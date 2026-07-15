@@ -370,10 +370,53 @@ Provider packages can have their own conformance tests, including isolation guar
 
 > CI and policy files are protected control-plane artifacts. By default, changing them requires human approval. Teams may select a more autonomous policy, but weakening protection must be explicit and auditable.
 
+## Follow-up: Product boundary and first viable slice
+
+Issue #1 asked whether the proposal was a philosophy, Rust framework, runtime, tooling ecosystem, hosted factory, or some combination, and requested a falsifiable first slice. A follow-up interview established the following decisions.
+
+### Product shape and bootstrap
+
+The module platform and factory are one product, brand, and project, although they remain separate applications and packages. The factory is intended to be the first substantial application built with the module system. Self-hosting is progressive: early work does not depend on either unfinished system, and the project increasingly uses its own factory only as the required layers become dependable.
+
+The initial repository shape is a greenfield Rust monorepo and Cargo workspace with separate packages for modules, providers, compositions, runtime tooling, and the factory. Migrating existing codebases is a non-goal. The first factory release supports only repositories created by the project initializer, not arbitrary GitHub repositories.
+
+The initial audience is intentionally undefined beyond early experimenters, likely hobbyists. The ambition is to grow into a broadly applicable way to produce software rather than optimize the first contract around an invented customer persona.
+
+### Agent-assisted installation
+
+Installation should begin by adding a portable skill to the developer's existing coding agent. The skill follows the shared Agent Skills format so the core workflow can be used by compatible hosts such as Codex, Claude Code, Cursor, and others.
+
+The coding agent guides setup, but a deterministic, versioned CLI owns repository mutations. The module runtime arrives as a Rust dependency. The factory remains external versioned software rather than source vendored into each application. The onboarding agent creates the project, helps obtain a remote factory, configures GitHub and Slack, registers the repository, verifies the connection, and returns the lead-agent entry point.
+
+The first supported factory deployment is a container on a user-controlled machine reachable over SSH. This can be a cloud VM or other remotely reachable computer. Running the same container locally is useful for evaluation but weaker for team collaboration. Managed hosting, provider-specific setup, personal hardware, and Kubernetes may become additional guided recipes later.
+
+### First generated application
+
+The initializer produces a database-free Hello World Rust project. One typed capability is defined once and invoked both as an in-process Rust interface and through HTTP. Postgres remains an important future provider but is not required for the first proof.
+
+Deployment topology belongs to the application composition rather than the module. Kubernetes is an important future target for module-based applications and potentially for the factory, but it is not a first-slice requirement.
+
+### First factory
+
+Slack is the first factory UI. The developer talks to one persistent lead agent, which handles the requested change itself. The mature hierarchy of area leads, workers, reviewers, a merger, and continuous quality agents is introduced progressively rather than required at launch.
+
+Those roles are factory configuration, not hard-coded runtime concepts. The runtime supplies execution, isolation, persistence, human interaction, and reporting mechanisms; configuration determines the organization and gates, even if that configuration is initially internal.
+
+The lead works in a remote isolated code sandbox with dedicated Git worktree and branch isolation. It pushes its result, opens a GitHub pull request, reports it in Slack, and stops. A human must merge every v1 pull request.
+
+The sandbox is expected to preserve agent state exactly across suspension and resumption, similarly to a frozen remote development environment. Recovery may roll back a small bounded amount to a durable checkpoint, but the system may not lose the worktree, branch, conversation, task history, or audit state.
+
+The factory's internal agent system will be a purpose-built harness rather than Codex CLI or Claude Code. Its model, provider, tool, and loop architecture remains an explicit open question. The product contract specifies observable behavior without prematurely choosing that implementation.
+
+GitHub Issues may become the task ledger when workers are introduced. A factory-owned GitHub identity can perform system actions while comments and records distinguish the logical agent and run. Neither the issue workflow nor the final identity design is required by the first slice.
+
+The complete decision is maintained in [Product Contract and First Viable Slice](07-product-contract.md).
+
 ## Resulting documentation set
 
 The interview produced:
 
 - A short white paper stating the central thesis and system shape.
 - Detailed documents for modules, packages and providers, runtime behavior, contract evolution, the software factory, and quality and authority.
+- A product contract separating the long-term direction from the first end-to-end pilot.
 - This Q&A record, which preserves the reasoning and unresolved decisions behind those documents.

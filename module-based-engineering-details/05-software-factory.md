@@ -10,6 +10,24 @@ The software factory is a persistent control plane for developing and maintainin
 
 The module boundary gives the factory a natural unit of ownership, analysis, review, and merge accountability. Agents can work concurrently because every submitted change has one target module and cannot directly modify another module's source.
 
+The factory and module platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with the module system, following a progressive bootstrap in which early development does not depend on either system being complete.
+
+The factory runtime supplies mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the runtime.
+
+## First factory slice
+
+The governance hierarchy below is a mature direction. The first viable factory is deliberately smaller:
+
+1. A developer talks to one persistent lead agent through Slack.
+2. The lead handles the requested change itself.
+3. It works in a remote, isolated code sandbox with a dedicated worktree and branch.
+4. It opens a GitHub pull request and reports the result in Slack.
+5. It stops at the pull request boundary. A human must review and merge.
+
+The first slice has no required task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. These roles and surfaces can be added progressively without replacing the stable human-facing lead.
+
+The factory's agent loop is expected to be a purpose-built harness rather than an invocation of Codex CLI or Claude Code. Its internal model, provider, and tooling design has not been selected. The first slice specifies its behavior, not that implementation.
+
 ## Governance hierarchy
 
 The hierarchy discussed was:
@@ -50,7 +68,7 @@ Area ownership and subdivisions are explicit configuration rather than something
 
 Workers pick up ready tasks and work independently. Once work begins, workers do not communicate with one another to negotiate concurrent changes. Shared context comes from the area plan, task, module contract, and current repository state.
 
-Each worker submits a single-module merge request. Submission moves the work into a waiting state while the merger evaluates it. The durable task and its artifacts remain the source of truth; the system need not preserve the exact model session forever. A compatible worker can resume rework from the stored task, branch, evidence, and feedback.
+Each worker submits a single-module merge request. Submission moves the work into a waiting state while the merger evaluates it. The durable task, sandbox, branch, evidence, and feedback remain the source of truth for resumption and rework.
 
 ### Merger
 
@@ -109,7 +127,19 @@ Humans can push authoritative information into the harness at any time through t
 
 The lead can also initiate questions when area analysis, quality findings, implementation, or deprecation evidence requires judgment that the harness should not invent.
 
-The exact user interface for these questions and approvals was not designed. It should provide clear context and strong approval requests rather than relying on unstructured side-channel instructions.
+Slack is the first human interface to the lead. It should provide clear context and strong approval requests rather than relying on implicit authority. Other interfaces may be added later.
+
+GitHub is the first review and integration surface. The initial factory opens a pull request but never merges it autonomously. GitHub Issues may later become the task ledger when worker agents are introduced. A factory GitHub App or bot identity can act on behalf of the system while comments and factory records attribute work to a logical agent and run; the exact identity design remains open.
+
+## Remote execution and resumability
+
+Factory agents run in remote code sandboxes. Every sandbox is isolated and supports a lifecycle comparable to create, suspend, resume, checkpoint, and destroy. Worktree and branch isolation are required from the first version, even while only one lead agent performs work.
+
+Stopping the factory must not discard agent state. The target behavior is to freeze and resume the complete sandbox exactly where it stopped. Recovery may return to a recent durable checkpoint and repeat a small, bounded amount of work, but losing the worktree, branch, conversation, task history, or audit record is unacceptable.
+
+The factory itself is distributed as a container and can be stopped and resumed. Its first supported deployment recipe is a user-controlled machine reachable over SSH and capable of running containers. That machine may be a cloud VM or another remotely reachable computer. Running the container on the developer's current computer is useful for evaluation, although it is a weaker team setup because availability depends on that computer.
+
+"Remotely hosted" does not require a vendor-operated service. A future onboarding flow may guide users toward a managed offering, common compute providers, Kubernetes, or their own hardware.
 
 ## Continuous quality agent
 
@@ -138,6 +168,9 @@ Passing CI is necessary but may not be sufficient when the target module, import
 
 The discussion did not settle:
 
+- The implementation of the factory's own agent harness, including its model, provider, and tool architecture.
+- The exact sandbox provider contract, checkpoint frequency, and bounded rollback behavior.
+- Managed hosting and provider-specific deployment recipes beyond the first SSH-and-container path.
 - The exact durable task schema and storage system.
 - How workers claim tasks and how leases expire.
 - The exact priority model across areas after human overrides.
@@ -145,6 +178,5 @@ The discussion did not settle:
 - How an area lead records and versions its broad plan.
 - Whether area-lead reassessment is performed by the same model instance or a fresh worker.
 - The precise waiting, callback, retry, and cancellation protocols.
-- The interface through which humans inspect, steer, approve, and reorganize the harness.
+- Human interfaces beyond the first Slack integration.
 - Which actions the top-level lead can perform without explicit human authorization.
-
