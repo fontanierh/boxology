@@ -83,7 +83,7 @@ The first release bundle contains:
 - A deterministic installer CLI.
 - Rust module-runtime packages with Rust and HTTP bindings.
 - A portable factory sandbox image containing an agent harness and Slack bridge.
-- Bootstrap support for a managed durable-sandbox provider or a compatible container target with persistent storage and restart behavior.
+- Bootstrap support for a managed durable-sandbox provider or a compatible container target with crash-consistent durable storage and restart behavior.
 
 The agent harness may be an existing runner or an extremely small wrapper in this milestone. The bundle validates the sandbox lifecycle and product boundary, not the novelty of its internal agent loop.
 
@@ -91,7 +91,7 @@ The agent harness may be an existing runner or an extremely small wrapper in thi
 
 The MVP has one deployed object: the durable lead sandbox. It can be supplied by a managed sandbox provider or run from the project's portable container image on a compatible target.
 
-A self-hosted target must provide persistent storage for the repository and harness state plus restart behavior for the bridge and harness. An ephemeral container can execute the image but does not satisfy the resume guarantee. The exact managed provider, cloud, container host, and storage mechanism remain implementation choices.
+A self-hosted target must provide crash-consistent durable storage for the repository and harness state plus restart behavior for the bridge and harness. An ephemeral container can execute the image but does not satisfy the recovery guarantee. The exact managed provider, cloud, container host, and storage mechanism remain implementation choices.
 
 This keeps the deployment portable across hosted sandbox systems, cloud virtual machines, personal hardware, and later Kubernetes targets without introducing a second control-plane service.
 
@@ -128,6 +128,8 @@ A TypeScript application or another foreign-language component can therefore app
 
 Slack is the first factory UI. A developer talks to one persistent lead agent. There is no custom dashboard or task interface in the foundation milestone.
 
+The Slack bridge must not depend only on live event delivery. When it starts or resumes, it catches up on requests still available to it in the configured channel history that arrived while it was unavailable. This recovery is necessarily bounded by the history the Slack workspace retains and permits the bridge to read.
+
 The lead agent handles the requested change itself:
 
 1. Receive the request through Slack.
@@ -139,6 +141,8 @@ The lead agent handles the requested change itself:
 7. Stop and wait. A human reviews and merges the pull request.
 
 Autonomous merging is explicitly excluded from v1.
+
+Before retrying an external effect whose outcome is uncertain, the lead inspects the current state of the system that owns that effect. This is a standing recovery rule, not an exactly-once guarantee: an ambiguous failure may still produce a rare repeated effect.
 
 The prescribed acceptance task is to add a new backward-compatible `greet(name)` capability to the generated Hello module. Calling it with `Ada` returns `Hello, Ada!` through both Rust and HTTP. Its pull request must:
 
@@ -178,8 +182,8 @@ durable lead sandbox
 
 Its foundation recovery boundary is:
 
-- **Normal recovery:** process restarts, sandbox stop-and-resume, and replacement of lost compute while its durable storage survives preserve the repository and persisted harness state. A managed sandbox may freeze and resume its full state; a container target must provide the equivalent persistent volume and restart behavior.
-- **Catastrophic sandbox loss:** simultaneous loss of the sandbox and its durable storage is outside the foundation persistence guarantee. A fresh lead can reconstruct the project's semantic state from the repository and Git history, project instructions and documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history, and any optional lead-authored checkpoint.
+- **Normal recovery:** process restarts, unclean harness termination, sandbox stop-and-resume, and replacement of lost compute while its durable storage survives recover the repository and persisted harness state from a valid, internally consistent recovery point. Work after that point may need to be repeated. A managed sandbox may freeze and resume its full state; a container target must provide equivalent durable storage, crash-consistent persistence, and restart behavior. The exact persistence mechanism is an implementation choice.
+- **Catastrophic sandbox loss:** simultaneous loss of the sandbox and its durable storage is outside the foundation persistence guarantee. A fresh lead can reconstruct the project's semantic state from the repository and Git history, project instructions and documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history that remains retained and accessible, and any optional lead-authored checkpoint.
 
 Catastrophic reconstruction does not promise exact continuation of hidden reasoning, preservation of uncommitted work, or recovery of an action that existed only inside the destroyed sandbox. It is semantic recovery: before repeating an external action, the lead inspects current GitHub and Slack state, just as a human would notice that a pull request or reply already exists. Rare duplicate or repeated effects after ambiguous failures remain possible; the foundation does not promise exactly-once delivery or require a central outbox or deduplication ledger.
 
@@ -206,8 +210,10 @@ The foundation milestone is successful when this complete scenario works:
 9. The lead opens exactly one pull request and returns it in Slack.
 10. The factory does not merge it; a human makes the merge decision.
 11. Stopping and resuming the sandbox, or replacing its compute while durable storage survives, preserves its repository and persisted harness state.
+12. Terminating the harness uncleanly during work and restarting it recovers a valid repository and harness state from a consistent recovery point; the lead inspects current Slack and GitHub state before retrying any uncertain external effect.
+13. A request sent to the configured Slack channel while the bridge is stopped is discovered after restart when it remains available in channel history.
 
-This scenario proves installation, module definition, two bindings, one module-local evolution, remote factory access, human-agent interaction, isolated implementation, storage-backed resumption, and the human merge boundary. It is an end-to-end foundation milestone, not evidence that multi-agent parallelism or catastrophic exact recovery is already effective.
+This scenario proves installation, module definition, two bindings, one module-local evolution, remote factory access, human-agent interaction, isolated implementation, clean and unclean storage-backed recovery, Slack catch-up, and the human merge boundary. It is an end-to-end foundation milestone, not evidence that multi-agent parallelism, exactly-once effects, or catastrophic exact recovery is already effective.
 
 ## Explicit foundation-milestone non-goals
 

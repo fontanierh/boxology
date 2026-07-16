@@ -483,7 +483,7 @@ The complete MVP factory is one durable lead-agent sandbox. It contains:
 
 Launching the factory means ensuring that this one sandbox, harness, and bridge are running. There is no separate MVP control-plane service, database, router, task ledger, or mandatory factory log.
 
-The sandbox may come from a managed durable-sandbox provider or from the project's portable container image on any compatible target. A container target must supply persistent storage and restart behavior; an ephemeral container may run the image but does not meet the resume guarantee. The exact provider, cloud, host, and storage mechanism were not selected. Kubernetes remains an important later target rather than the first recipe.
+The sandbox may come from a managed durable-sandbox provider or from the project's portable container image on any compatible target. A container target must supply crash-consistent durable storage and restart behavior; an ephemeral container may run the image but does not meet the recovery guarantee. The exact provider, cloud, host, and storage mechanism were not selected. Kubernetes remains an important later target rather than the first recipe.
 
 ### Authority and visible state
 
@@ -498,11 +498,13 @@ The foundation does not add a canonical factory ledger. Agents may emit events w
 
 ### Recovery boundary
 
-While durable sandbox storage survives, process restart, sandbox stop-and-resume, and loss or replacement of the compute host preserve the repository and persisted harness state. A managed provider may implement this by freezing and resuming the sandbox; a container deployment may implement it with persistent storage and restart behavior. The project depends on these observable properties without yet choosing their implementation.
+While durable sandbox storage survives, process restart, unclean harness termination, sandbox stop-and-resume, and loss or replacement of the compute host recover the repository and persisted harness state from a valid, internally consistent recovery point. Work after that point may need to be repeated. A managed provider may implement this by freezing and resuming the sandbox; a container deployment must provide equivalent crash-consistent durable storage and restart behavior. The project depends on these observable properties without prescribing the persistence mechanism.
 
-Simultaneous destruction of the sandbox and its durable storage is outside the foundation persistence guarantee. A fresh lead should be able to reconstruct the project's semantic state from Git and repository documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history, and any optional checkpoint. This does not promise exact continuation of hidden reasoning, recovery of uncommitted work, or preservation of an action known only to the destroyed sandbox.
+Simultaneous destruction of the sandbox and its durable storage is outside the foundation persistence guarantee. A fresh lead should be able to reconstruct the project's semantic state from Git and repository documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history that remains retained and accessible, and any optional checkpoint. This does not promise exact continuation of hidden reasoning, recovery of uncommitted work, or preservation of an action known only to the destroyed sandbox.
 
 External effects use the same semantic recovery model. Before acting, a resumed or replacement lead inspects current GitHub and Slack state and can recognize an existing pull request or reply as a human would. Rare repeated effects after ambiguous failures remain possible. Exactly-once delivery, a central outbox, and a deduplication ledger are not foundation guarantees.
+
+The Slack bridge does not rely only on live event delivery. After downtime it catches up on requests still retained and accessible in the configured channel history. Before retrying an external effect whose result is uncertain, the lead inspects the system that owns that effect. This is narrower than checking every external action in advance and does not require deterministic branch or pull-request naming.
 
 ### Deferred multi-agent guarantees
 
@@ -511,6 +513,12 @@ The foundation does not select Temporal, RabbitMQ, another workflow engine or qu
 Issue #57 owns the later questions: worker-pool startup and supervision, safe task claiming, leases and fencing, stale submissions, durable agent-to-agent messages, multiple coordinators or mergers, reconciliation, provenance or audit records if needed, and selection of the coordination backend.
 
 This transfer is an explicit scope decision. The foundation is complete without selecting or specifying those mechanisms; a later review should evaluate them against the post-MVP agent-pool milestone rather than reopen them as blockers for the one-sandbox MVP.
+
+### Review refinement
+
+Review of the sandbox-native proposal identified that storage survival alone did not guarantee a recoverable state after an unclean process death. The foundation therefore added the observable consistent-recovery behavior and explicit acceptance tests for unclean harness termination and Slack catch-up.
+
+The review did not establish a required persistence algorithm, deterministic branch or pull-request naming, frequent WIP pushes, a recommended checkpoint policy, or a general approval-record format. Those suggestions were not needed to close the recovery gap and remain undecided or owned by their existing focused issues. Slack history is used only to the extent that the workspace retains it and permits the bridge to read it.
 
 ## Resulting documentation set
 
