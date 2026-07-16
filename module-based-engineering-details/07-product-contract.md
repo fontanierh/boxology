@@ -104,12 +104,15 @@ The onboarding agent can later guide users through a first-party hosted service,
 
 At the end of project initialization, the developer has a small running application that proves the central module abstraction:
 
-- One typed Hello World capability is defined once.
+- One implementation method is annotated as a typed Hello World capability.
+- A deterministic pre-Cargo step generates its contract crate, schema, typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
 - The capability can be invoked directly through the Rust module interface.
 - The same capability can be invoked through an HTTP endpoint.
-- The behavior comes from the same module contract rather than two handwritten implementations.
+- Both paths reach the same annotated implementation method through the generated contract rather than two handwritten interfaces or implementations.
 
 The first proof is database-free. Postgres and Redis remain important provider candidates, but persistence is a later slice and should not obscure validation of the module, binding, and factory loop.
+
+The deterministic contract generator is therefore a core foundation deliverable rather than incidental scaffolding. The milestone is not complete until generation, provenance, reproducibility, typed invocation, and compatibility classification work as one path.
 
 The foundation milestone covers unary request-response only. The first full module-runtime release is expected to add streaming data, streaming events, and real-time interaction as first-class contract shapes.
 

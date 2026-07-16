@@ -6,7 +6,7 @@ This document expands the compatibility, migration, and deprecation process disc
 
 ## Compatibility goal
 
-Modules should normally evolve through backward-compatible changes. Consumers depend only on the stable contract and should not require simultaneous edits when the provider's implementation changes.
+Modules should normally evolve through backward-compatible changes. Consumers depend only on the generated contract and should not require simultaneous edits when the providing module's implementation changes.
 
 The system does not assume that compatibility can be preserved forever. Genuine breaking changes will occur. The goal is to turn them into visible, managed migrations rather than codebase-wide atomic patches.
 
@@ -14,19 +14,51 @@ The central rule is:
 
 > A cross-module change is a coordinated migration composed of independently mergeable, single-package changes.
 
+## Contract identity, revision, and explicit versions
+
+Three concepts are distinct:
+
+- A **contract identity** is the stable logical identity of a capability, field, or other contract element.
+- A **contract revision** or fingerprint identifies one generated state so it can be compared with its base revision.
+- An **explicit public version** is a deliberately published surface such as `v1` or `v2`.
+
+Stable identities and comparable revisions are required for dependable analysis. Explicit public versions are optional. A module can continuously evolve one contract surface for its entire lifetime, as many public APIs do, provided it expands, migrates, deprecates, and contracts that surface safely.
+
+The platform therefore does not require one crate, namespace, trait, or route per explicit version. A module may introduce parallel versions when unmanaged consumers, long support windows, or genuinely incompatible semantics make coexistence useful. That is a module and harness policy choice rather than the universal migration mechanism.
+
 ## Expand-migrate-contract
 
 The process discussed was:
 
-1. The provider module introduces the new contract while retaining the old version.
-2. The factory identifies consumers of the old version.
+1. The providing module expands its existing surface with a compatible bridge while retaining the old behavior or shape.
+2. The factory identifies consumers affected by the intended contraction or tightening.
 3. It creates a migration task for every managed consumer.
 4. Every consumer changes in its own pull request.
 5. Completion updates a durable migration record.
-6. Static dependency analysis and runtime evidence determine whether usage remains.
-7. When removal policy is satisfied, the factory creates a final task for the module providing the contract to delete the old version.
+6. Static dependency analysis, deployment state, and runtime evidence determine whether old usage remains.
+7. When configured removal policy is satisfied, the factory creates a final task for the providing module to tighten or remove the deprecated surface.
 
-The old and new versions coexist during the migration. This is the mechanism that preserves the one-package-per-pull-request invariant.
+The bridge and deprecated surface coexist during the migration. They do not need different public version labels. This staged coexistence is what preserves the one-package-per-pull-request invariant.
+
+For example, making an input field required can proceed as:
+
+```text
+add the field as optional
+-> migrate consumers to populate it
+-> verify managed adoption and applicable deployment evidence
+-> make the field required
+```
+
+Removing a field can proceed as:
+
+```text
+mark the field deprecated
+-> migrate consumers away from it
+-> verify applicable usage has drained
+-> remove the field
+```
+
+The final step is mechanically incompatible with an old consumer. Compatibility analysis must say so honestly. The harness authorizes it only because the configured migration policy has accepted the evidence; it does not relabel the change as intrinsically compatible.
 
 ## Durable migration ownership
 
@@ -37,12 +69,12 @@ Consumer migrations update the record. Any suitable agent can later resume the d
 The record needs to represent at least the lifecycle discussed:
 
 ```text
-new contract introduced
+compatible bridge introduced
 -> consumers identified
 -> consumer migrations in progress
 -> no managed consumers remain
 -> removal authorized
--> old contract removed
+-> deprecated surface removed or tightened
 ```
 
 The exact storage schema and callback protocol were not designed.
@@ -74,9 +106,9 @@ Billing module
 
 Swift, Kotlin, and other bindings follow the same pattern. The binding remains inside the managed package and dependency system even though its generated output is consumed outside Rust.
 
-When a provider introduces a new contract version, the binding module receives its own migration task and pull request. Client applications managed by the factory can then receive separate adoption tasks.
+When a providing module changes a contract surface used by a binding module, the binding receives its own migration task and pull request. Client applications managed by the factory can then receive separate adoption tasks. If the providing module deliberately introduces a parallel public version, the same staged process applies to adopting it.
 
-This preserves the rule that the provider does not directly edit consumer source or generated SDK copies inside consumer modules.
+This preserves the rule that the providing module does not directly edit consumer source or generated SDK copies inside consumer modules.
 
 ## Unknown public consumers
 
@@ -111,7 +143,7 @@ These findings become tasks or human questions through the same factory control 
 
 ## Complexity tradeoff
 
-This process makes a codebase-wide change more elaborate than editing several functions in one pull request. It can create more versions, generated artifacts, tasks, and pull requests.
+This process makes a codebase-wide change more elaborate than editing several functions in one pull request. It can create temporary compatibility shapes, generated artifacts, tasks, and pull requests. Explicit parallel versions add further cost only when the module chooses them.
 
 That cost is intentional. The system assumes that agent productivity makes the extra mechanical work affordable. In return, each change has a constrained blast radius, every module remains independently mergeable, and consumers cannot be silently broken by an atomic cross-module patch.
 
@@ -119,8 +151,8 @@ That cost is intentional. The system assumes that agent productivity makes the e
 
 The discussion did not settle:
 
-- The compatibility rules or schema-diffing mechanism.
-- Version numbering and support-window policy.
+- The complete compatibility taxonomy and schema-diffing mechanism.
+- Optional public version numbering and support-window policy.
 - The exact durable migration record format.
 - How unmanaged clients identify themselves in telemetry.
 - When a human is always required for removal.

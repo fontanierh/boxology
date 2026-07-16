@@ -30,6 +30,8 @@ The harness can add mandatory system-level checks beyond what an individual pack
 
 Package kinds add different baselines. Modules require contract compatibility and behavioral validation. Providers require conformance and isolation evidence. Compositions require assembly and integration validation. Platform packages require whole-workspace validation and stricter approval by default, subject to configured harness policy, because runtime, CI, build, generator, and enforcement changes can affect every package.
 
+When a native module's declared contract-generation inputs change or its owner explicitly requests regeneration, deterministic platform validation regenerates its contract outputs with the current workspace generator and classifies the semantic contract diff. Untouched contract crates produced by older backward-compatible generator releases remain valid. The harness decides whether a compatible change, an evidenced contraction, or an explicit override may merge. The default factory should block an incompatible tightening or removal until its configured deprecation process is satisfied. A more permissive harness can change that policy, but it cannot suppress the underlying classification or claim that the change remained compatible.
+
 The guarantee is procedural:
 
 > The harness guarantees that the declared and mandatory evidence was produced successfully. It cannot guarantee that the evidence completely defines correctness.

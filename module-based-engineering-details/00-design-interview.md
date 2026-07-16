@@ -28,6 +28,8 @@ The answer was acknowledged as difficult to phrase precisely.
 
 The three promises identified were independent evolution, enforced contract compatibility, and consistent configurable invocation.
 
+**Later refinement:** "Versioned" does not require public `v1` or `v2` surfaces. Every extracted contract has stable element identities and a comparable revision, but explicit parallel versions are optional. A native module owns one generated contract crate containing its complete supported surface and one handwritten implementation crate.
+
 ## Question 2: What happens when compatibility cannot be preserved?
 
 **Question:** What should happen when a module genuinely needs a change that cannot remain backward-compatible?
@@ -44,7 +46,9 @@ A strong invariant was introduced in module-specific terms: a pull request alway
 
 > A cross-module change is never one patch. It is a coordinated migration composed of independently mergeable, single-package changes.
 
-The lifecycle became: add the new version, identify consumers, migrate each consumer separately, verify zero remaining use, and remove the old version in a final change to the module providing the contract.
+The lifecycle was initially phrased as: add the new version, identify consumers, migrate each consumer separately, verify zero remaining use, and remove the old version in a final change to the module providing the contract.
+
+**Later refinement:** Explicit parallel versions are one available technique, not the required workflow. The ordinary path can expand one evolving surface compatibly, migrate consumers, and then contract it. Adding an optional field before later requiring it, or deprecating a field before removing it, follows the same durable migration process without introducing `v2`. The generator always classifies the final tightening or removal honestly; the configured harness decides whether migration evidence permits it to merge.
 
 ## Question 3: How are shared repository artifacts handled?
 
@@ -304,7 +308,7 @@ A client binding was defined as a thin module inside the Rust-managed ecosystem.
 
 > Dependencies are declared statically, invoked through typed runtime capabilities, and observed dynamically. Managed external clients participate through generated client-binding modules.
 
-**Later refinement:** The common ownership manifest is authoritative. Workspace CI must reject Rust dependency edges between modules that lack a corresponding declared contract import and every edge to a crate classified as a foreign implementation. The crate-classification topology remains separate design work. Runtime or generated code supplies handles only for declared imports. Raw networking, filesystem access, build scripts, or dynamic topics used to bypass those boundaries are quality violations; the foundation detects them where possible but does not technically prevent them under convention-level isolation.
+**Later refinement:** The common ownership manifest is authoritative. A native module owns a handwritten implementation crate and a mechanically generated contract crate derived from annotated implementation methods. Other modules compile only against declared generated contracts; application compositions are the authorized roots that link selected implementations. Workspace CI rejects undeclared contract edges and every module-owned dependency on a foreign implementation across normal, build, development, renamed, optional, feature-activated, and target-specific edges. Runtime or generated code supplies handles only for declared imports. Raw networking, filesystem access, build scripts, or dynamic topics used to bypass those boundaries are quality violations; the foundation detects them where possible but does not technically prevent them under convention-level isolation.
 
 ## Question 15: When can an unknown public consumer be disconnected?
 
@@ -331,6 +335,8 @@ No universal policy window or automatic-removal threshold was selected.
 > Cycles are a quality and planning concern, not a runtime primitive. The factory analyzes and mitigates them while the runtime remains neutral.
 
 **Later refinement:** Review split the generic dependency graph into Rust-build, live-invocation, asynchronous-event, provider-dependency, and data-flow graphs. Rust-build cycles are forbidden. New live-invocation cycles are blocked by default with a durable exception path. Asynchronous cycles are allowed only with recorded idempotency, termination, and bounded-amplification evidence. Provider-dependency and data-flow cycles remain analytical findings. Existing accepted cycles are grandfathered so they do not block unrelated work. Runtime safeguards such as deadlines, cancellation, retry ceilings, and recursion protection remain necessary independently of graph policy.
+
+**Build-topology refinement:** Contract crates never depend on implementation crates. `billing-implementation -> customer-contract` and `customer-implementation -> billing-contract` therefore remain an acyclic Cargo graph even if a live relationship is explicitly approved. The composition links both implementations and injects their generated typed handles. This makes build feasibility independent from the harness's stricter default policy for live cycles.
 
 ## Question 17: How do concurrent tasks in one module work?
 
