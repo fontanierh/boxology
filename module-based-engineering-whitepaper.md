@@ -28,7 +28,7 @@ Each module owns:
 
 Every pull request has one accountable package and zero foreign source changes. Mechanically reproducible artifacts attributable to that package may accompany it.
 
-Modules communicate only through versioned interfaces. They never access another module's storage directly.
+Modules must communicate through declared, versioned interfaces and must not access another module's storage directly. The foundation treats this as an architectural rule checked by CI and review; at L0 it is not a security boundary against malicious same-process code. Compositions can require stronger credential, process, or adversarial isolation profiles.
 
 Rust modules receive the full native guarantee set. Foreign-language modules remain first-class ownership and factory units, but only their managed binding boundary receives the same guarantees.
 
@@ -48,7 +48,7 @@ billing requires relational-store
 -> production binds it to Postgres
 ```
 
-Provider instances are private to their modules, even when infrastructure is physically shared.
+Provider bindings are logically private to their modules, even when infrastructure is physically shared. A composition declares whether that contract is enforced by convention, scoped credentials, process boundaries, or an adversarial sandbox.
 
 ## [Runtime](module-based-engineering-details/03-runtime.md)
 
@@ -65,7 +65,7 @@ Authentication adapters normalize credentials into realm-scoped principals:
 -> Principal(realm, subject, kind)
 ```
 
-Modules declare default access policies with endpoint-level overrides. Authentication realms may provide safe, named development identities so the same authorization behavior can be exercised through local tools.
+Modules declare default access policies with endpoint-level overrides. That declaration sets maximum reachability: compositions may narrow or omit an endpoint but never widen it. Authentication realms may provide safe, named development identities so the same authorization behavior can be exercised through local tools.
 
 ## [Evolution](module-based-engineering-details/04-evolution.md)
 

@@ -85,6 +85,8 @@ The system also needs flexible authentication providers for web applications.
 
 **Clarification:** Exposure, identity, and permission were separated. The working categories were code/internal/external exposure, normalized caller identity, and a capability or scope. External reachability does not imply anonymous access.
 
+**Later refinement:** The effective endpoint declaration sets maximum reachability. Compositions may omit or narrow an endpoint but never widen it; raising the maximum belongs to the module as a contract change. Code-only endpoints receive no platform-generated network route. Internal endpoints are restricted to a declared trust zone but still require authentication and authorization. These guarantees govern platform-generated routing and do not sandbox mutually trusted code in the foundation's shared-process isolation profile.
+
 The initial `User(user_id)` concept was considered too narrow.
 
 ## Identity refinement within question 4
@@ -268,6 +270,8 @@ The provider's role is to isolate its instances. A consumer assumes it can acces
 
 > Every provider binding is private to one module. Physical topology is provider-specific, but the provider must prevent one binding from accessing another.
 
+**Later refinement:** Privacy is an architectural contract whose enforcement strength is declared by the composition. L0 relies on mutually trusted code and convention; L1 uses least-privilege binding credentials; L2 adds process, operating-system, network, and resource isolation; L3 adds sandboxing, controlled egress, and unforgeable scoped capabilities for untrusted code. Conformance tests provide evidence for a claimed profile but cannot prove universal non-access. This supersedes any reading of the original formulation as an unconditional security guarantee.
+
 ## Question 13: How does data cross module boundaries?
 
 **Question:** How should a module obtain and retain information owned by another module without violating storage isolation?
@@ -299,6 +303,8 @@ A client binding was defined as a thin module inside the Rust-managed ecosystem.
 **Captured formulation:**
 
 > Dependencies are declared statically, invoked through typed runtime capabilities, and observed dynamically. Managed external clients participate through generated client-binding modules.
+
+**Later refinement:** The common ownership manifest is authoritative. Workspace CI must reject Rust dependency edges between modules that lack a corresponding declared contract import and every edge to a crate classified as a foreign implementation. The crate-classification topology remains separate design work. Runtime or generated code supplies handles only for declared imports. Raw networking, filesystem access, build scripts, or dynamic topics used to bypass those boundaries are quality violations; the foundation detects them where possible but does not technically prevent them under convention-level isolation.
 
 ## Question 15: When can an unknown public consumer be disconnected?
 

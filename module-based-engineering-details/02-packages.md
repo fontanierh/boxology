@@ -134,7 +134,25 @@ Providers must not silently rewrite arbitrary module source. Their generated or 
 
 ## Provider isolation
 
-Every binding is private to one consuming module, even if the underlying infrastructure is physically shared.
+A private binding is an architectural contract, not a universal security guarantee. A module must use only its own binding, even if the underlying infrastructure is physically shared. The strength of that rule depends on the isolation profile selected by the application composition.
+
+Isolation profiles provide increasing assurance. Later profiles retain the earlier guarantees but may replace their mechanisms:
+
+- **L0 — Convention:** mutually trusted modules may share a process and credentials. Boundaries rely on code discipline, review, provider conventions, and tests. This is the foundation default.
+- **L1 — Credential-enforced:** each binding receives least-privilege credentials, such as a binding-specific database role. Shared administrative credentials remain control-plane material and are not delivered to modules.
+- **L2 — Process-isolated:** L1 plus separate processes or containers and enforced operating-system, network, and resource policy.
+- **L3 — Adversarial:** L2 plus sandboxed module code and controlled egress, with module-visible reusable credentials replaced by brokered, unforgeable scoped capabilities. Deploying code deliberately treated as untrusted at runtime would require this profile. L3 remains a future target whose runtime threat model and acceptance criteria are not established here. Sandboxing candidate code, builds, CI, and factory credentials remains separate work in [issue #24](https://github.com/fontanierh/module-based-engineering/issues/24).
+
+A composition declares the minimum profile it requires. Its selected providers and deployment topology must supply the corresponding controls, and tooling must not claim a stronger profile than the deployed mechanisms support.
+
+The selected profile and its validation evidence belong in the composition's release or deployment record:
+
+- **L0 evidence** records the applicable ownership checks, linting, and review results.
+- **L1 evidence** additionally validates binding-specific roles, default privileges, and attempted cross-binding denial.
+- **L2 evidence** additionally validates process identity and the deployed operating-system, network, and resource policies.
+- **L3 evidence** cannot be accepted until its separate adversarial threat model and verification criteria have been defined.
+
+These checks are evidence about configured controls, never proof of universal isolation.
 
 A Postgres provider may choose among different isolation mechanisms:
 
@@ -143,9 +161,11 @@ A Postgres provider may choose among different isolation mechanisms:
 - Separate schemas.
 - Isolated tables and credentials in one database.
 
-The consumer should not need to know which mechanism was selected. It assumes that it can touch only its own state.
+The consumer should not need to know which conforming mechanism was selected. Raw SQL is permitted against a module's own binding at L0 and L1. At L0 the ownership rule is conventional; at L1 provider-issued credentials enforce access for code using those credentials. L1 does not make hostile modules sharing one process safe from credential theft. Arbitrary networking is technically constrained only when an L2 or L3 network policy does so.
 
-The runtime does not protect the system from a malicious or defective provider implementation. Provider packages are trusted infrastructure components, distinct from the platform package kind. A provider that allows one binding to access another has violated its contract and is a bad provider. Provider conformance tests should exercise the promised isolation and behavior.
+The initial Postgres provider should target L1 by default through binding-specific roles and privileges. Profile-specific negative tests and deployment validation provide evidence that controls are configured correctly; tests alone do not prove non-access.
+
+The runtime does not protect the system from a malicious or defective provider implementation. Providers and platform components enforcing a profile are trusted computing-base components. A provider that claims a profile without supplying its controls is defective.
 
 ## Is a provider a module?
 
@@ -162,9 +182,11 @@ An application composition package describes a deployable application assembled 
 It can declare:
 
 - Which modules and versions are included.
-- Which endpoints are exposed.
+- Which endpoints are enabled, within each module's declared maximum exposure.
+- Which trust zones exist and how internal routes are constrained to them.
 - Which transport bindings are enabled.
 - How module requirements are bound to providers.
+- The minimum required isolation profile.
 - Which authentication realms are configured.
 - Application-level configuration.
 - Integration tests.
