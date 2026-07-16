@@ -434,6 +434,24 @@ Slack is the only first-class integration in the foundation milestone. GitHub is
 
 The complete decision is maintained in [Product Contract and Foundation Milestone](07-product-contract.md).
 
+## Follow-up: Canonical capability contract
+
+Issue #4 asked what representation is authoritative, which Rust types may cross a capability boundary, how different bindings preserve the same meaning, and where customization is allowed. A follow-up interview established these decisions:
+
+- Rust implementation methods and adjacent boundary-type declarations are the authoring source. A deterministic language-neutral schema is the compatibility and binding authority.
+- An annotated boundary type is lifted into the generated contract crate and re-exported into the implementation crate. The one generated compiled type implements `ModuleType`; consumers never compile against a duplicate implementation-side type.
+- Exported types use an explicit contract-safe subset. Borrowing, lifetimes, arbitrary generics, trait objects, platform-sized integers, and Rust file or I/O handles are rejected at the boundary.
+- Generated handles are asynchronous and accept an explicit `CallContext` carrying caller, deadline, cancellation, tracing, and applicable idempotency information. Domain errors are structured and remain distinct from invocation failures.
+- Missing, null, and present values can be represented distinctly. Defaults and declarative validation are schema metadata; tightening accepted input is a breaking change.
+- Generated consumers ignore unknown response fields and preserve unknown output enum or error variants. Older providers reject input variants they do not understand with a structured contract error.
+- Binary streams and sensitive values use dedicated contract-aware types rather than host file handles, paths, or unmarked strings.
+- Unary, server-streaming, client-streaming, bidirectional, and event-subscription shapes are first-class schema concepts, although the foundation milestone implements unary calls only.
+- The canonical schema is platform-owned rather than OpenAPI- or Protobuf-owned. Those formats and language SDKs are generated bindings when they can represent the contract faithfully.
+- Binding compatibility is checked during generation or composition validation. A binding that cannot preserve an interaction shape or other required semantics is rejected before runtime.
+- Handwritten transport customization may translate into and out of the same canonical contract. It may not create an undocumented parallel API that escapes compatibility, dependency, or authorization analysis.
+
+The complete decision is maintained in [Canonical Capability Contract](09-capability-contract.md).
+
 ## Resulting documentation set
 
 The interview produced:
@@ -441,4 +459,5 @@ The interview produced:
 - A short white paper stating the central thesis and system shape.
 - Detailed documents for modules, packages and providers, runtime behavior, contract evolution, the software factory, and quality and authority.
 - A product contract separating the long-term direction from the first end-to-end foundation milestone.
+- A Rust build-topology contract and canonical capability-contract design.
 - This Q&A record, which preserves the reasoning and unresolved decisions behind those documents.

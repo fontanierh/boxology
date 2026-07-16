@@ -56,6 +56,8 @@ The runtime provides a standard way to define and invoke typed capabilities.
 
 Rust implementation methods become capabilities when annotated. A deterministic pre-Cargo generator derives the contract crate, typed handles, implementation-neutral dispatch interface, implementation-local adapter, metadata, test bindings, and language-neutral compatibility schema. Developers and agents do not maintain the generated crate manually.
 
+Rust source is the authoring authority while the generated schema is the compatibility authority. Exported types implement a constrained contract-type model, generated handles are asynchronous and distinguish domain errors from invocation failures, and every call carries explicit runtime context. The [canonical capability contract](module-based-engineering-details/09-capability-contract.md) defines the complete boundary.
+
 Capabilities may support request-response, streaming, events, and real-time interaction. Configurable bindings can expose them through Rust, HTTP, RPC, CLI, or other transports.
 
 The runtime remains small and vendor-neutral. Workflow engines such as Temporal may be used inside modules without becoming runtime concepts.

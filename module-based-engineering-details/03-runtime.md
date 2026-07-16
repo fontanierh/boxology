@@ -29,7 +29,9 @@ The metadata discussed included:
 - File, binary, or secret input semantics.
 - Side-effect and confirmation metadata where needed by a caller.
 
-The exact annotation syntax and schema-safe type subset remain open. The important requirement is that the annotated method signature and metadata be rich enough to generate or validate its configured bindings. Values crossing the capability boundary must be representable faithfully; unsupported boundary types are generation errors rather than silently lossy bindings.
+The source model, schema-safe type subset, invocation envelope, and binding rules are defined in [Canonical Capability Contract](09-capability-contract.md). Values crossing the capability boundary must implement the generated contract-type model and be representable faithfully; unsupported boundary types are generation errors rather than silently lossy bindings.
+
+Every annotated method receives an explicit `CallContext` and generated caller handles are asynchronous. The implementation returns a declared structured domain error. The generated handle wraps that result in a distinct invocation-error type that can represent deadline, cancellation, availability, contract, or response failures. Local bindings use the same caller type without pretending that local and remote execution have identical operational behavior.
 
 ## Generated contract crate
 
@@ -170,13 +172,17 @@ Protobuf is treated as a schema and encoding rather than as the transport itself
 
 Every binding must preserve the capability contract, but a binding can only be selected when it supports the endpoint's interaction shape. For example, server-sent events support a server-to-client stream but do not provide a general bidirectional session.
 
+Binding compatibility is checked during generation or application-composition validation. An incompatible binding is rejected before the application accepts traffic, with a diagnostic identifying the capability and unsupported contract feature.
+
 The runtime can provide a generic development CLI capable of invoking any compatible endpoint. A module or application can also package a CLI as a real internal product. No handwritten CLI implementation should be required when the endpoint definition already contains the necessary input, output, validation, authentication, and interaction metadata.
 
 CLI is therefore useful but not mandatory. It is neither a special module type nor automatically a public compatibility surface.
 
 ## Streaming, events, and real-time behavior
 
-The first end-to-end foundation milestone exercises unary request-response through Rust and HTTP only. The first full module-runtime release is expected to support more than ordinary request-response calls. Its required additional interaction shapes are:
+The contract model recognizes unary request-response, server streaming, client streaming, bidirectional streaming, and event subscriptions. The first end-to-end foundation milestone exercises unary request-response through Rust and HTTP only. The first full module-runtime release is expected to implement the additional shapes.
+
+Streaming signatures use platform contract types rather than arbitrary Rust streams so the schema and bindings can identify the required behavior. The required additional interaction shapes include:
 
 - Streaming data associated with a call.
 - Streaming events that consumers can observe.
@@ -188,7 +194,7 @@ Durable workflow behavior can be expressed by a module's own endpoints and event
 
 ## Rust calls and external clients
 
-Within the Rust ecosystem, module-to-module calls go through a generated typed capability handle. The module declares the imported contract, the contract-owning module's generated crate supplies the canonical handle type, and the runtime or composition creates and injects the permitted handle.
+Within the Rust ecosystem, module-to-module calls go through a generated asynchronous typed capability handle. The module declares the imported contract, the contract-owning module's generated crate supplies the canonical handle type, and the runtime or composition creates and injects the permitted handle.
 
 The application composition binds that handle to an in-process implementation or a remote transport. Module code remains statically typed and deployment-neutral; it does not perform ambient string-based service lookup.
 
@@ -200,8 +206,6 @@ External managed clients participate through client-binding modules. A binding m
 
 The discussion did not settle:
 
-- The exact capability-annotation syntax and schema-safe Rust type subset.
-- How annotated boundary types are lifted into and referenced from the generated contract crate.
 - The adapter loading and configuration mechanism.
 - Detailed streaming, event replay, and real-time semantics.
 - The exact representation of permissions and resource authorization.

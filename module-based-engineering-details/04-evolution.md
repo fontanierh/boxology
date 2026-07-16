@@ -8,6 +8,8 @@ This document expands the compatibility, migration, and deprecation process disc
 
 Modules should normally evolve through backward-compatible changes. Consumers depend only on the generated contract and should not require simultaneous edits when the providing module's implementation changes.
 
+The deterministic language-neutral schema is the compatibility authority. The generator compares the submitted schema with the base revision and reports semantic changes independently of Rust formatting, macro expansion, or binding-specific representation. See [Canonical Capability Contract](09-capability-contract.md).
+
 The system does not assume that compatibility can be preserved forever. Genuine breaking changes will occur. The goal is to turn them into visible, managed migrations rather than codebase-wide atomic patches.
 
 The central rule is:
@@ -59,6 +61,15 @@ mark the field deprecated
 ```
 
 The final step is mechanically incompatible with an old consumer. Compatibility analysis must say so honestly. The harness authorizes it only because the configured migration policy has accepted the evidence; it does not relabel the change as intrinsically compatible.
+
+The contract model supplies several mechanical rules needed by this process:
+
+- Generated consumers ignore unknown fields in received structs.
+- Generated output enums and errors preserve an unknown variant rather than failing to decode the complete response.
+- An older provider rejects an unknown input variant with a structured contract error.
+- Tightening validation so previously valid input is rejected is a breaking semantic change.
+
+These rules make some expansions mechanically survivable, but they do not replace semantic change classification. The generator reports the change and the harness applies the configured policy.
 
 ## Durable migration ownership
 
@@ -151,7 +162,7 @@ That cost is intentional. The system assumes that agent productivity makes the e
 
 The discussion did not settle:
 
-- The complete compatibility taxonomy and schema-diffing mechanism.
+- Compatibility policy for semantic changes that cannot be inferred completely from schema shape.
 - Optional public version numbering and support-window policy.
 - The exact durable migration record format.
 - How unmanaged clients identify themselves in telemetry.

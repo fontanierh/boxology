@@ -105,10 +105,13 @@ The onboarding agent can later guide users through a first-party hosted service,
 At the end of project initialization, the developer has a small running application that proves the central module abstraction:
 
 - One implementation method is annotated as a typed Hello World capability.
-- A deterministic pre-Cargo step generates its contract crate, schema, typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
+- Its boundary types are authored beside the implementation and lifted into the generated contract crate.
+- A deterministic pre-Cargo step generates its language-neutral schema, contract crate, asynchronous typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
 - The capability can be invoked directly through the Rust module interface.
 - The same capability can be invoked through an HTTP endpoint.
 - Both paths reach the same annotated implementation method through the generated contract rather than two handwritten interfaces or implementations.
+
+The generated handle uses the invocation envelope in [Canonical Capability Contract](09-capability-contract.md): an explicit call context, a declared domain error, and a distinct invocation-error layer even when the selected binding is in-process.
 
 The first proof is database-free. Postgres and Redis remain important provider candidates, but persistence is a later slice and should not obscure validation of the module, binding, and factory loop.
 
