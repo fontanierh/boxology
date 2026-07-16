@@ -6,6 +6,14 @@ Module-based engineering trades additional scaffolding and smaller pull requests
 
 [Read the complete design interview and Q&A](module-based-engineering-details/00-design-interview.md).
 
+## [Product](module-based-engineering-details/07-product-contract.md)
+
+The module platform and software factory are one product, brand, and project, even though they remain separate applications and packages internally. The module platform constrains the blast radius of changes; the factory makes the additional coordination and scaffolding economically practical.
+
+Development bootstraps progressively. The module foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
+
+The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It generates one capability callable both as Rust code and through HTTP, connects the repository to a remotely hosted factory, and lets the developer ask a lead agent through Slack to add a backward-compatible capability in one isolated pull request for human review. It does not yet test multi-agent parallelism.
+
 ## [Modules](module-based-engineering-details/01-modules.md)
 
 A module is a self-contained capability that evolves independently behind a stable, versioned contract.
@@ -21,6 +29,8 @@ Each module owns:
 Every pull request has one accountable module and zero foreign source changes. Mechanically derived artifacts may accompany it.
 
 Modules communicate only through versioned interfaces. They never access another module's storage directly.
+
+Rust modules receive the full native guarantee set. Foreign-language modules remain first-class ownership and factory units, but only their managed binding boundary receives the same guarantees.
 
 ## [Packages](module-based-engineering-details/02-packages.md)
 
@@ -72,6 +82,8 @@ Client-binding modules generate TypeScript, Swift, Kotlin, or other SDKs while k
 ## [Software Factory](module-based-engineering-details/05-software-factory.md)
 
 A top-level lead coordinates the harness and interfaces with humans. Area leads maintain plans and publish prioritized tasks. Worker agents execute tasks independently.
+
+Those roles describe the intended mature organization, not a hard-coded minimum. The first factory contains only the human-facing lead. Roles, handoffs, and gates are factory policy expressed through configuration so workers, reviewers, and a merger can be introduced progressively.
 
 The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed modules, changed imported contracts, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
 

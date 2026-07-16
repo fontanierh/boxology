@@ -124,6 +124,12 @@ A composition package should contain almost no business logic. Meaningful logic 
 
 Composition packages also give shared assembly artifacts a semantic owner. Changing which modules are deployed or how they are bound changes the composition package rather than editing the implementation of every included module.
 
+## Deployment topology
+
+Modules remain deployment-neutral. The application composition decides whether a module is linked into a shared binary, exposed as a separately deployed service, or assembled as another process type such as a worker. This keeps deployment choices out of module business logic and allows the same module contract to participate in different application topologies.
+
+Kubernetes is an important future deployment target for module-based applications, but it is not part of the foundation milestone. Kubernetes support should be expressed through composition and deployment tooling rather than built into individual modules. The same separation applies when deploying the software factory itself: running the factory on Kubernetes and deploying module-based applications to Kubernetes are distinct targets.
+
 ## Workflow engines
 
 The discussion deliberately avoided making Temporal or another workflow engine a required runtime concept.
@@ -140,4 +146,4 @@ The discussion did not settle:
 - Whether a binding can be switched without rebuilding a composition.
 - How vendor-specific requirements are named and governed.
 - The exact boundary between composition configuration and deployment configuration.
-
+- The representation and generation of Kubernetes deployment artifacts.

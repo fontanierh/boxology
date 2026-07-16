@@ -10,6 +10,26 @@ The software factory is a persistent control plane for developing and maintainin
 
 The module boundary gives the factory a natural unit of ownership, analysis, review, and merge accountability. Agents can work concurrently because every submitted change has one target module and cannot directly modify another module's source.
 
+The factory and module platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with the module system, following a progressive bootstrap in which early development does not depend on either system being complete.
+
+The factory control plane supplies mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the execution engine.
+
+## Foundation-milestone factory
+
+The governance hierarchy below is a mature direction. The foundation-milestone factory is deliberately smaller:
+
+1. A developer talks to one persistent lead agent through Slack.
+2. The lead handles the requested change itself.
+3. It works in a remote, isolated code sandbox with a dedicated worktree and branch.
+4. It opens a GitHub pull request and reports the result in Slack.
+5. It stops at the pull request boundary. A human must review and merge.
+
+The foundation milestone has no required task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. These roles and surfaces can be added progressively without replacing the stable human-facing lead.
+
+The factory owns its agent execution interface and lifecycle guarantees. The first implementation may wrap an existing runner, call model APIs directly, or use a bare-bones custom loop. The foundation milestone specifies observable behavior without requiring a sophisticated original harness.
+
+Its prescribed acceptance task is one backward-compatible, module-local change: add `greet(name)`, returning `Hello, {name}!`, to the generated Hello module; touch no foreign package source; keep Rust and HTTP behavior consistent; open exactly one pull request; and leave merging to a human. This foundation milestone does not yet test concurrent agent work or the safe-parallelism thesis.
+
 ## Governance hierarchy
 
 The hierarchy discussed was:
@@ -50,7 +70,7 @@ Area ownership and subdivisions are explicit configuration rather than something
 
 Workers pick up ready tasks and work independently. Once work begins, workers do not communicate with one another to negotiate concurrent changes. Shared context comes from the area plan, task, module contract, and current repository state.
 
-Each worker submits a single-module merge request. Submission moves the work into a waiting state while the merger evaluates it. The durable task and its artifacts remain the source of truth; the system need not preserve the exact model session forever. A compatible worker can resume rework from the stored task, branch, evidence, and feedback.
+Each worker submits a single-module merge request. Submission moves the work into a waiting state while the merger evaluates it. The durable task, sandbox, branch, evidence, and feedback remain the source of truth for resumption and rework.
 
 ### Merger
 
@@ -109,7 +129,21 @@ Humans can push authoritative information into the harness at any time through t
 
 The lead can also initiate questions when area analysis, quality findings, implementation, or deprecation evidence requires judgment that the harness should not invent.
 
-The exact user interface for these questions and approvals was not designed. It should provide clear context and strong approval requests rather than relying on unstructured side-channel instructions.
+Slack is the only first-class human integration in the foundation milestone. It should provide clear context and strong approval requests rather than relying on implicit authority. Other interfaces may be added later.
+
+GitHub is the initial repository and pull-request surface, but there is no required GitHub App, bot workflow, Issues integration, or other first-class GitHub integration. The lead can use ordinary Git and GitHub credentials to push a branch and open a pull request, but it never merges autonomously. Dedicated identity and task-ledger integrations may be added when worker agents are introduced.
+
+## Remote execution and resumability
+
+Factory agents run in remote code sandboxes created and owned by the deployed factory. Every sandbox is isolated and supports a lifecycle comparable to create, suspend, resume, checkpoint, and destroy. It checks out the managed project repository and uses worktree and branch isolation from the foundation milestone, even while only one lead agent performs work.
+
+Graceful suspension freezes the complete sandbox and resumes it exactly where it stopped. After a crash, all repository bytes and durable records through the last completed execution-engine tool action survive; only the action that was in flight may be retried. GitHub and Slack effects are reconciled without duplicate pull requests, comments, or messages.
+
+Losing the worktree, branch, conversation, task history, or audit record is unacceptable.
+
+The factory itself is distributed as a container and can be stopped and resumed. Its first supported deployment recipe is a user-controlled machine reachable over SSH and capable of running containers. That machine may be a cloud VM or another remotely reachable computer. Running the container on the developer's current computer is useful for evaluation, although it is a weaker team setup because availability depends on that computer.
+
+"Remotely hosted" does not require a vendor-operated service. A future onboarding flow may guide users toward a managed offering, common compute providers, Kubernetes, or their own hardware.
 
 ## Continuous quality agent
 
@@ -138,6 +172,9 @@ Passing CI is necessary but may not be sufficient when the target module, import
 
 The discussion did not settle:
 
+- The implementation of the factory's eventual agent system beyond the minimal execution interface, including its model, provider, and tool architecture.
+- The exact sandbox provider contract, checkpoint frequency, and reconciliation algorithm required to satisfy the recovery guarantees.
+- Managed hosting and provider-specific deployment recipes beyond the first SSH-and-container path.
 - The exact durable task schema and storage system.
 - How workers claim tasks and how leases expire.
 - The exact priority model across areas after human overrides.
@@ -145,6 +182,5 @@ The discussion did not settle:
 - How an area lead records and versions its broad plan.
 - Whether area-lead reassessment is performed by the same model instance or a fresh worker.
 - The precise waiting, callback, retry, and cancellation protocols.
-- The interface through which humans inspect, steer, approve, and reorganize the harness.
+- Human interfaces beyond the first Slack integration.
 - Which actions the top-level lead can perform without explicit human authorization.
-
