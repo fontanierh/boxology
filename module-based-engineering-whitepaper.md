@@ -100,6 +100,8 @@ A continuous quality agent analyzes architecture, dependencies, and operational 
 
 Every package defines a strong automated quality contract appropriate to its kind. The harness runs it, adds required AI reviews, and refuses merges that fail policy.
 
+Before a pull request merges or an issue closes, the tracker is reconciled with the accepted decisions. Linked and otherwise affected issues are updated, fully resolved issues are closed, and partially resolved issues retain their remaining scope unless it is explicitly transferred to named open issues. Reviewer proposals are not mistaken for project decisions.
+
 The runtime does not promise correctness. The harness promises that the configured evidence and approval process were enforced.
 
 Humans retain authoritative control through the top-level lead. Sensitive actions and policy changes use explicit, audited approval requests.

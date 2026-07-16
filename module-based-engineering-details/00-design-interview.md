@@ -454,6 +454,18 @@ Issue #4 asked what representation is authoritative, which Rust types may cross 
 
 The complete decision is maintained in [Canonical Capability Contract](09-capability-contract.md).
 
+## Follow-up: Tracker reconciliation gate
+
+After several foundational pull requests changed assumptions shared by other open issues, the tracker was audited for stale premises. The following process decision was made:
+
+- Before merging any pull request, review every issue and review thread it addresses and scan the other open issues for assumptions changed by the same decisions.
+- Before closing any issue, perform the same repository-wide reconciliation even when no pull request performs the closure.
+- Update linked and otherwise affected issues to record their current remaining scope.
+- Close an issue only when it is resolved, or when it is explicitly superseded and every unresolved part is transferred to named open issues.
+- Preserve reviewer recommendations as proposals unless they were explicitly accepted and recorded in merged project documentation.
+
+The complete rule is maintained as the [tracker reconciliation gate](06-quality-and-authority.md#tracker-reconciliation-gate).
+
 ## Resulting documentation set
 
 The interview produced:
