@@ -113,6 +113,8 @@ The signals discussed were:
 5. **Shared dependency resolution changed:** a version, source, checksum, or selected dependency used by an affected package changed, so whole-workspace validation and semantic reassessment are required even when the lockfile was mechanically reproduced.
 6. **Area plan or human guidance changed:** the task may need revision or may have become obsolete.
 
+Before accepting the merge, the configured merge process also runs the [tracker reconciliation gate](06-quality-and-authority.md#tracker-reconciliation-gate). Linked issues and any other open issues made stale by the change must reflect the decisions that are actually merging. Partially resolved issues remain open with their remaining scope recorded unless every unresolved part is explicitly transferred to named open issues; undecided review suggestions remain proposals.
+
 After a merge, in-progress work falls into one of the states discussed:
 
 ```text

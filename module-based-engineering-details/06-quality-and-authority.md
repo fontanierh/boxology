@@ -54,6 +54,17 @@ The merger therefore reruns the applicable checks against the latest main state.
 
 An intervening change to the same package, an imported contract, or shared dependency resolution can also require area-lead reassessment even when the tests remain green. The quality process recognizes that automated checks may not capture every semantic change.
 
+## Tracker reconciliation gate
+
+Before any pull request merges, the merge process must reconcile its decisions with the issue tracker:
+
+- Review every issue and review thread the pull request claims to address.
+- Update any linked issue whose premise, questions, or remaining scope changed.
+- Scan the other open issues for assumptions made stale by the same merged decisions and update or close them when the result is already settled.
+- Close an issue only when all of its required work is resolved, or when it is explicitly superseded and every unresolved part has been transferred to named open issues. Otherwise, keep it open and record the exact remaining scope.
+
+The same reconciliation is mandatory before closing an issue even when no pull request performs the closure. The recorded result must distinguish decisions established by merged documentation or implementation from reviewer proposals that remain undecided. Reconciliation must not silently promote an unaccepted suggestion into project policy.
+
 ## Provider conformance
 
 Provider packages are trusted infrastructure components and need their own quality contracts; they are distinct from the platform package kind.
