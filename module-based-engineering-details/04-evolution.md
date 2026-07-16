@@ -8,7 +8,7 @@ This document expands the compatibility, migration, and deprecation process disc
 
 Modules should normally evolve through backward-compatible changes. Consumers depend only on the generated contract and should not require simultaneous edits when the providing module's implementation changes.
 
-The deterministic language-neutral schema is the compatibility authority. The generator compares the submitted schema with the base revision and reports semantic changes independently of Rust formatting, macro expansion, or binding-specific representation. See [Canonical Capability Contract](09-capability-contract.md).
+The deterministic language-neutral schema is the compatibility authority. The generator compares the submitted schema with the base revision and reports changes independently of Rust formatting, macro expansion, or binding-specific representation. Documentation-only changes receive their own classification rather than being mixed with semantic evolution. See [Canonical Capability Contract](09-capability-contract.md).
 
 The system does not assume that compatibility can be preserved forever. Genuine breaking changes will occur. The goal is to turn them into visible, managed migrations rather than codebase-wide atomic patches.
 
@@ -64,9 +64,10 @@ The final step is mechanically incompatible with an old consumer. Compatibility 
 
 The contract model supplies several mechanical rules needed by this process:
 
-- Generated consumers ignore unknown fields in received structs.
+- Generated consumers ignore unknown fields in provider outputs.
 - Generated output enums and errors preserve an unknown variant rather than failing to decode the complete response.
-- An older provider rejects an unknown input variant with a structured contract error.
+- An older provider rejects an unknown input field or variant with a structured contract error rather than silently discarding caller intent.
+- Adding an optional input field therefore uses provider-first deployment before callers send it.
 - Tightening validation so previously valid input is rejected is a breaking semantic change.
 
 These rules make some expansions mechanically survivable, but they do not replace semantic change classification. The generator reports the change and the harness applies the configured policy.

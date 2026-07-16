@@ -50,6 +50,8 @@ The necessary restriction is at the boundary: inputs, outputs, errors, and other
 
 Developers author annotated boundary-type declarations beside the implementation. The pre-Cargo generator lifts each declaration into the generated contract crate, where the one real compiled type implements `ModuleType`. The implementation-side annotation resolves to a re-export of that generated type. Consumers, the implementation adapter, and bindings therefore share one contract type without a second handwritten declaration.
 
+Because this happens before Cargo type-checking, an exported declaration must be syntactically self-contained and target-independent. The generator rejects aliases to unannotated boundary types, macro-generated fields or variants, `cfg`-dependent contract shapes, and attributes or derives it cannot explicitly propagate. Structured errors use this same lifting path rather than a separate implementation-side derive model.
+
 ## Generation before Cargo
 
 Cargo determines its package graph before compiling a procedural macro, so annotation expansion alone cannot create a sibling contract crate in the same build. The platform therefore owns a deterministic generation step before Cargo runs:

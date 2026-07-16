@@ -30,7 +30,7 @@ A capability is an annotated asynchronous implementation method. Conceptually:
 #[module::capability(
     name = "create_user",
     auth = "customer",
-    idempotency = "keyed"
+    idempotency = "none"
 )]
 async fn create_user(
     &self,
@@ -56,13 +56,17 @@ The runtime context is an explicit method parameter. It is recognized by the gen
 Developers author exported data types beside the implementation:
 
 ```rust
-#[module::type]
+#[module::contract]
 pub struct CreateUser {
     pub email: String,
 }
 ```
 
 Before Cargo builds, the generator reads the declaration and emits the real compiled type into the module's generated contract crate. In the implementation crate, the annotated source location resolves to a re-export of that generated type. There is therefore one compiled `CreateUser` type, owned by the contract crate, without asking developers to maintain it in a second file.
+
+Because generation runs before Cargo type-checking, an exported declaration must be syntactically self-contained. Its contract shape cannot depend on a type alias to an unannotated type, macro-generated fields or variants, or `cfg` and target-dependent source. A contract that changes with the build target would create more than one compatibility authority and is rejected.
+
+The generator explicitly propagates only supported attributes and derives to the lifted type. An unknown attribute or derive is a generation error rather than something silently discarded. These restrictions apply to exported declarations, not to internal Rust code.
 
 Every exported type implements the platform's contract-type trait, referred to here as `ModuleType`. Standard supported types receive platform implementations; user-defined boundary types receive generated implementations. A handwritten implementation that can misrepresent the wire shape is not part of the supported API.
 
@@ -94,7 +98,7 @@ The contract therefore records presence and nullability separately:
 - `Option<T>` represents an ordinary optional value: absence maps to `None`, while an explicit `null` is not silently collapsed into absence.
 - A runtime contract type such as `Field<T>` represents `Missing`, `Null`, or `Value(T)` when all three states matter.
 
-Defaults and declarative validation are contract metadata. For example, a field can declare a default plus minimum and maximum values. Every binding applies the same declared rules before invoking the implementation. The provider remains authoritative; generated clients may validate earlier only as a convenience.
+Defaults and declarative validation are contract metadata. For example, a field can declare a default plus minimum and maximum values. Every binding applies the same declared rules before invoking the implementation. The provider remains authoritative; generated clients may validate earlier only as a convenience. A client-side validation failure reflects that consumer's schema revision and remains distinguishable from a provider-returned contract or domain error. It is not proof that a differently versioned provider would reject the input.
 
 Changing validation so a previously valid input becomes invalid is a breaking semantic change. Complex business rules remain implementation logic and return structured domain errors rather than being forced into the schema.
 
@@ -109,12 +113,14 @@ Sensitive values use a contract-aware wrapper such as `Secret<String>`. That met
 An exported operation declares a structured domain error type:
 
 ```rust
-#[derive(ModuleError)]
-enum CreateUserError {
+#[module::contract(error)]
+pub enum CreateUserError {
     EmailAlreadyExists,
     InvalidEmail { reason: String },
 }
 ```
+
+Errors use the same lift-and-re-export mechanism as every other boundary type. The generator supplies both `ModuleType` and the error-specific `ModuleError` behavior; developers do not maintain a separate derive-based compilation path.
 
 Opaque strings and types such as `anyhow::Error` remain useful internally but cannot cross the module boundary. Callers and generated bindings must be able to identify and handle declared failures.
 
@@ -145,7 +151,15 @@ Generated capability handles are always asynchronous, including when a compositi
 
 Cancellation is advisory. It asks work to stop but does not roll back side effects that already occurred.
 
-Every operation declares the retry or idempotency property needed to reason about another attempt. This does not make every operation idempotent and does not authorize automatic retry of every failed call. Retry policy must respect the operation declaration, deadline, and caller intent.
+Every operation declares the retry or idempotency property needed to reason about another attempt. Conceptually, the declaration distinguishes:
+
+- **None:** retry is not known to be safe.
+- **Inherent:** the operation itself is safe to repeat without platform deduplication state.
+- **Keyed:** safety depends on stored deduplication state associated with an idempotency key.
+
+The exact source spelling is a tooling choice. A keyed declaration is not decorative metadata: composition validation rejects it unless an implementation capable of honoring the guarantee is configured. The database-free foundation milestone does not provide keyed deduplication.
+
+These declarations do not authorize automatic retry of every failed call. Retry policy must respect the operation declaration, deadline, and caller intent.
 
 ## Interaction shapes
 
@@ -176,9 +190,11 @@ It records at least the contract information established here:
 
 OpenAPI, Protobuf, generated Rust, and language-native SDKs are outputs of this schema when their mapping is faithful. They are not competing authorities. A generated artifact must preserve the documentation and policy metadata applicable to that artifact.
 
+Documentation remains part of the generated schema and artifact revision, but the change classifier reports a documentation-only change separately from semantic compatibility changes. Editing a Rust doc comment therefore does not create a migration signal.
+
 ## Forward-compatible decoding
 
-Generated consumers ignore unknown fields in received structs. A provider may therefore add an optional response field without making an older consumer reject the entire response.
+Generated consumers ignore unknown fields in provider outputs. A provider may therefore add an optional response field without making an older consumer reject the entire response.
 
 Output enums and structured errors include an unknown representation conceptually equivalent to:
 
@@ -186,7 +202,9 @@ Output enums and structured errors include an unknown representation conceptuall
 Unknown { tag, payload }
 ```
 
-An older consumer can report or conservatively handle a new provider variant rather than failing to decode the complete call. If a newer caller sends an enum variant to an older provider that does not understand the requested behavior, the binding rejects it with a structured contract error before invoking the implementation.
+An older consumer can report or conservatively handle a new provider variant rather than failing to decode the complete call. Because the older consumer cannot know the classification of a newly introduced payload, an unknown payload is opaque and sensitive by default. Generated debug, logging, and tracing output redacts it; reading or forwarding the raw payload requires an explicit action.
+
+Input is intentionally stricter. If a newer caller sends an unknown field or enum variant to an older provider, the binding rejects it with a structured contract error before invoking the implementation. Silently ignoring requested behavior could produce a successful but incorrect side effect. Adding an optional input field therefore requires provider-first deployment before callers begin sending it, which is the normal expand-migrate-contract order.
 
 These decoding rules do not automatically classify every new enum or error variant as semantically compatible. The generator still reports the precise schema change, and the harness applies the configured compatibility and migration policy.
 
@@ -199,8 +217,11 @@ Examples include:
 - Server-sent events cannot represent a bidirectional streaming capability.
 - A basic HTTP request-response binding cannot expose a streaming response unless an appropriate streaming binding is configured.
 - A CLI binding can reject an interactive session shape for which it has no faithful terminal representation.
+- A binding that cannot carry the complete range of `u64` must use a declared lossless representation, such as a decimal string, or reject the capability. It may not silently coerce the value into a lossy number.
 
 The diagnostic identifies the capability, unsupported feature, and compatible binding kinds. A binding must not silently degrade the contract.
+
+Context propagation is also a conformance dimension. A binding declares how it carries deadlines, tracing, idempotency keys, authentication context, and cancellation. It may not silently discard them. Composition validation rejects a binding when a capability requires a context property that the binding cannot preserve.
 
 ## Handwritten customization
 
@@ -220,6 +241,8 @@ This contract model does not yet specify:
 
 - Detailed cursor, replay, backpressure, delivery, and bidirectional-session semantics.
 - Runtime discovery, placement, routing, lifecycle, and overload behavior.
+- Per-binding context mappings, including deadline-budget calculation, authentication propagation, and cancellation behavior.
+- Keyed-idempotency scope, retention, replay responses, storage, and provider integration.
 - Exact wire mappings for every future binding and language SDK.
 - The complete permission and resource-authorization model.
 - Registry publication and support policy for unmanaged consumers.

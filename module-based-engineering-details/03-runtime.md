@@ -172,7 +172,7 @@ Protobuf is treated as a schema and encoding rather than as the transport itself
 
 Every binding must preserve the capability contract, but a binding can only be selected when it supports the endpoint's interaction shape. For example, server-sent events support a server-to-client stream but do not provide a general bidirectional session.
 
-Binding compatibility is checked during generation or application-composition validation. An incompatible binding is rejected before the application accepts traffic, with a diagnostic identifying the capability and unsupported contract feature.
+Binding compatibility is checked during generation or application-composition validation. Interaction shape, value representation, and propagation of `CallContext` fields are conformance dimensions. An incompatible binding is rejected before the application accepts traffic, with a diagnostic identifying the capability and unsupported contract feature.
 
 The runtime can provide a generic development CLI capable of invoking any compatible endpoint. A module or application can also package a CLI as a real internal product. No handwritten CLI implementation should be required when the endpoint definition already contains the necessary input, output, validation, authentication, and interaction metadata.
 
