@@ -88,7 +88,7 @@ Those roles describe the intended mature organization, not a hard-coded minimum.
 
 The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed packages, changed imported contracts, shared dependency-resolution changes, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
 
-A continuous quality agent analyzes architecture, dependencies, and operational evidence. It surfaces coherence problems such as cycles and publishes targeted improvement tasks.
+A continuous quality agent analyzes architecture, dependencies, and operational evidence. New Rust-build and live-invocation cycles are blocked by default; asynchronous cycles require idempotency, termination, and bounded-amplification evidence; provider-dependency and data-flow cycles remain analytical findings. Existing accepted cycles do not block unrelated work.
 
 ## [Quality and Authority](module-based-engineering-details/06-quality-and-authority.md)
 
