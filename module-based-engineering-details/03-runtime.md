@@ -154,7 +154,7 @@ CLI is therefore useful but not mandatory. It is neither a special module type n
 
 ## Streaming, events, and real-time behavior
 
-The first version is expected to support more than ordinary request-response calls. The requirements stated during the discussion were:
+The first end-to-end foundation milestone exercises unary request-response through Rust and HTTP only. The first full module-runtime release is expected to support more than ordinary request-response calls. Its required additional interaction shapes are:
 
 - Streaming data associated with a call.
 - Streaming events that consumers can observe.
@@ -183,4 +183,3 @@ The discussion did not settle:
 - The exact representation of permissions and resource authorization.
 - How code-only access is technically enforced when modules share one process.
 - Which CLI behavior is guaranteed by default beyond the generic invocation path.
-

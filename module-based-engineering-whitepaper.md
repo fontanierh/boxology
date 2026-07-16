@@ -12,7 +12,7 @@ The module platform and software factory are one product, brand, and project, ev
 
 Development bootstraps progressively. The module foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
 
-The first viable slice targets a greenfield Rust repository created by the platform. It generates one capability callable both as Rust code and through HTTP, connects the repository to a remotely hosted factory, and lets a developer ask a lead agent through Slack to produce an isolated pull request for human review.
+The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It generates one capability callable both as Rust code and through HTTP, connects the repository to a remotely hosted factory, and lets the developer ask a lead agent through Slack to add a backward-compatible capability in one isolated pull request for human review. It does not yet test multi-agent parallelism.
 
 ## [Modules](module-based-engineering-details/01-modules.md)
 
@@ -29,6 +29,8 @@ Each module owns:
 Every pull request has one accountable module and zero foreign source changes. Mechanically derived artifacts may accompany it.
 
 Modules communicate only through versioned interfaces. They never access another module's storage directly.
+
+Rust modules receive the full native guarantee set. Foreign-language modules remain first-class ownership and factory units, but only their managed binding boundary receives the same guarantees.
 
 ## [Packages](module-based-engineering-details/02-packages.md)
 

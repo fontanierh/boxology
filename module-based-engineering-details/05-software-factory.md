@@ -12,11 +12,11 @@ The module boundary gives the factory a natural unit of ownership, analysis, rev
 
 The factory and module platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with the module system, following a progressive bootstrap in which early development does not depend on either system being complete.
 
-The factory runtime supplies mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the runtime.
+The factory control plane supplies mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the execution engine.
 
-## First factory slice
+## Foundation-milestone factory
 
-The governance hierarchy below is a mature direction. The first viable factory is deliberately smaller:
+The governance hierarchy below is a mature direction. The foundation-milestone factory is deliberately smaller:
 
 1. A developer talks to one persistent lead agent through Slack.
 2. The lead handles the requested change itself.
@@ -24,9 +24,11 @@ The governance hierarchy below is a mature direction. The first viable factory i
 4. It opens a GitHub pull request and reports the result in Slack.
 5. It stops at the pull request boundary. A human must review and merge.
 
-The first slice has no required task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. These roles and surfaces can be added progressively without replacing the stable human-facing lead.
+The foundation milestone has no required task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. These roles and surfaces can be added progressively without replacing the stable human-facing lead.
 
-The factory's agent loop is expected to be a purpose-built harness rather than an invocation of Codex CLI or Claude Code. Its internal model, provider, and tooling design has not been selected. The first slice specifies its behavior, not that implementation.
+The factory owns its agent execution interface and lifecycle guarantees. The first implementation may wrap an existing runner, call model APIs directly, or use a bare-bones custom loop. The foundation milestone specifies observable behavior without requiring a sophisticated original harness.
+
+Its prescribed acceptance task is one backward-compatible, module-local change: add `greet(name)`, returning `Hello, {name}!`, to the generated Hello module; touch no foreign package source; keep Rust and HTTP behavior consistent; open exactly one pull request; and leave merging to a human. This foundation milestone does not yet test concurrent agent work or the safe-parallelism thesis.
 
 ## Governance hierarchy
 
@@ -127,15 +129,17 @@ Humans can push authoritative information into the harness at any time through t
 
 The lead can also initiate questions when area analysis, quality findings, implementation, or deprecation evidence requires judgment that the harness should not invent.
 
-Slack is the first human interface to the lead. It should provide clear context and strong approval requests rather than relying on implicit authority. Other interfaces may be added later.
+Slack is the only first-class human integration in the foundation milestone. It should provide clear context and strong approval requests rather than relying on implicit authority. Other interfaces may be added later.
 
-GitHub is the first review and integration surface. The initial factory opens a pull request but never merges it autonomously. GitHub Issues may later become the task ledger when worker agents are introduced. A factory GitHub App or bot identity can act on behalf of the system while comments and factory records attribute work to a logical agent and run; the exact identity design remains open.
+GitHub is the initial repository and pull-request surface, but there is no required GitHub App, bot workflow, Issues integration, or other first-class GitHub integration. The lead can use ordinary Git and GitHub credentials to push a branch and open a pull request, but it never merges autonomously. Dedicated identity and task-ledger integrations may be added when worker agents are introduced.
 
 ## Remote execution and resumability
 
-Factory agents run in remote code sandboxes. Every sandbox is isolated and supports a lifecycle comparable to create, suspend, resume, checkpoint, and destroy. Worktree and branch isolation are required from the first version, even while only one lead agent performs work.
+Factory agents run in remote code sandboxes created and owned by the deployed factory. Every sandbox is isolated and supports a lifecycle comparable to create, suspend, resume, checkpoint, and destroy. It checks out the managed project repository and uses worktree and branch isolation from the foundation milestone, even while only one lead agent performs work.
 
-Stopping the factory must not discard agent state. The target behavior is to freeze and resume the complete sandbox exactly where it stopped. Recovery may return to a recent durable checkpoint and repeat a small, bounded amount of work, but losing the worktree, branch, conversation, task history, or audit record is unacceptable.
+Graceful suspension freezes the complete sandbox and resumes it exactly where it stopped. After a crash, all repository bytes and durable records through the last completed execution-engine tool action survive; only the action that was in flight may be retried. GitHub and Slack effects are reconciled without duplicate pull requests, comments, or messages.
+
+Losing the worktree, branch, conversation, task history, or audit record is unacceptable.
 
 The factory itself is distributed as a container and can be stopped and resumed. Its first supported deployment recipe is a user-controlled machine reachable over SSH and capable of running containers. That machine may be a cloud VM or another remotely reachable computer. Running the container on the developer's current computer is useful for evaluation, although it is a weaker team setup because availability depends on that computer.
 
@@ -168,8 +172,8 @@ Passing CI is necessary but may not be sufficient when the target module, import
 
 The discussion did not settle:
 
-- The implementation of the factory's own agent harness, including its model, provider, and tool architecture.
-- The exact sandbox provider contract, checkpoint frequency, and bounded rollback behavior.
+- The implementation of the factory's eventual agent system beyond the minimal execution interface, including its model, provider, and tool architecture.
+- The exact sandbox provider contract, checkpoint frequency, and reconciliation algorithm required to satisfy the recovery guarantees.
 - Managed hosting and provider-specific deployment recipes beyond the first SSH-and-container path.
 - The exact durable task schema and storage system.
 - How workers claim tasks and how leases expire.

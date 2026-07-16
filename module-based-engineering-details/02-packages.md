@@ -128,7 +128,7 @@ Composition packages also give shared assembly artifacts a semantic owner. Chang
 
 Modules remain deployment-neutral. The application composition decides whether a module is linked into a shared binary, exposed as a separately deployed service, or assembled as another process type such as a worker. This keeps deployment choices out of module business logic and allows the same module contract to participate in different application topologies.
 
-Kubernetes is an important future deployment target for module-based applications, but it is not part of the first viable slice. Kubernetes support should be expressed through composition and deployment tooling rather than built into individual modules. The same separation applies when deploying the software factory itself: running the factory on Kubernetes and deploying module-based applications to Kubernetes are distinct targets.
+Kubernetes is an important future deployment target for module-based applications, but it is not part of the foundation milestone. Kubernetes support should be expressed through composition and deployment tooling rather than built into individual modules. The same separation applies when deploying the software factory itself: running the factory on Kubernetes and deploying module-based applications to Kubernetes are distinct targets.
 
 ## Workflow engines
 

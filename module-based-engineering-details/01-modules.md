@@ -72,6 +72,14 @@ The factory uses declared imports for dependable dependency analysis. Runtime ob
 
 Managed clients outside Rust participate through client-binding modules, which generate language-native SDKs while keeping the contract dependency visible to the factory. Completely unmanaged public consumers cannot receive the same migration guarantee.
 
+## Native and foreign-language modules
+
+Everything managed as part of an application should be represented as a module. Rust is the native implementation path and receives the full runtime, dependency-analysis, compatibility, and factory guarantees.
+
+A foreign-language component, such as a TypeScript application, can also be represented as a first-class module package. It retains explicit ownership, factory tasks, and the one-module pull-request boundary. A client-binding module remains in the native managed ecosystem, owns the contract import, and generates the language-native SDK the foreign module consumes.
+
+The platform can enforce and evolve that declared binding boundary, but it cannot provide the same static and runtime guarantees inside foreign-language implementation code. Polyglot code is therefore allowed anywhere the application composition requires it, with an explicitly reduced guarantee level rather than an implicit claim of equivalence with native Rust modules.
+
 ## Dependency cycles
 
 The discussion did not make dependency cycles a runtime error. Backward-compatible contracts and single-module pull requests remove much of the change-management difficulty normally associated with a cycle.
@@ -93,4 +101,3 @@ The discussion did not settle:
 - The enforcement mechanism for file ownership.
 - The exact type system or interface-definition language.
 - Whether any categories of new dependency cycle should be mechanically blocked rather than only surfaced.
-
