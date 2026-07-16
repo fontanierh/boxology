@@ -16,6 +16,8 @@ The runtime's central object is a typed capability or endpoint definition. That 
 
 The desired endpoint API should collect the information required by bindings without requiring handwritten transport-specific adapters.
 
+Rust implementation methods are the authoring source. A method becomes part of the module contract when it is annotated as a capability. No exported service trait, parallel interface file, or prescribed internal organization is required. Unannotated methods remain internal implementation details.
+
 The metadata discussed included:
 
 - Named and documented inputs.
@@ -27,7 +29,15 @@ The metadata discussed included:
 - File, binary, or secret input semantics.
 - Side-effect and confirmation metadata where needed by a caller.
 
-The exact Rust interface or interface-definition language was not chosen. The important requirement is that the contract be rich enough to generate or validate its configured bindings.
+The exact annotation syntax and schema-safe type subset remain open. The important requirement is that the annotated method signature and metadata be rich enough to generate or validate its configured bindings. Values crossing the capability boundary must be representable faithfully; unsupported boundary types are generation errors rather than silently lossy bindings.
+
+## Generated contract crate
+
+Each native module owns one generated contract crate in addition to its handwritten implementation crate. A deterministic platform generator runs before Cargo, reads annotated implementation methods, and produces the contract-safe Rust types, typed caller handles, server-side dispatch surface, module-local adapter glue, metadata, and language-neutral schema required by configured bindings.
+
+The generated crate is checked into Git as a declared, reproducible artifact and is never edited manually. CI regenerates it byte-for-byte from the module's permitted source inputs and pinned generator. Other modules compile only against this generated contract, never against the providing module's implementation. See [Rust Build Topology](08-rust-build-topology.md).
+
+The contract crate represents the module's complete supported surface. Public `v1` or `v2` crates, traits, and namespaces are optional rather than required. Stable capability identities and generated contract revisions provide change tracking without dictating a public versioning scheme.
 
 ## Exposure, identity, and permission
 
@@ -176,7 +186,9 @@ Durable workflow behavior can be expressed by a module's own endpoints and event
 
 ## Rust calls and external clients
 
-Within the Rust ecosystem, module-to-module calls should go through a runtime-provided typed function or capability handle. The module declares the imported contract, and the runtime or generated code supplies the typed caller.
+Within the Rust ecosystem, module-to-module calls go through a generated typed capability handle. The module declares the imported contract, the contract-owning module's generated crate supplies the canonical handle type, and the runtime or composition creates and injects the permitted handle.
+
+The application composition binds that handle to an in-process implementation or a remote transport. Module code remains statically typed and deployment-neutral; it does not perform ambient string-based service lookup.
 
 This gives the factory a static dependency graph while runtime observations provide actual-usage telemetry.
 
@@ -186,8 +198,8 @@ External managed clients participate through client-binding modules. A binding m
 
 The discussion did not settle:
 
-- The exact endpoint declaration syntax.
-- Whether the canonical interface is Rust-first or language-neutral.
+- The exact capability-annotation syntax and schema-safe Rust type subset.
+- How annotated boundary types are lifted into and referenced from the generated contract crate.
 - The adapter loading and configuration mechanism.
 - Detailed streaming, event replay, and real-time semantics.
 - The exact representation of permissions and resource authorization.

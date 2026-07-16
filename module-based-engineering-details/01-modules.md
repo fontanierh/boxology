@@ -6,17 +6,17 @@ This document expands the module model discussed during the design interview. It
 
 ## Core promise
 
-A module is a self-contained capability that can evolve independently behind a stable, versioned contract. The platform exposes that contract consistently through whatever bindings have been configured, such as Rust calls, HTTP, RPC, or CLI.
+A module is a self-contained capability that can evolve independently behind a stable, machine-extracted contract. The platform exposes that contract consistently through whatever bindings have been configured, such as Rust calls, HTTP, RPC, or CLI.
 
 The intended developer experience is that work inside one module does not require reasoning about the implementations of all other modules. Consumers depend on its declared contract rather than its internals. Compatibility checks and the deprecation workflow protect those consumers as the implementation evolves.
 
 This promise has three parts:
 
 - **Independent evolution:** the module can be edited without editing its consumers in the same change.
-- **Contract compatibility:** compatible changes remain safe for existing consumers, while incompatible changes follow an explicit versioned migration.
+- **Contract compatibility:** compatible changes remain safe for existing consumers, while incompatible changes follow an explicit, evidenced migration.
 - **Consistent invocation:** callers use the same capability contract through the bindings selected by the application.
 
-The promise is not that breaking changes never occur. It is that breakage is explicit, versioned, measured, and removed through a managed process.
+The promise is not that breaking changes never occur. It is that breakage is detected, explicit, measured, and removed through a managed process. Public `v1` or `v2` surfaces can be useful, but the runtime does not require them.
 
 ## Ownership boundary
 
@@ -30,8 +30,8 @@ This is a semantic rule rather than a literal one-directory rule. Modules are th
 
 The ownership model discussed was:
 
-- A module implementation is owned by that module.
-- An API contract or schema is owned by the module providing it.
+- A module's handwritten implementation and annotated capability definitions are owned by that module.
+- Its generated contract crate, schema, handles, and dispatch glue are reproducible artifacts attributable to that module.
 - Shared domain types require an explicit owning contract module rather than ownerless shared code.
 - Runtime, CI, and build tooling belong to platform packages.
 - Deployment assembly belongs to an application composition package.
@@ -68,9 +68,11 @@ The owning module remains the source of truth for live data. A consuming module 
 
 Dependencies must be declared statically and exercised through typed runtime capabilities.
 
-The common ownership manifest's declared contract dependencies are the authoritative semantic dependency record. For example, billing declares that it requires a version of the customer contact contract. Every Rust dependency giving one module access to a contract owned by another must correspond to such a declared import. Workspace CI must map Cargo edges to package ownership and reject both undeclared inter-module edges and any edge to a crate classified as a foreign implementation, even when a contract import exists. The exact crate classification and topology remain tracked in [issue #39](https://github.com/fontanierh/module-based-engineering/issues/39).
+The common ownership manifest's declared contract dependencies are the authoritative semantic dependency record. For example, billing declares that it requires the customer contact capability and any explicit contract surface it selects. Every Rust dependency giving one module access to a contract owned by another must correspond to such a declared import.
 
-The runtime or generated Rust interface supplies typed capability handles only for declared imports. This makes ordinary invocation and impact analysis depend on the declared graph; it does not claim that handles are unforgeable under convention-level, same-process isolation.
+One logical module owns a handwritten implementation crate and a mechanically generated contract crate. Workspace CI maps complete Cargo edges to logical ownership and role. It rejects undeclared inter-module edges and every module-owned dependency on a foreign implementation, even when a contract import exists. Application compositions are the authorized assembly roots that may depend on selected implementation crates. The full edge policy and generation model are defined in [Rust Build Topology](08-rust-build-topology.md).
+
+The generated contract crate supplies the canonical typed handle. The runtime and composition create and inject those handles only for declared imports, optionally through a generated consumer `Imports` structure. This makes ordinary invocation and impact analysis depend on the declared graph; it does not claim that handles are unforgeable under convention-level, same-process isolation.
 
 Using raw networking, filesystem access, build scripts, dynamically constructed topic names, or similar mechanisms to bypass a module or provider boundary is a quality violation. The foundation can detect some bypasses mechanically and others through review, but convention-level isolation does not technically prevent them.
 
@@ -98,7 +100,7 @@ The platform can enforce and evolve that declared binding boundary, but it canno
 
 Each graph has a different policy:
 
-- **Rust build graph:** cycles are forbidden. Cargo already rejects ordinary crate cycles, and CI must reject build- or development-dependency tricks that bypass the rule. The mapping between modules, contract crates, implementation crates, and generated crates remains the separate build-architecture decision in [issue #39](https://github.com/fontanierh/module-based-engineering/issues/39).
+- **Rust build graph:** cycles are forbidden. Contract crates never depend on implementation crates; module implementations may depend on declared foreign contract crates but never on foreign implementations. Application compositions link the selected implementations. CI must reject build-, development-, target-, or generated-dependency tricks that bypass these rules. The concrete topology is defined in [Rust Build Topology](08-rust-build-topology.md).
 - **Live invocation graph:** a merge candidate that adds an edge completing a new cycle is blocked by default. A configured architectural approver may authorize an exception, but the durable approval must record the rationale, affected operations, and required runtime safeguards.
 - **Asynchronous event graph:** cycles are allowed. A change completing one must record its idempotency, termination, and bounded-amplification argument so an event cannot circulate or multiply indefinitely without an explicit design.
 - **Provider-dependency and data-flow graphs:** cycles are observed and surfaced for architectural review but are not merge-blocking merely because they exist.
@@ -113,5 +115,5 @@ The discussion did not settle:
 
 - The concrete serialization and implementation tooling for the common package manifest contract.
 - The precise granularity at which a large module should be divided.
-- The exact type system or interface-definition language.
-- The Rust contract/implementation crate topology, dispatch model, and concrete representation of coexisting contract versions.
+- The exact schema-safe contract type system and annotation syntax.
+- The internal erased-dispatch implementation behind composition-selected typed handles.

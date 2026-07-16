@@ -25,6 +25,14 @@ Here, source includes every hand-authored or otherwise non-derived file: impleme
 
 Modules are the most common contract-bearing owners, but providers, compositions, and platform packages are equally valid owners once their ownership records exist.
 
+## Logical packages and Cargo crates
+
+The word **package** in the ownership model names a semantic owner, not necessarily one Cargo package or crate. A native module owns a handwritten implementation crate and a mechanically generated contract crate. Both compilation units belong to the same logical module, factory area, quality contract, and pull-request owner.
+
+The generated contract crate is a declared derived output of the module's annotated Rust implementation methods. It does not become a separate accountable package merely because Cargo compiles it independently. Conversely, an application composition is a separate logical owner even when it compiles both module implementations into one binary.
+
+This distinction preserves the universal ownership rule while allowing Cargo to enforce that modules compile only against foreign contracts. The complete crate-role and edge policy is defined in [Rust Build Topology](08-rust-build-topology.md).
+
 ## Common ownership manifest
 
 Every package kind participates in a common logical manifest contract. The serialization syntax remains open, but each manifest must declare:
@@ -181,7 +189,7 @@ An application composition package describes a deployable application assembled 
 
 It can declare:
 
-- Which modules and versions are included.
+- Which modules and any explicitly selected contract surfaces are included.
 - Which endpoints are enabled, within each module's declared maximum exposure.
 - Which trust zones exist and how internal routes are constrained to them.
 - Which transport bindings are enabled.
