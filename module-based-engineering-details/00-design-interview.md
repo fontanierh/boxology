@@ -434,6 +434,26 @@ Slack is the only first-class integration in the foundation milestone. GitHub is
 
 The complete decision is maintained in [Product Contract and Foundation Milestone](07-product-contract.md).
 
+## Follow-up: Canonical capability contract
+
+Issue #4 asked what representation is authoritative, which Rust types may cross a capability boundary, how different bindings preserve the same meaning, and where customization is allowed. A follow-up interview established these decisions:
+
+- Rust implementation methods and adjacent boundary-type declarations are the authoring source. A deterministic language-neutral schema is the compatibility and binding authority.
+- An annotated boundary type is lifted into the generated contract crate and re-exported into the implementation crate. Structs and structured errors use the same path; the one generated compiled type implements `ModuleType`, and consumers never compile against a duplicate implementation-side type.
+- Exported declarations are syntactically self-contained and target-independent. Borrowing, lifetimes, aliases to unannotated boundary types, macro-generated fields, `cfg`-dependent shapes, arbitrary generics, trait objects, platform-sized integers, and Rust file or I/O handles are rejected at the boundary.
+- Generated handles are asynchronous and accept an explicit `CallContext` carrying caller, deadline, cancellation, tracing, and applicable idempotency information. Domain errors are structured and remain distinct from invocation failures. Bindings must declare rather than silently drop their context-propagation behavior.
+- Missing, null, and present values can be represented distinctly. Defaults and declarative validation are schema metadata; tightening accepted input is a breaking change.
+- Generated consumers ignore unknown response fields and preserve unknown output enum or error variants with opaque, redacted payloads. Older providers reject input fields or variants they do not understand with a structured contract error.
+- Binary streams and sensitive values use dedicated contract-aware types rather than host file handles, paths, or unmarked strings.
+- Unary, server-streaming, client-streaming, bidirectional, and event-subscription shapes are first-class schema concepts, although the foundation milestone implements unary calls only.
+- The canonical schema is platform-owned rather than OpenAPI- or Protobuf-owned. Those formats and language SDKs are generated bindings when they can represent the contract faithfully.
+- Binding compatibility is checked during generation or composition validation. A binding that cannot preserve an interaction shape, context property, or value such as the full range of `u64` is rejected or must use a declared lossless representation.
+- Retry metadata distinguishes operations that are not known safe, operations that are inherently repeatable, and keyed deduplication that requires configured state. The database-free foundation does not provide keyed deduplication.
+- Documentation-only schema changes receive their own classification, and client-side validation remains distinguishable from provider rejection under mixed revisions.
+- Handwritten transport customization may translate into and out of the same canonical contract. It may not create an undocumented parallel API that escapes compatibility, dependency, or authorization analysis.
+
+The complete decision is maintained in [Canonical Capability Contract](09-capability-contract.md).
+
 ## Resulting documentation set
 
 The interview produced:
@@ -441,4 +461,5 @@ The interview produced:
 - A short white paper stating the central thesis and system shape.
 - Detailed documents for modules, packages and providers, runtime behavior, contract evolution, the software factory, and quality and authority.
 - A product contract separating the long-term direction from the first end-to-end foundation milestone.
+- A Rust build-topology contract and canonical capability-contract design.
 - This Q&A record, which preserves the reasoning and unresolved decisions behind those documents.

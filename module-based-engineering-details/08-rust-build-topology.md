@@ -36,6 +36,7 @@ impl CustomerService {
     #[exposure("internal")]
     pub async fn get_customer(
         &self,
+        context: CallContext,
         input: GetCustomer,
     ) -> Result<Customer, GetCustomerError> {
         // business logic
@@ -43,9 +44,13 @@ impl CustomerService {
 }
 ```
 
-The exact annotation syntax remains part of the capability-contract design. No trait, file layout, or internal service pattern is required merely because a method is exported. Unannotated methods remain ordinary internal Rust code.
+The exact macro spelling remains a tooling choice. No exported service trait, file layout, or internal service pattern is required merely because a method is exported. Unannotated methods remain ordinary internal Rust code.
 
-The necessary restriction is at the boundary: inputs, outputs, errors, and other values crossing an annotated method must be representable by the contract type system. The generator rejects a boundary it cannot express faithfully. Internal implementation types and organization remain unconstrained.
+The necessary restriction is at the boundary: inputs, outputs, errors, and other values crossing an annotated method must implement the contract-type model and be representable by the language-neutral schema. The generator rejects a boundary it cannot express faithfully. Internal implementation types and organization remain unconstrained. The complete source model is defined in [Canonical Capability Contract](09-capability-contract.md).
+
+Developers author annotated boundary-type declarations beside the implementation. The pre-Cargo generator lifts each declaration into the generated contract crate, where the one real compiled type implements `ModuleType`. The implementation-side annotation resolves to a re-export of that generated type. Consumers, the implementation adapter, and bindings therefore share one contract type without a second handwritten declaration.
+
+Because this happens before Cargo type-checking, an exported declaration must be syntactically self-contained and target-independent. The generator rejects aliases to unannotated boundary types, macro-generated fields or variants, `cfg`-dependent contract shapes, and attributes or derives it cannot explicitly propagate. Structured errors use this same lifting path rather than a separate implementation-side derive model.
 
 ## Generation before Cargo
 
@@ -141,7 +146,7 @@ or
 -> composition-selected remote binding
 ```
 
-The composition must reject missing, duplicate, or incompatible bindings before accepting traffic. The exact erased-dispatch mechanism and local-versus-remote failure semantics remain separate runtime implementation work.
+The composition must reject missing, duplicate, or incompatible bindings before accepting traffic. The exact erased-dispatch mechanism remains runtime implementation work. Local and remote bindings share the asynchronous, fallible handle contract defined in [Canonical Capability Contract](09-capability-contract.md), while discovery, routing, placement, and overload remain separate topology work.
 
 ## Merge-blocking build-graph rules
 
@@ -202,10 +207,8 @@ The default factory should require backward-compatible changes or a completed, e
 
 This topology does not settle:
 
-- The exact annotation syntax or schema-safe Rust type subset.
-- How boundary types are lifted into the generated crate and referenced by the implementation.
-- The exact language-neutral schema and compatibility taxonomy.
-- Local and remote failure, deadline, cancellation, retry, discovery, and overload semantics.
+- Detailed streaming, replay, and real-time behavior beyond the interaction shapes reserved by the contract.
+- Discovery, placement, routing, lifecycle, and overload semantics.
 - The internal erased-dispatch or routing implementation.
 - Public artifact publication and support-window policy for unmanaged consumers.
 
