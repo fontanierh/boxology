@@ -45,6 +45,16 @@ A module can declare a default access policy and an endpoint can override it. A 
 
 The safe posture discussed was default denial: access that is not declared should not be inferred.
 
+An endpoint's effective module declaration—its endpoint override when present, otherwise the module default—sets its maximum reachability. A composition may omit the endpoint or select a binding whose reachability is equal to or narrower than that maximum. It must never widen it. Raising the maximum is a contract change owned by the module.
+
+Reachability is ordered from narrowest to broadest:
+
+- **Code-only:** the platform must not generate or activate a network route for the endpoint. It remains callable through permitted in-process capability handles.
+- **Internal:** the endpoint may be routed only inside the composition's declared trust zone. Internal is not an authentication bypass; callers must still authenticate and satisfy the endpoint's authorization policy.
+- **External:** the endpoint may be routed externally. This does not imply anonymous access; anonymity must still be explicit.
+
+Composition validation rejects bindings that exceed the module-declared maximum. Under the foundation's convention-level isolation profile, these rules constrain platform-generated routing but do not sandbox mutually trusted code or prevent it from opening its own connections in a shared process.
+
 ## Realm-scoped principals
 
 A simple `User(user_id)` identity was considered too limited. The normalized caller identity should be scoped to an application or identity realm:
@@ -181,5 +191,4 @@ The discussion did not settle:
 - The adapter loading and configuration mechanism.
 - Detailed streaming, event replay, and real-time semantics.
 - The exact representation of permissions and resource authorization.
-- How code-only access is technically enforced when modules share one process.
 - Which CLI behavior is guaranteed by default beyond the generic invocation path.

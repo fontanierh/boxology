@@ -56,9 +56,11 @@ An intervening change to the same package, an imported contract, or shared depen
 
 Provider packages are trusted infrastructure components and need their own quality contracts; they are distinct from the platform package kind.
 
-A storage provider that promises private bindings should have conformance tests demonstrating that one binding cannot access another. Providers can also validate generated configuration, local-development setup, migrations, connectivity, and health conventions.
+Provider conformance tests should attempt cross-binding access and validate the credentials, roles, and default privileges required by the provider's part of a claimed isolation profile. Composition and deployment validation must separately inspect process identity, network and resource policy, sandboxing, and egress controls where the selected profile requires them. These checks are evidence about configured controls, not proof against every query, process, or deployment. Providers can also validate generated configuration, local-development setup, migrations, connectivity, and health conventions.
 
 The runtime does not sandbox a defective provider into correctness. A provider that violates its stated behavior is considered broken.
+
+Runtime isolation profiles govern behavior of code that reaches a deployment. Agent authorship, prompt injection, CI, credential, and supply-chain risks are separate control-plane threats. Review and protected checks are pre-merge defenses, not substitutes for runtime isolation; their complete threat model remains unresolved.
 
 ## Protecting quality policy
 

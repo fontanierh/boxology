@@ -50,9 +50,11 @@ The package boundary is therefore the universal unit of agent work and merge acc
 
 ## State ownership
 
-A module has no access to another module's store. When several modules use the same infrastructure provider, every provider binding is private to its owning module.
+A module must not inspect or mutate another module's store. When several modules use the same infrastructure provider, every provider binding is logically private to its owning module.
 
-The provider decides how to implement that isolation. A Postgres provider might use separate servers, databases, schemas, or table-level isolation. From the module's perspective, the guarantee is the same: it receives its own logical store and cannot inspect or mutate another binding.
+The strength of that rule is determined by the application composition's declared [provider-isolation profile](02-packages.md#provider-isolation). The foundation profile relies on mutually trusted code, review, provider scoping, and conformance evidence. It is intended to prevent or detect ordinary boundary mistakes but is not a security boundary against malicious same-process code.
+
+The provider supplies the binding-level controls for its claimed profile. The composition, deployment substrate, and runtime supply process, operating-system, network, resource, sandbox, and egress controls where required. A Postgres provider might use separate servers, databases, schemas, table-level isolation, or binding-specific credentials. The consuming module receives its own logical store and is required to use only that binding.
 
 Cross-module information moves only through normal module interfaces. The patterns discussed were:
 
@@ -64,9 +66,13 @@ The owning module remains the source of truth for live data. A consuming module 
 
 ## Dependencies
 
-Dependencies should be declared statically and exercised through typed runtime capabilities.
+Dependencies must be declared statically and exercised through typed runtime capabilities.
 
-For example, billing would declare that it requires a version of the customer contact contract. The runtime or generated Rust interface then supplies a typed handle through which billing issues calls. A module should not construct arbitrary module names or bypass its declared imports.
+The common ownership manifest's declared contract dependencies are the authoritative semantic dependency record. For example, billing declares that it requires a version of the customer contact contract. Every Rust dependency giving one module access to a contract owned by another must correspond to such a declared import. Workspace CI must map Cargo edges to package ownership and reject both undeclared inter-module edges and any edge to a crate classified as a foreign implementation, even when a contract import exists. The exact crate classification and topology remain tracked in [issue #39](https://github.com/fontanierh/module-based-engineering/issues/39).
+
+The runtime or generated Rust interface supplies typed capability handles only for declared imports. This makes ordinary invocation and impact analysis depend on the declared graph; it does not claim that handles are unforgeable under convention-level, same-process isolation.
+
+Using raw networking, filesystem access, build scripts, dynamically constructed topic names, or similar mechanisms to bypass a module or provider boundary is a quality violation. The foundation can detect some bypasses mechanically and others through review, but convention-level isolation does not technically prevent them.
 
 The factory uses declared imports for dependable dependency analysis. Runtime observations add evidence about which operations are actually being used. Static declarations and dynamic telemetry complement rather than replace one another.
 
@@ -99,4 +105,5 @@ The discussion did not settle:
 - The concrete serialization and implementation tooling for the common package manifest contract.
 - The precise granularity at which a large module should be divided.
 - The exact type system or interface-definition language.
+- The Rust contract/implementation crate topology, dispatch model, and concrete representation of coexisting contract versions.
 - Whether any categories of new dependency cycle should be mechanically blocked rather than only surfaced.
