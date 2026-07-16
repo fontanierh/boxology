@@ -54,7 +54,7 @@ Provider bindings are logically private to their modules, even when infrastructu
 
 The runtime provides a standard way to define and invoke typed capabilities.
 
-Rust implementation methods become capabilities when annotated. A deterministic pre-Cargo generator derives the contract crate, typed handles, dispatch glue, metadata, and language-neutral compatibility schema. Developers and agents do not maintain the generated crate manually.
+Rust implementation methods become capabilities when annotated. A deterministic pre-Cargo generator derives the contract crate, typed handles, implementation-neutral dispatch interface, implementation-local adapter, metadata, test bindings, and language-neutral compatibility schema. Developers and agents do not maintain the generated crate manually.
 
 Capabilities may support request-response, streaming, events, and real-time interaction. Configurable bindings can expose them through Rust, HTTP, RPC, CLI, or other transports.
 

@@ -42,7 +42,7 @@ Every package kind participates in a common logical manifest contract. The seria
 - Declared package and contract dependencies.
 - Quality-contract entry points.
 - Declared derived outputs.
-- For every derived output: its output paths, generator identity and version, complete semantic inputs, required tool and environment pins, and regeneration check.
+- For every derived output: its output paths, generator identity, complete semantic inputs, and regeneration check. Generated content records the resolved generator version as provenance, while the protected workspace toolchain resolves the current executable and environment consistently for local development and CI.
 - Protected control-plane declarations where applicable.
 
 Repository-wide ownership policy, CI, build tooling, generator definitions, and merger enforcement belong to platform packages. Ownership, provenance, and quality-policy declarations are protected control-plane data. A pull request cannot weaken or replace the base revision's rules in order to authorize its own changes.
@@ -55,7 +55,7 @@ The merger evaluates ownership from the base revision of a pull request:
 2. Classify every changed path exactly once as either a non-derived path owned by one package or one declared derived output. Reject ambiguous, overlapping, or unowned classifications.
 3. Require the set of non-derived owners to contain exactly one accountable package.
 4. Require every changed derived path to be declared as an output attributable to that package.
-5. Starting from the base revision plus only the accountable package's complete permitted non-derived diff, run the declared pinned generators and require them to recreate every submitted derived output byte-for-byte.
+5. Starting from the base revision plus only the accountable package's complete permitted non-derived diff, run the declared generators as resolved by the protected workspace toolchain and require them to recreate every submitted derived output byte-for-byte.
 6. Apply the accountable package's quality contract and every global validation triggered by the change's semantic impact.
 
 Ownership proposed by the pull request does not retroactively authorize other paths in that same pull request. Bootstrapping the ownership record for a newly created package therefore needs a separately defined creation protocol, tracked in [issue #47](https://github.com/fontanierh/module-based-engineering/issues/47).

@@ -38,7 +38,7 @@ The ownership model discussed was:
 - Generated indexes and lockfiles are derived artifacts rather than foreign package source, but shared lockfile impact can require whole-workspace validation and reassessment.
 - Generated clients are published artifacts; a consumer adopts a new version in its own change.
 
-Derived artifacts must remain mechanically reproducible from the base revision plus only the accountable package's complete permitted non-derived diff under pinned generators. They cannot hide hand-written semantic changes or weaken protected ownership and quality policy. The common manifest, ownership algorithm, and lockfile rules are defined in [Packages, Providers, and Compositions](02-packages.md#common-ownership-manifest).
+Derived artifacts must remain mechanically reproducible from the base revision plus only the accountable package's complete permitted non-derived diff under the protected workspace toolchain. They cannot hide hand-written semantic changes or weaken protected ownership and quality policy. The common manifest, ownership algorithm, and lockfile rules are defined in [Packages, Providers, and Compositions](02-packages.md#common-ownership-manifest).
 
 ## Why accept more pull requests
 

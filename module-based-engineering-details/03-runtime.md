@@ -33,9 +33,11 @@ The exact annotation syntax and schema-safe type subset remain open. The importa
 
 ## Generated contract crate
 
-Each native module owns one generated contract crate in addition to its handwritten implementation crate. A deterministic platform generator runs before Cargo, reads annotated implementation methods, and produces the contract-safe Rust types, typed caller handles, server-side dispatch surface, module-local adapter glue, metadata, and language-neutral schema required by configured bindings.
+Each native module owns one generated contract crate in addition to its handwritten implementation crate. A deterministic platform generator runs before Cargo, reads annotated implementation methods, and produces the contract-safe Rust types, typed caller handles, implementation-neutral server-side dispatch interface, metadata, language-neutral schema, and programmable test bindings required by configured bindings and module tests.
 
-The generated crate is checked into Git as a declared, reproducible artifact and is never edited manually. CI regenerates it byte-for-byte from the module's permitted source inputs and pinned generator. Other modules compile only against this generated contract, never against the providing module's implementation. See [Rust Build Topology](08-rust-build-topology.md).
+The contract crate never depends on the implementation. The generator emits separate module-local adapter code inside the implementation crate to connect annotated methods to the contract's dispatch interface; the composition performs the final binding. The generated outputs are checked into Git as declared, reproducible artifacts and are never edited manually. CI regenerates submitted outputs byte-for-byte from the module's permitted source inputs using the generator resolved by the workspace toolchain. Other modules compile only against the generated contract, never against the providing module's implementation. See [Rust Build Topology](08-rust-build-topology.md).
+
+The workspace supplies one current, backward-compatible generator rather than selecting one per module. Generated outputs record which release produced them. Updating the workspace tool does not rewrite every contract: a module moves to the current generator lazily when its contract is next generated, while older generated crates remain supported.
 
 The contract crate represents the module's complete supported surface. Public `v1` or `v2` crates, traits, and namespaces are optional rather than required. Stable capability identities and generated contract revisions provide change tracking without dictating a public versioning scheme.
 
