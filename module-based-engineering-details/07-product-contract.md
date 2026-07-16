@@ -44,7 +44,7 @@ The first supported technical envelope is narrow:
 - Slack as the only first-class human integration in the foundation milestone.
 - One repository managed by a factory installation at a time for the foundation milestone.
 
-A monorepo is not treated as a monolith. Modules retain separate contracts and ownership even when they share a repository and Cargo lockfile. Changes to global derived artifacts require appropriate whole-workspace validation.
+A monorepo is not treated as a monolith. Modules retain separate contracts and ownership even when they share a repository and Cargo lockfile. An ordinary package change may include only the minimal lockfile resolution reproducible from its own permitted non-derived diff under pinned inputs. A lockfile change that alters a dependency used by another package requires whole-workspace validation and semantic reassessment.
 
 ## Repository and execution locations
 
@@ -118,7 +118,7 @@ The foundation milestone covers unary request-response only. The first full modu
 Everything managed as part of an application should be represented as a module, but not every implementation receives the same guarantees.
 
 - A **native module** is implemented in Rust and receives the full runtime, dependency-analysis, compatibility, and factory guarantees.
-- A **foreign-language module** remains a first-class factory package with ownership, tasks, and the one-module pull-request boundary, but its internals receive fewer static and runtime guarantees.
+- A **foreign-language module** remains a first-class factory package with ownership, tasks, and the one-package pull-request boundary, but its internals receive fewer static and runtime guarantees.
 - A **client-binding module** remains in the native managed ecosystem, owns the contract import, and generates a language-native SDK for a foreign module.
 
 A TypeScript application or another foreign-language component can therefore appear anywhere the application composition requires. The platform manages its declared boundary but cannot make the same claims about its internal implementation that it makes for a native Rust module.

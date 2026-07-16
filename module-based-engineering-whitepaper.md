@@ -26,7 +26,7 @@ Each module owns:
 - Its migrations and tests
 - Its quality contract
 
-Every pull request has one accountable module and zero foreign source changes. Mechanically derived artifacts may accompany it.
+Every pull request has one accountable package and zero foreign source changes. Mechanically reproducible artifacts attributable to that package may accompany it.
 
 Modules communicate only through versioned interfaces. They never access another module's storage directly.
 
@@ -34,11 +34,12 @@ Rust modules receive the full native guarantee set. Foreign-language modules rem
 
 ## [Packages](module-based-engineering-details/02-packages.md)
 
-The ecosystem contains three package kinds:
+The ecosystem contains four package kinds:
 
 - Modules implement product capabilities.
 - Providers satisfy technical requirements such as relational storage, caching, or pub-sub.
 - Compositions assemble modules and providers into deployable applications.
+- Platform packages own the runtime, CI, build tooling, repository-wide generators, and enforcement machinery.
 
 A module declares a typed requirement. An environment binds it to a provider:
 
@@ -85,13 +86,13 @@ A top-level lead coordinates the harness and interfaces with humans. Area leads 
 
 Those roles describe the intended mature organization, not a hard-coded minimum. The first factory contains only the human-facing lead. Roles, handoffs, and gates are factory policy expressed through configuration so workers, reviewers, and a merger can be introduced progressively.
 
-The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed modules, changed imported contracts, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
+The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed packages, changed imported contracts, shared dependency-resolution changes, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
 
 A continuous quality agent analyzes architecture, dependencies, and operational evidence. It surfaces coherence problems such as cycles and publishes targeted improvement tasks.
 
 ## [Quality and Authority](module-based-engineering-details/06-quality-and-authority.md)
 
-Modules define strong automated quality contracts. The harness runs them, adds required AI reviews, and refuses merges that fail policy.
+Every package defines a strong automated quality contract appropriate to its kind. The harness runs it, adds required AI reviews, and refuses merges that fail policy.
 
 The runtime does not promise correctness. The harness promises that the configured evidence and approval process were enforced.
 

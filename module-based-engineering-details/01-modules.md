@@ -20,13 +20,13 @@ The promise is not that breaking changes never occur. It is that breakage is exp
 
 ## Ownership boundary
 
-Every pull request has one semantic owner: one module. It may change that module's owned source and deterministic artifacts derived from the change. It may not change source owned by another module.
+Every pull request has exactly one semantic owner: one package. It may change that package's owned non-derived files and deterministic artifacts attributable to the change. It may not change hand-authored source, manifests, tests, migrations, configuration, or other non-derived files owned by another package.
 
 The rule is therefore:
 
-> One pull request, one accountable module, zero foreign source changes.
+> One pull request, one accountable package, zero foreign source changes.
 
-This is a semantic rule rather than a literal one-directory rule. Repository-wide files can still change when they are mechanical projections of the module change.
+This is a semantic rule rather than a literal one-directory rule. Modules are the most common owner, but provider, application-composition, and platform packages can also own changes. Repository-wide source such as CI, build tooling, and generators belongs to platform packages. Repository-wide derived files can change only when they are declared, reproducible projections attributable to the accountable package.
 
 The ownership model discussed was:
 
@@ -35,10 +35,10 @@ The ownership model discussed was:
 - Shared domain types require an explicit owning contract module rather than ownerless shared code.
 - Runtime, CI, and build tooling belong to platform packages.
 - Deployment assembly belongs to an application composition package.
-- Generated indexes and lockfiles are derived artifacts rather than foreign module source.
+- Generated indexes and lockfiles are derived artifacts rather than foreign package source, but shared lockfile impact can require whole-workspace validation and reassessment.
 - Generated clients are published artifacts; a consumer adopts a new version in its own change.
 
-Derived artifacts must remain mechanically reproducible. They cannot be used to hide hand-written semantic changes outside the target module.
+Derived artifacts must remain mechanically reproducible from the base revision plus only the accountable package's complete permitted non-derived diff under pinned generators. They cannot hide hand-written semantic changes or weaken protected ownership and quality policy. The common manifest, ownership algorithm, and lockfile rules are defined in [Packages, Providers, and Compositions](02-packages.md#common-ownership-manifest).
 
 ## Why accept more pull requests
 
@@ -46,7 +46,7 @@ An ordinary codebase may change several areas in one pull request because doing 
 
 A change spanning four modules becomes a coordinated sequence of four independently mergeable pull requests. This produces more scaffolding, code generation, and integration work. The bet is that agents make those mechanical costs cheap enough that the system can optimize for limited blast radius and strong ownership instead of minimizing the number of pull requests.
 
-The module boundary is therefore also a unit of agent work and merge accountability.
+The package boundary is therefore the universal unit of agent work and merge accountability. Module packages remain the primary unit for product-capability work.
 
 ## State ownership
 
@@ -76,13 +76,13 @@ Managed clients outside Rust participate through client-binding modules, which g
 
 Everything managed as part of an application should be represented as a module. Rust is the native implementation path and receives the full runtime, dependency-analysis, compatibility, and factory guarantees.
 
-A foreign-language component, such as a TypeScript application, can also be represented as a first-class module package. It retains explicit ownership, factory tasks, and the one-module pull-request boundary. A client-binding module remains in the native managed ecosystem, owns the contract import, and generates the language-native SDK the foreign module consumes.
+A foreign-language component, such as a TypeScript application, can also be represented as a first-class module package. It retains explicit ownership, factory tasks, and the one-package pull-request boundary. A client-binding module remains in the native managed ecosystem, owns the contract import, and generates the language-native SDK the foreign module consumes.
 
 The platform can enforce and evolve that declared binding boundary, but it cannot provide the same static and runtime guarantees inside foreign-language implementation code. Polyglot code is therefore allowed anywhere the application composition requires it, with an explicitly reduced guarantee level rather than an implicit claim of equivalence with native Rust modules.
 
 ## Dependency cycles
 
-The discussion did not make dependency cycles a runtime error. Backward-compatible contracts and single-module pull requests remove much of the change-management difficulty normally associated with a cycle.
+The discussion did not make dependency cycles a runtime error. Backward-compatible contracts and single-package pull requests remove much of the change-management difficulty normally associated with a cycle.
 
 Cycles can still signal engineering problems, including recursive request paths, availability coupling, unclear ownership, or difficult isolated testing. The agreed direction was to treat these as quality concerns:
 
@@ -96,8 +96,7 @@ Cycles can still signal engineering problems, including recursive request paths,
 
 The discussion did not settle:
 
-- The exact module manifest format.
+- The concrete serialization and implementation tooling for the common package manifest contract.
 - The precise granularity at which a large module should be divided.
-- The enforcement mechanism for file ownership.
 - The exact type system or interface-definition language.
 - Whether any categories of new dependency cycle should be mechanically blocked rather than only surfaced.

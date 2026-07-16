@@ -6,27 +6,29 @@ This document expands the quality ownership, CI, review, policy, and human-autho
 
 ## Separation of responsibility
 
-Quality belongs to modules and the software factory, not to the application runtime.
+Quality belongs to accountable packages and the software factory, not to the application runtime.
 
 The runtime provides capability invocation, transport and authentication integration, and resolved provider bindings. It makes no promise that application behavior is correct or that a module's tests are sufficient.
 
-Module engineers and users are responsible for defining strong automated validation. The harness executes and enforces the configured validation before a change can merge.
+Package owners and users are responsible for defining strong automated validation. The harness executes and enforces the configured validation before a change can merge.
 
-## Module quality contract
+## Package quality contract
 
-Every module owns a quality contract appropriate to its behavior. The discussion did not prescribe one universal command or test framework, but it did establish that module CI should be good enough to check the module automatically.
+Every module, provider, application composition, and platform package owns a quality contract appropriate to its behavior. The discussion did not prescribe one universal command or test framework, but it did establish that package CI should be good enough to check the accountable package automatically.
 
 The contract can include:
 
 - Compilation and static checks.
-- Module tests.
-- Contract and compatibility checks.
-- Integration tests.
+- Package-local tests.
+- Contract and compatibility checks where applicable.
+- Integration tests where applicable.
 - Tests for provider-backed behavior.
 - AI reviewers.
-- Any specialized validation defined by the module owners.
+- Any specialized validation defined by the package owners.
 
-The harness can add mandatory system-level checks beyond what an individual module declares.
+The harness can add mandatory system-level checks beyond what an individual package declares.
+
+Package kinds add different baselines. Modules require contract compatibility and behavioral validation. Providers require conformance and isolation evidence. Compositions require assembly and integration validation. Platform packages require whole-workspace validation and stricter approval by default, subject to configured harness policy, because runtime, CI, build, generator, and enforcement changes can affect every package.
 
 The guarantee is procedural:
 
@@ -36,7 +38,7 @@ This distinction avoids attributing application-quality guarantees to the runtim
 
 ## AI review
 
-AI reviewers can participate directly in CI. They can inspect implementation quality, contract compatibility, tests, architecture, and adherence to module rules.
+AI reviewers can participate directly in CI. They can inspect implementation quality, contract compatibility, tests, architecture, and adherence to package rules.
 
 The exact number, models, independence rules, and review rubrics were not selected in the interview. Those choices are harness policy rather than runtime behavior.
 
@@ -48,11 +50,11 @@ Because agents work concurrently, CI must evaluate a candidate against the curre
 
 The merger therefore reruns the applicable checks against the latest main state. It returns failures to the durable task for repair.
 
-An intervening change to the same module or an imported contract can also require area-lead reassessment even when the tests remain green. The quality process recognizes that automated checks may not capture every semantic change.
+An intervening change to the same package, an imported contract, or shared dependency resolution can also require area-lead reassessment even when the tests remain green. The quality process recognizes that automated checks may not capture every semantic change.
 
 ## Provider conformance
 
-Providers are trusted platform packages and need their own quality contracts.
+Provider packages are trusted infrastructure components and need their own quality contracts; they are distinct from the platform package kind.
 
 A storage provider that promises private bindings should have conformance tests demonstrating that one binding cannot access another. Providers can also validate generated configuration, local-development setup, migrations, connectivity, and health conventions.
 
@@ -105,4 +107,3 @@ The discussion did not settle:
 - How evidence and approvals are represented in merge records.
 - Whether changing tests and implementation in one pull request needs special treatment beyond protected quality files.
 - The exact capabilities and hard limits of the top-level lead.
-

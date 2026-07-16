@@ -8,7 +8,7 @@ This document expands the multi-agent coordination, task, merge, and continuous-
 
 The software factory is a persistent control plane for developing and maintaining a modular system. It manages many tasks and agents across time rather than running one isolated coding request from beginning to end.
 
-The module boundary gives the factory a natural unit of ownership, analysis, review, and merge accountability. Agents can work concurrently because every submitted change has one target module and cannot directly modify another module's source.
+The package boundary gives the factory a universal unit of ownership, analysis, review, and merge accountability. Modules are the most common target, but providers, compositions, and platform packages can also own work. Agents can work concurrently because every submitted change has one accountable package and cannot modify another package's non-derived files.
 
 The factory and module platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with the module system, following a progressive bootstrap in which early development does not depend on either system being complete.
 
@@ -60,7 +60,7 @@ The phrase "keys to the whole harness" referred to control over planning and coo
 
 ### Area leads
 
-There can be a coordinator or area lead per module. A sufficiently large module can be divided into hard-coded logical areas, each with its own lead.
+There can be a coordinator or area lead per package. A sufficiently large module or other package can be divided into explicit logical areas, each with its own lead.
 
 An area lead maintains a broad plan for its area. Worker agents automatically receive the applicable plan when they pick up a ready task. The lead publishes tasks and assigns their relative priority within the area.
 
@@ -70,7 +70,7 @@ Area ownership and subdivisions are explicit configuration rather than something
 
 Workers pick up ready tasks and work independently. Once work begins, workers do not communicate with one another to negotiate concurrent changes. Shared context comes from the area plan, task, module contract, and current repository state.
 
-Each worker submits a single-module merge request. Submission moves the work into a waiting state while the merger evaluates it. The durable task, sandbox, branch, evidence, and feedback remain the source of truth for resumption and rework.
+Each worker submits a single-package merge request. Submission moves the work into a waiting state while the merger evaluates it. The durable task, sandbox, branch, evidence, and feedback remain the source of truth for resumption and rework.
 
 ### Merger
 
@@ -86,7 +86,7 @@ Automatic priority aging was discussed as a possible starvation control but was 
 
 ## Optimistic parallelism
 
-Multiple agents may work on the same module or logical area concurrently. The system does not take an exclusive module-wide write lock before work begins.
+Multiple agents may work on the same package or logical area concurrently. The system does not take an exclusive package-wide write lock before work begins.
 
 Instead, it uses optimistic parallel development with serialized integration:
 
@@ -108,9 +108,10 @@ The signals discussed were:
 
 1. **Git conflict:** the change cannot be applied mechanically and is returned for rework.
 2. **CI or integration failure:** required checks fail on the current merge candidate and the task is returned.
-3. **Target module changed:** an intervening merge touched the same module, so the area lead should assess whether semantic rework is needed even if Git can merge it.
+3. **Target package changed:** an intervening merge touched the same package, so the area lead should assess whether semantic rework is needed even if Git can merge it.
 4. **Imported contract changed:** a dependency used by the task changed and the consumer assumptions need reassessment.
-5. **Area plan or human guidance changed:** the task may need revision or may have become obsolete.
+5. **Shared dependency resolution changed:** a version, source, checksum, or selected dependency used by an affected package changed, so whole-workspace validation and semantic reassessment are required even when the lockfile was mechanically reproduced.
+6. **Area plan or human guidance changed:** the task may need revision or may have become obsolete.
 
 After a merge, in-progress work falls into one of the states discussed:
 
@@ -162,11 +163,11 @@ Cycle management was explicitly placed here and in factory planning rather than 
 
 ## Relationship to CI and review
 
-The merger relies on module-defined and harness-required CI. Integration tests run against the current merge candidate, not merely against the branch state on which the worker originally finished.
+The merger relies on package-defined and harness-required CI. Integration tests run against the current merge candidate, not merely against the branch state on which the worker originally finished.
 
-AI reviewers can be part of those required checks. Their configuration belongs to the harness and module quality policy rather than to the runtime.
+AI reviewers can be part of those required checks. Their configuration belongs to the harness and package quality policy rather than to the runtime.
 
-Passing CI is necessary but may not be sufficient when the target module, imported contract, or authoritative plan changed. Those cases route back through semantic reassessment.
+Passing CI is necessary but may not be sufficient when the target package, imported contract, shared dependency resolution, or authoritative plan changed. Those cases route back through semantic reassessment.
 
 ## Matters not yet specified
 
