@@ -12,7 +12,7 @@ The system does not assume that compatibility can be preserved forever. Genuine 
 
 The central rule is:
 
-> A cross-module change is a coordinated migration composed of independently mergeable, single-module changes.
+> A cross-module change is a coordinated migration composed of independently mergeable, single-package changes.
 
 ## Expand-migrate-contract
 
@@ -26,7 +26,7 @@ The process discussed was:
 6. Static dependency analysis and runtime evidence determine whether usage remains.
 7. When removal policy is satisfied, the factory creates a final task for the module providing the contract to delete the old version.
 
-The old and new versions coexist during the migration. This is the mechanism that preserves the one-module-per-pull-request invariant.
+The old and new versions coexist during the migration. This is the mechanism that preserves the one-package-per-pull-request invariant.
 
 ## Durable migration ownership
 

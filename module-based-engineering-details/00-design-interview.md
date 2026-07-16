@@ -36,23 +36,23 @@ The three promises identified were independent evolution, enforced contract comp
 
 The system should treat internal contracts with discipline similar to public APIs. This creates more scaffolding and more pull requests than a codebase-wide atomic edit, but agent productivity should make that cost acceptable.
 
-A strong invariant was introduced: a pull request always changes one module. A merge request may never change several modules at once.
+A strong invariant was introduced in module-specific terms: a pull request always changes one module, and a merge request may never change several modules at once. Question 3 records the later generalization from module to accountable package.
 
 **Clarification:** Callbacks should update a durable migration record rather than depend on one long-lived agent session. Any suitable worker can resume responsibility from that record.
 
 **Captured formulation:**
 
-> A cross-module change is never one patch. It is a coordinated migration composed of independently mergeable, single-module changes.
+> A cross-module change is never one patch. It is a coordinated migration composed of independently mergeable, single-package changes.
 
 The lifecycle became: add the new version, identify consumers, migrate each consumer separately, verify zero remaining use, and remove the old version in a final change to the module providing the contract.
 
 ## Question 3: How are shared repository artifacts handled?
 
-**Question:** Under the one-module-per-pull-request rule, how should repository-wide artifacts such as workspace configuration, dependency lockfiles, shared schemas, generated clients, CI configuration, and the runtime be classified and changed?
+**Question:** Under the then-current one-module-per-pull-request rule, how should repository-wide artifacts such as workspace configuration, dependency lockfiles, shared schemas, generated clients, CI configuration, and the runtime be classified and changed?
 
 The initial response was a request for a recommendation.
 
-**Proposed answer:** Define the invariant as one semantic owner per pull request rather than one directory. A change can modify its target module's source and deterministic artifacts derived from it, but never another module's source.
+**Proposed answer:** Define the invariant as one semantic owner per pull request rather than one directory. A change can modify its target package's non-derived files and deterministic artifacts derived from them, but never another package's non-derived files.
 
 The proposed ownership model was:
 
@@ -63,13 +63,15 @@ The proposed ownership model was:
 - Deployment configuration belongs to an application composition package.
 - Lockfiles and indexes are derived artifacts.
 
-The shared lockfile was identified as an awkward but acceptable initial derived artifact. Independent build roots could be considered later if it causes real cross-module breakage.
+The shared lockfile was identified as an awkward but acceptable initial derived artifact. Independent build roots could be considered later if it causes real cross-package breakage.
 
 **Answer:** This was accepted as a good way to express the rule.
 
 **Captured formulation:**
 
-> One pull request has one accountable module and zero foreign source changes. It may also contain mechanically derived artifacts attributable to that module.
+> One pull request has one accountable package and zero foreign source changes. It may also contain mechanically reproducible artifacts attributable to that package.
+
+**Later refinement:** Review generalized the original module phrasing into four accountable package kinds: module, provider, application composition, and platform. Every kind can own source, a factory area, a pull request, and a quality contract. The merger resolves ownership from the base revision, requires exactly one non-derived owner, and regenerates declared derived outputs byte-for-byte from that package's complete permitted non-derived diff under pinned inputs. A shared `Cargo.lock` is reproducible but not semantically harmless: resolution changes outside the minimal closure are rejected, while changes affecting dependencies used by foreign packages trigger whole-workspace validation and reassessment. The concrete manifest syntax remains open; these semantics do not.
 
 ## Question 4: Where do exposure and authentication policy live?
 
@@ -244,7 +246,7 @@ Semantic requirements were preferred over vendor requirements, such as relationa
 
 **Answer:** The recommendation was no, but both are versioned packages. A module represents product capability; a provider describes how the platform satisfies technical infrastructure. A provider may contain libraries, tooling, deployment logic, and supporting services. A supporting service that exposes product capability can itself be a module.
 
-The package kinds identified were module packages, provider packages, and application composition packages.
+The package kinds initially identified were module packages, provider packages, and application composition packages. Later ownership review promoted the already-mentioned platform package into a fourth first-class kind for the runtime, CI, build tooling, repository-wide generators, and enforcement machinery.
 
 ### What is an application composition package?
 
@@ -276,7 +278,7 @@ The example used was a customer module that owns names and email addresses and a
 
 The standard microservice approaches were explained as synchronous API calls, event-driven local projections, snapshots, and workflow orchestration. The tradeoffs are availability coupling, eventual consistency, and deliberate historical staleness.
 
-**Answer:** Data exchange should go through the normal module interface. With backward-compatible contracts, clear deprecation, and one-module pull requests, this is sufficient.
+**Answer:** Data exchange should go through the normal module interface. With backward-compatible contracts, clear deprecation, and single-package pull requests, this is sufficient.
 
 **Captured formulation:**
 
@@ -312,7 +314,7 @@ No universal policy window or automatic-removal threshold was selected.
 
 **Question:** Suppose billing calls customer and customer also calls billing. How should the architecture prevent or resolve the cycle?
 
-**Response:** With backward-compatible changes and one-module pull requests, a graph-level cycle did not appear to be an inherent problem.
+**Response:** With backward-compatible changes and single-package pull requests, a graph-level cycle did not appear to be an inherent problem.
 
 **Clarification:** The remaining concerns are operational rather than merge-related: recursive synchronous calls, timeouts and retries, availability coupling, startup ordering, isolated testing, and unclear ownership. A graph-level cycle can exist without causing a recursive request path.
 
@@ -350,7 +352,7 @@ Before answering, the governance model was expanded.
 
 ## Question 19: What evidence must a merge request provide?
 
-**Question:** What minimum evidence should every single-module pull request provide before the merger can accept it?
+**Question:** What minimum evidence should every single-package pull request provide before the merger can accept it?
 
 **Answer:** Engineers and users are responsible for defining excellent CI for their modules so that behavior is checked automatically. CI can and should include AI reviewers. Strong guarantees should be baked into the harness, while the runtime makes no quality promise.
 

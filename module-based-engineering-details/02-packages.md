@@ -6,21 +6,73 @@ This document expands the package kinds and infrastructure model discussed durin
 
 ## Package kinds
 
-The ecosystem contains at least three distinct package kinds:
+The ecosystem contains four distinct package kinds. Every kind can own source, a pull request, a factory area, and a quality contract.
 
-- **Module package:** implements a product or domain capability.
-- **Provider package:** satisfies a technical requirement using a particular technology or strategy.
-- **Application composition package:** assembles modules and providers into a deployable application.
+| Package kind | Responsibility | Baseline change contract |
+| --- | --- | --- |
+| **Module** | Implements a product or domain capability, including managed client-binding modules. | Contract compatibility, module tests, and expand-migrate-contract for breaking interfaces. |
+| **Provider** | Satisfies a technical requirement using a particular technology or strategy. | Provider conformance, binding isolation, and migration or provisioning validation where applicable. |
+| **Application composition** | Assembles modules and providers into a deployable application. | Assembly and integration validation; almost no business logic. |
+| **Platform** | Owns the runtime, CI, build tooling, repository-wide generators, and enforcement machinery. | Whole-workspace validation and stricter approval by default, subject to configured harness policy, because changes can have global blast radius. |
 
-They can share packaging, versioning, testing, and factory conventions without being the same kind of object.
+They share packaging, versioning, testing, ownership, and factory conventions without being the same kind of object. A client-binding module remains a module package rather than introducing a fifth kind.
 
-The distinction is:
+The universal ownership rule is:
 
-```text
-Module      -> what capability does the product provide?
-Provider    -> how does the environment satisfy a technical requirement?
-Composition -> what deployable system is assembled from them?
-```
+> One pull request, one accountable package, zero foreign source changes.
+
+Here, source includes every hand-authored or otherwise non-derived file: implementation, manifests, tests, migrations, configuration, quality policy, and similar inputs.
+
+Modules are the most common contract-bearing owners, but providers, compositions, and platform packages are equally valid owners once their ownership records exist.
+
+## Common ownership manifest
+
+Every package kind participates in a common logical manifest contract. The serialization syntax remains open, but each manifest must declare:
+
+- A stable package identity and package kind.
+- Owned non-derived paths, including source, manifests, tests, migrations, configuration, and quality contracts.
+- Declared package and contract dependencies.
+- Quality-contract entry points.
+- Declared derived outputs.
+- For every derived output: its output paths, generator identity and version, complete semantic inputs, required tool and environment pins, and regeneration check.
+- Protected control-plane declarations where applicable.
+
+Repository-wide ownership policy, CI, build tooling, generator definitions, and merger enforcement belong to platform packages. Ownership, provenance, and quality-policy declarations are protected control-plane data. A pull request cannot weaken or replace the base revision's rules in order to authorize its own changes.
+
+## Ownership and derived-artifact enforcement
+
+The merger evaluates ownership from the base revision of a pull request:
+
+1. Read the ownership and derivation declarations from the base revision.
+2. Classify every changed path exactly once as either a non-derived path owned by one package or one declared derived output. Reject ambiguous, overlapping, or unowned classifications.
+3. Require the set of non-derived owners to contain exactly one accountable package.
+4. Require every changed derived path to be declared as an output attributable to that package.
+5. Starting from the base revision plus only the accountable package's complete permitted non-derived diff, run the declared pinned generators and require them to recreate every submitted derived output byte-for-byte.
+6. Apply the accountable package's quality contract and every global validation triggered by the change's semantic impact.
+
+Ownership proposed by the pull request does not retroactively authorize other paths in that same pull request. Bootstrapping the ownership record for a newly created package therefore needs a separately defined creation protocol, tracked in [issue #47](https://github.com/fontanierh/module-based-engineering/issues/47).
+
+A generated file physically located under another package is not automatically foreign source. It is permitted only when the base revision declares it as non-editable derived output and the regeneration check attributes it to the accountable package. Otherwise it is foreign source and the merger rejects the change. Published client generation still follows the separate-consumer rule: a consumer adopts the generated client in its own package-owned change.
+
+Protected control-plane files cannot be relabeled as derived output to evade their approval policy. Byte reproducibility proves provenance, not limited semantic impact; repository-wide consequences can still trigger broader validation.
+
+## Shared Cargo lockfile
+
+`Cargo.lock` is a global derived artifact with semantic risk, not harmless generated output. An ordinary package pull request must:
+
+1. Begin with the base revision's lockfile.
+2. Apply only the accountable package's permitted non-derived changes.
+3. Run the repository-defined minimal dependency resolution under pinned Cargo, toolchain, registry, and generator inputs. This resolver must preserve every existing selection from the base lockfile that still satisfies the accountable package's declared dependency change, add newly required selections, and deterministically change only the existing selections that can no longer remain fixed and their required transitive closure.
+4. Reproduce the submitted lockfile byte-for-byte.
+5. Reject every lockfile change outside the necessary minimal resolution closure.
+
+A transitive change inside that minimal closure remains attributable to the accountable package. A transitive change outside it has no valid owner and is rejected.
+
+The merger compares pinned resolver output and dependency metadata reachable from foreign packages before and after resolution. If a version, source, checksum, selected package, resolved feature set, target-specific selection, or other build-relevant resolver output used by a foreign package changes, the pull request retains one accountable package and contains no foreign source change, but it loses package-local blast-radius treatment. It requires whole-workspace build and tests, all mandatory repository gates, and semantic reassessment of in-progress work involving affected packages.
+
+Deliberate repository-wide dependency maintenance, including security updates and major or routine shared upgrades, belongs to a platform package and normally requires whole-workspace validation. Such a change must include a platform-owned, versioned update declaration naming the requested dependency change and its allowed resolution scope; a lockfile-only mutation is invalid. The pinned resolver treats that declaration as semantic input and preserves every base selection outside its permitted closure. Source edits to foreign package manifests or implementations remain separate package-owned pull requests.
+
+Independent Cargo build roots remain deferred. The factory should measure lockfile-triggered reassessments, rework, and queue delay so separate roots can be introduced if shared resolution repeatedly serializes integration in practice.
 
 ## Requirements, providers, and bindings
 
@@ -78,7 +130,7 @@ A provider package may contribute several kinds of material:
 
 These responsibilities span more than the application runtime. Scaffolding and validation belong to the module toolchain and factory. Infrastructure provisioning belongs to deployment tooling. The runtime only needs the resolved binding used when the module executes.
 
-Providers must not silently rewrite arbitrary module source. The intended model is that their generated or scaffolded outputs are declared, attributable, and governed by the same module ownership rules as other files.
+Providers must not silently rewrite arbitrary module source. Their generated or scaffolded outputs must be declared, attributable, and governed by the package ownership and derived-artifact rules above.
 
 ## Provider isolation
 
@@ -93,7 +145,7 @@ A Postgres provider may choose among different isolation mechanisms:
 
 The consumer should not need to know which mechanism was selected. It assumes that it can touch only its own state.
 
-The runtime does not protect the system from a malicious or defective provider implementation. Providers are trusted platform packages. A provider that allows one binding to access another has violated its contract and is a bad provider. Provider conformance tests should exercise the promised isolation and behavior.
+The runtime does not protect the system from a malicious or defective provider implementation. Provider packages are trusted infrastructure components, distinct from the platform package kind. A provider that allows one binding to access another has violated its contract and is a bad provider. Provider conformance tests should exercise the promised isolation and behavior.
 
 ## Is a provider a module?
 
@@ -140,7 +192,7 @@ A module can use a workflow engine as ordinary implementation code. If several m
 
 The discussion did not settle:
 
-- The common manifest format shared by package kinds.
+- The concrete serialization syntax and implementation tooling for the common manifest contract.
 - The exact lifecycle interface implemented by provider packages.
 - How provider bindings are represented across development, testing, and production environments.
 - Whether a binding can be switched without rebuilding a composition.
