@@ -390,6 +390,8 @@ Provider packages can have their own conformance tests, including isolation guar
 
 Issue #1 asked whether the proposal was a philosophy, Rust framework, runtime, tooling ecosystem, hosted factory, or some combination, and requested a falsifiable first slice. A follow-up interview established the following decisions.
 
+**Historical note:** This section records the first foundation formulation. Its SSH-first deployment, separate factory-control-plane language, and exact crash-recovery claims were later superseded by the sandbox-native decisions recorded in [Follow-up: Sandbox-native factory foundation](#follow-up-sandbox-native-factory-foundation).
+
 ### Product shape and bootstrap
 
 The module platform and factory are one product, brand, and project, although they remain separate applications and packages. The factory is intended to be the first substantial application built with the module system. Self-hosting is progressive: early work does not depend on either unfinished system, and the project increasingly uses its own factory only as the required layers become dependable.
@@ -465,6 +467,50 @@ After several foundational pull requests changed assumptions shared by other ope
 - Preserve reviewer recommendations as proposals unless they were explicitly accepted and recorded in merged project documentation.
 
 The complete rule is maintained as the [tracker reconciliation gate](06-quality-and-authority.md#tracker-reconciliation-gate).
+
+## Follow-up: Sandbox-native factory foundation
+
+[Issue #23](https://github.com/fontanierh/module-based-engineering/issues/23) asked for the factory's control-plane authority, durable state, recovery, external-effect, and provenance guarantees. The follow-up deliberately resolved only the foundation milestone and transferred stronger post-MVP coordination to [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57).
+
+### Foundation deployment boundary
+
+The complete MVP factory is one durable lead-agent sandbox. It contains:
+
+- The lead's agent harness, which may be an existing harness or a very thin wrapper.
+- A bridge binary through which the harness receives and sends messages in the configured Slack channel.
+- The managed-repository checkout, dedicated worktree, and branch.
+- The harness state persisted by the sandbox.
+
+Launching the factory means ensuring that this one sandbox, harness, and bridge are running. There is no separate MVP control-plane service, database, router, task ledger, or mandatory factory log.
+
+The sandbox may come from a managed durable-sandbox provider or from the project's portable container image on any compatible target. A container target must supply persistent storage and restart behavior; an ephemeral container may run the image but does not meet the resume guarantee. The exact provider, cloud, host, and storage mechanism were not selected. Kubernetes remains an important later target rather than the first recipe.
+
+### Authority and visible state
+
+Authority is split across existing surfaces:
+
+- Slack is the human's conversational interface to the lead.
+- GitHub contains the human-visible repository, branch, pull-request, review, and later task state.
+- Git contains the code and history.
+- The sandbox owns the private running agent loop, worktree, uncommitted work, and harness state.
+
+The foundation does not add a canonical factory ledger. Agents may emit events when useful for user review, and a lead may eventually write an optional checkpoint to the repository or a factory-owned store, but neither was made a foundation requirement.
+
+### Recovery boundary
+
+While durable sandbox storage survives, process restart, sandbox stop-and-resume, and loss or replacement of the compute host preserve the repository and persisted harness state. A managed provider may implement this by freezing and resuming the sandbox; a container deployment may implement it with persistent storage and restart behavior. The project depends on these observable properties without yet choosing their implementation.
+
+Simultaneous destruction of the sandbox and its durable storage is outside the foundation persistence guarantee. A fresh lead should be able to reconstruct the project's semantic state from Git and repository documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history, and any optional checkpoint. This does not promise exact continuation of hidden reasoning, recovery of uncommitted work, or preservation of an action known only to the destroyed sandbox.
+
+External effects use the same semantic recovery model. Before acting, a resumed or replacement lead inspects current GitHub and Slack state and can recognize an existing pull request or reply as a human would. Rare repeated effects after ambiguous failures remain possible. Exactly-once delivery, a central outbox, and a deduplication ledger are not foundation guarantees.
+
+### Deferred multi-agent guarantees
+
+The foundation does not select Temporal, RabbitMQ, another workflow engine or queue, or a custom durable control plane. Those technologies may later be useful, but the decision follows the needs of the multi-agent factory rather than preceding them.
+
+Issue #57 owns the later questions: worker-pool startup and supervision, safe task claiming, leases and fencing, stale submissions, durable agent-to-agent messages, multiple coordinators or mergers, reconciliation, provenance or audit records if needed, and selection of the coordination backend.
+
+This transfer is an explicit scope decision. The foundation is complete without selecting or specifying those mechanisms; a later review should evaluate them against the post-MVP agent-pool milestone rather than reopen them as blockers for the one-sandbox MVP.
 
 ## Resulting documentation set
 

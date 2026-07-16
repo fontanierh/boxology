@@ -6,13 +6,13 @@ This document expands the multi-agent coordination, task, merge, and continuous-
 
 ## Purpose
 
-The software factory is a persistent control plane for developing and maintaining a modular system. It manages many tasks and agents across time rather than running one isolated coding request from beginning to end.
+The mature software factory is intended to coordinate development and maintenance of a modular system across many tasks and agents. The foundation deliberately begins with one persistent lead agent rather than assuming that a separate control plane already exists.
 
 The package boundary gives the factory a universal unit of ownership, analysis, review, and merge accountability. Modules are the most common target, but providers, compositions, and platform packages can also own work. Agents can work concurrently because every submitted change has one accountable package and cannot modify another package's non-derived files.
 
 The factory and module platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with the module system, following a progressive bootstrap in which early development does not depend on either system being complete.
 
-The factory control plane supplies mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the execution engine.
+An eventual shared factory substrate may supply mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the execution engine.
 
 ## Foundation-milestone factory
 
@@ -20,11 +20,11 @@ The governance hierarchy below is a mature direction. The foundation-milestone f
 
 1. A developer talks to one persistent lead agent through Slack.
 2. The lead handles the requested change itself.
-3. It works in a remote, isolated code sandbox with a dedicated worktree and branch.
+3. The lead, its harness, Slack bridge, repository checkout, worktree, and persisted harness state all run in one durable remote sandbox.
 4. It opens a GitHub pull request and reports the result in Slack.
 5. It stops at the pull request boundary. A human must review and merge.
 
-The foundation milestone has no required task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. These roles and surfaces can be added progressively without replacing the stable human-facing lead.
+The foundation milestone has no separate factory service, required task or event ledger, task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. Launching the factory means ensuring that the lead sandbox and the harness and bridge inside it are running. Additional roles and surfaces can be added progressively without replacing the stable human-facing lead.
 
 The factory owns its agent execution interface and lifecycle guarantees. The first implementation may wrap an existing runner, call model APIs directly, or use a bare-bones custom loop. The foundation milestone specifies observable behavior without requiring a sophisticated original harness.
 
@@ -70,7 +70,7 @@ Area ownership and subdivisions are explicit configuration rather than something
 
 Workers pick up ready tasks and work independently. Once work begins, workers do not communicate with one another to negotiate concurrent changes. Shared context comes from the area plan, task, module contract, and current repository state.
 
-Each worker submits a single-package merge request. Submission moves the work into a waiting state while the merger evaluates it. The durable task, sandbox, branch, evidence, and feedback remain the source of truth for resumption and rework.
+Each worker submits a single-package merge request. Submission moves the work into a waiting state while the merger evaluates it. The exact durable task, claim, messaging, and recovery model for this post-MVP pool remains to be specified.
 
 ### Merger
 
@@ -138,15 +138,15 @@ GitHub is the initial repository and pull-request surface, but there is no requi
 
 ## Remote execution and resumability
 
-Factory agents run in remote code sandboxes created and owned by the deployed factory. Every sandbox is isolated and supports a lifecycle comparable to create, suspend, resume, checkpoint, and destroy. It checks out the managed project repository and uses worktree and branch isolation from the foundation milestone, even while only one lead agent performs work.
+The complete foundation factory is one durable lead-agent sandbox. It contains the harness, Slack bridge, managed-repository checkout, dedicated worktree and branch, and persisted harness state. There is no separate foundation control plane that creates or owns that sandbox.
 
-Graceful suspension freezes the complete sandbox and resumes it exactly where it stopped. After a crash, all repository bytes and durable records through the last completed execution-engine tool action survive; only the action that was in flight may be retried. GitHub and Slack effects are reconciled without duplicate pull requests, comments, or messages.
+Process restarts, sandbox stop-and-resume, and compute replacement preserve the repository and persisted harness state while durable storage survives. A managed sandbox provider may freeze and resume the whole environment. The same factory image may instead run on any compatible container target, provided that target supplies persistent storage and restart behavior. An ephemeral container does not meet this guarantee.
 
-Losing the worktree, branch, conversation, task history, or audit record is unacceptable.
+If the sandbox and its durable storage are both destroyed, a fresh lead reconstructs the project's semantic state from Git, repository instructions and documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history, and any optional checkpoint written by the previous lead. Exact hidden-reasoning continuation, uncommitted-work preservation, and exactly-once GitHub or Slack effects are not promised across this catastrophic boundary. The new lead inspects those external systems before acting, but a rare repeated effect after an ambiguous failure remains possible.
 
-The factory itself is distributed as a container and can be stopped and resumed. Its first supported deployment recipe is a user-controlled machine reachable over SSH and capable of running containers. That machine may be a cloud VM or another remotely reachable computer. Running the container on the developer's current computer is useful for evaluation, although it is a weaker team setup because availability depends on that computer.
+The foundation does not require a central database, event ledger, queue, outbox, deduplication service, or workflow engine. Agents may emit events for observability and the lead may author a checkpoint, but neither is a mandatory source of truth. Selecting stronger post-MVP coordination mechanisms is deferred.
 
-"Remotely hosted" does not require a vendor-operated service. A future onboarding flow may guide users toward a managed offering, common compute providers, Kubernetes, or their own hardware.
+"Remotely hosted" does not require a vendor-operated service. Onboarding may guide users toward a managed durable-sandbox provider or the portable image on common compute providers, personal hardware, and later Kubernetes.
 
 ## Continuous quality agent
 
@@ -179,10 +179,8 @@ Passing CI is necessary but may not be sufficient when the target package, impor
 The discussion did not settle:
 
 - The implementation of the factory's eventual agent system beyond the minimal execution interface, including its model, provider, and tool architecture.
-- The exact sandbox provider contract, checkpoint frequency, and reconciliation algorithm required to satisfy the recovery guarantees.
-- Managed hosting and provider-specific deployment recipes beyond the first SSH-and-container path.
-- The exact durable task schema and storage system.
-- How workers claim tasks and how leases expire.
+- The first managed sandbox provider and exact container persistence and restart recipes.
+- Whether a lead-authored checkpoint should be standardized and where it should live.
 - The exact priority model across areas after human overrides.
 - How the merger computes affected work beyond the identified signals.
 - How an area lead records and versions its broad plan.
@@ -190,3 +188,5 @@ The discussion did not settle:
 - The precise waiting, callback, retry, and cancellation protocols.
 - Human interfaces beyond the first Slack integration.
 - Which actions the top-level lead can perform without explicit human authorization.
+
+The durable task schema, worker claims, leases and fencing, multi-agent messaging, split-brain prevention, stronger audit or provenance records, and eventual coordination backend are explicitly deferred to [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57). This is an accepted product-sequencing decision, not an incomplete foundation acceptance criterion: those mechanisms should be specified when the factory introduces the agent pool that needs them.

@@ -30,7 +30,7 @@ The goal is comprehensive dogfooding, not circular bootstrapping. A broken facto
 
 ## Primary v1 operator and operating envelope
 
-The primary v1 operator is an individual developer or very small Rust team starting a greenfield backend, already using GitHub and a skill-compatible coding agent, and willing to operate a factory container on an SSH-reachable machine and interact with it through Slack.
+The primary v1 operator is an individual developer or very small Rust team starting a greenfield backend, already using GitHub and a skill-compatible coding agent, and willing to provision or connect a durable lead-agent sandbox and interact with it through Slack.
 
 This is the person able to evaluate the foundation milestone, not a claim about the eventual market. Early operators will probably be hobbyists and other experimenters. The long-term ambition is much broader: to become an excellent general way to produce software.
 
@@ -52,10 +52,9 @@ The system distinguishes:
 
 - **Product source repository:** contains the source of the module platform and factory. Through progressive dogfooding, this repository can itself become a managed project repository.
 - **Managed project repository:** is initialized by the platform and connected to a factory. It contains application modules, compositions, tests, and repository-local factory configuration. It does not receive a copied implementation of the factory.
-- **Deployed factory:** is the external running control plane connected to the managed project repository.
-- **Agent sandbox:** is a resumable execution environment created and owned by the deployed factory. It checks out the managed repository and produces an isolated worktree, branch, and pull request.
+- **Lead-agent sandbox:** is the complete deployed factory in the foundation milestone. It contains the agent harness, Slack bridge, managed-repository checkout, worktree, branch, and persisted harness state.
 
-These are roles rather than necessarily permanent physical boundaries. The product source repository is also eligible to be managed by a deployed factory once progressive dogfooding reaches that stage.
+The foundation has no separate factory service outside that sandbox. The product source repository is also eligible to be managed by a lead sandbox once progressive dogfooding reaches that stage.
 
 ## Installation and onboarding
 
@@ -69,10 +68,10 @@ The onboarding skill provides judgment and guidance. A deterministic, versioned 
 2. The agent explains the setup and asks the minimum necessary questions.
 3. The agent obtains and runs the project CLI.
 4. The CLI creates the Rust workspace, module, composition, and repository configuration.
-5. The agent guides deployment or connection of a remote factory.
-6. It configures Slack, grants the factory ordinary repository and pull-request access, registers the repository, verifies connectivity, and returns a working Slack entry point to the lead agent.
+5. The agent provisions or connects a durable lead sandbox and installs the factory sandbox image or equivalent package into it.
+6. It configures the sandbox's Slack bridge, grants the lead ordinary repository and pull-request access, verifies connectivity, starts the harness, and returns the working Slack channel.
 
-The module runtime is a normal Rust dependency. The factory is versioned software installed outside the managed project's source, not factory source code copied into every repository. Only project-specific contracts and integration configuration belong in the managed repository.
+The module runtime is a normal Rust dependency. The factory is versioned software installed inside the lead sandbox, not factory source code copied into every managed repository. Only project-specific contracts and integration configuration belong in the managed repository.
 
 GitHub is the initial repository and pull-request surface, but a dedicated GitHub App, bot workflow, Issues integration, or other first-class GitHub integration is not part of the foundation milestone. The factory can use ordinary Git and GitHub credentials to push a branch and open a pull request.
 
@@ -83,22 +82,18 @@ The first release bundle contains:
 - A portable onboarding skill.
 - A deterministic installer CLI.
 - Rust module-runtime packages with Rust and HTTP bindings.
-- A factory container containing the control plane, minimal execution engine, Slack integration, and sandbox-provider integration.
-- A tested SSH-and-container deployment recipe.
+- A portable factory sandbox image containing an agent harness and Slack bridge.
+- Bootstrap support for a managed durable-sandbox provider or a compatible container target with persistent storage and restart behavior.
 
-The factory execution engine may be extremely small in this milestone. The bundle validates the factory-owned lifecycle and product boundary, not the novelty of its internal agent loop.
+The agent harness may be an existing runner or an extremely small wrapper in this milestone. The bundle validates the sandbox lifecycle and product boundary, not the novelty of its internal agent loop.
 
 ## Initial factory deployment
 
-The first guaranteed factory deployment recipe is:
+The MVP has one deployed object: the durable lead sandbox. It can be supplied by a managed sandbox provider or run from the project's portable container image on a compatible target.
 
-- A user-controlled machine reachable over SSH.
-- A container runtime on that machine.
-- The factory installed and run as a container.
+A self-hosted target must provide persistent storage for the repository and harness state plus restart behavior for the bridge and harness. An ephemeral container can execute the image but does not satisfy the resume guarantee. The exact managed provider, cloud, container host, and storage mechanism remain implementation choices.
 
-This path covers a cloud virtual machine or other remotely reachable hardware without requiring a first-party managed service or provider-specific integration. The same container may run on the developer's current computer for evaluation. That is not the preferred collaborative setup because the factory becomes unavailable whenever the computer is unavailable.
-
-The onboarding agent can later guide users through a first-party hosted service, common compute providers such as AWS or GCP, Kubernetes, or personal hardware. Agent-guided flexibility should remain grounded in deterministic, tested deployment recipes.
+This keeps the deployment portable across hosted sandbox systems, cloud virtual machines, personal hardware, and later Kubernetes targets without introducing a second control-plane service.
 
 ## Generated Hello World project
 
@@ -136,8 +131,8 @@ Slack is the first factory UI. A developer talks to one persistent lead agent. T
 The lead agent handles the requested change itself:
 
 1. Receive the request through Slack.
-2. Create or resume an isolated remote code sandbox.
-3. Work in a dedicated Git worktree and branch.
+2. Continue inside its durable remote sandbox and managed-repository checkout.
+3. Create or resume a dedicated Git worktree and branch.
 4. Validate the result according to the repository's current checks.
 5. Push the branch and open a GitHub pull request.
 6. Return the result and pull-request link through Slack.
@@ -159,7 +154,7 @@ This validates a real module ownership and binding invariant. It does not valida
 
 The eventual factory may include a top-level lead, area leads, workers, reviewers, a merger, and continuous quality agents. Those roles must not be mandatory concepts hard-coded into the execution engine.
 
-The factory control plane provides mechanisms for running agents, isolating work, preserving state, asking humans, and reporting results. Factory configuration determines which roles exist, how work moves between them, and which gates apply. This configuration may remain internal at first while the design is being adjusted.
+As the factory grows, its shared substrate will need mechanisms for running agents, isolating work, preserving state, asking humans, and reporting results. Factory configuration determines which roles exist, how work moves between them, and which gates apply. This configuration may remain internal at first while the design is being adjusted.
 
 The first configuration contains only the human-facing lead. GitHub Issues, worker agents, task assignment, review agents, merger coordination, and a dedicated GitHub identity are introduced progressively.
 
@@ -171,27 +166,24 @@ The first implementation may wrap an existing runner, call model APIs directly, 
 
 ## Isolation, suspension, and recovery
 
-Every factory agent receives an isolated remote code sandbox. The intended sandbox lifecycle is:
+The complete foundation factory runs in one durable lead-agent sandbox:
 
 ```text
-create -> run -> suspend -> resume -> complete -> destroy
-                   `-> checkpoint/recover
+durable lead sandbox
+|-- agent harness
+|-- Slack bridge
+|-- repository checkout and worktree
+`-- persisted harness state
 ```
 
-Recovery has two observable levels:
+Its foundation recovery boundary is:
 
-- **Graceful suspension:** the complete sandbox resumes exactly where it stopped.
-- **Crash recovery:** all repository bytes and durable records through the last completed execution-engine tool action survive. Only the action that was in flight may be retried. GitHub and Slack side effects are reconciled without duplicate pull requests, comments, or messages.
+- **Normal recovery:** process restarts, sandbox stop-and-resume, and replacement of lost compute while its durable storage survives preserve the repository and persisted harness state. A managed sandbox may freeze and resume its full state; a container target must provide the equivalent persistent volume and restart behavior.
+- **Catastrophic sandbox loss:** simultaneous loss of the sandbox and its durable storage is outside the foundation persistence guarantee. A fresh lead can reconstruct the project's semantic state from the repository and Git history, project instructions and documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history, and any optional lead-authored checkpoint.
 
-The following data may not be lost:
+Catastrophic reconstruction does not promise exact continuation of hidden reasoning, preservation of uncommitted work, or recovery of an action that existed only inside the destroyed sandbox. It is semantic recovery: before repeating an external action, the lead inspects current GitHub and Slack state, just as a human would notice that a pull request or reply already exists. Rare duplicate or repeated effects after ambiguous failures remain possible; the foundation does not promise exactly-once delivery or require a central outbox or deduplication ledger.
 
-- The worktree and uncommitted changes.
-- The branch and commits.
-- The conversation and request.
-- The run status and task history.
-- Audit and delivery records.
-
-The exact sandbox provider, checkpoint protocol, and reconciliation algorithm remain to be designed. They must satisfy the observable guarantees above.
+The foundation does not require a factory database, event ledger, queue, or workflow engine. Agents may emit events when useful for observability, and the lead may write a checkpoint to the repository or a future factory-owned store, but neither is a required source of truth in this milestone. The backend used for stronger future coordination remains open.
 
 ## Deployment topology
 
@@ -206,17 +198,16 @@ The foundation milestone is successful when this complete scenario works:
 1. A developer starts from a greenfield repository and invokes the onboarding skill through a compatible coding agent.
 2. The installer creates the database-free Rust Hello World project.
 3. The capability works through both an in-process Rust call and HTTP.
-4. The onboarding agent deploys or connects a containerized factory on a remotely reachable machine.
-5. Slack is connected, ordinary repository credentials are supplied, and the repository is registered.
+4. The onboarding agent provisions or connects one durable lead sandbox through a managed provider or a compatible persistent container target.
+5. The factory image or equivalent package is installed there; Slack is connected; ordinary repository credentials are supplied; and the harness is started.
 6. The developer asks the lead agent in Slack to add the backward-compatible `greet(name)` capability, for which `greet("Ada")` returns `Hello, Ada!`.
-7. The lead performs the change in a factory-owned resumable sandbox, worktree, and branch.
+7. The lead performs the change inside that sandbox in a dedicated worktree and branch.
 8. The resulting change touches no foreign package source, contains only permitted deterministic artifacts outside the Hello module, and behaves consistently through Rust and HTTP.
 9. The lead opens exactly one pull request and returns it in Slack.
 10. The factory does not merge it; a human makes the merge decision.
-11. Graceful suspension resumes the complete sandbox exactly.
-12. Crash recovery preserves repository bytes and durable records through the last completed tool action, retries at most the in-flight action, and does not duplicate GitHub or Slack effects.
+11. Stopping and resuming the sandbox, or replacing its compute while durable storage survives, preserves its repository and persisted harness state.
 
-This scenario proves installation, module definition, two bindings, one module-local evolution, remote factory access, human-agent interaction, isolated implementation, durable execution, and the human merge boundary. It is an end-to-end foundation milestone, not evidence that multi-agent parallelism is already effective.
+This scenario proves installation, module definition, two bindings, one module-local evolution, remote factory access, human-agent interaction, isolated implementation, storage-backed resumption, and the human merge boundary. It is an end-to-end foundation milestone, not evidence that multi-agent parallelism or catastrophic exact recovery is already effective.
 
 ## Explicit foundation-milestone non-goals
 
@@ -235,9 +226,16 @@ The foundation milestone does not promise:
 - Worker, reviewer, area-lead, merger, or continuous-quality roles.
 - Autonomous merging.
 - A sophisticated or finalized internal factory execution engine.
+- A separate factory control-plane service, task ledger, or mandatory event log.
+- A mandatory workflow engine or queue.
+- Exact continuation after the sandbox and its durable storage are both destroyed.
+- Exactly-once GitHub or Slack effects.
+- Multi-agent task claims, leases, fencing, or split-brain prevention.
 - Streaming, event streaming, or real-time interaction in the foundation milestone; these remain requirements for the first full module-runtime release.
 
 Most are sequencing decisions rather than rejections of the broader direction. Reduced guarantees inside foreign-language implementation code are a deliberate boundary.
+
+The factory-control-plane items above are accepted deferrals, not missing foundation specifications. They do not block implementation or acceptance of the one-sandbox milestone. Their next design gate is the post-MVP agent-pool work in [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57), when concrete coordination requirements exist.
 
 Brownfield adoption should be reconsidered only after the greenfield milestones provide evidence worth generalizing. Exit remains reversible: a managed project is an ordinary Cargo workspace in the developer's Git repository, the runtime is a normal Rust dependency, and the factory is external software. Turning off the factory leaves the complete source and Git history under the developer's control; removing the runtime can proceed as an ordinary code migration rather than a data export or repository conversion.
 
@@ -246,12 +244,13 @@ Brownfield adoption should be reconsidered only after the greenfield milestones 
 The product boundary can be fixed while these implementation questions remain open:
 
 - The factory's eventual agent loop, models, providers, tools, and memory beyond the minimal execution engine.
-- The sandbox provider interface and exact suspension protocol.
-- The factory's durable data model and reconciliation behavior.
+- The first managed sandbox provider and the exact container storage, restart, and suspension recipes.
+- Whether an optional lead-authored checkpoint should be standardized and where it should live.
 - The portable skill's distribution and host-specific installation wrappers.
 - Authentication and authorization for Slack, repository credentials, and factory access.
 - Additional deployment recipes and a possible managed service.
 - Kubernetes generation and operational conventions.
 - The configuration language for future roles, handoffs, queues, and gates.
+- The post-MVP multi-agent coordination and stronger durability guarantees tracked in [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57).
 
 They should be resolved through separate focused design work rather than expanding the foundation milestone.

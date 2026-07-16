@@ -12,7 +12,7 @@ The module platform and software factory are one product, brand, and project, ev
 
 Development bootstraps progressively. The module foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
 
-The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It extracts one annotated Rust implementation method into a generated contract crate callable both as Rust code and through HTTP, connects the repository to a remotely hosted factory, and lets the developer ask a lead agent through Slack to add a backward-compatible capability in one isolated pull request for human review. It does not yet test multi-agent parallelism.
+The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It extracts one annotated Rust implementation method into a generated contract crate callable both as Rust code and through HTTP, connects the repository to one durable lead-agent sandbox, and lets the developer ask that lead through Slack to add a backward-compatible capability in one isolated pull request for human review. The sandbox contains the harness, Slack bridge, repository checkout, worktree, and persisted harness state; there is no separate foundation control plane. This milestone does not yet test multi-agent parallelism.
 
 ## [Modules](module-based-engineering-details/01-modules.md)
 
@@ -91,6 +91,8 @@ Client-binding modules generate TypeScript, Swift, Kotlin, or other SDKs while k
 A top-level lead coordinates the harness and interfaces with humans. Area leads maintain plans and publish prioritized tasks. Worker agents execute tasks independently.
 
 Those roles describe the intended mature organization, not a hard-coded minimum. The first factory contains only the human-facing lead. Roles, handoffs, and gates are factory policy expressed through configuration so workers, reviewers, and a merger can be introduced progressively.
+
+The first factory is one durable sandbox running the lead, its harness, and its Slack bridge. It can use a managed durable-sandbox provider or the project's portable image on a compatible container target with persistent storage and restart behavior. Normal stop-and-resume preserves the repository and persisted harness state while that storage survives. Total sandbox and storage loss falls back to semantic reconstruction from GitHub, Slack, and repository state; exact continuation and exactly-once external effects are not foundation guarantees. Stronger multi-agent coordination is deferred rather than forcing a ledger, queue, or workflow engine into the MVP.
 
 The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed packages, changed imported contracts, shared dependency-resolution changes, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
 
