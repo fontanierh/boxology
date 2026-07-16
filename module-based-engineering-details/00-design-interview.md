@@ -330,6 +330,8 @@ No universal policy window or automatic-removal threshold was selected.
 
 > Cycles are a quality and planning concern, not a runtime primitive. The factory analyzes and mitigates them while the runtime remains neutral.
 
+**Later refinement:** Review split the generic dependency graph into Rust-build, live-invocation, asynchronous-event, provider-dependency, and data-flow graphs. Rust-build cycles are forbidden. New live-invocation cycles are blocked by default with a durable exception path. Asynchronous cycles are allowed only with recorded idempotency, termination, and bounded-amplification evidence. Provider-dependency and data-flow cycles remain analytical findings. Existing accepted cycles are grandfathered so they do not block unrelated work. Runtime safeguards such as deadlines, cancellation, retry ceilings, and recursion protection remain necessary independently of graph policy.
+
 ## Question 17: How do concurrent tasks in one module work?
 
 **Question:** How should the factory handle several ready tasks that all want to change the same module at the same time?

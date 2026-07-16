@@ -152,14 +152,17 @@ A perpetual quality agent analyzes the system beyond individual pull requests. I
 
 The responsibilities discussed included:
 
-- Static analysis of module dependencies.
-- Detecting or discouraging cycles.
-- Prompting planners to produce plans that avoid cycles.
+- Constructing and maintaining evidence for separate Rust-build, live-invocation, asynchronous-event, provider-dependency, and data-flow graphs.
+- Supplying that evidence to configured CI and merger policy, which gate newly introduced Rust-build and live-invocation cycles.
+- Preserving approved exceptions and grandfathered cycles as durable findings.
+- Requiring idempotency, termination, and bounded-amplification evidence for changes completing asynchronous event cycles.
+- Surfacing provider-dependency and data-flow cycles for architectural review.
+- Prompting planners to produce plans that avoid or remove problematic cycles.
 - Combining code analysis with operational evidence where useful.
 - Identifying codebase directions that need human evaluation.
 - Publishing targeted improvement tasks.
 
-Cycle management was explicitly placed here and in factory planning rather than in the application runtime. The runtime remains capable of executing declared module relationships; the factory tries to prevent or mitigate problematic designs.
+Cycle acceptance is configured CI and merger policy rather than a runtime graph check. The runtime must independently supply invocation safeguards required even for accepted or apparently acyclic graphs; their precise semantics remain open in [issue #6](https://github.com/fontanierh/module-based-engineering/issues/6).
 
 ## Relationship to CI and review
 

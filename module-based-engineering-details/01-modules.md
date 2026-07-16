@@ -88,15 +88,24 @@ The platform can enforce and evolve that declared binding boundary, but it canno
 
 ## Dependency cycles
 
-The discussion did not make dependency cycles a runtime error. Backward-compatible contracts and single-package pull requests remove much of the change-management difficulty normally associated with a cycle.
+"Cycle" is not one property. The platform analyzes separate graphs:
 
-Cycles can still signal engineering problems, including recursive request paths, availability coupling, unclear ownership, or difficult isolated testing. The agreed direction was to treat these as quality concerns:
+- The **Rust build graph** contains Cargo package and crate dependencies.
+- The **live invocation graph** contains declared calls in which the caller waits for or maintains a live dependency on the callee, including unary request-response, call-scoped streams, and applicable real-time sessions.
+- The **asynchronous event graph** contains detached publications and subscriptions that do not keep the publisher waiting on a live consumer.
+- The **provider dependency graph** contains declared dependencies among provider packages together with module requirements and provider bindings.
+- The **data-flow graph** records declared movement and ownership of information.
 
-- Planners receive the dependency graph and should avoid introducing cycles.
-- Mechanical analysis can identify new declared cycles.
-- The continuous quality agent can combine static analysis with operational traces and create decoupling tasks.
-- Existing cycles need not stop unrelated work.
-- The runtime remains neutral rather than embedding a universal cycle policy.
+Each graph has a different policy:
+
+- **Rust build graph:** cycles are forbidden. Cargo already rejects ordinary crate cycles, and CI must reject build- or development-dependency tricks that bypass the rule. The mapping between modules, contract crates, implementation crates, and generated crates remains the separate build-architecture decision in [issue #39](https://github.com/fontanierh/module-based-engineering/issues/39).
+- **Live invocation graph:** a merge candidate that adds an edge completing a new cycle is blocked by default. A configured architectural approver may authorize an exception, but the durable approval must record the rationale, affected operations, and required runtime safeguards.
+- **Asynchronous event graph:** cycles are allowed. A change completing one must record its idempotency, termination, and bounded-amplification argument so an event cannot circulate or multiply indefinitely without an explicit design.
+- **Provider-dependency and data-flow graphs:** cycles are observed and surfaced for architectural review but are not merge-blocking merely because they exist.
+
+When this policy is introduced, existing accepted cycles are snapshotted and tracked as quality findings. They do not block unrelated work; the gates apply to newly introduced cycle edges.
+
+Graph policy is not runtime safety. Deadlines, cancellation and budget propagation, retry ceilings, and recursion protection are required independently because an acyclic declared graph can still recurse dynamically. Their precise invocation semantics remain part of the runtime execution-model work in [issue #6](https://github.com/fontanierh/module-based-engineering/issues/6).
 
 ## Matters not yet specified
 
@@ -106,4 +115,3 @@ The discussion did not settle:
 - The precise granularity at which a large module should be divided.
 - The exact type system or interface-definition language.
 - The Rust contract/implementation crate topology, dispatch model, and concrete representation of coexisting contract versions.
-- Whether any categories of new dependency cycle should be mechanically blocked rather than only surfaced.
