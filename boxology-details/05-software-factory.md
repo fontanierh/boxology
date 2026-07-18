@@ -6,7 +6,7 @@ This document expands the multi-agent coordination, task, merge, and continuous-
 
 ## Purpose
 
-The mature software factory is intended to coordinate development and maintenance of a modular system across many tasks and agents. The foundation deliberately begins with one persistent lead agent rather than assuming that a separate control plane already exists.
+The mature software factory is intended to coordinate development and maintenance of a modular system across many tasks and agents. The foundation begins as a portable skill used by one coding agent rather than assuming that a separate control plane, persistent session, or Boxology-owned harness already exists. The agent using that skill is the **lead agent**.
 
 The package boundary gives the factory a universal unit of ownership, analysis, review, and merge accountability. Boxes are the most common target, but providers, compositions, and platform packages can also own work. Agents can work concurrently because every submitted change has one accountable package and cannot modify another package's non-derived files.
 
@@ -16,19 +16,15 @@ An eventual shared factory substrate may supply mechanisms such as agent executi
 
 ## Foundation-milestone factory
 
-The governance hierarchy below is a mature direction. The foundation-milestone factory is deliberately smaller:
+The governance hierarchy below is a mature direction. The v0 factory is deliberately only the Boxology skill:
 
-1. A developer talks to one persistent lead agent through Slack.
-2. The lead handles the requested change itself.
-3. The lead, its harness, Slack bridge, repository checkout, worktree, and persisted harness state all run in one durable remote sandbox.
-4. It opens a GitHub pull request and reports the result in Slack.
-5. It stops at the pull request boundary. A human must review and merge.
+1. A developer gives the skill to a compatible coding-agent harness.
+2. The skill explains Boxology's philosophy, box boundaries, contracts, compatibility rules, and way of working.
+3. The coding agent adopts the lead-agent role and works through whatever tools and human interface its harness provides.
 
-The foundation milestone has no separate factory service, required task or event ledger, task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. Launching the factory means ensuring that the lead sandbox and the harness and bridge inside it are running. Additional roles and surfaces can be added progressively without replacing the stable human-facing lead.
+V0 has no Boxology-owned harness, gateway, sandbox, factory service, task or event ledger, GitHub Issues workflow, worker pool, area leads, reviewer, merger, dashboard, or required communication transport. Codex, Claude Code, Pi, Hermes, and other compatible harnesses are equally valid hosts. Hermes with Slack is one possible operator setup, not part of Boxology.
 
-The factory owns its agent execution interface and lifecycle guarantees. The first implementation may wrap an existing runner, call model APIs directly, or use a bare-bones custom loop. The foundation milestone specifies observable behavior without requiring a sophisticated original harness.
-
-Its prescribed acceptance task is one backward-compatible, box-local change: add `greet(name)`, returning `Hello, {name}!`, to the generated Hello box; touch no foreign package source; keep Rust and HTTP behavior consistent; open exactly one pull request; and leave merging to a human. This foundation milestone does not yet test concurrent agent work or the safe-parallelism thesis.
+The skill does not promise session persistence, frozen execution, stop-and-resume, message catch-up, or recovery. Those properties belong to the chosen harness until a later Boxology-owned execution layer exists. V0 also does not prescribe a GitHub task or pull-request workflow; richer factory behavior is added iteratively after the box model itself is usable.
 
 ## Governance hierarchy
 
@@ -45,7 +41,7 @@ Humans <-> top-level lead
 
 ### Top-level lead
 
-The top-level lead is the primary interface between humans and the harness. It receives authoritative human guidance and can ask humans for information, direction, review, or approval.
+The top-level lead is the primary interface between humans and the harness. In v0 this simply names the coding agent using the Boxology skill. It receives authoritative human guidance through its harness and can ask humans for information, direction, review, or approval.
 
 Its control-plane responsibilities include:
 
@@ -56,7 +52,7 @@ Its control-plane responsibilities include:
 - Cancelling or superseding work.
 - Routing strong approval requests.
 
-The phrase "keys to the whole harness" referred to control over planning and coordination. Sensitive actions and policy changes still need explicit approval according to the configured harness policy.
+The phrase "keys to the whole harness" referred to the mature lead's control over planning and coordination. V0 adds no authority layer of its own; the selected harness, its system prompt, project instructions, supplied credentials, and the agent's judgment determine what it can do.
 
 ### Area leads
 
@@ -128,27 +124,31 @@ The worker performing rework receives the newly merged change and reasons about 
 
 ## Human control
 
-Humans can push authoritative information into the harness at any time through the top-level lead. This is the mechanism for resolving ambiguous product questions, changing priorities, approving sensitive actions, or correcting the factory's understanding of the codebase.
+Humans can push authoritative information into the selected harness through the lead. This is the mechanism for resolving ambiguous product questions, changing priorities, approving sensitive actions, or correcting the lead's understanding of the codebase.
 
-The lead can also initiate questions when area analysis, quality findings, implementation, or deprecation evidence requires judgment that the harness should not invent.
+The lead can also initiate questions when analysis or implementation requires judgment that it should not invent. Boxology does not select the interface: it can be a local agent UI, remote control, Slack, WhatsApp, or anything else the harness or gateway supports.
 
-Slack is the only first-class human integration in the foundation milestone. It should provide clear context and strong approval requests rather than relying on implicit authority. Other interfaces may be added later.
+V0 contains no Boxology communication gateway, message-recovery protocol, or GitHub integration. The chosen harness and operator own access control, delivery, persistence, repository credentials, and external-effect behavior.
 
-The foundation bridge catches up on requests still available in the configured channel history after downtime rather than relying only on live events. Slack retention and access policy bound how far it can recover. Before retrying any external effect whose outcome is uncertain, the lead inspects the current state in the system that owns the effect; this reduces repeated actions without promising exactly-once behavior.
+## Foundation authority model
 
-GitHub is the initial repository and pull-request surface, but there is no required GitHub App, bot workflow, Issues integration, or other first-class GitHub integration. The lead can use ordinary Git and GitHub credentials to push a branch and open a pull request, but it never merges autonomously. Dedicated identity and task-ledger integrations may be added when worker agents are introduced.
+The foundation deliberately treats the lead as an agent operating with the authority available through its chosen harness, not as a process constrained by a separate Boxology authorization service.
 
-## Remote execution and resumability
+- Boxology defines no channel, user allowlist, identity model, or role assignment. Any instruction the harness presents as an authorized user message is authoritative.
+- Conflicting or ambiguous guidance has no deterministic newest-message, quorum, or priority algorithm. The lead follows its system prompt and project instructions, uses agent judgment, and asks humans when useful.
+- The lead may use every filesystem, process, network, Git, GitHub, communication, or other capability made available by the operator.
+- Project instructions and system prompts are editable guidance, not a platform-enforced capability boundary.
+- Approvals are ordinary conversation interpreted by the lead. V0 has no formal approval object, nonce, expiry, replay protection, separate approval store, capability matrix, immutable policy layer, or agent-controlled break-glass protocol.
 
-The complete foundation factory is one durable lead-agent sandbox. It contains the harness, Slack bridge, managed-repository checkout, dedicated worktree and branch, and persisted harness state. There is no separate foundation control plane that creates or owns that sandbox.
+The simple v0 skill focuses on Boxology principles rather than prescribing GitHub Issues, pull-request queues, or a human-merge protocol. A user may instruct the lead to follow any of those workflows through ordinary harness and repository configuration.
 
-Process restarts, unclean harness termination, sandbox stop-and-resume, and compute replacement recover the repository and persisted harness state from a valid, internally consistent recovery point while durable storage survives. Work after that point may need to be repeated. A managed sandbox provider may freeze and resume the whole environment. The same factory image may instead run on any compatible container target, provided that target supplies durable storage, crash-consistent persistence, and restart behavior. The exact persistence mechanism remains an implementation choice. An ephemeral container does not meet this guarantee.
+Formal roles, enforced authority policy, structured approvals, revocation, and break-glass behavior are deferred to [issue #66](https://github.com/fontanierh/boxology/issues/66). The later multi-agent coordination substrate remains tracked in [issue #57](https://github.com/fontanierh/boxology/issues/57).
 
-If the sandbox and its durable storage are both destroyed, a fresh lead reconstructs the project's semantic state from Git, repository instructions and documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history that remains retained and accessible, and any optional checkpoint written by the previous lead. Exact hidden-reasoning continuation, uncommitted-work preservation, and exactly-once GitHub or Slack effects are not promised across this catastrophic boundary. The new lead inspects those external systems before acting, but a rare repeated effect after an ambiguous failure remains possible.
+## Execution and resumability
 
-The foundation does not require a central database, event ledger, queue, outbox, deduplication service, or workflow engine. Agents may emit events for observability and the lead may author a checkpoint, but neither is a mandatory source of truth. Selecting stronger post-MVP coordination mechanisms is deferred.
+Boxology v0 does not own the lead's execution environment. The user can run the skill in a local coding agent, remote agent, container, managed sandbox, or another harness-supported setup. Boxology makes no promise about session persistence, uncommitted work, message delivery, stop-and-resume, crash consistency, external-effect deduplication, or reconstruction after loss.
 
-"Remotely hosted" does not require a vendor-operated service. Onboarding may guide users toward a managed durable-sandbox provider or the portable image on common compute providers, personal hardware, and later Kubernetes.
+Persistent workspaces and repository-backed context may be useful operator choices, but they are not v0 conformance requirements. Stronger factory-owned execution and durability guarantees are deferred until Boxology introduces the harness or coordination substrate that can implement them.
 
 ## Continuous quality agent
 
@@ -180,15 +180,14 @@ Passing CI is necessary but may not be sufficient when the target package, impor
 
 The discussion did not settle:
 
-- The implementation of the factory's eventual agent system beyond the minimal execution interface, including its model, provider, and tool architecture.
-- The first managed sandbox provider and exact container persistence and restart recipes.
+- The implementation of a future Boxology-owned harness or factory execution layer, including its model, provider, tool, gateway, and durability architecture.
 - Whether a lead-authored checkpoint should be standardized and where it should live.
 - The exact priority model across areas after human overrides.
 - How the merger computes affected work beyond the identified signals.
 - How an area lead records and versions its broad plan.
 - Whether area-lead reassessment is performed by the same model instance or a fresh worker.
 - The precise waiting, callback, retry, and cancellation protocols.
-- Human interfaces beyond the first Slack integration.
-- Which actions the top-level lead can perform without explicit human authorization.
+- Whether Boxology should eventually ship or select any human communication gateway.
+- The formal role and approval architecture beyond the permissive foundation model, tracked in [issue #66](https://github.com/fontanierh/boxology/issues/66).
 
 The durable task schema, worker claims, leases and fencing, multi-agent messaging, split-brain prevention, stronger audit or provenance records, and eventual coordination backend are explicitly deferred to [issue #57](https://github.com/fontanierh/boxology/issues/57). This is an accepted product-sequencing decision, not an incomplete foundation acceptance criterion: those mechanisms should be specified when the factory introduces the agent pool that needs them.
