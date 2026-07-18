@@ -1,12 +1,12 @@
 # Rust Build Topology
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
-This document defines how a native module maps onto Rust and Cargo. It separates the module's ownership boundary from its compilation units, establishes the generated contract boundary, and records the minimum build-graph enforcement required by the platform.
+This document defines how a native box maps onto Rust and Cargo. It separates the box's ownership boundary from its compilation units, establishes the generated contract boundary, and records the minimum build-graph enforcement required by the platform.
 
-## One module, two compilation units
+## One box, two compilation units
 
-A module is one logical package and one pull-request owner. It owns two Cargo crates:
+A box is one logical package and one pull-request owner. It owns two Cargo crates:
 
 - A handwritten **implementation crate** containing its behavior and internal organization.
 - A mechanically generated **contract crate** containing the Rust surface that consumers may compile against.
@@ -14,15 +14,15 @@ A module is one logical package and one pull-request owner. It owns two Cargo cr
 For example:
 
 ```text
-modules/customer/
-  module manifest
+boxes/customer/
+  boxology.toml         # logical package and ownership manifest
   implementation/       # handwritten customer implementation crate
   generated/contract/   # generated customer contract crate
 ```
 
-The exact directory and crate names are tooling choices. The semantic distinction is not: another module may compile against the contract crate but never against the implementation crate.
+The exact directory and crate names are tooling choices. The semantic distinction is not: another box may compile against the contract crate but never against the implementation crate.
 
-This does not weaken the single-owner rule. Both crates belong to the same module package, and a module-owned pull request may change its implementation inputs together with deterministic contract outputs attributable to them.
+This does not weaken the single-owner rule. Both crates belong to the same box package, and a box-owned pull request may change its implementation inputs together with deterministic contract outputs attributable to them.
 
 ## Rust-first contract authoring
 
@@ -48,7 +48,7 @@ The exact macro spelling remains a tooling choice. No exported service trait, fi
 
 The necessary restriction is at the boundary: inputs, outputs, errors, and other values crossing an annotated method must implement the contract-type model and be representable by the language-neutral schema. The generator rejects a boundary it cannot express faithfully. Internal implementation types and organization remain unconstrained. The complete source model is defined in [Canonical Capability Contract](09-capability-contract.md).
 
-Developers author annotated boundary-type declarations beside the implementation. The pre-Cargo generator lifts each declaration into the generated contract crate, where the one real compiled type implements `ModuleType`. The implementation-side annotation resolves to a re-export of that generated type. Consumers, the implementation adapter, and bindings therefore share one contract type without a second handwritten declaration.
+Developers author annotated boundary-type declarations beside the implementation. The pre-Cargo generator lifts each declaration into the generated contract crate, where the one real compiled type implements `ContractType`. The implementation-side annotation resolves to a re-export of that generated type. Consumers, the implementation adapter, and bindings therefore share one contract type without a second handwritten declaration.
 
 Because this happens before Cargo type-checking, an exported declaration must be syntactically self-contained and target-independent. The generator rejects aliases to unannotated boundary types, macro-generated fields or variants, `cfg`-dependent contract shapes, and attributes or derives it cannot explicitly propagate. Structured errors use this same lifting path rather than a separate implementation-side derive model.
 
@@ -74,7 +74,7 @@ The generated outputs include the material required by the selected bindings, in
 
 The contract crate defines only the implementation-neutral dispatch side. It never imports, names, or reaches into the implementation crate. The generator separately emits adapter code inside the implementation crate that implements the generated dispatch interface and invokes the annotated methods. The composition connects that adapter to the typed handles. Whether the generated interface is internally represented by a trait, function table, or another erased mechanism remains an implementation detail.
 
-The generated crate is checked into Git as a declared derived artifact so a clone remains an ordinary Cargo workspace with useful editor behavior and reviewable contract diffs. It is never hand-edited. The module manifest records the generator identity, semantic inputs, outputs, and regeneration command. CI uses the generator resolved by the protected workspace toolchain to recreate every submitted generated output byte-for-byte under the ownership rules in [Packages, Providers, and Compositions](02-packages.md#ownership-and-derived-artifact-enforcement).
+The generated crate is checked into Git as a declared derived artifact so a clone remains an ordinary Cargo workspace with useful editor behavior and reviewable contract diffs. It is never hand-edited. The box's `boxology.toml` records the generator identity, semantic inputs, outputs, and regeneration command. CI uses the generator resolved by the protected workspace toolchain to recreate every submitted generated output byte-for-byte under the ownership rules in [Packages, Providers, and Compositions](02-packages.md#ownership-and-derived-artifact-enforcement).
 
 Byte-for-byte stability is an acceptance requirement for the generator, not an assumed property. Generation must use stable ordering, omit timestamps, randomness, absolute host paths, and other machine-specific data, normalize paths and line endings, and use workspace-resolved formatting and tooling. The same source and workspace toolchain must produce identical output on every supported development and CI platform.
 
@@ -82,16 +82,16 @@ The same generator supplies programmable test bindings from the contract definit
 
 ## Workspace generator lifecycle
 
-A workspace has one current generator supplied by its platform toolchain. Modules do not select or pin independent generator versions. The workspace resolves one exact tool version for a generation run—through its Cargo lockfile, platform tool manifest, or an equivalent deterministic installation mechanism—so local development and CI do not accidentally use different releases.
+A workspace has one current generator supplied by its platform toolchain. Boxes do not select or pin independent generator versions. The workspace resolves one exact tool version for a generation run—through its Cargo lockfile, platform tool manifest, or an equivalent deterministic installation mechanism—so local development and CI do not accidentally use different releases.
 
 Every generated artifact records machine-readable generator provenance; generated Rust source can also carry a header such as:
 
 ```rust
-// Generated by mbe-contract-generator 1.3.0.
+// Generated by boxology-contract-generator 1.3.0.
 // Do not edit manually.
 ```
 
-Updating the workspace generator does not mass-regenerate every module. Existing generated crates remain valid and continue to compile. When a module's declared contract-generation inputs next change, or its owner explicitly requests regeneration, CI uses the current workspace generator and requires the checked-in output to match it. That lazy regeneration replaces the module's derived output and updates the provenance. A workspace can therefore contain artifacts produced by several historical generator releases while installing and running only the current generator.
+Updating the workspace generator does not mass-regenerate every box. Existing generated crates remain valid and continue to compile. When a box's declared contract-generation inputs next change, or its owner explicitly requests regeneration, CI uses the current workspace generator and requires the checked-in output to match it. That lazy regeneration replaces the box's derived output and updates the provenance. A workspace can therefore contain artifacts produced by several historical generator releases while installing and running only the current generator.
 
 Generator releases must be backward-compatible:
 
@@ -99,11 +99,11 @@ Generator releases must be backward-compatible:
 - Unchanged source produces a semantically equivalent contract even when the generated representation improves.
 - Existing generated crates remain compatible with the current runtime and workspace tooling.
 
-Compatibility analysis distinguishes a representational regeneration diff from a semantic contract change. If a new generator turns unchanged source into an incompatible contract or makes an older generated crate unusable, that release is defective and must not become the workspace generator. A breaking generator upgrade is not a normal module migration path.
+Compatibility analysis distinguishes a representational regeneration diff from a semantic contract change. If a new generator turns unchanged source into an incompatible contract or makes an older generated crate unusable, that release is defective and must not become the workspace generator. A breaking generator upgrade is not a normal box migration path.
 
 ## Contract evolution without mandatory public versions
 
-The contract crate represents the complete contract surface the module currently supports. The platform does not require separate crates, namespaces, or traits named `v1`, `v2`, or similar.
+The contract crate represents the complete contract surface the box currently supports. The platform does not require separate crates, namespaces, or traits named `v1`, `v2`, or similar.
 
 Every capability needs a stable logical identity, and every generated contract state needs a revision or fingerprint so the platform can compare it with its base revision. These internal revision identities support analysis; they do not force a public versioning scheme.
 
@@ -127,17 +127,17 @@ mark a field deprecated
 
 The final tightening or removal can be incompatible with an old consumer. It becomes an authorized step only after the configured migration and deprecation policy is satisfied. The generator always identifies and describes the contract change; the harness decides whether its evidence is sufficient to merge.
 
-Explicit parallel versions remain available when a module needs long-lived incompatible surfaces, especially for public or unmanaged consumers. A module can expose those surfaces from the same generated contract crate or choose a more elaborate packaging strategy. Parallel `v1` and `v2` artifacts are a product and harness choice, not a runtime invariant.
+Explicit parallel versions remain available when a box needs long-lived incompatible surfaces, especially for public or unmanaged consumers. A box can expose those surfaces from the same generated contract crate or choose a more elaborate packaging strategy. Parallel `v1` and `v2` artifacts are a product and harness choice, not a runtime invariant.
 
 ## Dependency and dispatch model
 
 The common ownership manifest remains the authoritative dependency record. An implementation declares the exact foreign capabilities it imports. Generated typed handles expose only those imports.
 
-The contract-owning module supplies the canonical handle type through its generated contract crate. Consumers do not generate independent copies of that public Rust API. A consumer may receive a generated `Imports` structure that contains only the handles declared by its manifest.
+The contract-owning box supplies the canonical handle type through its generated contract crate. Consumers do not generate independent copies of that public Rust API. A consumer may receive a generated `Imports` structure that contains only the handles declared by its manifest.
 
-Module code is statically typed against those handles. The application composition owns binding: it selects implementations, creates the permitted handles, and connects each handle to an in-process target or a remote transport. Modules do not perform ambient string-based lookup through a global service locator.
+Box code is statically typed against those handles. The application composition owns binding: it selects implementations, creates the permitted handles, and connects each handle to an in-process target or a remote transport. Boxes do not perform ambient string-based lookup through a global service locator.
 
-The module-facing API therefore remains stable across placement choices:
+The box-facing API therefore remains stable across placement choices:
 
 ```text
 typed capability handle
@@ -156,24 +156,24 @@ The minimum edge policy is:
 
 | From | To | Policy |
 | --- | --- | --- |
-| Module contract | Any module implementation | Forbidden |
-| Module implementation | Its own generated contract | Allowed |
-| Module implementation | Declared foreign contract | Allowed |
-| Module implementation | Foreign implementation | Forbidden |
-| Application composition | Selected module implementations | Allowed |
-| Any module crate | Undeclared foreign contract | Forbidden |
+| Box contract | Any box implementation | Forbidden |
+| Box implementation | Its own generated contract | Allowed |
+| Box implementation | Declared foreign contract | Allowed |
+| Box implementation | Foreign implementation | Forbidden |
+| Application composition | Selected box implementations | Allowed |
+| Any box crate | Undeclared foreign contract | Forbidden |
 
 The check covers normal, build, development, renamed, optional, feature-activated, and target-specific edges. A build script or generated source cannot be used to conceal a forbidden dependency.
 
-Module-owned tests follow the same boundary and use the generator's programmable contract-level test bindings for foreign capabilities. Tests that deliberately link several real implementations belong to an application composition and its integration-quality contract.
+Box-owned tests follow the same boundary and use the generator's programmable contract-level test bindings for foreign capabilities. Tests that deliberately link several real implementations belong to an application composition and its integration-quality contract.
 
-Providers and platform crates have their own declared roles, but they cannot be used as passthroughs that expose a foreign module implementation to ordinary module code.
+Providers and platform crates have their own declared roles, but they cannot be used as passthroughs that expose a foreign box implementation to ordinary box code.
 
 ## Build cycles and invocation cycles
 
 Contract crates never depend on implementation crates. Contract-to-contract edges, when permitted by the declared contract model, must also remain acyclic because they are part of the Rust build graph.
 
-If two contracts would otherwise refer to one another's types, the module designers must break the build cycle. They can use boundary-local data-transfer types and explicit translation, or extract a genuinely shared concept into a separately owned contract module whose own edges remain acyclic. The platform does not prescribe one universal choice, but it never disguises a contract cycle as a valid Cargo graph.
+If two contracts would otherwise refer to one another's types, the box designers must break the build cycle. They can use boundary-local data-transfer types and explicit translation, or extract a genuinely shared concept into a separately owned contract box whose own edges remain acyclic. The platform does not prescribe one universal choice, but it never disguises a contract cycle as a valid Cargo graph.
 
 The split permits two implementations to import one another's contracts without creating a Cargo cycle:
 
@@ -183,7 +183,7 @@ customer-implementation -> billing-contract
 composition             -> both implementations
 ```
 
-This does not make the live-invocation cycle automatically desirable. The graph-specific policy in [Modules](01-modules.md#dependency-cycles) still blocks a newly introduced live cycle by default and requires an explicit architectural exception with runtime safeguards. The build topology merely keeps Cargo from conflating an approved runtime relationship with an impossible build relationship.
+This does not make the live-invocation cycle automatically desirable. The graph-specific policy in [Boxes](01-boxes.md#dependency-cycles) still blocks a newly introduced live cycle by default and requires an explicit architectural exception with runtime safeguards. The build topology merely keeps Cargo from conflating an approved runtime relationship with an impossible build relationship.
 
 ## Foundation milestone
 

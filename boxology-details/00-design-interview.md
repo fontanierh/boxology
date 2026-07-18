@@ -1,8 +1,10 @@
-# Module-Based Engineering Design Interview
+# Boxology Design Interview
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
 This is a comprehensive chronological record of the substantive Q&A that produced the initial white paper, followed by later decision interviews where identified. It is lightly edited and condensed for readability rather than presented as a verbatim chat transcript. It preserves the ideas, uncertainty, clarifications, and decisions discussed at each stage.
+
+The historical discussion used *module* as the working term for the independently owned capability unit. The accepted product name is **Boxology**, and the canonical product term is now **box**. Historical passages retain the terminology used when those decisions were made; current normative documents use *box*.
 
 ## Opening concept
 
@@ -441,7 +443,7 @@ The complete decision is maintained in [Product Contract and Foundation Mileston
 Issue #4 asked what representation is authoritative, which Rust types may cross a capability boundary, how different bindings preserve the same meaning, and where customization is allowed. A follow-up interview established these decisions:
 
 - Rust implementation methods and adjacent boundary-type declarations are the authoring source. A deterministic language-neutral schema is the compatibility and binding authority.
-- An annotated boundary type is lifted into the generated contract crate and re-exported into the implementation crate. Structs and structured errors use the same path; the one generated compiled type implements `ModuleType`, and consumers never compile against a duplicate implementation-side type.
+- An annotated boundary type is lifted into the generated contract crate and re-exported into the implementation crate. Structs and structured errors use the same path; the one generated compiled type implements `ContractType`, and consumers never compile against a duplicate implementation-side type.
 - Exported declarations are syntactically self-contained and target-independent. Borrowing, lifetimes, aliases to unannotated boundary types, macro-generated fields, `cfg`-dependent shapes, arbitrary generics, trait objects, platform-sized integers, and Rust file or I/O handles are rejected at the boundary.
 - Generated handles are asynchronous and accept an explicit `CallContext` carrying caller, deadline, cancellation, tracing, and applicable idempotency information. Domain errors are structured and remain distinct from invocation failures. Bindings must declare rather than silently drop their context-propagation behavior.
 - Missing, null, and present values can be represented distinctly. Defaults and declarative validation are schema metadata; tightening accepted input is a breaking change.
@@ -470,7 +472,7 @@ The complete rule is maintained as the [tracker reconciliation gate](06-quality-
 
 ## Follow-up: Sandbox-native factory foundation
 
-[Issue #23](https://github.com/fontanierh/module-based-engineering/issues/23) asked for the factory's control-plane authority, durable state, recovery, external-effect, and provenance guarantees. The follow-up deliberately resolved only the foundation milestone and transferred stronger post-MVP coordination to [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57).
+[Issue #23](https://github.com/fontanierh/boxology/issues/23) asked for the factory's control-plane authority, durable state, recovery, external-effect, and provenance guarantees. The follow-up deliberately resolved only the foundation milestone and transferred stronger post-MVP coordination to [issue #57](https://github.com/fontanierh/boxology/issues/57).
 
 ### Foundation deployment boundary
 
@@ -519,6 +521,25 @@ This transfer is an explicit scope decision. The foundation is complete without 
 Review of the sandbox-native proposal identified that storage survival alone did not guarantee a recoverable state after an unclean process death. The foundation therefore added the observable consistent-recovery behavior and explicit acceptance tests for unclean harness termination and Slack catch-up.
 
 The review did not establish a required persistence algorithm, deterministic branch or pull-request naming, frequent WIP pushes, a recommended checkpoint policy, or a general approval-record format. Those suggestions were not needed to close the recovery gap and remain undecided or owned by their existing focused issues. Slack history is used only to the extent that the workspace retains it and permits the bridge to read it.
+
+## Follow-up: Product name and box terminology
+
+The descriptive working name *module-based engineering* and the provisional `mbe` namespace were rejected as the product identity. The desired naming style was short, memorable, slightly playful, and anchored in a real reference, with Cargo, Elixir, Tokio, Megaloop, and Crab cited as positive examples.
+
+**Backplane** was initially selected because independent hardware components communicate through declared pins and protocols while consumers ignore their internal implementation. The name was discarded before repository changes when a collision check found an adjacent open-source developer platform with its own Backplane API and CLI, as well as exact package-name collisions.
+
+**Boxology** was then selected as the canonical product name. The reference is box-and-arrow system architecture, but with executable meaning:
+
+- A **box** is an independently owned capability unit.
+- Typed ports and contracts are the box's public interface.
+- Arrows are the explicitly permitted communication paths.
+- Humans own box boundaries, interfaces, types, data models, and composition.
+- Agents implement and evolve the code hidden inside each box.
+- A box implementation may be replaced without requiring consumers to understand it while its contract remains compatible.
+
+The product and CLI use **Boxology** and `boxology`. The package manifest is `boxology.toml`; product-owned crates, the onboarding skill, and the factory image use the `boxology` namespace. The technical term *box* replaces *module* in normative product documentation. Historical interview passages retain the working term used when the underlying decisions were made.
+
+The Rust API should not introduce a new unqualified type named `Box`, which would be confused with Rust's standard `Box<T>`. Product attributes and generated contract concepts use the Boxology or contract namespace instead.
 
 ## Resulting documentation set
 

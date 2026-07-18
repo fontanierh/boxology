@@ -1,8 +1,8 @@
 # Canonical Capability Contract
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
-This document defines the canonical contract authored by a native Rust module. It fixes the relationship between annotated implementation code, the generated language-neutral schema, typed Rust handles, and transport or client bindings.
+This document defines the canonical contract authored by a native Rust box. It fixes the relationship between annotated implementation code, the generated language-neutral schema, typed Rust handles, and transport or client bindings.
 
 ## Two authorities, one source of human intent
 
@@ -27,7 +27,7 @@ A capability is an annotated asynchronous implementation method. Conceptually:
 
 ```rust
 /// Creates a customer account.
-#[module::capability(
+#[boxology::capability(
     name = "create_user",
     auth = "customer",
     idempotency = "none"
@@ -56,19 +56,19 @@ The runtime context is an explicit method parameter. It is recognized by the gen
 Developers author exported data types beside the implementation:
 
 ```rust
-#[module::contract]
+#[boxology::contract]
 pub struct CreateUser {
     pub email: String,
 }
 ```
 
-Before Cargo builds, the generator reads the declaration and emits the real compiled type into the module's generated contract crate. In the implementation crate, the annotated source location resolves to a re-export of that generated type. There is therefore one compiled `CreateUser` type, owned by the contract crate, without asking developers to maintain it in a second file.
+Before Cargo builds, the generator reads the declaration and emits the real compiled type into the box's generated contract crate. In the implementation crate, the annotated source location resolves to a re-export of that generated type. There is therefore one compiled `CreateUser` type, owned by the contract crate, without asking developers to maintain it in a second file.
 
 Because generation runs before Cargo type-checking, an exported declaration must be syntactically self-contained. Its contract shape cannot depend on a type alias to an unannotated type, macro-generated fields or variants, or `cfg` and target-dependent source. A contract that changes with the build target would create more than one compatibility authority and is rejected.
 
 The generator explicitly propagates only supported attributes and derives to the lifted type. An unknown attribute or derive is a generation error rather than something silently discarded. These restrictions apply to exported declarations, not to internal Rust code.
 
-Every exported type implements the platform's contract-type trait, referred to here as `ModuleType`. Standard supported types receive platform implementations; user-defined boundary types receive generated implementations. A handwritten implementation that can misrepresent the wire shape is not part of the supported API.
+Every exported type implements the platform's contract-type trait, referred to here as `ContractType`. Standard supported types receive platform implementations; user-defined boundary types receive generated implementations. A handwritten implementation that can misrepresent the wire shape is not part of the supported API.
 
 The supported type subset is intentionally smaller than Rust:
 
@@ -80,7 +80,7 @@ The supported type subset is intentionally smaller than Rust:
 - Structured contract error enums.
 - Dedicated contract types for binary data, streams, sensitive values, and other semantics that ordinary Rust system types cannot carry across bindings.
 
-The generator rejects boundary types it cannot represent faithfully. Unsupported examples include borrowed values and lifetimes, platform-sized integers, arbitrary generics, trait objects, arbitrary `impl Trait`, and standard-library file or I/O handles. These restrictions apply only at exported boundaries; internal module code remains ordinary Rust.
+The generator rejects boundary types it cannot represent faithfully. Unsupported examples include borrowed values and lifetimes, platform-sized integers, arbitrary generics, trait objects, arbitrary `impl Trait`, and standard-library file or I/O handles. These restrictions apply only at exported boundaries; internal box code remains ordinary Rust.
 
 ## Presence, nullability, defaults, and validation
 
@@ -113,16 +113,16 @@ Sensitive values use a contract-aware wrapper such as `Secret<String>`. That met
 An exported operation declares a structured domain error type:
 
 ```rust
-#[module::contract(error)]
+#[boxology::contract(error)]
 pub enum CreateUserError {
     EmailAlreadyExists,
     InvalidEmail { reason: String },
 }
 ```
 
-Errors use the same lift-and-re-export mechanism as every other boundary type. The generator supplies both `ModuleType` and the error-specific `ModuleError` behavior; developers do not maintain a separate derive-based compilation path.
+Errors use the same lift-and-re-export mechanism as every other boundary type. The generator supplies both `ContractType` and the error-specific `ContractError` behavior; developers do not maintain a separate derive-based compilation path.
 
-Opaque strings and types such as `anyhow::Error` remain useful internally but cannot cross the module boundary. Callers and generated bindings must be able to identify and handle declared failures.
+Opaque strings and types such as `anyhow::Error` remain useful internally but cannot cross the box boundary. Callers and generated bindings must be able to identify and handle declared failures.
 
 The generated caller handle separates domain failures from invocation failures:
 
@@ -181,7 +181,7 @@ The canonical compatibility schema is a small, platform-owned, versioned represe
 
 It records at least the contract information established here:
 
-- Stable module, capability, type, field, and error identities.
+- Stable box, capability, type, field, and error identities.
 - Inputs, outputs, structured errors, and the complete type graph.
 - Interaction shape.
 - Authentication, exposure, idempotency, validation, deprecation, and sensitive-value metadata.
@@ -229,11 +229,11 @@ Handwritten customization is allowed behind the canonical contract, not beside i
 
 For example, if generated JSON handling is unsuitable for a file upload, a handwritten multipart HTTP adapter may parse the upload, convert it into the declared contract input, invoke the generated typed handle, and map the declared result back to HTTP. The capability, authorization metadata, errors, and compatibility surface remain the same.
 
-An undocumented route that bypasses the contract would be invisible to dependency analysis, compatibility checking, authorization metadata, and SDK generation. It is therefore not a supported managed binding. Internal implementation logic remains unrestricted because it does not create another module boundary.
+An undocumented route that bypasses the contract would be invisible to dependency analysis, compatibility checking, authorization metadata, and SDK generation. It is therefore not a supported managed binding. Internal implementation logic remains unrestricted because it does not create another box boundary.
 
 ## Generated outputs
 
-The generator uses this model to produce the module's language-neutral schema, Rust contract crate, typed handles, implementation-neutral dispatch interface, implementation-local adapter, configured binding artifacts, and programmable contract-level test bindings. Their Cargo topology, provenance, and reproducibility rules are defined in [Rust Build Topology](08-rust-build-topology.md).
+The generator uses this model to produce the box's language-neutral schema, Rust contract crate, typed handles, implementation-neutral dispatch interface, implementation-local adapter, configured binding artifacts, and programmable contract-level test bindings. Their Cargo topology, provenance, and reproducibility rules are defined in [Rust Build Topology](08-rust-build-topology.md).
 
 ## Matters deliberately left to later designs
 

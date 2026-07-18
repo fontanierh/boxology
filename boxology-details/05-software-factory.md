@@ -1,6 +1,6 @@
 # Software Factory
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
 This document expands the multi-agent coordination, task, merge, and continuous-analysis system discussed during the design interview.
 
@@ -8,9 +8,9 @@ This document expands the multi-agent coordination, task, merge, and continuous-
 
 The mature software factory is intended to coordinate development and maintenance of a modular system across many tasks and agents. The foundation deliberately begins with one persistent lead agent rather than assuming that a separate control plane already exists.
 
-The package boundary gives the factory a universal unit of ownership, analysis, review, and merge accountability. Modules are the most common target, but providers, compositions, and platform packages can also own work. Agents can work concurrently because every submitted change has one accountable package and cannot modify another package's non-derived files.
+The package boundary gives the factory a universal unit of ownership, analysis, review, and merge accountability. Boxes are the most common target, but providers, compositions, and platform packages can also own work. Agents can work concurrently because every submitted change has one accountable package and cannot modify another package's non-derived files.
 
-The factory and module platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with the module system, following a progressive bootstrap in which early development does not depend on either system being complete.
+The factory and Boxology platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with Boxology, following a progressive bootstrap in which early development does not depend on either system being complete.
 
 An eventual shared factory substrate may supply mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the execution engine.
 
@@ -28,7 +28,7 @@ The foundation milestone has no separate factory service, required task or event
 
 The factory owns its agent execution interface and lifecycle guarantees. The first implementation may wrap an existing runner, call model APIs directly, or use a bare-bones custom loop. The foundation milestone specifies observable behavior without requiring a sophisticated original harness.
 
-Its prescribed acceptance task is one backward-compatible, module-local change: add `greet(name)`, returning `Hello, {name}!`, to the generated Hello module; touch no foreign package source; keep Rust and HTTP behavior consistent; open exactly one pull request; and leave merging to a human. This foundation milestone does not yet test concurrent agent work or the safe-parallelism thesis.
+Its prescribed acceptance task is one backward-compatible, box-local change: add `greet(name)`, returning `Hello, {name}!`, to the generated Hello box; touch no foreign package source; keep Rust and HTTP behavior consistent; open exactly one pull request; and leave merging to a human. This foundation milestone does not yet test concurrent agent work or the safe-parallelism thesis.
 
 ## Governance hierarchy
 
@@ -60,7 +60,7 @@ The phrase "keys to the whole harness" referred to control over planning and coo
 
 ### Area leads
 
-There can be a coordinator or area lead per package. A sufficiently large module or other package can be divided into explicit logical areas, each with its own lead.
+There can be a coordinator or area lead per package. A sufficiently large box or other package can be divided into explicit logical areas, each with its own lead.
 
 An area lead maintains a broad plan for its area. Worker agents automatically receive the applicable plan when they pick up a ready task. The lead publishes tasks and assigns their relative priority within the area.
 
@@ -68,7 +68,7 @@ Area ownership and subdivisions are explicit configuration rather than something
 
 ### Worker agents
 
-Workers pick up ready tasks and work independently. Once work begins, workers do not communicate with one another to negotiate concurrent changes. Shared context comes from the area plan, task, module contract, and current repository state.
+Workers pick up ready tasks and work independently. Once work begins, workers do not communicate with one another to negotiate concurrent changes. Shared context comes from the area plan, task, box contract, and current repository state.
 
 Each worker submits a single-package merge request. Submission moves the work into a waiting state while the merger evaluates it. The exact durable task, claim, messaging, and recovery model for this post-MVP pool remains to be specified.
 
@@ -166,7 +166,7 @@ The responsibilities discussed included:
 - Identifying codebase directions that need human evaluation.
 - Publishing targeted improvement tasks.
 
-Cycle acceptance is configured CI and merger policy rather than a runtime graph check. The runtime must independently supply invocation safeguards required even for accepted or apparently acyclic graphs; their precise semantics remain open in [issue #6](https://github.com/fontanierh/module-based-engineering/issues/6).
+Cycle acceptance is configured CI and merger policy rather than a runtime graph check. The runtime must independently supply invocation safeguards required even for accepted or apparently acyclic graphs; their precise semantics remain open in [issue #6](https://github.com/fontanierh/boxology/issues/6).
 
 ## Relationship to CI and review
 
@@ -191,4 +191,4 @@ The discussion did not settle:
 - Human interfaces beyond the first Slack integration.
 - Which actions the top-level lead can perform without explicit human authorization.
 
-The durable task schema, worker claims, leases and fencing, multi-agent messaging, split-brain prevention, stronger audit or provenance records, and eventual coordination backend are explicitly deferred to [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57). This is an accepted product-sequencing decision, not an incomplete foundation acceptance criterion: those mechanisms should be specified when the factory introduces the agent pool that needs them.
+The durable task schema, worker claims, leases and fencing, multi-agent messaging, split-brain prevention, stronger audit or provenance records, and eventual coordination backend are explicitly deferred to [issue #57](https://github.com/fontanierh/boxology/issues/57). This is an accepted product-sequencing decision, not an incomplete foundation acceptance criterion: those mechanisms should be specified when the factory introduces the agent pool that needs them.
