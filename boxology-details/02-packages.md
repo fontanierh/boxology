@@ -35,7 +35,24 @@ This distinction preserves the universal ownership rule while allowing Cargo to 
 
 ## Common ownership manifest
 
-Every logical package root contains one package-local `boxology.toml`, discovered deterministically without a hand-maintained central index. Every package kind participates in the same logical manifest model, with common ownership fields and kind-specific sections. The remaining field-level serialization details remain open, but each manifest must declare:
+Every logical package root contains exactly one package-local `boxology.toml`, discovered deterministically without a hand-maintained central index. Every package kind participates in the same manifest model, with common ownership fields and kind-specific sections. TOML is the v1 serialization.
+
+The workspace checker walks from the Cargo workspace root, excluding VCS metadata and Cargo build-output directories, and finds every `boxology.toml`. Manifest paths are normalized relative to that root. Absolute paths, `..` escapes, symlink escapes, duplicate package identities, overlapping ownership, and files that classify under no package are rejected.
+
+Every manifest begins with:
+
+```toml
+schema = 1
+id = "billing"
+kind = "box"
+owned = ["boxology.toml", "implementation/**", "tests/**"]
+```
+
+`id` is a human-readable, workspace-unique, rename-stable slug matching `[a-z][a-z0-9-]*`. Directory names, Cargo package names, and an optional `display_name` may change without changing the identity. Full identity split, merge, transfer, and retirement semantics remain tracked in [issue #3](https://github.com/fontanierh/boxology/issues/3).
+
+`schema` identifies the manifest format. A checker must continue to read every older schema version it claims to support and must reject an unknown newer version rather than silently ignoring it. Within a known schema version, unknown keys are also rejected so misspelled ownership or policy declarations cannot silently disappear. A format change that cannot be interpreted compatibly increments the schema value and requires an explicit workspace migration.
+
+The common v1 fields encode:
 
 - A stable package identity and package kind.
 - Owned non-derived paths, including source, manifests, tests, migrations, configuration, and quality contracts.
@@ -44,6 +61,65 @@ Every logical package root contains one package-local `boxology.toml`, discovere
 - Declared derived outputs.
 - For every derived output: its output paths, generator identity, complete semantic inputs, and regeneration check. Generated content records the resolved generator version as provenance, while the protected workspace toolchain resolves the current executable and environment consistently for local development and CI.
 - Protected control-plane declarations where applicable.
+
+Imports, quality entry points, Cargo crates, and derived outputs use these forms:
+
+```toml
+[[imports]]
+package = "customer"
+contract = "customer"
+
+[quality]
+commands = ["cargo test -p billing-implementation"]
+
+[[crates]]
+cargo_package = "billing-implementation"
+path = "implementation"
+role = "box-implementation"
+
+[[crates]]
+cargo_package = "billing-contract"
+path = "generated/contract"
+role = "box-contract"
+
+[[derived]]
+id = "contract"
+generator = "boxology-contract"
+inputs = ["implementation/src/**"]
+outputs = ["generated/contract/**", "generated/schema.json"]
+```
+
+The generator value is a logical workspace-tool identity, not a per-box version pin. The current workspace tool resolves the executable; generated outputs record its resolved version as provenance.
+
+Declared generation inputs are complete and fail closed. The generator must fail if it attempts to read semantic input outside the manifest's `inputs` patterns; otherwise byte reproducibility would not prove that the declared inputs determine the output.
+
+V1 imports the package's canonical contract and has no parallel-surface selector. If explicit long-lived surfaces later require one, it is added through a compatible manifest-schema extension after that contract model is specified rather than reserving a speculative field now.
+
+`[quality].commands` supplies package-specific entry points to `boxology check`, including generated-project conformance tests. These are trusted repository commands and execute with the lead sandbox's full ambient filesystem, environment, credential, process, and network access under the [foundation threat boundary](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
+
+The foundation crate-role vocabulary is `box-implementation`, `box-contract`, `composition`, and `platform`. The checker reads Cargo metadata and requires every Cargo package to match exactly one manifest `[[crates]]` entry by normalized manifest path and Cargo package name. A role cannot be inferred from a directory or crate-name suffix. Provider crate roles are added when the first provider enters the foundation rather than being guessed now.
+
+A composition adds its selected boxes and bindings:
+
+```toml
+[composition]
+boxes = ["hello"]
+
+[[composition.bindings]]
+box = "hello"
+capability = "hello.greet"
+transport = "in-process"
+
+[[composition.bindings]]
+box = "hello"
+capability = "hello.greet"
+transport = "http"
+exposure = "external"
+```
+
+Composition validation checks that every selected identity exists, every binding is compatible with the generated contract, and an exposure does not exceed the box's declared maximum.
+
+The initializer creates a logical `platform` package at the workspace root. Its manifest owns root `Cargo.toml`, repository CI, generator configuration, ownership rules, and other non-derived root machinery, and declares `Cargo.lock` as the workspace's global derived artifact. The Hello box and application composition live under their own package roots with their own manifests. The platform package may initially contain no Rust crate.
 
 Repository-wide ownership policy, CI, build tooling, generator definitions, and merger enforcement belong to platform packages. Ownership, provenance, and quality-policy declarations are protected control-plane data. A pull request cannot weaken or replace the base revision's rules in order to authorize its own changes.
 
@@ -222,7 +298,6 @@ A box can use a workflow engine as ordinary implementation code. If several boxe
 
 The discussion did not settle:
 
-- The remaining field-level serialization details and implementation tooling for `boxology.toml`.
 - The exact lifecycle interface implemented by provider packages.
 - How provider bindings are represented across development, testing, and production environments.
 - Whether a binding can be switched without rebuilding a composition.
