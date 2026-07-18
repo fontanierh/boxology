@@ -193,7 +193,7 @@ Requests and responses use `application/json`. The composition default request-b
 The lossless JSON mapping is:
 
 - Strings and booleans use their JSON equivalents.
-- Integers through 32 bits and finite floating-point values use JSON numbers.
+- Integers through 32 bits and finite floating-point values use JSON numbers. Contract `f32` and `f64` values are finite-only at every capability boundary: a non-finite request value is invalid input, and a non-finite provider result is an invalid contract response.
 - `i64` and `u64` use decimal JSON strings so JavaScript clients cannot lose precision. Their use in ordinary API design is discouraged, but the binding remains lossless when they are required.
 - String-keyed maps use JSON objects. Other map-key types are not supported by this binding.
 - Bounded binary values use `{"base64":"..."}` with standard padded Base64. Streaming binary values are outside the unary foundation binding.
@@ -205,9 +205,9 @@ Within an object:
 - `Option<T>` maps omission to `None` and rejects explicit `null`.
 - `Field<T>` maps omission to `Missing`, `null` to `Null`, and any valid value to `Value`.
 
-At the top level, `Option<T>` uses JSON `null` for `None`. A top-level `Field<T>` is rejected during binding validation because an HTTP body cannot represent the distinction between a missing body and a deliberately missing contract value faithfully.
+At the top level, `Option<T>` uses JSON `null` for `None`. Object fields use omission because an object can distinguish an absent field from a present field; a top-level request body must exist, so `null` is the canonical representation of top-level `None`. A top-level `Field<T>` is rejected during binding validation because an HTTP body cannot represent the distinction between a missing body and a deliberately missing contract value faithfully.
 
-Every valid response uses one of three envelopes:
+Every valid response uses one of three envelopes. Their format belongs to this HTTP binding and evolves backward-compatibly with it; it is not negotiated per request and does not add a versioned URL. An incompatible future envelope is a distinct binding rather than a silent change to this one.
 
 ```json
 {"result":{"value":"..."}}
@@ -226,7 +226,7 @@ Declared domain errors always return `422`; the structured error variant remains
 | Status | Meaning |
 | --- | --- |
 | `400` | Malformed JSON or contract validation failure. |
-| `404` | Unknown box or capability identity. |
+| `404` | Unknown box or capability identity, with a diagnostic that distinguishes the two cases. |
 | `504` | Deadline exceeded. |
 | `503` | Bound target unavailable. |
 | `502` | Bound target returned an invalid contract response. |
@@ -234,7 +234,7 @@ Declared domain errors always return `422`; the structured error variant remains
 
 Cancellation, disconnection, or transport failure that produces no valid HTTP response becomes a client-side `CallError`; it has no invented HTTP status.
 
-The binding carries remaining deadline budget in `Boxology-Timeout-Ms`, W3C trace context in `traceparent` and `tracestate`, and a declared idempotency key in `Idempotency-Key`. Missing headers mean composition-default deadline, a newly created trace, and no idempotency key respectively. Client disconnection requests advisory cancellation of the in-flight capability. The anonymous Hello endpoint constructs anonymous caller context inside the binding; v1 does not trust caller-supplied identity headers, and authenticated caller propagation remains part of the later authentication design.
+The binding carries remaining deadline budget in `Boxology-Timeout-Ms`, W3C trace context in `traceparent` and `tracestate`, and a declared idempotency key in `Idempotency-Key`. Missing headers mean composition-default deadline, a newly created trace, and no idempotency key respectively. The foundation transports the idempotency key into `CallContext`; it does not provide a deduplication store or imply retry-safe replay by itself. Client disconnection requests advisory cancellation of the in-flight capability. The anonymous Hello endpoint constructs anonymous caller context inside the binding; v1 does not trust caller-supplied identity headers, and authenticated caller propagation remains part of the later authentication design.
 
 Binding conformance tests must exercise routing, every supported value shape, missing/null/value behavior, the three response envelopes, status mapping, context propagation, request limits, and rejection of unsupported or lossy contracts.
 
