@@ -537,9 +537,24 @@ The descriptive working name *module-based engineering* and the provisional `mbe
 - Agents implement and evolve the code hidden inside each box.
 - A box implementation may be replaced without requiring consumers to understand it while its contract remains compatible.
 
-The product and CLI use **Boxology** and `boxology`. The package manifest is `boxology.toml`; product-owned crates, the onboarding skill, and the factory image use the `boxology` namespace. The technical term *box* replaces *module* in normative product documentation. Historical interview passages retain the working term used when the underlying decisions were made.
+The product and CLI use **Boxology** and `boxology`. The package manifest is `boxology.toml`; product-owned crates and the onboarding skill use the `boxology` namespace. The technical term *box* replaces *module* in normative product documentation. Historical interview passages retain the working term used when the underlying decisions were made.
 
 The Rust API should not introduce a new unqualified type named `Box`, which would be confused with Rust's standard `Box<T>`. Product attributes and generated contract concepts use the Boxology or contract namespace instead.
+
+## Follow-up: Skill-only, harness-neutral v0
+
+Review of the six MVP-spec blocker proposals caused the factory foundation to be narrowed again. This follow-up supersedes the earlier sandbox-native foundation wherever the two conflict.
+
+- V0 ships a small, portable Boxology skill. It explains the philosophy, box boundaries, human-owned contracts and data models, compatibility principles, and way of working. The coding agent using it is called the **lead agent**.
+- Boxology does not own or select the v0 coding-agent harness. Codex, Claude Code, Pi, Hermes, and other compatible hosts are valid. Hermes is only an example an operator might use; it is not built, forked, vendored, packaged, or guaranteed by Boxology.
+- Slack is not part of Boxology. Human communication, identity, access control, delivery, and transport security belong to the selected harness or gateway. Any instruction that harness presents as an authorized user message is authoritative.
+- V0 has no Boxology sandbox, gateway, factory image, persistent agent service, GitHub Issues workflow, worker pool, reviewer, merger, or task ledger. Those factory capabilities are introduced progressively rather than implied by the word "factory."
+- Boxology makes no harness promise about liveness, session persistence, frozen state, stop-and-resume, crash consistency, message catch-up, or recovery. An operator's chosen harness may provide them independently.
+- The lead uses the files, environment, credentials, processes, networking, and external authority supplied by its harness. Boxology does not enforce author allowlists for repository instructions or add a prompt-injection classifier. It recommends least privilege but permits GitHub workflow read/write so the lead can modify and run Actions when the operator wants that setup.
+- `boxology check` owns universal repository validation. Package-specific quality commands are declared in `boxology.toml`, run with the lead environment's ambient authority, and let the generated Hello project register its Rust and HTTP conformance tests without a hard-coded special case.
+- The v0 skill does not yet prescribe GitHub task, pull-request, approval, or merge behavior. Formal roles and authority enforcement remain later work.
+
+The earlier durable-sandbox, Slack catch-up, and human-merge acceptance scenario remains part of the historical reasoning that led here, not a v0 product guarantee.
 
 ## Resulting documentation set
 

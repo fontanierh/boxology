@@ -16,7 +16,7 @@ The Boxology platform and software factory are one product, brand, and project, 
 
 Development bootstraps progressively. The Boxology foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
 
-The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It extracts one annotated Rust implementation method into a generated contract crate callable both as Rust code and through HTTP, connects the repository to one durable lead-agent sandbox, and lets the developer ask that lead through Slack to add a backward-compatible capability in one isolated pull request for human review. The sandbox contains the harness, Slack bridge, repository checkout, worktree, and persisted harness state; there is no separate foundation control plane. This milestone does not yet test multi-agent parallelism.
+The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It extracts one annotated Rust implementation method into a generated contract crate callable both as Rust code and through HTTP. A small, portable skill explains the Boxology principles to the developer's existing coding agent and names it the lead agent. Boxology does not yet supply that agent's harness, gateway, sandbox, persistence, or GitHub workflow. This milestone tests the box model and harness-neutral guidance, not multi-agent parallelism.
 
 ## [Boxes](boxology-details/01-boxes.md)
 
@@ -94,9 +94,9 @@ Client-binding boxes generate TypeScript, Swift, Kotlin, or other SDKs while kee
 
 A top-level lead coordinates the harness and interfaces with humans. Area leads maintain plans and publish prioritized tasks. Worker agents execute tasks independently.
 
-Those roles describe the intended mature organization, not a hard-coded minimum. The first factory contains only the human-facing lead. Roles, handoffs, and gates are factory policy expressed through configuration so workers, reviewers, and a merger can be introduced progressively.
+Those roles describe the intended mature organization, not a hard-coded minimum. V0 is only a harness-neutral Boxology skill: the coding agent using it is the human-facing lead. The skill explains the philosophy, boundaries, contracts, compatibility principles, and way of working. It does not yet prescribe GitHub Issues, workers, reviews, merging, or another coordination workflow.
 
-The first factory is one durable sandbox running the lead, its harness, and its Slack bridge. It can use a managed durable-sandbox provider or the project's portable image on a compatible container target with crash-consistent durable storage and restart behavior. Clean suspension and unclean process termination recover a valid repository and harness state while that storage survives, and the bridge catches up on retained, accessible Slack requests after downtime. Total sandbox and storage loss falls back to semantic reconstruction from GitHub, available Slack history, and repository state; exact continuation and exactly-once external effects are not foundation guarantees. Stronger multi-agent coordination is deferred rather than forcing a ledger, queue, or workflow engine into the MVP.
+Codex, Claude Code, Pi, Hermes, and other compatible harnesses can host that lead. Their communication surfaces, permissions, persistence, and recovery behavior remain their own. Boxology supplies no v0 harness, Slack integration, sandbox, factory image, liveness monitor, message catch-up, or durability guarantee. Those capabilities can be introduced progressively when Boxology owns the execution substrate that can provide them.
 
 The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed packages, changed imported contracts, shared dependency-resolution changes, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
 
@@ -108,6 +108,6 @@ Every package defines a strong automated quality contract appropriate to its kin
 
 Before a pull request merges or an issue closes, the tracker is reconciled with the accepted decisions. Linked and otherwise affected issues are updated, fully resolved issues are closed, and partially resolved issues retain their remaining scope unless it is explicitly transferred to named open issues. Reviewer proposals are not mistaken for project decisions.
 
-The runtime does not promise correctness. The harness promises that the configured evidence and approval process were enforced.
+The runtime does not promise correctness. `boxology check` produces the configured evidence; enforcement belongs to the user's current workflow until a later Boxology-owned harness exists.
 
-Humans retain authoritative control through the top-level lead. Sensitive actions and policy changes use explicit, audited approval requests.
+Humans retain authoritative control through the top-level lead. In v0, authority is ordinary agent conversation governed by the selected harness and editable project instructions; formal roles and audited approval protocols remain later work.
