@@ -198,7 +198,7 @@ boxology check [--base <git-revision>] [--format human|json]
 
 `boxology check` is the canonical non-mutating validation command used by developers, the lead, and generated CI. V1 always validates the complete workspace; package-scoped and impact-selected validation are later optimizations. It regenerates into temporary output and compares byte-for-byte rather than modifying the checkout. If `--base` is supplied, contract and ownership changes are classified against that revision. Local use defaults to the merge base with the configured main branch; CI passes the pull request's base revision explicitly.
 
-The command exits `0` when every check passes, `1` when repository validation fails, and `2` when invocation or configuration prevents validation from running. Human output is the default. `--format json` emits one versioned JSON document containing check identifiers, package identities, paths, diagnostics, contract classifications, and the final status.
+The command exits `0` when every check passes, `1` when repository validation fails, and `2` when invocation or configuration prevents validation from running. Human output is the default. `--format json` emits one JSON document whose top-level `schema` field identifies the diagnostic format version, followed by check identifiers, package identities, paths, diagnostics, contract classifications, and the final status.
 
 The foundation `boxology check` baseline is:
 
@@ -207,15 +207,19 @@ The foundation `boxology check` baseline is:
 3. Classify contract changes against the base revision and report incompatible tightening or removal even when harness policy later authorizes it.
 4. Validate the complete Cargo graph, forbidden implementation edges, feature and target-specific edges, and shared-lockfile rules.
 5. Run `cargo fmt --all --check`.
-6. Run `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+6. Run `cargo clippy --workspace --all-targets --all-features -- -D warnings` with the workspace's pinned Rust toolchain; changing that pin is a deliberate platform-package change.
 7. Run `cargo test --workspace --all-features`.
-8. Run the generated Hello project's in-process Rust and HTTP conformance tests, including the accepted HTTP wire contract.
+8. Run each package's declared `[quality].commands`. The generated Hello project declares its in-process Rust and HTTP conformance tests there, including the accepted HTTP wire contract; the checker contains no Hello-specific branch.
 
 An intentional contract change is authored in Rust and followed by `boxology generate`; its generated diff and semantic classification are reviewed together. An accidental stale or hand-edited artifact fails `boxology check` with the regeneration command needed to repair it. The checker never hides an incompatible change merely because generated files match.
 
 The initializer emits a repository-owned GitHub Actions workflow that runs the same `boxology check --base <pull-request-base>` command on Linux. The lead runs `boxology check` before opening a pull request. The platform does not create branch-protection or required-check settings; the operator decides whether to make that visible GitHub check a merge requirement. There is no hidden factory-only validation layer.
 
-The supported foundation execution matrix is Linux for the factory and generated CI, with local command support on Linux and macOS. Other hosts are not claimed until they enter the tested matrix.
+Package quality commands are trusted repository code and run with the sandbox's full ambient access, as defined by the [foundation threat boundary](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
+
+The supported foundation execution matrix is Linux for generated CI, with local `boxology` command support on Linux and macOS. A chosen lead harness may run anywhere it supports; Boxology makes no harness-host claim. Other Boxology CLI hosts are not claimed until they enter the tested matrix.
+
+The generator's own conformance suite runs on Linux and macOS and compares derived output across both platforms. Platform-dependent ordering, paths, line endings, timestamps, or other byte differences fail there rather than being delegated to generated projects.
 
 ## Foundation milestone
 
