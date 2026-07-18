@@ -9,11 +9,11 @@ This document separates the long-term product direction from the first falsifiab
 The product combines:
 
 - A Rust Boxology platform for defining independently evolvable boxes.
-- A remotely hosted software factory for changing systems built with that platform.
+- A software-factory direction for changing systems built with that platform, beginning as a harness-neutral skill and growing into richer coordination later.
 
 These are one product, brand, and project. They remain separate applications and packages internally. The Boxology platform reduces the amount of code and context an agent can affect at once. The factory makes the resulting increase in scaffolding, pull requests, and coordinated migrations practical.
 
-The supported product journey combines both systems, but they are not fused technically. The Boxology runtime is delivered as a Rust dependency and can execute without a running factory. The first factory release, however, only promises to operate on repositories initialized by Boxology; arbitrary repositories are out of scope.
+The supported product journey combines both systems, but they are not fused technically. The Boxology runtime is delivered as a Rust dependency. V0 factory behavior is guidance used by the developer's existing coding agent, and only promises to describe work in repositories initialized by Boxology; arbitrary-repository migration is out of scope.
 
 ## Progressive bootstrap
 
@@ -30,7 +30,7 @@ The goal is comprehensive dogfooding, not circular bootstrapping. A broken facto
 
 ## Primary v1 operator and operating envelope
 
-The primary v1 operator is an individual developer or very small Rust team starting a greenfield backend, already using GitHub and a skill-compatible coding agent, and willing to provision or connect a durable lead-agent sandbox and interact with it through Slack.
+The primary v1 operator is an individual developer or very small Rust team starting a greenfield backend with a skill-compatible coding agent.
 
 This is the person able to evaluate the foundation milestone, not a claim about the eventual market. Early operators will probably be hobbyists and other experimenters. The long-term ambition is much broader: to become an excellent general way to produce software.
 
@@ -40,9 +40,7 @@ The first supported technical envelope is narrow:
 - A repository created by the platform initializer.
 - A Rust backend in one Git repository and Cargo workspace.
 - Application boxes and compositions kept as distinct crates or packages within that repository.
-- GitHub as the source-review surface.
-- Slack as the only first-class human integration in the foundation milestone.
-- One repository managed by a factory installation at a time for the foundation milestone.
+- One repository initialized and worked on by one lead agent at a time for the foundation milestone.
 
 A monorepo is not treated as a monolith. Boxes retain separate contracts and ownership even when they share a repository and Cargo lockfile. An ordinary package change may include only the minimal lockfile resolution reproducible from its own permitted non-derived diff under pinned inputs. A lockfile change that alters a dependency used by another package requires whole-workspace validation and semantic reassessment.
 
@@ -51,29 +49,28 @@ A monorepo is not treated as a monolith. Boxes retain separate contracts and own
 The system distinguishes:
 
 - **Product source repository:** contains the source of the Boxology platform and factory. Through progressive dogfooding, this repository can itself become a managed project repository.
-- **Managed project repository:** is initialized by the platform and connected to a factory. It contains application boxes, compositions, tests, and repository-local factory configuration. It does not receive a copied implementation of the factory.
-- **Lead-agent sandbox:** is the complete deployed factory in the foundation milestone. It contains the agent harness, Slack bridge, managed-repository checkout, worktree, branch, and persisted harness state.
+- **Managed project repository:** is initialized by the platform and contains application boxes, compositions, tests, generated artifacts, and repository-local Boxology configuration. It does not receive a copied agent harness.
+- **Lead environment:** is wherever the developer's selected coding-agent harness runs. It may be local, remote, containerized, or managed by another service; it is not a Boxology deployment object in v0.
 
-The foundation has no separate factory service outside that sandbox. The product source repository is also eligible to be managed by a lead sandbox once progressive dogfooding reaches that stage.
+The foundation has no Boxology factory service, gateway, or sandbox. The product source repository is also eligible to be managed by a lead agent once progressive dogfooding reaches that stage.
 
 ## Installation and onboarding
 
 Installation begins through the developer's existing coding agent.
 
-The project supplies a portable onboarding skill following the shared Agent Skills format. The same core workflow should be usable by compatible hosts such as Codex, Claude Code, Cursor, and other agents that support skills. Host-specific packaging may differ, but the product should not make one coding-agent application part of its architecture.
+The project supplies a portable Boxology skill following the shared Agent Skills format. The same core guidance should be usable by compatible hosts such as Codex, Claude Code, Cursor, Pi, Hermes, and other agents that support skills. Host-specific packaging may differ, but the product does not make one coding-agent application part of its architecture.
 
-The onboarding skill provides judgment and guidance. A deterministic, versioned installer owns the actual mutations. The expected flow is:
+The v0 skill is intentionally small. It explains Boxology's philosophy, box boundaries, contracts, compatibility principles, and way of working, and names the coding agent using it the **lead agent**. A deterministic, versioned installer owns project-generation mutations. The expected flow is:
 
 1. The developer installs or gives the onboarding skill to a compatible coding agent.
 2. The agent explains the setup and asks the minimum necessary questions.
 3. The agent obtains and runs the project CLI.
 4. The CLI creates the Rust workspace, box, composition, and repository configuration.
-5. The agent provisions or connects a durable lead sandbox and installs the factory sandbox image or equivalent package into it.
-6. It configures the sandbox's Slack bridge, grants the lead ordinary repository and pull-request access, verifies connectivity, starts the harness, and returns the working Slack channel.
+5. The same coding agent continues as the lead through whatever tools and human interface its chosen harness already provides.
 
-The Boxology runtime is a normal Rust dependency. The factory is versioned software installed inside the lead sandbox, not factory source code copied into every managed repository. Only project-specific contracts and integration configuration belong in the managed repository.
+The Boxology runtime is a normal Rust dependency. The skill is installed into or supplied to the chosen agent host; no Boxology harness source is copied into the managed repository. Only project-specific contracts and configuration belong there.
 
-GitHub is the initial repository and pull-request surface, but a dedicated GitHub App, bot workflow, Issues integration, or other first-class GitHub integration is not part of the foundation milestone. The factory can use ordinary Git and GitHub credentials to push a branch and open a pull request.
+V0 does not prescribe GitHub Issues, a dedicated GitHub App, a bot workflow, a pull-request queue, or a merge protocol. A lead may use ordinary Git and GitHub capabilities when its harness and operator provide them.
 
 ## Foundation release bundle
 
@@ -82,27 +79,16 @@ The first release bundle contains:
 - A portable onboarding skill.
 - A deterministic installer CLI.
 - Rust box-runtime packages with Rust and HTTP bindings.
-- A portable factory container image containing the Hermes Agent reference harness and its native Slack gateway.
-- A tested Docker deployment recipe with crash-consistent durable storage and restart behavior.
 
-Hermes Agent is the v0 reference harness, not a permanent platform dependency. The bundle validates the sandbox lifecycle and product boundary, not the novelty of its internal agent loop.
+It does not include a Boxology agent harness, communication gateway, factory image, or sandbox runtime.
 
-## Initial factory deployment
+## Harness and deployment neutrality
 
-The primary tested v0 recipe is one Boxology factory container on a remotely reachable Linux machine running Docker. It uses a named or bind-mounted durable volume for both `~/.hermes` and the managed repository, and a restart policy such as `unless-stopped`. The container is the durable lead sandbox; there is no separate Boxology sandbox control plane.
+V0 runs inside the coding-agent harness selected by the user. Codex with local or remote control, Claude Code, Pi, Hermes with Slack, and other setups are examples rather than Boxology components or conformance targets. Boxology does not build, fork, vendor, publish, or require Hermes and does not select Slack or another communication transport.
 
-The image contains:
+The operator may run that harness directly, in a container, on a managed sandbox, or on another target. Docker and Kubernetes remain useful deployment options for chosen harnesses and future Boxology-owned services, but neither belongs to the v0 product contract.
 
-- Hermes Agent as the replaceable reference harness.
-- Hermes's native Slack gateway using Socket Mode.
-- Boxology's default project instructions or skill.
-- The managed-repository checkout, dedicated worktree, and branch.
-
-Hermes persists session metadata and full message history in `~/.hermes/state.db`; that database and the repository are both on the durable volume. Process memory may be lost on restart. The required recovery contract is the persisted repository and harness state, not frozen RAM.
-
-No custom Boxology agent loop or separate Slack bridge is required in v0. The Hermes integration owns the already-required startup reconciliation of messages still available in configured Slack channel history; choosing the native gateway does not waive that acceptance criterion. The container uses the ordinary credentials and full networking supplied by the operator under the threat boundary in [Quality and Authority](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
-
-Docker is a reference deployment recipe, not part of the factory, harness, or Boxology architecture. Podman, managed sandboxes, personal hardware, cloud providers, and Kubernetes may later implement the same durable substrate contract. Those additional recipes and conformance work are tracked in [issue #67](https://github.com/fontanierh/boxology/issues/67).
+Boxology makes no v0 promise about harness liveness, session persistence, frozen state, stop-and-resume, crash consistency, message catch-up, or recovery. Those properties belong entirely to the selected harness and operator. Stronger factory-owned execution and durability remain later work in [issue #57](https://github.com/fontanierh/boxology/issues/57); possible deployment recipes can be reconsidered when Boxology owns something that needs deployment.
 
 ## Generated Hello World project
 
@@ -117,7 +103,7 @@ At the end of project initialization, the developer has a small running applicat
 
 The generated handle uses the invocation envelope in [Canonical Capability Contract](09-capability-contract.md): an explicit call context, a declared domain error, and a distinct invocation-error layer even when the selected binding is in-process.
 
-The first proof is database-free. Postgres and Redis remain important provider candidates, but persistence is a later slice and should not obscure validation of the box, binding, and factory loop.
+The first proof is database-free. Postgres and Redis remain important provider candidates, but persistence is a later slice and should not obscure validation of the box, binding, and lead workflow.
 
 The deterministic contract generator is therefore a core foundation deliverable rather than incidental scaffolding. The milestone is not complete until generation, provenance, reproducibility, typed invocation, and compatibility classification work as one path.
 
@@ -127,43 +113,19 @@ The foundation milestone covers unary request-response only. The first full box-
 
 Everything managed as part of an application should be represented as a box, but not every implementation receives the same guarantees.
 
-- A **native box** is implemented in Rust and receives the full runtime, dependency-analysis, compatibility, and factory guarantees.
-- A **foreign-language box** remains a first-class factory package with ownership, tasks, and the one-package pull-request boundary, but its internals receive fewer static and runtime guarantees.
+- A **native box** is implemented in Rust and receives the full runtime, dependency-analysis, compatibility, and Boxology validation guarantees.
+- A **foreign-language box** remains a first-class managed package with ownership and a declared boundary, but its internals receive fewer static and runtime guarantees.
 - A **client-binding box** remains in the native managed ecosystem, owns the contract import, and generates a language-native SDK for a foreign box.
 
 A TypeScript application or another foreign-language component can therefore appear anywhere the application composition requires. The platform manages its declared boundary but cannot make the same claims about its internal implementation that it makes for a native Rust box.
 
 ## First factory behavior
 
-Slack is the first factory UI. A developer talks to one persistent lead agent. There is no custom dashboard or task interface in the foundation milestone.
+The developer uses the selected coding agent normally. Once given the Boxology skill, that agent is the lead agent: it understands the project in terms of boxes, their human-owned contracts and data models, compatible evolution, and the rule that communication crosses declared interfaces.
 
-The v0 reference implementation uses Hermes Agent's native Slack gateway in Socket Mode. It requires no public webhook endpoint and no separate Boxology bridge process.
+The skill focuses on those principles. It does not yet define GitHub Issues, task pickup, worker communication, review roles, a merger, Slack behavior, pull-request stopping, or autonomous-merging policy. The user and chosen harness remain free to supply their ordinary workflow.
 
-The Slack integration must not depend only on live event delivery. When it starts or resumes, it catches up on requests still available to it in the configured channel history that arrived while it was unavailable. This recovery is necessarily bounded by the history the Slack workspace retains and permits the integration to read.
-
-The lead agent handles the requested change itself:
-
-1. Receive the request through Slack.
-2. Continue inside its durable remote sandbox and managed-repository checkout.
-3. Create or resume a dedicated Git worktree and branch.
-4. Validate the result according to the repository's current checks.
-5. Push the branch and open a GitHub pull request.
-6. Return the result and pull-request link through Slack.
-7. Stop and wait. A human reviews and merges the pull request.
-
-Autonomous merging is explicitly excluded from v1.
-
-Before retrying an external effect whose outcome is uncertain, the lead inspects the current state of the system that owns that effect. This is a standing recovery rule, not an exactly-once guarantee: an ambiguous failure may still produce a rare repeated effect.
-
-The prescribed acceptance task is to add a new backward-compatible `greet(name)` capability to the generated Hello box. Calling it with `Ada` returns `Hello, Ada!` through both Rust and HTTP. Its pull request must:
-
-- Change no foreign package source.
-- Change only the Hello box source and permitted deterministic artifacts.
-- Preserve consistent behavior through the Rust and HTTP bindings.
-- Produce exactly one pull request.
-- Never merge that pull request automatically.
-
-This validates a real box ownership and binding invariant. It does not validate concurrent agent work or the broader safe-parallelism thesis; that requires a later experiment.
+The runtime acceptance task is to add a backward-compatible `greet(name)` capability to the generated Hello box. Calling it with `Ada` returns `Hello, Ada!` through both Rust and HTTP. The resulting repository state must change no foreign package source, include only permitted deterministic artifacts outside the Hello box, and preserve consistent behavior through both bindings. This validates a real box ownership and binding invariant, not multi-agent coordination or the broader safe-parallelism thesis.
 
 ## Factory organization is configuration
 
@@ -171,34 +133,17 @@ The eventual factory may include a top-level lead, area leads, workers, reviewer
 
 As the factory grows, its shared substrate will need mechanisms for running agents, isolating work, preserving state, asking humans, and reporting results. Factory configuration determines which roles exist, how work moves between them, and which gates apply. This configuration may remain internal at first while the design is being adjusted.
 
-The first configuration contains only the human-facing lead. GitHub Issues, worker agents, task assignment, review agents, merger coordination, and a dedicated GitHub identity are introduced progressively.
+The first configuration is only the human-facing lead role supplied by the skill. GitHub Issues, worker agents, task assignment, review agents, merger coordination, dedicated identities, and gateways are introduced progressively.
 
 ## Factory execution boundary
 
-The onboarding skill runs in the developer's existing coding agent. Agents inside the factory run behind a factory-owned execution interface that preserves the lifecycle and behavioral guarantees in this contract.
-
-The v0 reference implementation runs Hermes Agent directly. Hermes remains behind the factory execution boundary rather than becoming part of the managed project contract or Boxology architecture. Later implementations may wrap another runner, call model APIs directly, or use a custom loop without changing a managed repository's box contracts. Model providers, tool protocols, memory, and the eventual agent architecture remain open design questions.
+The skill runs in the developer's existing coding agent. V0 has no second population of agents inside a Boxology-owned factory and no Boxology execution interface. The selected harness owns models, tools, memory, permissions, user communication, and lifecycle behavior.
 
 ## Isolation, suspension, and recovery
 
-The complete foundation factory runs in one durable lead-agent sandbox:
+Boxology v0 makes no harness guarantee. It does not promise a sandbox, process isolation, session persistence, durable agent state, frozen execution, stop-and-resume, message recovery, crash recovery, or exactly-once external effects. A chosen harness may provide any of those properties independently, but they are neither required nor tested by Boxology.
 
-```text
-durable lead sandbox
-|-- agent harness
-|-- Slack bridge
-|-- repository checkout and worktree
-`-- persisted harness state
-```
-
-Its foundation recovery boundary is:
-
-- **Normal recovery:** process restarts, unclean harness termination, sandbox stop-and-resume, and replacement of lost compute while its durable storage survives recover the repository and persisted harness state from a valid, internally consistent recovery point. Work after that point may need to be repeated. A managed sandbox may freeze and resume its full state; a container target must provide equivalent durable storage, crash-consistent persistence, and restart behavior. The exact persistence mechanism is an implementation choice.
-- **Catastrophic sandbox loss:** simultaneous loss of the sandbox and its durable storage is outside the foundation persistence guarantee. A fresh lead can reconstruct the project's semantic state from the repository and Git history, project instructions and documentation, GitHub issues, branches, pull requests, reviews and comments, Slack history that remains retained and accessible, and any optional lead-authored checkpoint.
-
-Catastrophic reconstruction does not promise exact continuation of hidden reasoning, preservation of uncommitted work, or recovery of an action that existed only inside the destroyed sandbox. It is semantic recovery: before repeating an external action, the lead inspects current GitHub and Slack state, just as a human would notice that a pull request or reply already exists. Rare duplicate or repeated effects after ambiguous failures remain possible; the foundation does not promise exactly-once delivery or require a central outbox or deduplication ledger.
-
-The foundation does not require a factory database, event ledger, queue, or workflow engine. Agents may emit events when useful for observability, and the lead may write a checkpoint to the repository or a future factory-owned store, but neither is a required source of truth in this milestone. The backend used for stronger future coordination remains open.
+The repository remains the durable artifact owned by the developer. That fact can help a replacement agent recover project context, but v0 does not define or guarantee a reconstruction procedure.
 
 ## Deployment topology
 
@@ -213,18 +158,12 @@ The foundation milestone is successful when this complete scenario works:
 1. A developer starts from a greenfield repository and invokes the onboarding skill through a compatible coding agent.
 2. The installer creates the database-free Rust Hello World project.
 3. The capability works through both an in-process Rust call and HTTP.
-4. The onboarding agent provisions or connects a remotely reachable Docker host and starts the persistent factory container with durable Hermes and repository storage plus automatic restart.
-5. Hermes Agent's Slack Socket Mode gateway is connected; ordinary repository credentials are supplied; and the reference harness is started.
-6. The developer asks the lead agent in Slack to add the backward-compatible `greet(name)` capability, for which `greet("Ada")` returns `Hello, Ada!`.
-7. The lead performs the change inside that sandbox in a dedicated worktree and branch.
-8. The resulting change touches no foreign package source, contains only permitted deterministic artifacts outside the Hello box, and behaves consistently through Rust and HTTP.
-9. The lead opens exactly one pull request and returns it in Slack.
-10. The factory does not merge it; a human makes the merge decision.
-11. Stopping and resuming the sandbox, or replacing its compute while durable storage survives, preserves its repository and persisted harness state.
-12. Terminating the harness uncleanly during work and restarting it recovers a valid repository and harness state from a consistent recovery point; the lead inspects current Slack and GitHub state before retrying any uncertain external effect.
-13. A request sent to the configured Slack channel while the bridge is stopped is discovered after restart when it remains available in channel history.
+4. The skill explains the Boxology model and identifies the coding agent using it as the lead agent, regardless of which compatible harness hosts it.
+5. The developer asks that lead to add the backward-compatible `greet(name)` capability, for which `greet("Ada")` returns `Hello, Ada!`.
+6. The resulting repository state touches no foreign package source, contains only permitted deterministic artifacts outside the Hello box, and behaves consistently through Rust and HTTP.
+7. `boxology check` passes using the same visible validation path available to local development and generated CI.
 
-This scenario proves installation, box definition, two bindings, one box-local evolution, remote factory access, human-agent interaction, isolated implementation, clean and unclean storage-backed recovery, Slack catch-up, and the human merge boundary. It is an end-to-end foundation milestone, not evidence that multi-agent parallelism, exactly-once effects, or catastrophic exact recovery is already effective.
+This scenario proves installation, box definition, two bindings, one box-local evolution, deterministic validation, and harness-neutral lead guidance. It does not test remote execution, persistence, communication delivery, pull-request policy, or multi-agent parallelism.
 
 ## Explicit foundation-milestone non-goals
 
@@ -237,22 +176,25 @@ The foundation milestone does not promise:
 - A Postgres or Redis provider in the generated example.
 - Kubernetes deployment.
 - A first-party managed hosting service.
+- A Boxology-owned coding-agent harness, sandbox, or execution service.
+- A Boxology communication gateway or required human interface.
+- Hermes, Slack, or any other specific harness and transport.
 - A custom factory dashboard or task UI.
 - A dedicated GitHub App, bot, or first-class GitHub integration.
 - GitHub Issues as a task system.
 - Worker, reviewer, area-lead, merger, or continuous-quality roles.
-- Autonomous merging.
+- A prescribed pull-request or autonomous-merging policy.
 - A sophisticated or finalized internal factory execution engine.
 - A separate factory control-plane service, task ledger, or mandatory event log.
 - A mandatory workflow engine or queue.
-- Exact continuation after the sandbox and its durable storage are both destroyed.
-- Exactly-once GitHub or Slack effects.
+- Harness-session persistence, frozen state, stop-and-resume, or crash recovery.
+- Message catch-up or exactly-once external effects.
 - Multi-agent task claims, leases, fencing, or split-brain prevention.
 - Streaming, event streaming, or real-time interaction in the foundation milestone; these remain requirements for the first full box-runtime release.
 
 Most are sequencing decisions rather than rejections of the broader direction. Reduced guarantees inside foreign-language implementation code are a deliberate boundary.
 
-The factory-control-plane items above are accepted deferrals, not missing foundation specifications. They do not block implementation or acceptance of the one-sandbox milestone. Their next design gate is the post-MVP agent-pool work in [issue #57](https://github.com/fontanierh/boxology/issues/57), when concrete coordination requirements exist.
+The factory-control-plane items above are accepted deferrals, not missing foundation specifications. They do not block implementation or acceptance of the skill-only milestone. Their next design gate is the post-MVP harness and agent-pool work in [issue #57](https://github.com/fontanierh/boxology/issues/57), when concrete coordination requirements exist.
 
 Brownfield adoption should be reconsidered only after the greenfield milestones provide evidence worth generalizing. Exit remains reversible: a managed project is an ordinary Cargo workspace in the developer's Git repository, the runtime is a normal Rust dependency, and the factory is external software. Turning off the factory leaves the complete source and Git history under the developer's control; removing the runtime can proceed as an ordinary code migration rather than a data export or repository conversion.
 
@@ -260,11 +202,11 @@ Brownfield adoption should be reconsidered only after the greenfield milestones 
 
 The product boundary can be fixed while these implementation questions remain open:
 
-- The factory's eventual agent loop, models, providers, tools, and memory beyond the Hermes reference harness.
-- Additional sandbox substrates and deployment recipes beyond the tested Docker reference, tracked in [issue #67](https://github.com/fontanierh/boxology/issues/67).
+- Whether and when Boxology should own an agent harness, gateway, execution service, or durability layer.
+- Sandbox substrates and deployment recipes if Boxology later owns a deployable factory component, tracked in [issue #67](https://github.com/fontanierh/boxology/issues/67).
 - Whether an optional lead-authored checkpoint should be standardized and where it should live.
 - The portable skill's distribution and host-specific installation wrappers.
-- Authentication and authorization for Slack, repository credentials, and factory access.
+- Authentication and authorization for any future Boxology-owned gateway or factory service.
 - Additional deployment recipes and a possible managed service.
 - Kubernetes generation and operational conventions.
 - The configuration language for future roles, handoffs, queues, and gates.
