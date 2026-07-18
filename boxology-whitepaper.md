@@ -4,6 +4,8 @@ AI makes producing code increasingly cheap. The new bottleneck is safely coordin
 
 Boxology treats a software system as independent boxes connected only through explicit, typed interfaces. Humans own the box boundaries, contracts, types, data models, and composition. Agents may implement and replace the code hidden inside each box.
 
+Box-and-arrow diagrams are often dismissed as architectural slideware because nothing enforces their boundaries. Boxology reclaims the idea by making the boxes and arrows executable and mechanically checked.
+
 This approach trades additional scaffolding and smaller pull requests for isolation, comprehensibility, and safe parallelism.
 
 [Read the complete design interview and Q&A](boxology-details/00-design-interview.md).
