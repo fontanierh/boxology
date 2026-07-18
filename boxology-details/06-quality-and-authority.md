@@ -73,7 +73,28 @@ Provider conformance tests should attempt cross-binding access and validate the 
 
 The runtime does not sandbox a defective provider into correctness. A provider that violates its stated behavior is considered broken.
 
-Runtime isolation profiles govern behavior of code that reaches a deployment. Agent authorship, prompt injection, CI, credential, and supply-chain risks are separate control-plane threats. Review and protected checks are pre-merge defenses, not substitutes for runtime isolation; their complete threat model remains unresolved.
+Runtime isolation profiles govern behavior of code that reaches a deployment. Agent authorship, CI, credential, and supply-chain risks are separate control-plane threats. Review and protected checks are pre-merge defenses, not substitutes for runtime isolation; the foundation boundary for those threats is defined below.
+
+## Foundation lead-sandbox threat boundary
+
+The foundation treats the complete lead sandbox like a coding-agent workstation. The sandbox is the sole hard containment boundary; there is no nested credential-free executor for repository-controlled builds, tests, scripts, dependencies, or generated code.
+
+Inside that boundary:
+
+- The managed repository, including its code, project instructions, issues, pull requests, reviews, and comments, is trusted and may intentionally steer the lead.
+- Third-party dependency source, build output, tool output, and unrelated external material are data rather than authoritative project instructions. The coding agent is responsible for interpreting them accordingly; v1 adds no mechanical prompt-injection classifier.
+- The lead, harness, Slack integration, and executed repository code share the sandbox filesystem, environment variables, processes, supplied credentials, and network access. Running `cargo test` or a build script therefore has the same ambient access as running it directly from the coding agent.
+- Full outbound networking is available. V1 does not provide an egress allowlist or proxy.
+
+Outside that boundary, the sandbox receives no host filesystem, unrelated volumes, container-control socket, or infrastructure-administration access unless the operator deliberately grants it. Granting any of those expands the deployment's trusted boundary.
+
+The installer recommends repository- and channel-scoped credentials and may warn when it can identify broader access, but it accepts the credentials the operator supplies. It does not validate or reject the operator's security posture. V1 also provides no mechanical secret redaction, data-loss prevention, credential broker, or just-in-time credential substitution. Safe use of available credentials is the agent's responsibility.
+
+Factory releases and images use ordinary GitHub and registry trust. The installed release or image digest is recorded for reproducibility, but v1 does not add a signing or attestation system.
+
+Compromise response is human-operated: stop or destroy the sandbox, revoke its credentials, inspect GitHub and Slack for effects, and rebuild from a trusted release and repository state. The MVP makes no claim that it can contain a malicious build script or prevent code inside the sandbox from exfiltrating an available credential, so it does not add acceptance tests that pretend otherwise.
+
+Mediated egress, just-in-time credentials, mechanical redaction, automated containment, and stronger release verification are explicitly deferred to [issue #65](https://github.com/fontanierh/boxology/issues/65). Multi-agent and per-role security remains part of the later coordination milestone in [issue #57](https://github.com/fontanierh/boxology/issues/57).
 
 ## Protecting quality policy
 
