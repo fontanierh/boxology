@@ -1,6 +1,6 @@
 # Product Contract and Foundation Milestone
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
 This document separates the long-term product direction from the first falsifiable foundation milestone. It resolves the product-boundary questions without pretending that the eventual market, agent implementation, or deployment ecosystem is already known.
 
@@ -8,20 +8,20 @@ This document separates the long-term product direction from the first falsifiab
 
 The product combines:
 
-- A Rust module platform for defining independently evolvable capabilities.
+- A Rust Boxology platform for defining independently evolvable boxes.
 - A remotely hosted software factory for changing systems built with that platform.
 
-These are one product, brand, and project. They remain separate applications and packages internally. The module platform reduces the amount of code and context an agent can affect at once. The factory makes the resulting increase in scaffolding, pull requests, and coordinated migrations practical.
+These are one product, brand, and project. They remain separate applications and packages internally. The Boxology platform reduces the amount of code and context an agent can affect at once. The factory makes the resulting increase in scaffolding, pull requests, and coordinated migrations practical.
 
-The supported product journey combines both systems, but they are not fused technically. The module runtime is delivered as a Rust dependency and can execute without a running factory. The first factory release, however, only promises to operate on repositories initialized by the module platform; arbitrary repositories are out of scope.
+The supported product journey combines both systems, but they are not fused technically. The Boxology runtime is delivered as a Rust dependency and can execute without a running factory. The first factory release, however, only promises to operate on repositories initialized by Boxology; arbitrary repositories are out of scope.
 
 ## Progressive bootstrap
 
 The system cannot depend on itself before it exists. Development therefore proceeds progressively:
 
-1. Build the initial module foundation through conventional development.
+1. Build the initial Boxology foundation through conventional development.
 2. Build the first factory without requiring it to modify its own source.
-3. Make the factory the first substantial application built with the module system.
+3. Make the factory the first substantial application built with Boxology.
 4. Introduce factory-assisted changes gradually.
 5. Add task coordination, workers, reviews, merging, and continuous analysis as separate increments.
 6. Increase self-hosting as each layer becomes dependable.
@@ -39,19 +39,19 @@ The first supported technical envelope is narrow:
 - A greenfield project.
 - A repository created by the platform initializer.
 - A Rust backend in one Git repository and Cargo workspace.
-- Application modules and compositions kept as distinct crates or packages within that repository.
+- Application boxes and compositions kept as distinct crates or packages within that repository.
 - GitHub as the source-review surface.
 - Slack as the only first-class human integration in the foundation milestone.
 - One repository managed by a factory installation at a time for the foundation milestone.
 
-A monorepo is not treated as a monolith. Modules retain separate contracts and ownership even when they share a repository and Cargo lockfile. An ordinary package change may include only the minimal lockfile resolution reproducible from its own permitted non-derived diff under pinned inputs. A lockfile change that alters a dependency used by another package requires whole-workspace validation and semantic reassessment.
+A monorepo is not treated as a monolith. Boxes retain separate contracts and ownership even when they share a repository and Cargo lockfile. An ordinary package change may include only the minimal lockfile resolution reproducible from its own permitted non-derived diff under pinned inputs. A lockfile change that alters a dependency used by another package requires whole-workspace validation and semantic reassessment.
 
 ## Repository and execution locations
 
 The system distinguishes:
 
-- **Product source repository:** contains the source of the module platform and factory. Through progressive dogfooding, this repository can itself become a managed project repository.
-- **Managed project repository:** is initialized by the platform and connected to a factory. It contains application modules, compositions, tests, and repository-local factory configuration. It does not receive a copied implementation of the factory.
+- **Product source repository:** contains the source of the Boxology platform and factory. Through progressive dogfooding, this repository can itself become a managed project repository.
+- **Managed project repository:** is initialized by the platform and connected to a factory. It contains application boxes, compositions, tests, and repository-local factory configuration. It does not receive a copied implementation of the factory.
 - **Lead-agent sandbox:** is the complete deployed factory in the foundation milestone. It contains the agent harness, Slack bridge, managed-repository checkout, worktree, branch, and persisted harness state.
 
 The foundation has no separate factory service outside that sandbox. The product source repository is also eligible to be managed by a lead sandbox once progressive dogfooding reaches that stage.
@@ -67,11 +67,11 @@ The onboarding skill provides judgment and guidance. A deterministic, versioned 
 1. The developer installs or gives the onboarding skill to a compatible coding agent.
 2. The agent explains the setup and asks the minimum necessary questions.
 3. The agent obtains and runs the project CLI.
-4. The CLI creates the Rust workspace, module, composition, and repository configuration.
+4. The CLI creates the Rust workspace, box, composition, and repository configuration.
 5. The agent provisions or connects a durable lead sandbox and installs the factory sandbox image or equivalent package into it.
 6. It configures the sandbox's Slack bridge, grants the lead ordinary repository and pull-request access, verifies connectivity, starts the harness, and returns the working Slack channel.
 
-The module runtime is a normal Rust dependency. The factory is versioned software installed inside the lead sandbox, not factory source code copied into every managed repository. Only project-specific contracts and integration configuration belong in the managed repository.
+The Boxology runtime is a normal Rust dependency. The factory is versioned software installed inside the lead sandbox, not factory source code copied into every managed repository. Only project-specific contracts and integration configuration belong in the managed repository.
 
 GitHub is the initial repository and pull-request surface, but a dedicated GitHub App, bot workflow, Issues integration, or other first-class GitHub integration is not part of the foundation milestone. The factory can use ordinary Git and GitHub credentials to push a branch and open a pull request.
 
@@ -81,7 +81,7 @@ The first release bundle contains:
 
 - A portable onboarding skill.
 - A deterministic installer CLI.
-- Rust module-runtime packages with Rust and HTTP bindings.
+- Rust box-runtime packages with Rust and HTTP bindings.
 - A portable factory sandbox image containing an agent harness and Slack bridge.
 - Bootstrap support for a managed durable-sandbox provider or a compatible container target with crash-consistent durable storage and restart behavior.
 
@@ -97,32 +97,32 @@ This keeps the deployment portable across hosted sandbox systems, cloud virtual 
 
 ## Generated Hello World project
 
-At the end of project initialization, the developer has a small running application that proves the central module abstraction:
+At the end of project initialization, the developer has a small running application that proves the central box abstraction:
 
 - One implementation method is annotated as a typed Hello World capability.
 - Its boundary types are authored beside the implementation and lifted into the generated contract crate.
 - A deterministic pre-Cargo step generates its language-neutral schema, contract crate, asynchronous typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
-- The capability can be invoked directly through the Rust module interface.
+- The capability can be invoked directly through the Rust box interface.
 - The same capability can be invoked through an HTTP endpoint.
 - Both paths reach the same annotated implementation method through the generated contract rather than two handwritten interfaces or implementations.
 
 The generated handle uses the invocation envelope in [Canonical Capability Contract](09-capability-contract.md): an explicit call context, a declared domain error, and a distinct invocation-error layer even when the selected binding is in-process.
 
-The first proof is database-free. Postgres and Redis remain important provider candidates, but persistence is a later slice and should not obscure validation of the module, binding, and factory loop.
+The first proof is database-free. Postgres and Redis remain important provider candidates, but persistence is a later slice and should not obscure validation of the box, binding, and factory loop.
 
 The deterministic contract generator is therefore a core foundation deliverable rather than incidental scaffolding. The milestone is not complete until generation, provenance, reproducibility, typed invocation, and compatibility classification work as one path.
 
-The foundation milestone covers unary request-response only. The first full module-runtime release is expected to add streaming data, streaming events, and real-time interaction as first-class contract shapes.
+The foundation milestone covers unary request-response only. The first full box-runtime release is expected to add streaming data, streaming events, and real-time interaction as first-class contract shapes.
 
-## Native and foreign-language modules
+## Native and foreign-language boxes
 
-Everything managed as part of an application should be represented as a module, but not every implementation receives the same guarantees.
+Everything managed as part of an application should be represented as a box, but not every implementation receives the same guarantees.
 
-- A **native module** is implemented in Rust and receives the full runtime, dependency-analysis, compatibility, and factory guarantees.
-- A **foreign-language module** remains a first-class factory package with ownership, tasks, and the one-package pull-request boundary, but its internals receive fewer static and runtime guarantees.
-- A **client-binding module** remains in the native managed ecosystem, owns the contract import, and generates a language-native SDK for a foreign module.
+- A **native box** is implemented in Rust and receives the full runtime, dependency-analysis, compatibility, and factory guarantees.
+- A **foreign-language box** remains a first-class factory package with ownership, tasks, and the one-package pull-request boundary, but its internals receive fewer static and runtime guarantees.
+- A **client-binding box** remains in the native managed ecosystem, owns the contract import, and generates a language-native SDK for a foreign box.
 
-A TypeScript application or another foreign-language component can therefore appear anywhere the application composition requires. The platform manages its declared boundary but cannot make the same claims about its internal implementation that it makes for a native Rust module.
+A TypeScript application or another foreign-language component can therefore appear anywhere the application composition requires. The platform manages its declared boundary but cannot make the same claims about its internal implementation that it makes for a native Rust box.
 
 ## First factory behavior
 
@@ -144,15 +144,15 @@ Autonomous merging is explicitly excluded from v1.
 
 Before retrying an external effect whose outcome is uncertain, the lead inspects the current state of the system that owns that effect. This is a standing recovery rule, not an exactly-once guarantee: an ambiguous failure may still produce a rare repeated effect.
 
-The prescribed acceptance task is to add a new backward-compatible `greet(name)` capability to the generated Hello module. Calling it with `Ada` returns `Hello, Ada!` through both Rust and HTTP. Its pull request must:
+The prescribed acceptance task is to add a new backward-compatible `greet(name)` capability to the generated Hello box. Calling it with `Ada` returns `Hello, Ada!` through both Rust and HTTP. Its pull request must:
 
 - Change no foreign package source.
-- Change only the Hello module source and permitted deterministic artifacts.
+- Change only the Hello box source and permitted deterministic artifacts.
 - Preserve consistent behavior through the Rust and HTTP bindings.
 - Produce exactly one pull request.
 - Never merge that pull request automatically.
 
-This validates a real module ownership and binding invariant. It does not validate concurrent agent work or the broader safe-parallelism thesis; that requires a later experiment.
+This validates a real box ownership and binding invariant. It does not validate concurrent agent work or the broader safe-parallelism thesis; that requires a later experiment.
 
 ## Factory organization is configuration
 
@@ -191,9 +191,9 @@ The foundation does not require a factory database, event ledger, queue, or work
 
 ## Deployment topology
 
-Modules do not decide how they are deployed. Application compositions own deployment topology and select whether modules are linked into one binary, exposed as separate services, or assembled into other process types.
+Boxes do not decide how they are deployed. Application compositions own deployment topology and select whether boxes are linked into one binary, exposed as separate services, or assembled into other process types.
 
-Kubernetes is an important future target for any module-based application, as well as a possible deployment target for the factory itself. It is deliberately not part of the foundation milestone. Kubernetes support should be supplied by composition and deployment tooling without adding Kubernetes-specific behavior to modules.
+Kubernetes is an important future target for any application built with Boxology, as well as a possible deployment target for the factory itself. It is deliberately not part of the foundation milestone. Kubernetes support should be supplied by composition and deployment tooling without adding Kubernetes-specific behavior to boxes.
 
 ## First end-to-end foundation milestone
 
@@ -206,14 +206,14 @@ The foundation milestone is successful when this complete scenario works:
 5. The factory image or equivalent package is installed there; Slack is connected; ordinary repository credentials are supplied; and the harness is started.
 6. The developer asks the lead agent in Slack to add the backward-compatible `greet(name)` capability, for which `greet("Ada")` returns `Hello, Ada!`.
 7. The lead performs the change inside that sandbox in a dedicated worktree and branch.
-8. The resulting change touches no foreign package source, contains only permitted deterministic artifacts outside the Hello module, and behaves consistently through Rust and HTTP.
+8. The resulting change touches no foreign package source, contains only permitted deterministic artifacts outside the Hello box, and behaves consistently through Rust and HTTP.
 9. The lead opens exactly one pull request and returns it in Slack.
 10. The factory does not merge it; a human makes the merge decision.
 11. Stopping and resuming the sandbox, or replacing its compute while durable storage survives, preserves its repository and persisted harness state.
 12. Terminating the harness uncleanly during work and restarting it recovers a valid repository and harness state from a consistent recovery point; the lead inspects current Slack and GitHub state before retrying any uncertain external effect.
 13. A request sent to the configured Slack channel while the bridge is stopped is discovered after restart when it remains available in channel history.
 
-This scenario proves installation, module definition, two bindings, one module-local evolution, remote factory access, human-agent interaction, isolated implementation, clean and unclean storage-backed recovery, Slack catch-up, and the human merge boundary. It is an end-to-end foundation milestone, not evidence that multi-agent parallelism, exactly-once effects, or catastrophic exact recovery is already effective.
+This scenario proves installation, box definition, two bindings, one box-local evolution, remote factory access, human-agent interaction, isolated implementation, clean and unclean storage-backed recovery, Slack catch-up, and the human merge boundary. It is an end-to-end foundation milestone, not evidence that multi-agent parallelism, exactly-once effects, or catastrophic exact recovery is already effective.
 
 ## Explicit foundation-milestone non-goals
 
@@ -221,7 +221,7 @@ The foundation milestone does not promise:
 
 - Migration of existing codebases.
 - Operation on arbitrary or non-initialized repositories.
-- Full native guarantees inside foreign-language modules.
+- Full native guarantees inside foreign-language boxes.
 - Multi-repository coordination.
 - A Postgres or Redis provider in the generated example.
 - Kubernetes deployment.
@@ -237,11 +237,11 @@ The foundation milestone does not promise:
 - Exact continuation after the sandbox and its durable storage are both destroyed.
 - Exactly-once GitHub or Slack effects.
 - Multi-agent task claims, leases, fencing, or split-brain prevention.
-- Streaming, event streaming, or real-time interaction in the foundation milestone; these remain requirements for the first full module-runtime release.
+- Streaming, event streaming, or real-time interaction in the foundation milestone; these remain requirements for the first full box-runtime release.
 
 Most are sequencing decisions rather than rejections of the broader direction. Reduced guarantees inside foreign-language implementation code are a deliberate boundary.
 
-The factory-control-plane items above are accepted deferrals, not missing foundation specifications. They do not block implementation or acceptance of the one-sandbox milestone. Their next design gate is the post-MVP agent-pool work in [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57), when concrete coordination requirements exist.
+The factory-control-plane items above are accepted deferrals, not missing foundation specifications. They do not block implementation or acceptance of the one-sandbox milestone. Their next design gate is the post-MVP agent-pool work in [issue #57](https://github.com/fontanierh/boxology/issues/57), when concrete coordination requirements exist.
 
 Brownfield adoption should be reconsidered only after the greenfield milestones provide evidence worth generalizing. Exit remains reversible: a managed project is an ordinary Cargo workspace in the developer's Git repository, the runtime is a normal Rust dependency, and the factory is external software. Turning off the factory leaves the complete source and Git history under the developer's control; removing the runtime can proceed as an ordinary code migration rather than a data export or repository conversion.
 
@@ -257,6 +257,6 @@ The product boundary can be fixed while these implementation questions remain op
 - Additional deployment recipes and a possible managed service.
 - Kubernetes generation and operational conventions.
 - The configuration language for future roles, handoffs, queues, and gates.
-- The post-MVP multi-agent coordination and stronger durability guarantees tracked in [issue #57](https://github.com/fontanierh/module-based-engineering/issues/57).
+- The post-MVP multi-agent coordination and stronger durability guarantees tracked in [issue #57](https://github.com/fontanierh/boxology/issues/57).
 
 They should be resolved through separate focused design work rather than expanding the foundation milestone.

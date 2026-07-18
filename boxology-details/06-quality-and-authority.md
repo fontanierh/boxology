@@ -1,6 +1,6 @@
 # Quality and Authority
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
 This document expands the quality ownership, CI, review, policy, and human-authority model discussed during the design interview.
 
@@ -8,13 +8,13 @@ This document expands the quality ownership, CI, review, policy, and human-autho
 
 Quality belongs to accountable packages and the software factory, not to the application runtime.
 
-The runtime provides capability invocation, transport and authentication integration, and resolved provider bindings. It makes no promise that application behavior is correct or that a module's tests are sufficient.
+The runtime provides capability invocation, transport and authentication integration, and resolved provider bindings. It makes no promise that application behavior is correct or that a box's tests are sufficient.
 
 Package owners and users are responsible for defining strong automated validation. The harness executes and enforces the configured validation before a change can merge.
 
 ## Package quality contract
 
-Every module, provider, application composition, and platform package owns a quality contract appropriate to its behavior. The discussion did not prescribe one universal command or test framework, but it did establish that package CI should be good enough to check the accountable package automatically.
+Every box, provider, application composition, and platform package owns a quality contract appropriate to its behavior. The discussion did not prescribe one universal command or test framework, but it did establish that package CI should be good enough to check the accountable package automatically.
 
 The contract can include:
 
@@ -28,9 +28,9 @@ The contract can include:
 
 The harness can add mandatory system-level checks beyond what an individual package declares.
 
-Package kinds add different baselines. Modules require contract compatibility and behavioral validation. Providers require conformance and isolation evidence. Compositions require assembly and integration validation. Platform packages require whole-workspace validation and stricter approval by default, subject to configured harness policy, because runtime, CI, build, generator, and enforcement changes can affect every package.
+Package kinds add different baselines. Boxes require contract compatibility and behavioral validation. Providers require conformance and isolation evidence. Compositions require assembly and integration validation. Platform packages require whole-workspace validation and stricter approval by default, subject to configured harness policy, because runtime, CI, build, generator, and enforcement changes can affect every package.
 
-When a native module's declared contract-generation inputs change or its owner explicitly requests regeneration, deterministic platform validation regenerates its contract outputs with the current workspace generator and classifies the semantic contract diff. Untouched contract crates produced by older backward-compatible generator releases remain valid. The harness decides whether a compatible change, an evidenced contraction, or an explicit override may merge. The default factory should block an incompatible tightening or removal until its configured deprecation process is satisfied. A more permissive harness can change that policy, but it cannot suppress the underlying classification or claim that the change remained compatible.
+When a native box's declared contract-generation inputs change or its owner explicitly requests regeneration, deterministic platform validation regenerates its contract outputs with the current workspace generator and classifies the semantic contract diff. Untouched contract crates produced by older backward-compatible generator releases remain valid. The harness decides whether a compatible change, an evidenced contraction, or an explicit override may merge. The default factory should block an incompatible tightening or removal until its configured deprecation process is satisfied. A more permissive harness can change that policy, but it cannot suppress the underlying classification or claim that the change remained compatible.
 
 The guarantee is procedural:
 
@@ -107,9 +107,9 @@ For public or risky endpoints, a human can provide the final authorization to re
 
 ## Continuous quality and coherence
 
-The perpetual quality agent complements pull-request CI by looking for problems across time and across module boundaries. It can surface aging deprecations, cycles, stalled migrations, and broader architectural drift.
+The perpetual quality agent complements pull-request CI by looking for problems across time and across box boundaries. It can surface aging deprecations, cycles, stalled migrations, and broader architectural drift.
 
-Its findings create tasks or human questions. It does not silently rewrite unrelated modules as part of one change.
+Its findings create tasks or human questions. It does not silently rewrite unrelated boxes as part of one change.
 
 ## Matters not yet specified
 

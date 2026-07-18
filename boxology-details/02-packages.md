@@ -1,6 +1,6 @@
 # Packages, Providers, and Compositions
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
 This document expands the package kinds and infrastructure model discussed during the design interview.
 
@@ -10,12 +10,12 @@ The ecosystem contains four distinct package kinds. Every kind can own source, a
 
 | Package kind | Responsibility | Baseline change contract |
 | --- | --- | --- |
-| **Module** | Implements a product or domain capability, including managed client-binding modules. | Contract compatibility, module tests, and expand-migrate-contract for breaking interfaces. |
+| **Box** | Implements a product or domain capability, including managed client-binding boxes. | Contract compatibility, box tests, and expand-migrate-contract for breaking interfaces. |
 | **Provider** | Satisfies a technical requirement using a particular technology or strategy. | Provider conformance, binding isolation, and migration or provisioning validation where applicable. |
-| **Application composition** | Assembles modules and providers into a deployable application. | Assembly and integration validation; almost no business logic. |
+| **Application composition** | Assembles boxes and providers into a deployable application. | Assembly and integration validation; almost no business logic. |
 | **Platform** | Owns the runtime, CI, build tooling, repository-wide generators, and enforcement machinery. | Whole-workspace validation and stricter approval by default, subject to configured harness policy, because changes can have global blast radius. |
 
-They share packaging, versioning, testing, ownership, and factory conventions without being the same kind of object. A client-binding module remains a module package rather than introducing a fifth kind.
+They share packaging, versioning, testing, ownership, and factory conventions without being the same kind of object. A client-binding box remains a box package rather than introducing a fifth kind.
 
 The universal ownership rule is:
 
@@ -23,19 +23,19 @@ The universal ownership rule is:
 
 Here, source includes every hand-authored or otherwise non-derived file: implementation, manifests, tests, migrations, configuration, quality policy, and similar inputs.
 
-Modules are the most common contract-bearing owners, but providers, compositions, and platform packages are equally valid owners once their ownership records exist.
+Boxes are the most common contract-bearing owners, but providers, compositions, and platform packages are equally valid owners once their ownership records exist.
 
 ## Logical packages and Cargo crates
 
-The word **package** in the ownership model names a semantic owner, not necessarily one Cargo package or crate. A native module owns a handwritten implementation crate and a mechanically generated contract crate. Both compilation units belong to the same logical module, factory area, quality contract, and pull-request owner.
+The word **package** in the ownership model names a semantic owner, not necessarily one Cargo package or crate. A native box owns a handwritten implementation crate and a mechanically generated contract crate. Both compilation units belong to the same logical box, factory area, quality contract, and pull-request owner.
 
-The generated contract crate is a declared derived output of the module's annotated Rust implementation methods. It does not become a separate accountable package merely because Cargo compiles it independently. Conversely, an application composition is a separate logical owner even when it compiles both module implementations into one binary.
+The generated contract crate is a declared derived output of the box's annotated Rust implementation methods. It does not become a separate accountable package merely because Cargo compiles it independently. Conversely, an application composition is a separate logical owner even when it compiles both box implementations into one binary.
 
-This distinction preserves the universal ownership rule while allowing Cargo to enforce that modules compile only against foreign contracts. The complete crate-role and edge policy is defined in [Rust Build Topology](08-rust-build-topology.md).
+This distinction preserves the universal ownership rule while allowing Cargo to enforce that boxes compile only against foreign contracts. The complete crate-role and edge policy is defined in [Rust Build Topology](08-rust-build-topology.md).
 
 ## Common ownership manifest
 
-Every package kind participates in a common logical manifest contract. The serialization syntax remains open, but each manifest must declare:
+Every logical package root contains one package-local `boxology.toml`, discovered deterministically without a hand-maintained central index. Every package kind participates in the same logical manifest model, with common ownership fields and kind-specific sections. The remaining field-level serialization details remain open, but each manifest must declare:
 
 - A stable package identity and package kind.
 - Owned non-derived paths, including source, manifests, tests, migrations, configuration, and quality contracts.
@@ -58,7 +58,7 @@ The merger evaluates ownership from the base revision of a pull request:
 5. Starting from the base revision plus only the accountable package's complete permitted non-derived diff, run the declared generators as resolved by the protected workspace toolchain and require them to recreate every submitted derived output byte-for-byte.
 6. Apply the accountable package's quality contract and every global validation triggered by the change's semantic impact.
 
-Ownership proposed by the pull request does not retroactively authorize other paths in that same pull request. Bootstrapping the ownership record for a newly created package therefore needs a separately defined creation protocol, tracked in [issue #47](https://github.com/fontanierh/module-based-engineering/issues/47).
+Ownership proposed by the pull request does not retroactively authorize other paths in that same pull request. Bootstrapping the ownership record for a newly created package therefore needs a separately defined creation protocol, tracked in [issue #47](https://github.com/fontanierh/boxology/issues/47).
 
 A generated file physically located under another package is not automatically foreign source. It is permitted only when the base revision declares it as non-editable derived output and the regeneration check attributes it to the accountable package. Otherwise it is foreign source and the merger rejects the change. Published client generation still follows the separate-consumer rule: a consumer adopts the generated client in its own package-owned change.
 
@@ -86,9 +86,9 @@ Independent Cargo build roots remain deferred. The factory should measure lockfi
 
 The initial word "adapter" was carrying too many meanings. The infrastructure discussion was clarified into three concepts:
 
-- A **requirement** states what a module needs.
+- A **requirement** states what a box needs.
 - A **provider** implements that kind of requirement.
-- A **binding** is the configured provider instance assigned to one module.
+- A **binding** is the configured provider instance assigned to one box.
 
 For example:
 
@@ -104,11 +104,11 @@ agent-loop requires durable-workflows as runs
 an environment could bind agent-loop.runs to shared workflow infrastructure
 ```
 
-The runtime does not need to understand the vendor behind a binding. The broader platform toolchain can scaffold, validate, provision, and configure it, while the runtime receives the resolved handle or configuration needed by the module.
+The runtime does not need to understand the vendor behind a binding. The broader platform toolchain can scaffold, validate, provision, and configure it, while the runtime receives the resolved handle or configuration needed by the box.
 
 ## Semantic requirements
 
-Modules should normally request semantic capabilities rather than particular vendors.
+Boxes should normally request semantic capabilities rather than particular vendors.
 
 The examples discussed were:
 
@@ -119,7 +119,7 @@ key-value-store  -> Redis provider
 pub-sub          -> Redis provider
 ```
 
-One provider can implement several requirement types. A module may deliberately request vendor-specific behavior when necessary, but doing so explicitly sacrifices portability.
+One provider can implement several requirement types. A box may deliberately request vendor-specific behavior when necessary, but doing so explicitly sacrifices portability.
 
 Postgres and Redis were identified as useful initial providers because they exercise persistent configuration, local development, isolation, migrations or initialization, runtime bindings, and production infrastructure.
 
@@ -128,7 +128,7 @@ Postgres and Redis were identified as useful initial providers because they exer
 A provider package may contribute several kinds of material:
 
 - A configuration schema.
-- Module scaffolding and required dependencies.
+- Box scaffolding and required dependencies.
 - A migrations folder or other provider-specific project structure.
 - ORM or client configuration.
 - Runtime client injection or connection information.
@@ -136,20 +136,20 @@ A provider package may contribute several kinds of material:
 - CI and conformance validation.
 - Deployment and health conventions.
 
-These responsibilities span more than the application runtime. Scaffolding and validation belong to the module toolchain and factory. Infrastructure provisioning belongs to deployment tooling. The runtime only needs the resolved binding used when the module executes.
+These responsibilities span more than the application runtime. Scaffolding and validation belong to the Boxology toolchain and factory. Infrastructure provisioning belongs to deployment tooling. The runtime only needs the resolved binding used when the box executes.
 
-Providers must not silently rewrite arbitrary module source. Their generated or scaffolded outputs must be declared, attributable, and governed by the package ownership and derived-artifact rules above.
+Providers must not silently rewrite arbitrary box source. Their generated or scaffolded outputs must be declared, attributable, and governed by the package ownership and derived-artifact rules above.
 
 ## Provider isolation
 
-A private binding is an architectural contract, not a universal security guarantee. A module must use only its own binding, even if the underlying infrastructure is physically shared. The strength of that rule depends on the isolation profile selected by the application composition.
+A private binding is an architectural contract, not a universal security guarantee. A box must use only its own binding, even if the underlying infrastructure is physically shared. The strength of that rule depends on the isolation profile selected by the application composition.
 
 Isolation profiles provide increasing assurance. Later profiles retain the earlier guarantees but may replace their mechanisms:
 
-- **L0 — Convention:** mutually trusted modules may share a process and credentials. Boundaries rely on code discipline, review, provider conventions, and tests. This is the foundation default.
-- **L1 — Credential-enforced:** each binding receives least-privilege credentials, such as a binding-specific database role. Shared administrative credentials remain control-plane material and are not delivered to modules.
+- **L0 — Convention:** mutually trusted boxes may share a process and credentials. Boundaries rely on code discipline, review, provider conventions, and tests. This is the foundation default.
+- **L1 — Credential-enforced:** each binding receives least-privilege credentials, such as a binding-specific database role. Shared administrative credentials remain control-plane material and are not delivered to boxes.
 - **L2 — Process-isolated:** L1 plus separate processes or containers and enforced operating-system, network, and resource policy.
-- **L3 — Adversarial:** L2 plus sandboxed module code and controlled egress, with module-visible reusable credentials replaced by brokered, unforgeable scoped capabilities. Deploying code deliberately treated as untrusted at runtime would require this profile. L3 remains a future target whose runtime threat model and acceptance criteria are not established here. Sandboxing candidate code, builds, CI, and factory credentials remains separate work in [issue #24](https://github.com/fontanierh/module-based-engineering/issues/24).
+- **L3 — Adversarial:** L2 plus sandboxed box code and controlled egress, with box-visible reusable credentials replaced by brokered, unforgeable scoped capabilities. Deploying code deliberately treated as untrusted at runtime would require this profile. L3 remains a future target whose runtime threat model and acceptance criteria are not established here. Sandboxing candidate code, builds, CI, and factory credentials remains separate work in [issue #24](https://github.com/fontanierh/boxology/issues/24).
 
 A composition declares the minimum profile it requires. Its selected providers and deployment topology must supply the corresponding controls, and tooling must not claim a stronger profile than the deployed mechanisms support.
 
@@ -169,60 +169,60 @@ A Postgres provider may choose among different isolation mechanisms:
 - Separate schemas.
 - Isolated tables and credentials in one database.
 
-The consumer should not need to know which conforming mechanism was selected. Raw SQL is permitted against a module's own binding at L0 and L1. At L0 the ownership rule is conventional; at L1 provider-issued credentials enforce access for code using those credentials. L1 does not make hostile modules sharing one process safe from credential theft. Arbitrary networking is technically constrained only when an L2 or L3 network policy does so.
+The consumer should not need to know which conforming mechanism was selected. Raw SQL is permitted against a box's own binding at L0 and L1. At L0 the ownership rule is conventional; at L1 provider-issued credentials enforce access for code using those credentials. L1 does not make hostile boxes sharing one process safe from credential theft. Arbitrary networking is technically constrained only when an L2 or L3 network policy does so.
 
 The initial Postgres provider should target L1 by default through binding-specific roles and privileges. Profile-specific negative tests and deployment validation provide evidence that controls are configured correctly; tests alone do not prove non-access.
 
 The runtime does not protect the system from a malicious or defective provider implementation. Providers and platform components enforcing a profile are trusted computing-base components. A provider that claims a profile without supplying its controls is defective.
 
-## Is a provider a module?
+## Is a provider a box?
 
-A provider is not itself a module, although both are packages.
+A provider is not itself a box, although both are packages.
 
-A provider can contain Rust libraries, tooling, generated code, deployment logic, or supporting services. If one of those services exposes a product capability, that service may itself be implemented as a module. That does not make the provider package and module package equivalent.
+A provider can contain Rust libraries, tooling, generated code, deployment logic, or supporting services. If one of those services exposes a product capability, that service may itself be implemented as a box. That does not make the provider package and box package equivalent.
 
-This distinction prevents technical provisioning concerns from being confused with the domain interfaces through which application modules collaborate.
+This distinction prevents technical provisioning concerns from being confused with the domain interfaces through which application boxes collaborate.
 
 ## Application composition packages
 
-An application composition package describes a deployable application assembled from modules and providers.
+An application composition package describes a deployable application assembled from boxes and providers.
 
 It can declare:
 
-- Which modules and any explicitly selected contract surfaces are included.
-- Which endpoints are enabled, within each module's declared maximum exposure.
+- Which boxes and any explicitly selected contract surfaces are included.
+- Which endpoints are enabled, within each box's declared maximum exposure.
 - Which trust zones exist and how internal routes are constrained to them.
 - Which transport bindings are enabled.
-- How module requirements are bound to providers.
+- How box requirements are bound to providers.
 - The minimum required isolation profile.
 - Which authentication realms are configured.
 - Application-level configuration.
 - Integration tests.
 - How the final binary, service, or deployment is built.
 
-For example, a customer web application composition might include identity, billing, and catalog modules; Postgres and Redis bindings; authentication realm configuration; and HTTP exposure rules.
+For example, a customer web application composition might include identity, billing, and catalog boxes; Postgres and Redis bindings; authentication realm configuration; and HTTP exposure rules.
 
-A composition package should contain almost no business logic. Meaningful logic that accumulates there should become another module. A monolithic deployment can have one composition containing many linked modules. Independently deployed services can each have a smaller composition package.
+A composition package should contain almost no business logic. Meaningful logic that accumulates there should become another box. A monolithic deployment can have one composition containing many linked boxes. Independently deployed services can each have a smaller composition package.
 
-Composition packages also give shared assembly artifacts a semantic owner. Changing which modules are deployed or how they are bound changes the composition package rather than editing the implementation of every included module.
+Composition packages also give shared assembly artifacts a semantic owner. Changing which boxes are deployed or how they are bound changes the composition package rather than editing the implementation of every included box.
 
 ## Deployment topology
 
-Modules remain deployment-neutral. The application composition decides whether a module is linked into a shared binary, exposed as a separately deployed service, or assembled as another process type such as a worker. This keeps deployment choices out of module business logic and allows the same module contract to participate in different application topologies.
+Boxes remain deployment-neutral. The application composition decides whether a box is linked into a shared binary, exposed as a separately deployed service, or assembled as another process type such as a worker. This keeps deployment choices out of box business logic and allows the same box contract to participate in different application topologies.
 
-Kubernetes is an important future deployment target for module-based applications, but it is not part of the foundation milestone. Kubernetes support should be expressed through composition and deployment tooling rather than built into individual modules. The same separation applies when deploying the software factory itself: running the factory on Kubernetes and deploying module-based applications to Kubernetes are distinct targets.
+Kubernetes is an important future deployment target for applications built with Boxology, but it is not part of the foundation milestone. Kubernetes support should be expressed through composition and deployment tooling rather than built into individual boxes. The same separation applies when deploying the software factory itself: running the factory on Kubernetes and deploying Boxology applications to Kubernetes are distinct targets.
 
 ## Workflow engines
 
 The discussion deliberately avoided making Temporal or another workflow engine a required runtime concept.
 
-A module can use a workflow engine as ordinary implementation code. If several modules later need consistent shared workflow infrastructure, a provider package can capture its provisioning, binding, worker, namespace, task-queue, testing, and operational conventions. That abstraction should be introduced because repeated use makes it valuable, not because the runtime assumes a particular workflow engine.
+A box can use a workflow engine as ordinary implementation code. If several boxes later need consistent shared workflow infrastructure, a provider package can capture its provisioning, binding, worker, namespace, task-queue, testing, and operational conventions. That abstraction should be introduced because repeated use makes it valuable, not because the runtime assumes a particular workflow engine.
 
 ## Matters not yet specified
 
 The discussion did not settle:
 
-- The concrete serialization syntax and implementation tooling for the common manifest contract.
+- The remaining field-level serialization details and implementation tooling for `boxology.toml`.
 - The exact lifecycle interface implemented by provider packages.
 - How provider bindings are represented across development, testing, and production environments.
 - Whether a binding can be switched without rebuilding a composition.

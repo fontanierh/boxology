@@ -1,12 +1,12 @@
 # Contract Evolution and Deprecation
 
-[Back to the white paper](../module-based-engineering-whitepaper.md)
+[Back to the white paper](../boxology-whitepaper.md)
 
 This document expands the compatibility, migration, and deprecation process discussed during the design interview.
 
 ## Compatibility goal
 
-Modules should normally evolve through backward-compatible changes. Consumers depend only on the generated contract and should not require simultaneous edits when the providing module's implementation changes.
+Boxes should normally evolve through backward-compatible changes. Consumers depend only on the generated contract and should not require simultaneous edits when the providing box's implementation changes.
 
 The deterministic language-neutral schema is the compatibility authority. The generator compares the submitted schema with the base revision and reports changes independently of Rust formatting, macro expansion, or binding-specific representation. Documentation-only changes receive their own classification rather than being mixed with semantic evolution. See [Canonical Capability Contract](09-capability-contract.md).
 
@@ -14,7 +14,7 @@ The system does not assume that compatibility can be preserved forever. Genuine 
 
 The central rule is:
 
-> A cross-module change is a coordinated migration composed of independently mergeable, single-package changes.
+> A cross-box change is a coordinated migration composed of independently mergeable, single-package changes.
 
 ## Contract identity, revision, and explicit versions
 
@@ -24,21 +24,21 @@ Three concepts are distinct:
 - A **contract revision** or fingerprint identifies one generated state so it can be compared with its base revision.
 - An **explicit public version** is a deliberately published surface such as `v1` or `v2`.
 
-Stable identities and comparable revisions are required for dependable analysis. Explicit public versions are optional. A module can continuously evolve one contract surface for its entire lifetime, as many public APIs do, provided it expands, migrates, deprecates, and contracts that surface safely.
+Stable identities and comparable revisions are required for dependable analysis. Explicit public versions are optional. A box can continuously evolve one contract surface for its entire lifetime, as many public APIs do, provided it expands, migrates, deprecates, and contracts that surface safely.
 
-The platform therefore does not require one crate, namespace, trait, or route per explicit version. A module may introduce parallel versions when unmanaged consumers, long support windows, or genuinely incompatible semantics make coexistence useful. That is a module and harness policy choice rather than the universal migration mechanism.
+The platform therefore does not require one crate, namespace, trait, or route per explicit version. A box may introduce parallel versions when unmanaged consumers, long support windows, or genuinely incompatible semantics make coexistence useful. That is a box and harness policy choice rather than the universal migration mechanism.
 
 ## Expand-migrate-contract
 
 The process discussed was:
 
-1. The providing module expands its existing surface with a compatible bridge while retaining the old behavior or shape.
+1. The providing box expands its existing surface with a compatible bridge while retaining the old behavior or shape.
 2. The factory identifies consumers affected by the intended contraction or tightening.
 3. It creates a migration task for every managed consumer.
 4. Every consumer changes in its own pull request.
 5. Completion updates a durable migration record.
 6. Static dependency analysis, deployment state, and runtime evidence determine whether old usage remains.
-7. When configured removal policy is satisfied, the factory creates a final task for the providing module to tighten or remove the deprecated surface.
+7. When configured removal policy is satisfied, the factory creates a final task for the providing box to tighten or remove the deprecated surface.
 
 The bridge and deprecated surface coexist during the migration. They do not need different public version labels. This staged coexistence is what preserves the one-package-per-pull-request invariant.
 
@@ -93,7 +93,7 @@ The exact storage schema and callback protocol were not designed.
 
 ## Finding consumers
 
-Managed Rust modules declare their imported contracts and issue calls through typed runtime capabilities. The factory reads those declarations to identify consumers.
+Managed Rust boxes declare their imported contracts and issue calls through typed runtime capabilities. The factory reads those declarations to identify consumers.
 
 Runtime telemetry provides a second signal. It can confirm actual use, find unexpected traffic, and show whether a deprecated method still receives calls.
 
@@ -103,24 +103,24 @@ Static and dynamic evidence have different roles:
 - Runtime telemetry shows observed use in deployed environments.
 - Neither alone proves that an unknown public consumer no longer exists.
 
-## Client-binding modules
+## Client-binding boxes
 
-A client binding is a thin managed module that imports a module contract and generates a language-native SDK.
+A client binding is a thin managed box that imports a box contract and generates a language-native SDK.
 
 For example:
 
 ```text
-Billing module
--> TypeScript binding module
+Billing box
+-> TypeScript binding box
 -> generated npm SDK
 -> web application
 ```
 
 Swift, Kotlin, and other bindings follow the same pattern. The binding remains inside the managed package and dependency system even though its generated output is consumed outside Rust.
 
-When a providing module changes a contract surface used by a binding module, the binding receives its own migration task and pull request. Client applications managed by the factory can then receive separate adoption tasks. If the providing module deliberately introduces a parallel public version, the same staged process applies to adopting it.
+When a providing box changes a contract surface used by a binding box, the binding receives its own migration task and pull request. Client applications managed by the factory can then receive separate adoption tasks. If the providing box deliberately introduces a parallel public version, the same staged process applies to adopting it.
 
-This preserves the rule that the providing module does not directly edit consumer source or generated SDK copies inside consumer modules.
+This preserves the rule that the providing box does not directly edit consumer source or generated SDK copies inside consumer boxes.
 
 ## Unknown public consumers
 
@@ -155,9 +155,9 @@ These findings become tasks or human questions through the same factory control 
 
 ## Complexity tradeoff
 
-This process makes a codebase-wide change more elaborate than editing several functions in one pull request. It can create temporary compatibility shapes, generated artifacts, tasks, and pull requests. Explicit parallel versions add further cost only when the module chooses them.
+This process makes a codebase-wide change more elaborate than editing several functions in one pull request. It can create temporary compatibility shapes, generated artifacts, tasks, and pull requests. Explicit parallel versions add further cost only when the box chooses them.
 
-That cost is intentional. The system assumes that agent productivity makes the extra mechanical work affordable. In return, each change has a constrained blast radius, every module remains independently mergeable, and consumers cannot be silently broken by an atomic cross-module patch.
+That cost is intentional. The system assumes that agent productivity makes the extra mechanical work affordable. In return, each change has a constrained blast radius, every box remains independently mergeable, and consumers cannot be silently broken by an atomic cross-box patch.
 
 ## Matters not yet specified
 
