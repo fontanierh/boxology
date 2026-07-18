@@ -213,7 +213,7 @@ The foundation `boxology check` baseline is:
 
 An intentional contract change is authored in Rust and followed by `boxology generate`; its generated diff and semantic classification are reviewed together. An accidental stale or hand-edited artifact fails `boxology check` with the regeneration command needed to repair it. The checker never hides an incompatible change merely because generated files match.
 
-The initializer emits a repository-owned GitHub Actions workflow that runs the same `boxology check --base <pull-request-base>` command on Linux. The lead runs `boxology check` before opening a pull request. The platform does not create branch-protection or required-check settings; the operator decides whether to make that visible GitHub check a merge requirement. There is no hidden factory-only validation layer.
+The initializer emits a repository-owned GitHub Actions workflow that runs the same `boxology check --base <pull-request-base>` command on Linux. Developers and the lead can run `boxology check` through their ordinary workflow. The platform does not create branch-protection or required-check settings; the operator decides whether to make that visible GitHub check a merge requirement. There is no hidden factory-only validation layer.
 
 Package quality commands are trusted repository code and run with the sandbox's full ambient access, as defined by the [foundation threat boundary](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
 
