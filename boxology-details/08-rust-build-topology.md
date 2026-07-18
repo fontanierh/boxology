@@ -185,6 +185,38 @@ composition             -> both implementations
 
 This does not make the live-invocation cycle automatically desirable. The graph-specific policy in [Boxes](01-boxes.md#dependency-cycles) still blocks a newly introduced live cycle by default and requires an explicit architectural exception with runtime safeguards. The build topology merely keeps Cargo from conflating an approved runtime relationship with an impossible build relationship.
 
+## Workspace operations and validation baseline
+
+Boxology exposes two foundation operations:
+
+```text
+boxology generate [--package <id>]
+boxology check [--base <git-revision>] [--format human|json]
+```
+
+`boxology generate` is the explicit mutating operation. Without selection it regenerates only packages whose declared generation inputs changed; `--package` also permits an owner to request regeneration of one package with the current workspace generator. It rewrites declared derived outputs, updates generator provenance, and reports the semantic contract classification. It never edits handwritten source.
+
+`boxology check` is the canonical non-mutating validation command used by developers, the lead, and generated CI. V1 always validates the complete workspace; package-scoped and impact-selected validation are later optimizations. It regenerates into temporary output and compares byte-for-byte rather than modifying the checkout. If `--base` is supplied, contract and ownership changes are classified against that revision. Local use defaults to the merge base with the configured main branch; CI passes the pull request's base revision explicitly.
+
+The command exits `0` when every check passes, `1` when repository validation fails, and `2` when invocation or configuration prevents validation from running. Human output is the default. `--format json` emits one versioned JSON document containing check identifiers, package identities, paths, diagnostics, contract classifications, and the final status.
+
+The foundation `boxology check` baseline is:
+
+1. Discover and validate every `boxology.toml`, ownership classification, package identity, Cargo crate role, declared import, and derived-output declaration.
+2. Recreate required generated contracts and schemas byte-for-byte with the workspace generator while leaving untouched historical artifacts on their recorded compatible generator provenance.
+3. Classify contract changes against the base revision and report incompatible tightening or removal even when harness policy later authorizes it.
+4. Validate the complete Cargo graph, forbidden implementation edges, feature and target-specific edges, and shared-lockfile rules.
+5. Run `cargo fmt --all --check`.
+6. Run `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+7. Run `cargo test --workspace --all-features`.
+8. Run the generated Hello project's in-process Rust and HTTP conformance tests, including the accepted HTTP wire contract.
+
+An intentional contract change is authored in Rust and followed by `boxology generate`; its generated diff and semantic classification are reviewed together. An accidental stale or hand-edited artifact fails `boxology check` with the regeneration command needed to repair it. The checker never hides an incompatible change merely because generated files match.
+
+The initializer emits a repository-owned GitHub Actions workflow that runs the same `boxology check --base <pull-request-base>` command on Linux. The lead runs `boxology check` before opening a pull request. The platform does not create branch-protection or required-check settings; the operator decides whether to make that visible GitHub check a merge requirement. There is no hidden factory-only validation layer.
+
+The supported foundation execution matrix is Linux for the factory and generated CI, with local command support on Linux and macOS. Other hosts are not claimed until they enter the tested matrix.
+
 ## Foundation milestone
 
 The generated Hello World project exercises the complete minimal topology:
@@ -193,7 +225,7 @@ The generated Hello World project exercises the complete minimal topology:
 2. The generator produces its contract crate, schema, typed handle, implementation-neutral dispatch interface, and implementation-local adapter.
 3. The composition invokes the capability through an in-process Rust binding.
 4. The same composition exposes the capability through HTTP from the same extracted contract.
-5. Regeneration and Cargo-edge checks run as mandatory platform validation.
+5. `boxology check` runs deterministic regeneration, Cargo-edge policy, the Rust baseline, and Rust/HTTP behavior as visible repository validation.
 
 This proves the boundary without requiring persistence, streaming, public version numbers, or a finalized remote execution model.
 
