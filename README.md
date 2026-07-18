@@ -1,6 +1,6 @@
 # Boxology
 
-Boxology is a system for building software as independent boxes and operating an autonomous software factory over them.
+Boxology is a platform for building software as independent boxes that humans define and agents implement. It works with any coding-agent harness. An autonomous, Boxology-based software factory is the project's committed flagship application — built on the platform, not inside it.
 
 Humans define box boundaries, typed interfaces, data models, and allowed connections. Agents implement and evolve the code hidden inside each box. A box can be replaced without requiring its consumers to understand its implementation as long as its contract remains compatible.
 

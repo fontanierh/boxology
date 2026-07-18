@@ -556,6 +556,18 @@ Review of the six MVP-spec blocker proposals caused the factory foundation to be
 
 The earlier durable-sandbox, Slack catch-up, and human-merge acceptance scenario remains part of the historical reasoning that led here, not a v0 product guarantee.
 
+## Follow-up: The platform and the factory are separate products
+
+The issue #1 resolution originally declared the platform and factory "one product, brand, and project." Issue #77 revisited that decision after the skill-only v0 pivot and the 2026-07-18 strategy review, and the maintainer accepted the separation.
+
+**Decision:** Boxology is the platform — the box model, runtime, generator, `boxology check`, installer, and harness-neutral skill. The autonomous software factory is not part of Boxology. It is the project's committed flagship application, built with Boxology and dogfooding it, and the vehicle for the safe-parallelism thesis.
+
+**Rationale:** the v0 scope demonstrated that Boxology works with any coding-agent harness; the strategy review concluded that agent orchestration will be commoditized while the structural substrate is the defensible bet. Making the factory customer number one of the platform is a cleaner test than a conjoined product: platform deficiencies surface as a customer's complaints.
+
+**Boundary:** Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge. The merge-discipline substrate (validation, classification, ownership and edge rules, protected-artifact identification) is platform; orchestration (roles, queues, gateways, coordination) is factory.
+
+**Guard:** the separation must not become another way for the factory to dissolve. The factory remains committed, governed by the issue #74 forcing commitment; only the product boundary moved. Historical passages describing "one product" retain the wording used when those decisions were made.
+
 ## Resulting documentation set
 
 The interview produced:

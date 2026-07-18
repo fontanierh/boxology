@@ -4,13 +4,15 @@
 
 This document expands the multi-agent coordination, task, merge, and continuous-analysis system discussed during the design interview.
 
+**Scope note:** the factory described here is not part of the Boxology platform. It is the design direction for the Boxology-based factory *application* — the platform's committed flagship consumer. Boxology defines what a safe change is; the factory decides who makes changes and when they merge. The separation decision is recorded in the [design interview](00-design-interview.md#follow-up-the-platform-and-the-factory-are-separate-products).
+
 ## Purpose
 
 The mature software factory is intended to coordinate development and maintenance of a modular system across many tasks and agents. The foundation begins as a portable skill used by one coding agent rather than assuming that a separate control plane, persistent session, or Boxology-owned harness already exists. The agent using that skill is the **lead agent**.
 
 The package boundary gives the factory a universal unit of ownership, analysis, review, and merge accountability. Boxes are the most common target, but providers, compositions, and platform packages can also own work. Agents can work concurrently because every submitted change has one accountable package and cannot modify another package's non-derived files.
 
-The factory and Boxology platform are delivered as one product while remaining separate applications internally. The factory is intended to become the first substantial application built with Boxology, following a progressive bootstrap in which early development does not depend on either system being complete.
+The factory is a separate application built with the Boxology platform rather than a component of it. It is intended to become the first substantial application built with Boxology, following a progressive bootstrap in which early development does not depend on either system being complete.
 
 An eventual shared factory substrate may supply mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the execution engine.
 
