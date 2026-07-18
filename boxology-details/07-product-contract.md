@@ -28,6 +28,8 @@ The system cannot depend on itself before it exists. Development therefore proce
 
 The goal is comprehensive dogfooding, not circular bootstrapping. A broken factory must remain repairable without needing that same factory to function.
 
+The transition from the single-lead bootstrap to a box-built factory is governed by a standing forcing commitment recorded in [issue #74](https://github.com/fontanierh/boxology/issues/74) and the [strategy review](10-strategy-review.md): it must arrive uncomfortably early rather than when it feels justified, and bootstrap-period friction is classified in advance as mechanical (the factory's future job) or semantic (evidence against the thesis), so relaxations of the discipline are recorded as data instead of rationalized.
+
 ## Primary v1 operator and operating envelope
 
 The primary v1 operator is an individual developer or very small Rust team starting a greenfield backend with a skill-compatible coding agent.

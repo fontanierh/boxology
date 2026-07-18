@@ -8,6 +8,8 @@ Box-and-arrow diagrams are often dismissed as architectural slideware because no
 
 This approach trades additional scaffolding and smaller pull requests for isolation, comprehensibility, and safe parallelism.
 
+The justification that ages best is oversight. Model capability grows, but human attention does not scale, and humans remain accountable for what merges. Box-scoped pull requests with machine-classified contract diffs are a trust interface: they keep every unit of agent work reviewable by the people responsible for it. The [strategy review](boxology-details/10-strategy-review.md) records this positioning, the thesis risks, and the self-hosting ladder.
+
 [Read the complete design interview and Q&A](boxology-details/00-design-interview.md).
 
 ## [Product](boxology-details/07-product-contract.md)
