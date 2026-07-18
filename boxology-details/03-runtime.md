@@ -178,6 +178,66 @@ The runtime can provide a generic development CLI capable of invoking any compat
 
 CLI is therefore useful but not mandatory. It is neither a special box type nor automatically a public compatibility surface.
 
+## Foundation HTTP binding
+
+The v1 HTTP binding is deliberately RPC-shaped. Every unary capability uses:
+
+```text
+POST /rpc/{box_id}/{capability_id}
+```
+
+Both identifiers come from the canonical contract and are encoded as individual percent-encoded path segments. V1 has no configurable REST verbs, resource paths, or transport-specific error annotations. A later handwritten REST adapter may translate into and out of the same typed capability, but it does not create a second public contract.
+
+Requests and responses use `application/json`. The composition default request-body limit is 1 MiB and may be lowered or raised explicitly. An oversized body returns `413`; an unsupported media type returns `415`; malformed JSON or a value rejected by contract validation returns `400` before invocation.
+
+The lossless JSON mapping is:
+
+- Strings and booleans use their JSON equivalents.
+- Integers through 32 bits and finite floating-point values use JSON numbers. Contract `f32` and `f64` values are finite-only at every capability boundary: a non-finite request value is invalid input, and a non-finite provider result is an invalid contract response.
+- `i64` and `u64` use decimal JSON strings so JavaScript clients cannot lose precision. Their use in ordinary API design is discouraged, but the binding remains lossless when they are required.
+- String-keyed maps use JSON objects. Other map-key types are not supported by this binding.
+- Bounded binary values use `{"base64":"..."}` with standard padded Base64. Streaming binary values are outside the unary foundation binding.
+- Every enum uses `{"tag":"variant","payload":...}`. A unit variant has `"payload":null`.
+
+Within an object:
+
+- `T` is required and rejects `null`.
+- `Option<T>` maps omission to `None` and rejects explicit `null`.
+- `Field<T>` maps omission to `Missing`, `null` to `Null`, and any valid value to `Value`.
+
+At the top level, `Option<T>` uses JSON `null` for `None`. Object fields use omission because an object can distinguish an absent field from a present field; a top-level request body must exist, so `null` is the canonical representation of top-level `None`. A top-level `Field<T>` is rejected during binding validation because an HTTP body cannot represent the distinction between a missing body and a deliberately missing contract value faithfully.
+
+Every valid response uses one of three envelopes. Their format belongs to this HTTP binding and evolves backward-compatibly with it; it is not negotiated per request and does not add a versioned URL. An incompatible future envelope is a distinct binding rather than a silent change to this one.
+
+```json
+{"result":{"value":"..."}}
+```
+
+```json
+{"error":{"kind":"domain","value":{"tag":"invalid_email","payload":{"reason":"..."}}}}
+```
+
+```json
+{"error":{"kind":"call","code":"invalid_request","message":"..."}}
+```
+
+Declared domain errors always return `422`; the structured error variant remains in the envelope. Server-observable invocation failures use:
+
+| Status | Meaning |
+| --- | --- |
+| `400` | Malformed JSON or contract validation failure. |
+| `404` | Unknown box or capability identity, with a diagnostic that distinguishes the two cases. |
+| `504` | Deadline exceeded. |
+| `503` | Bound target unavailable. |
+| `502` | Bound target returned an invalid contract response. |
+| `500` | Internal runtime failure. |
+
+Cancellation, disconnection, or transport failure that produces no valid HTTP response becomes a client-side `CallError`; it has no invented HTTP status.
+
+The binding carries remaining deadline budget in `Boxology-Timeout-Ms`, W3C trace context in `traceparent` and `tracestate`, and a declared idempotency key in `Idempotency-Key`. Missing headers mean composition-default deadline, a newly created trace, and no idempotency key respectively. The foundation transports the idempotency key into `CallContext`; it does not provide a deduplication store or imply retry-safe replay by itself. Client disconnection requests advisory cancellation of the in-flight capability. The anonymous Hello endpoint constructs anonymous caller context inside the binding; v1 does not trust caller-supplied identity headers, and authenticated caller propagation remains part of the later authentication design.
+
+Binding conformance tests must exercise routing, every supported value shape, missing/null/value behavior, the three response envelopes, status mapping, context propagation, request limits, and rejection of unsupported or lossy contracts.
+
 ## Streaming, events, and real-time behavior
 
 The contract model recognizes unary request-response, server streaming, client streaming, bidirectional streaming, and event subscriptions. The first end-to-end foundation milestone exercises unary request-response through Rust and HTTP only. The first full box-runtime release is expected to implement the additional shapes.
