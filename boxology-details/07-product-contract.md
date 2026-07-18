@@ -4,14 +4,21 @@
 
 This document separates the long-term product direction from the first falsifiable foundation milestone. It resolves the product-boundary questions without pretending that the eventual market, agent implementation, or deployment ecosystem is already known.
 
-## One product with two systems
+## The platform and the factory
 
-The product combines:
+Boxology, the product, is the platform:
 
-- A Rust Boxology platform for defining independently evolvable boxes.
-- A software-factory direction for changing systems built with that platform, beginning as a harness-neutral skill and growing into richer coordination later.
+- The box model and its documents.
+- The Rust runtime crates.
+- The deterministic contract generator and `boxology check`.
+- The installer CLI.
+- The harness-neutral skill that teaches any compatible coding agent to act as a lead.
 
-These are one product, brand, and project. They remain separate applications and packages internally. The Boxology platform reduces the amount of code and context an agent can affect at once. The factory makes the resulting increase in scaffolding, pull requests, and coordinated migrations practical.
+The autonomous software factory is deliberately **not** part of the Boxology product. It is the project's committed flagship application: built with Boxology, dogfooding it, and serving as the vehicle for the safe-parallelism thesis. The factory is customer number one of the platform, so platform deficiencies surface as a customer's complaints rather than internal compromises. Boxology works with any coding-agent harness — a property the v0 scope demonstrated rather than merely permitted.
+
+The boundary is: **Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge.** The merge-discipline substrate — validation, contract-change classification, ownership and edge rules, protected-artifact identification — is platform, because any factory consumes it. Orchestration — roles, queues, gateways, coordination — is factory.
+
+Separating the products must not become a way for the factory to dissolve: the factory remains this project's committed flagship application, governed by the forcing commitment in [issue #74](https://github.com/fontanierh/boxology/issues/74). Only the product boundary moved. The platform reduces the amount of code and context an agent can affect at once; the factory makes the resulting increase in scaffolding, pull requests, and coordinated migrations practical.
 
 The supported product journey combines both systems, but they are not fused technically. The Boxology runtime is delivered as a Rust dependency. V0 factory behavior is guidance used by the developer's existing coding agent, and only promises to describe work in repositories initialized by Boxology; arbitrary-repository migration is out of scope.
 

@@ -1,4 +1,4 @@
-# Boxology: Independent Software Boxes and Autonomous Factories
+# Boxology: Independent Software Boxes
 
 AI makes producing code increasingly cheap. The new bottleneck is safely coordinating many simultaneous changes.
 
@@ -14,7 +14,7 @@ The justification that ages best is oversight. Model capability grows, but human
 
 ## [Product](boxology-details/07-product-contract.md)
 
-The Boxology platform and software factory are one product, brand, and project, even though they remain separate applications and packages internally. The platform constrains the blast radius of changes; the factory makes the additional coordination and scaffolding economically practical.
+Boxology is the platform: the box model, runtime, contract generator, validation tooling, installer, and a harness-neutral skill. It works with any coding-agent harness. The autonomous software factory is not part of Boxology; it is the project's committed flagship application, built with Boxology, and the vehicle for the safe-parallelism thesis. The boundary is crisp: Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge. The platform constrains the blast radius of changes; a factory makes the additional coordination and scaffolding economically practical.
 
 Development bootstraps progressively. The Boxology foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
 
@@ -92,7 +92,7 @@ The generator always classifies the change. The configured harness decides wheth
 
 Client-binding boxes generate TypeScript, Swift, Kotlin, or other SDKs while keeping those consumers visible to the factory.
 
-## [Software Factory](boxology-details/05-software-factory.md)
+## [Software Factory](boxology-details/05-software-factory.md) — the flagship application
 
 A top-level lead coordinates the harness and interfaces with humans. Area leads maintain plans and publish prioritized tasks. Worker agents execute tasks independently.
 
