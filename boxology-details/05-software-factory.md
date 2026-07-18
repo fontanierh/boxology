@@ -22,7 +22,7 @@ The governance hierarchy below is a mature direction. The foundation-milestone f
 2. The lead handles the requested change itself.
 3. The lead, its harness, Slack bridge, repository checkout, worktree, and persisted harness state all run in one durable remote sandbox.
 4. It opens a GitHub pull request and reports the result in Slack.
-5. It stops at the pull request boundary. A human must review and merge.
+5. The shipped instructions stop at the pull request boundary and ask a human to review and merge.
 
 The foundation milestone has no separate factory service, required task or event ledger, task UI, GitHub Issues workflow, worker pool, area leads, reviewer agent, merger agent, or custom factory dashboard. Launching the factory means ensuring that the lead sandbox and the harness and bridge inside it are running. Additional roles and surfaces can be added progressively without replacing the stable human-facing lead.
 
@@ -132,11 +132,25 @@ Humans can push authoritative information into the harness at any time through t
 
 The lead can also initiate questions when area analysis, quality findings, implementation, or deprecation evidence requires judgment that the harness should not invent.
 
-Slack is the only first-class human integration in the foundation milestone. It should provide clear context and strong approval requests rather than relying on implicit authority. Other interfaces may be added later.
+Slack is the only first-class human integration in the foundation milestone. The lead should provide clear context when it asks for direction or approval, but the exchange remains ordinary conversation interpreted by the agent. Other interfaces may be added later.
 
 The foundation bridge catches up on requests still available in the configured channel history after downtime rather than relying only on live events. Slack retention and access policy bound how far it can recover. Before retrying any external effect whose outcome is uncertain, the lead inspects the current state in the system that owns the effect; this reduces repeated actions without promising exactly-once behavior.
 
-GitHub is the initial repository and pull-request surface, but there is no required GitHub App, bot workflow, Issues integration, or other first-class GitHub integration. The lead can use ordinary Git and GitHub credentials to push a branch and open a pull request, but it never merges autonomously. Dedicated identity and task-ledger integrations may be added when worker agents are introduced.
+GitHub is the initial repository and pull-request surface, but there is no required GitHub App, bot workflow, Issues integration, or other first-class GitHub integration. The shipped lead instructions use ordinary Git and GitHub credentials to push a branch and open a pull request, then wait for a human merge. Dedicated identity and task-ledger integrations may be added when worker agents are introduced.
+
+## Foundation authority model
+
+The foundation deliberately treats the lead as an agent operating with the authority available inside its sandbox, not as a process constrained by a separate authorization service.
+
+- Every human member of the configured Slack channel is authoritative in v1. Identity-specific roles and permissions are deferred.
+- Conflicting or ambiguous guidance has no deterministic newest-message, quorum, or priority algorithm. The lead follows its system prompt and project instructions, uses agent judgment, and asks humans when useful.
+- The lead may use every filesystem, process, network, Git, GitHub, Slack, or other capability made available inside the sandbox by the operator.
+- The default project instructions tell the lead to open a pull request and wait for human review. This is prompt policy, not a platform-enforced capability boundary. The user may edit `AGENTS.md`, the system prompt, or the supplied credentials and thereby change the lead's behavior and guarantees.
+- Slack approvals are ordinary conversation interpreted by the lead. V1 has no formal approval object, nonce, expiry, replay protection, separate approval store, capability matrix, immutable policy layer, or agent-controlled break-glass protocol.
+
+The human-merge workflow remains the shipped default and the foundation acceptance scenario. Boxology does not claim that it is unchangeable or that the runtime mechanically prevents a differently configured lead from merging or taking other actions its credentials permit.
+
+Formal roles, enforced authority policy, structured approvals, revocation, and break-glass behavior are deferred to [issue #66](https://github.com/fontanierh/boxology/issues/66). The later multi-agent coordination substrate remains tracked in [issue #57](https://github.com/fontanierh/boxology/issues/57).
 
 ## Remote execution and resumability
 
@@ -189,6 +203,6 @@ The discussion did not settle:
 - Whether area-lead reassessment is performed by the same model instance or a fresh worker.
 - The precise waiting, callback, retry, and cancellation protocols.
 - Human interfaces beyond the first Slack integration.
-- Which actions the top-level lead can perform without explicit human authorization.
+- The formal role and approval architecture beyond the permissive foundation model, tracked in [issue #66](https://github.com/fontanierh/boxology/issues/66).
 
 The durable task schema, worker claims, leases and fencing, multi-agent messaging, split-brain prevention, stronger audit or provenance records, and eventual coordination backend are explicitly deferred to [issue #57](https://github.com/fontanierh/boxology/issues/57). This is an accepted product-sequencing decision, not an incomplete foundation acceptance criterion: those mechanisms should be specified when the factory introduces the agent pool that needs them.
