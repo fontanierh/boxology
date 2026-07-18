@@ -21,3 +21,4 @@ The [product contract](boxology-details/07-product-contract.md) separates the lo
 - [Product contract and foundation milestone](boxology-details/07-product-contract.md)
 - [Rust build topology](boxology-details/08-rust-build-topology.md)
 - [Canonical capability contract](boxology-details/09-capability-contract.md)
+- [Strategy review and self-hosting ladder](boxology-details/10-strategy-review.md)
