@@ -50,7 +50,7 @@ owned = ["boxology.toml", "implementation/**", "tests/**"]
 
 `id` is a human-readable, workspace-unique, rename-stable slug matching `[a-z][a-z0-9-]*`. Directory names, Cargo package names, and an optional `display_name` may change without changing the identity. Full identity split, merge, transfer, and retirement semantics remain tracked in [issue #3](https://github.com/fontanierh/boxology/issues/3).
 
-`schema` identifies the manifest format. A checker must continue to read every older schema version it claims to support and must reject an unknown newer version rather than silently ignoring it. A format change that cannot be interpreted compatibly increments the schema value and requires an explicit workspace migration.
+`schema` identifies the manifest format. A checker must continue to read every older schema version it claims to support and must reject an unknown newer version rather than silently ignoring it. Within a known schema version, unknown keys are also rejected so misspelled ownership or policy declarations cannot silently disappear. A format change that cannot be interpreted compatibly increments the schema value and requires an explicit workspace migration.
 
 The common v1 fields encode:
 
@@ -90,6 +90,12 @@ outputs = ["generated/contract/**", "generated/schema.json"]
 ```
 
 The generator value is a logical workspace-tool identity, not a per-box version pin. The current workspace tool resolves the executable; generated outputs record its resolved version as provenance.
+
+Declared generation inputs are complete and fail closed. The generator must fail if it attempts to read semantic input outside the manifest's `inputs` patterns; otherwise byte reproducibility would not prove that the declared inputs determine the output.
+
+V1 imports the package's canonical contract and has no parallel-surface selector. If explicit long-lived surfaces later require one, it is added through a compatible manifest-schema extension after that contract model is specified rather than reserving a speculative field now.
+
+`[quality].commands` supplies package-specific entry points to `boxology check`, including generated-project conformance tests. These are trusted repository commands and execute with the lead sandbox's full ambient filesystem, environment, credential, process, and network access under the [foundation threat boundary](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
 
 The foundation crate-role vocabulary is `box-implementation`, `box-contract`, `composition`, and `platform`. The checker reads Cargo metadata and requires every Cargo package to match exactly one manifest `[[crates]]` entry by normalized manifest path and Cargo package name. A role cannot be inferred from a directory or crate-name suffix. Provider crate roles are added when the first provider enters the foundation rather than being guessed now.
 
