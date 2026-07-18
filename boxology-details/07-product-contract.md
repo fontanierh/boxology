@@ -82,18 +82,27 @@ The first release bundle contains:
 - A portable onboarding skill.
 - A deterministic installer CLI.
 - Rust box-runtime packages with Rust and HTTP bindings.
-- A portable factory sandbox image containing an agent harness and Slack bridge.
-- Bootstrap support for a managed durable-sandbox provider or a compatible container target with crash-consistent durable storage and restart behavior.
+- A portable factory container image containing the Hermes Agent reference harness and its native Slack gateway.
+- A tested Docker deployment recipe with crash-consistent durable storage and restart behavior.
 
-The agent harness may be an existing runner or an extremely small wrapper in this milestone. The bundle validates the sandbox lifecycle and product boundary, not the novelty of its internal agent loop.
+Hermes Agent is the v0 reference harness, not a permanent platform dependency. The bundle validates the sandbox lifecycle and product boundary, not the novelty of its internal agent loop.
 
 ## Initial factory deployment
 
-The MVP has one deployed object: the durable lead sandbox. It can be supplied by a managed sandbox provider or run from the project's portable container image on a compatible target.
+The primary tested v0 recipe is one Boxology factory container on a remotely reachable Linux machine running Docker. It uses a named or bind-mounted durable volume for both `~/.hermes` and the managed repository, and a restart policy such as `unless-stopped`. The container is the durable lead sandbox; there is no separate Boxology sandbox control plane.
 
-A self-hosted target must provide crash-consistent durable storage for the repository and harness state plus restart behavior for the bridge and harness. An ephemeral container can execute the image but does not satisfy the recovery guarantee. The exact managed provider, cloud, container host, and storage mechanism remain implementation choices.
+The image contains:
 
-This keeps the deployment portable across hosted sandbox systems, cloud virtual machines, personal hardware, and later Kubernetes targets without introducing a second control-plane service.
+- Hermes Agent as the replaceable reference harness.
+- Hermes's native Slack gateway using Socket Mode.
+- Boxology's default project instructions or skill.
+- The managed-repository checkout, dedicated worktree, and branch.
+
+Hermes persists session metadata and full message history in `~/.hermes/state.db`; that database and the repository are both on the durable volume. Process memory may be lost on restart. The required recovery contract is the persisted repository and harness state, not frozen RAM.
+
+No custom Boxology agent loop or separate Slack bridge is required in v0. The Hermes integration owns the already-required startup reconciliation of messages still available in configured Slack channel history; choosing the native gateway does not waive that acceptance criterion. The container uses the ordinary credentials and full networking supplied by the operator under the threat boundary in [Quality and Authority](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
+
+Docker is a reference deployment recipe, not part of the factory, harness, or Boxology architecture. Podman, managed sandboxes, personal hardware, cloud providers, and Kubernetes may later implement the same durable substrate contract. Those additional recipes and conformance work are tracked in [issue #67](https://github.com/fontanierh/boxology/issues/67).
 
 ## Generated Hello World project
 
@@ -128,7 +137,9 @@ A TypeScript application or another foreign-language component can therefore app
 
 Slack is the first factory UI. A developer talks to one persistent lead agent. There is no custom dashboard or task interface in the foundation milestone.
 
-The Slack bridge must not depend only on live event delivery. When it starts or resumes, it catches up on requests still available to it in the configured channel history that arrived while it was unavailable. This recovery is necessarily bounded by the history the Slack workspace retains and permits the bridge to read.
+The v0 reference implementation uses Hermes Agent's native Slack gateway in Socket Mode. It requires no public webhook endpoint and no separate Boxology bridge process.
+
+The Slack integration must not depend only on live event delivery. When it starts or resumes, it catches up on requests still available to it in the configured channel history that arrived while it was unavailable. This recovery is necessarily bounded by the history the Slack workspace retains and permits the integration to read.
 
 The lead agent handles the requested change itself:
 
@@ -166,7 +177,7 @@ The first configuration contains only the human-facing lead. GitHub Issues, work
 
 The onboarding skill runs in the developer's existing coding agent. Agents inside the factory run behind a factory-owned execution interface that preserves the lifecycle and behavioral guarantees in this contract.
 
-The first implementation may wrap an existing runner, call model APIs directly, or use a bare-bones custom loop. The choice must not leak into the managed project contract. Model providers, tool protocols, memory, and the eventual agent architecture remain open design questions.
+The v0 reference implementation runs Hermes Agent directly. Hermes remains behind the factory execution boundary rather than becoming part of the managed project contract or Boxology architecture. Later implementations may wrap another runner, call model APIs directly, or use a custom loop without changing a managed repository's box contracts. Model providers, tool protocols, memory, and the eventual agent architecture remain open design questions.
 
 ## Isolation, suspension, and recovery
 
@@ -202,8 +213,8 @@ The foundation milestone is successful when this complete scenario works:
 1. A developer starts from a greenfield repository and invokes the onboarding skill through a compatible coding agent.
 2. The installer creates the database-free Rust Hello World project.
 3. The capability works through both an in-process Rust call and HTTP.
-4. The onboarding agent provisions or connects one durable lead sandbox through a managed provider or a compatible persistent container target.
-5. The factory image or equivalent package is installed there; Slack is connected; ordinary repository credentials are supplied; and the harness is started.
+4. The onboarding agent provisions or connects a remotely reachable Docker host and starts the persistent factory container with durable Hermes and repository storage plus automatic restart.
+5. Hermes Agent's Slack Socket Mode gateway is connected; ordinary repository credentials are supplied; and the reference harness is started.
 6. The developer asks the lead agent in Slack to add the backward-compatible `greet(name)` capability, for which `greet("Ada")` returns `Hello, Ada!`.
 7. The lead performs the change inside that sandbox in a dedicated worktree and branch.
 8. The resulting change touches no foreign package source, contains only permitted deterministic artifacts outside the Hello box, and behaves consistently through Rust and HTTP.
@@ -249,8 +260,8 @@ Brownfield adoption should be reconsidered only after the greenfield milestones 
 
 The product boundary can be fixed while these implementation questions remain open:
 
-- The factory's eventual agent loop, models, providers, tools, and memory beyond the minimal execution engine.
-- The first managed sandbox provider and the exact container storage, restart, and suspension recipes.
+- The factory's eventual agent loop, models, providers, tools, and memory beyond the Hermes reference harness.
+- Additional sandbox substrates and deployment recipes beyond the tested Docker reference, tracked in [issue #67](https://github.com/fontanierh/boxology/issues/67).
 - Whether an optional lead-authored checkpoint should be standardized and where it should live.
 - The portable skill's distribution and host-specific installation wrappers.
 - Authentication and authorization for Slack, repository credentials, and factory access.
