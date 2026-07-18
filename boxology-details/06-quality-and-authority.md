@@ -73,17 +73,38 @@ Provider conformance tests should attempt cross-binding access and validate the 
 
 The runtime does not sandbox a defective provider into correctness. A provider that violates its stated behavior is considered broken.
 
-Runtime isolation profiles govern behavior of code that reaches a deployment. Agent authorship, prompt injection, CI, credential, and supply-chain risks are separate control-plane threats. Review and protected checks are pre-merge defenses, not substitutes for runtime isolation; their complete threat model remains unresolved.
+Runtime isolation profiles govern behavior of code that reaches a deployment. Agent authorship, CI, credential, and supply-chain risks are separate control-plane threats. Review and protected checks are pre-merge defenses, not substitutes for runtime isolation; the foundation boundary for those threats is defined below.
+
+## Foundation lead-sandbox threat boundary
+
+The foundation treats the environment in which the selected lead harness runs like an ordinary coding-agent workstation. Whatever isolation that harness or its operator supplies is the only hard containment boundary available; Boxology supplies no sandbox, nested credential-free executor, or additional containment for repository-controlled builds, tests, scripts, dependencies, or generated code.
+
+Inside that boundary:
+
+- The managed repository, including its code, project instructions, issues, pull requests, reviews, and comments, is trusted and may intentionally steer the lead. Boxology does not classify those instructions by author, require a private repository, align repository authors with a separate user allowlist, or mechanically distinguish an outside contributor. The lead interprets repository context using the same judgment it normally applies while working in code.
+- Third-party dependency source, build output, tool output, and unrelated external material are data rather than authoritative project instructions. The coding agent is responsible for interpreting them accordingly; v1 adds no mechanical prompt-injection classifier.
+- The lead, selected harness and gateway, and executed repository code share every filesystem path, environment variable, process, credential, and network capability the operator makes available. Running `cargo test`, a package quality command, or a build script therefore has the same ambient access as running it directly from that coding agent.
+- Full outbound networking is available. V1 does not provide an egress allowlist or proxy.
+
+Boxology neither grants nor withholds host files, unrelated volumes, container control, or infrastructure administration. If the chosen harness receives them, they are inside the effective trusted boundary.
+
+The shipped guidance recommends least privilege but accepts the credentials the operator supplies and does not validate or reject the operator's security posture. For a GitHub-managed project, the practical recommended setup is single-repository access including contents, pull requests, and GitHub Actions workflow read/write so the lead can create, modify, and run repository CI. Operators may deliberately grant either narrower or broader authority. V1 also provides no mechanical secret redaction, data-loss prevention, credential broker, or just-in-time credential substitution. Safe use of available credentials is the agent's responsibility.
+
+Boxology releases and dependencies use ordinary GitHub and package-registry trust. V1 does not add a signing or attestation system.
+
+Compromise response is human-operated: stop the selected harness or destroy its environment, revoke supplied credentials, inspect affected external systems, and rebuild from trusted software and repository state. The MVP makes no claim that it can contain a malicious build script or prevent code in the lead environment from exfiltrating an available credential, so it does not add acceptance tests that pretend otherwise.
+
+Mediated egress, just-in-time credentials, mechanical redaction, automated containment, and stronger release verification are explicitly deferred to [issue #65](https://github.com/fontanierh/boxology/issues/65). Multi-agent and per-role security remains part of the later coordination milestone in [issue #57](https://github.com/fontanierh/boxology/issues/57).
 
 ## Protecting quality policy
 
 An implementation agent may need to change tests or CI, but allowing it to silently weaken the checks that judge its own work would undermine the merge guarantee.
 
-The agreed default was:
+The agreed default guidance was:
 
 > CI and quality-policy files are protected control-plane artifacts. Changing them requires human approval by default.
 
-GitHub checks, branch protection, and review ownership can provide the initial enforcement mechanism. The harness can integrate with those systems instead of immediately rebuilding them.
+In the foundation, "protected" means that Boxology identifies these artifacts, the shipped skill tells the lead to flag their changes for human review, and `boxology check` evaluates the base revision's policy rather than letting a candidate authorize itself. Boxology does not enforce approval or configure branch protection. Operators can add GitHub required checks, branch protection, review ownership, or harness policy when they want a machine-enforced boundary. The lead is still permitted to create, modify, and run GitHub Actions when its supplied credentials allow it.
 
 Teams may deliberately choose a more permissive or highly autonomous policy. The platform should make the safer configuration easy and provide consistent defaults, but it should not impose one universal risk posture on every user.
 
@@ -91,13 +112,9 @@ Even in a permissive configuration, a policy downgrade should be explicit and au
 
 ## Top-level authority
 
-Humans interact with the factory through a top-level lead agent. Humans can provide authoritative guidance, reorganize areas, reprioritize work, resolve ambiguity, and approve sensitive decisions.
+The coding agent using the Boxology skill is the lead agent. It receives authoritative user guidance through whatever interface its selected harness or gateway provides. Boxology defines no Slack channel, user allowlist, role system, or human-identity protocol in v0; access control and transport security belong to the harness and its operator. Any instruction that harness presents as an authorized user message is authoritative.
 
-The lead can surface structured approval requests when analysis or implementation reaches a decision requiring human authority. The desired interface should make the requested action, evidence, consequences, and scope clear.
-
-The top-level lead controls the harness. That does not automatically mean it can bypass merge checks, change external systems, or perform other sensitive actions without the approval required by policy.
-
-Human guidance and approvals should be recorded so later agents can distinguish authoritative decisions from ordinary agent suggestions.
+The lead uses every capability supplied to it and follows its system prompt, project instructions, and agent judgment. The skill can ask it to explain sensitive actions and seek human review, but v0 has no structured approval protocol or platform-enforced authority ceiling.
 
 ## Deprecation authority
 
@@ -115,10 +132,9 @@ Its findings create tasks or human questions. It does not silently rewrite unrel
 
 The discussion did not settle:
 
-- The required baseline quality checks shipped by the platform.
 - The exact policy-file ownership and approval mechanism.
 - Risk tiers for automated versus human-approved merges.
 - How AI reviewer independence and disagreement are handled.
 - How evidence and approvals are represented in merge records.
 - Whether changing tests and implementation in one pull request needs special treatment beyond protected quality files.
-- The exact capabilities and hard limits of the top-level lead.
+- Formal roles, capabilities, and hard limits beyond the permissive skill-only foundation, tracked in [issue #66](https://github.com/fontanierh/boxology/issues/66).
