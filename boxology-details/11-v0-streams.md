@@ -20,7 +20,7 @@ The deterministic pre-Cargo generator: parsing annotated implementation methods 
 
 ## S3 — HTTP binding
 
-The v1 HTTP transport, implemented against S1's assembly API: `POST /rpc/{box_id}/{capability_id}` routing, the lossless JSON mapping, the three response envelopes, the status mapping, context headers (`Boxology-Timeout-Ms`, `traceparent`/`tracestate`, `Idempotency-Key`), request limits, advisory cancellation on disconnect, and the binding-conformance test suite. Normative inputs: the Foundation HTTP binding section of [Runtime](03-runtime.md). Depends on S1 and S2.
+The v1 HTTP transport, implemented against S1's assembly API: `POST /rpc/{box_id}/{capability_id}` routing, the lossless JSON mapping, the three response envelopes, the status mapping, context headers (`Boxology-Timeout-Ms`, `traceparent`/`tracestate`, `Idempotency-Key`), request limits, advisory cancellation on disconnect, and the binding-conformance test suite. Normative inputs: the Foundation HTTP binding section of [Runtime](03-runtime.md). Depends on S1 and S2. Spec: [S3 — HTTP Binding](../specs/s3-http-binding.md).
 
 ## S4 — Contract-change classification
 
