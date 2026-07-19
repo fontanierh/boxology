@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 mod budget;
+mod deny;
 mod links;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
             budget::run(&root(), base)
         }
         [command] if command == "links" => run_links(),
+        [command] if command == "deny" => deny::run(&root()),
         [command] if command == "test" => run_test(),
         _ => {
             usage();
@@ -42,7 +44,7 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask links\n       cargo xtask test"
+        "usage: cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask links\n       cargo xtask test"
     );
 }
 
@@ -79,6 +81,7 @@ fn run_ci(base: Option<&str>) -> u8 {
         ("doc", run_doc()),
         ("whitespace", check_tracked_whitespace()),
         ("links", links::check(&root())),
+        ("deny", deny::run(&root()) == 0),
     ];
     for &(name, passed) in &checks {
         println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
