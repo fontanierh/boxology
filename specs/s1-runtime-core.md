@@ -1,168 +1,177 @@
 # S1 Spec — Runtime Core and Composition Assembly
 
-[Stream definition](../boxology-details/11-v0-streams.md#s1--runtime-core-and-composition-assembly) · Status: **proposed**
+[Stream definition](../boxology-details/11-v0-streams.md#s1--runtime-core-and-composition-assembly) · Status: **revised, awaiting re-review** (first review addressed; cross-stream contract in issue #85)
 
-S1 builds the kernel crates: the contract-type model, the call context, the error model, the handle machinery, the composition assembly API, and the in-process binding. This is the definitionally non-box layer — everything the generator will later emit compiles against it. Normative input: [Canonical Capability Contract](../boxology-details/09-capability-contract.md); this spec makes implementation decisions, it does not reopen that contract.
+S1 builds the kernel crates: the contract-type model, the descriptor ABI, the call context, the error model, the handle machinery, the composition assembly API, and the in-process binding. This is the definitionally non-box layer — everything the generator will later emit compiles against it. Normative input: [Canonical Capability Contract](../boxology-details/09-capability-contract.md); this spec makes implementation decisions, it does not reopen that contract.
 
 ## Purpose
 
-Every later stream consumes S1: generated contract crates depend on its type model, the generator emits code against its traits, bindings implement its assembly API, and the classification stream trusts that its presence and error semantics are what the schema says they are. S1's job is to make those semantics *executable and conformance-tested* so that downstream streams inherit tested behavior, not prose.
+Every later stream consumes S1. Its job is to make the merged semantics *executable and conformance-tested*, and — per the cross-stream repair in issue #85 — to own the **descriptor ABI**: the generated, runtime-consumable description of a box's contract that assembly validation, wire decoding, and conformance checking all require. S1 defines the descriptor types; S2 generates their values; S3 decodes against them.
 
-S1 has a second, less obvious deliverable: **hand-written fixture boxes in exactly the shape the generator will later emit.** Since no generator exists yet, S1's integration tests are written against hand-authored "generated-style" contract crates. These fixtures then become S2's golden targets — the generator is correct when it byte-emits what S1 wrote by hand. This inverts the usual codegen risk: the emitted shape is designed, reviewed, and tested as ordinary code first, then mechanized.
+S1's second deliverable is the fixture suite: hand-written crates in exactly the shape S2 must later emit, which become S2's golden targets (fixture protocol in D10).
 
 ## Non-goals
 
-- No authentication, realms, delegation, or authorization semantics — `CallContext` carries a minimal caller slot whose real design is post-v0 (#8/#9).
-- No streaming, event, or session shapes — the type model reserves nothing for them beyond what the schema needs; their runtime types arrive with the full-runtime release (#11).
+- No authentication, realms, delegation, or authorization semantics — `Caller` is a placeholder pending #8/#9.
+- No streaming/event/session runtime types; descriptors carry the shape field, always `Unary` in v0.
 - No remote transports (S3), no telemetry export, no providers, no generic CLI.
-- No public-API stability promise: v0 crates are `0.x` and consumed from source; API churn during v0 is expected and cheap.
+- No public-API stability promise: v0 crates are `0.x`, consumed from source.
+- No `Keyed` idempotency support: descriptors admit `None | Inherent` only; `Keyed` is rejected at generation (S2) because no deduplication implementation exists to honor it — carrying the declaration unenforced would be a false promise.
+- No validation/default enforcement: v0 rejects `default`/`min`/`max`/validation annotations at generation with "not supported in v0" diagnostics (S2), rather than S1 carrying unenforced slots. The canonical contract remains the target; the v0 subset excludes it honestly.
 
 ## Decisions
 
-### D1 — Two crates: `boxology-contract` and `boxology-runtime`
+### D1 — Two crates; the invocation ABI lives in `boxology-contract`
 
-- **`boxology-contract`** — the pure type model: `ContractValue`, `ContractType`, `ContractError`, `Field<T>`, `Secret<T>`, `Blob`, presence/validation machinery. No async, no I/O, minimal dependencies. This is what *generated contract crates* depend on, so it must stay lightweight: a consumer compiling against a contract crate should not pull in an HTTP stack or an executor.
-- **`boxology-runtime`** — invocation and assembly: `CallContext`, `CallError`, cancellation, the erased dispatch layer, the composition builder and validation, the in-process binding. Implementation crates and compositions depend on it; contract crates do not.
+- **`boxology-contract`** — everything generated code and consumers compile against: the value model (`ContractValue`), `ContractType`/`ContractError`, `Field<T>`, `Secret<T>`, `Blob`, `OpaquePayload`, the **descriptor types** (D5), and the **invocation ABI** — `CallContext`, `CallError<E>`, `Deadline`, `CancelToken`, `TraceContext`, and the erased dispatch trait. Resolves the first review's blocking finding: generated contract crates define handles that take `CallContext` and return `CallError`, so those types must live in the one crate generated code depends on. A third invocation-ABI crate was considered and rejected as speculative; this crate stays free of I/O, servers, and assembly, and its one async-adjacent dependency is `tokio-util` for `CancellationToken` (recorded, challengeable, one wrapped type to replace).
+- **`boxology-runtime`** — assembly and execution: the composition builder, import resolution and exposure operations, validation, the in-process binding, the transport-binding trait. Compositions and transports depend on it; generated contract crates never do.
 
-The dependency direction (`runtime → contract`, never the reverse) mirrors the box edge rules at the platform layer and keeps the contract crate compile-time cheap.
+Generated contract crates depend on `boxology-contract` **only** (plus explicitly permitted foreign contract crates for public type reuse — none in v0; see the S2 spec).
 
-### D2 — `ContractValue` is the semantic intermediate representation
+### D2 — `ContractValue`: invariant-bearing, not a public enum
 
-Contract types encode to and decode from a boxology-owned value tree rather than implementing serde directly:
+The semantic intermediate representation is an opaque struct with a private representation, **fallible constructors, and read-only accessors/visitors** — not a public enum. Illegal states are unrepresentable by construction: non-finite floats are rejected at `ContractValue::f64(x)`, duplicate object keys at insertion, and `Missing` exists only as a field-slot state inside object construction, never as a free value. The first draft's public enum could not carry these invariants; S3's codec relies on them, so they are structural.
 
-```rust
-enum ContractValue {
-    Null,
-    Bool(bool),
-    I64(i64), U64(u64), F64(f64),   // finite only; non-finite is rejected at construction
-    String(String),
-    Bytes(Vec<u8>),
-    List(Vec<ContractValue>),
-    Object(Vec<(String, ContractValue)>),   // ordered, duplicate keys rejected
-    Missing,                                 // presence marker, legal only as an object field
-}
+Value kinds: null, bool, i64, u64, f64 (finite), string, bytes, list, object (ordered fields with per-field presence), plus the field-slot states. Encode (`typed → ContractValue`) is infallible for well-typed values; decode (`ContractValue → typed`) is fallible and strict.
+
+### D3 — Decoding is descriptor-guided and role-aware
+
+A schema-free syntax mapping is not invertible (issue #85, item 1): `"42"` on a wire is a string or a decimal-encoded `u64` only the expected type can decide; strict-input versus tolerant-output depends on direction. Therefore the layering is:
+
+```text
+wire syntax  ←→  ContractValue        (S3: descriptor-guided, role-aware)
+ContractValue ←→ typed Rust values    (S1: generated ContractType impls, strict)
 ```
 
-Rationale: the wire rules are bespoke — `u64` as decimal strings on the wire, adjacent enum tagging, the `Missing`/`Null`/`Value` tri-state, reject-unknown-input-fields, preserve-unknown-variants-as-opaque-payloads. Pushing those rules into per-binding serde impls would scatter the single most conformance-critical logic across every transport. With an IR: `ContractType` implements the *semantics* once (`encode → ContractValue`, `decode ← ContractValue` with strictness rules); each binding implements only a syntax mapping (`ContractValue ↔ JSON bytes`), and the S1 conformance grid tests semantics independently of any wire. Serde interop is explicitly a non-goal for boundary types in v0.
+`boxology-contract` defines `DecodeRole { ProviderInput, ConsumerOutput }` and the descriptor-walking validation used at the `ContractValue` layer: `ProviderInput` rejects unknown fields and unknown variants; `ConsumerOutput` ignores unknown fields and preserves unknown variants as `OpaquePayload`. Bindings own only syntax; every semantic judgment happens here, once.
 
-`ContractType` is **sealed against handwritten implementations** (private supertrait in a hidden module): the merged contract says a handwritten impl that can misrepresent the wire is not supported API, and sealing makes that mechanical. Platform types and generated types implement it; nothing else can.
+### D4 — Opaque payloads are actually opaque
 
-### D3 — The presence grid is the conformance core
+Unknown-variant payloads use `OpaquePayload`: private storage, redacted `Debug` (`OpaquePayload(..)`), no accessor that yields the raw value except explicit `reveal()` (documented as sensitive) and `forward()` (re-encoding for pass-through). Leakage tests assert the redaction in `Debug`, `Display`-absence, and diagnostics paths.
 
-The decode rules for object fields form a fixed grid, implemented once in `boxology-contract` and tested exhaustively:
+### D5 — The descriptor ABI
 
-| Declared | absent | `Null` | value |
-| --- | --- | --- | --- |
-| `T` | error: required | error: required non-null | `T` |
-| `Option<T>` | `None` | error: explicit null not accepted | `Some(T)` |
-| `Field<T>` | `Missing` | `Null` | `Value(T)` |
+`boxology-contract` defines immutable descriptor types; S2 generates `static` values in each contract crate; S1/S3 consume them:
 
-Top-level (non-field) positions: `Option<T>` maps `Null` ↔ `None`; `Field<T>` is rejected at generation time, so the runtime treats a top-level `Missing` as a contract violation. Generated output enums and errors carry `Unknown { tag: String, payload: ContractValue }`; the payload is treated as opaque and sensitive (never logged, never re-inspected) per the merged decoding rules. Every cell of this grid, both directions, is a table test; S3's wire suite later reuses the same cases at the JSON layer.
+- **`TypeDescriptor`** — the runtime type graph: scalars with width, string, blob, secret-wrapped, list, string-keyed map, struct (fields: name, presence kind `Required | Optional | TriState`, type, sensitivity), enum (variants: name, payload type), error enums. Drives role-aware decoding and conformance.
+- **`CapabilityDescriptor`** — capability local name, qualified id, input/output/error `TypeDescriptor`s, interaction shape (`Unary`), maximum exposure, idempotency (`None | Inherent`), documentation presence.
+- **`ImportDescriptor`** — the imported box id, contract revision expectation, and the imported capability set.
+- **`BoxDescriptor`** — box id, capability descriptors, import descriptors, contract revision fingerprint.
 
-### D4 — Error model
+Descriptors are plain data (`'static`, no closures), so they are also emitted into fixtures by hand and compared structurally in tests.
+
+### D6 — Error model
+
+`ContractError` is a marker + tag-access trait on generated error enums. `boxology-contract` defines:
 
 ```rust
-// boxology-contract
-trait ContractError: ContractType { /* marker + tag access */ }
-
-// boxology-runtime
 #[non_exhaustive]
-enum CallError<E> {
-    Domain(E),                     // declared, expected outcome
+pub enum CallError<E> {
+    Domain(E),
     Deadline,
     Cancelled,
-    Unavailable { detail },        // bound target unreachable
-    ContractViolation { detail },  // input/value rejected before or at the boundary
-    InvalidResponse { detail },    // target returned something the contract cannot accept
-    Internal { detail },
+    Unavailable(Detail),
+    ContractViolation(Detail),   // caller-side value rejected before/at the boundary
+    InvalidResponse(Detail),     // provider output the contract cannot accept
+    Internal(Detail),
 }
 ```
 
-Handles return `Result<Output, CallError<DomainError>>`. `CallError` is `#[non_exhaustive]`: it is a platform type whose variants may grow (it is not a contract enum and does not use the `Unknown` mechanism). The in-process binding constructs only `Domain`, `Deadline`, `Cancelled`, `ContractViolation`, and `Internal`; `Unavailable`/`InvalidResponse` exist for remote bindings but the *type* is shared — the remote-shaped-everywhere decision, realized.
+The erased layer's error is defined concretely: `ErasedCallError` carries either `Domain { error_tag: String, payload: ContractValue }` (typed handles decode it to `E` via the error `TypeDescriptor`) or one of the invocation classes with `Detail`. **The in-process binding can produce `InvalidResponse`** — a typed implementation returning output that fails contract encoding (or a domain error that fails encoding) is an invalid provider response wherever it runs; the first draft's claim otherwise is withdrawn. Caller-input violations (`ContractViolation`) are tested separately from provider-output violations (`InvalidResponse`), with no invocation occurring in the former case.
 
-### D5 — `CallContext`
+### D7 — `CallContext` and explicit child derivation
+
+Fields: `caller: Caller` (`Anonymous | System(&'static str)` placeholder), `deadline: Option<Deadline>` (absolute; accessor yields remaining budget), `cancellation: CancelToken`, `trace: TraceContext` (opaque W3C strings, carried not interpreted), `idempotency_key: Option<IdempotencyKey>` (transported, never honored in v0 — documented on the accessor).
+
+**Propagation is explicit, not automatic.** The first draft's "transitive propagation is automatic" is replaced by an API: `CallContext::child()` preserves deadline, trace continuity, and caller; derives a child cancellation token (parent cancels child, not vice versa); and **drops the idempotency key** — a key is an operation-scoped decision, never blindly inherited. Constructing a fresh context or a child is the caller's visible choice; there is no ambient state.
+
+### D8 — Erased dispatch is object-safe; handles are generated sugar
 
 ```rust
-struct CallContext {
-    caller: Caller,             // v0: Anonymous | System(&'static str); real principal model is post-v0
-    deadline: Option<Deadline>, // absolute instant; accessor returns remaining budget
-    cancellation: CancelToken,
-    trace: TraceContext,        // opaque W3C traceparent/tracestate strings in v0
-    idempotency_key: Option<IdempotencyKey>,
+pub trait ErasedTarget: Send + Sync {
+    fn call<'a>(&'a self, capability: &'a CapabilityId, ctx: CallContext, input: ContractValue)
+        -> Pin<Box<dyn Future<Output = Result<ContractValue, ErasedCallError>> + Send + 'a>>;
 }
 ```
 
-- Constructed by bindings or test code via a builder; there is no ambient/global context — explicitness is the merged design.
-- **Deadline semantics:** stored absolute, exposed as remaining budget (`context.remaining()`); child calls inherit the same deadline by default (transitive propagation is automatic because the instant is shared). No deadline means the composition default applies at the binding, not in core.
-- **Cancellation is advisory:** observing it is the implementation's choice; the runtime never kills work. `CancelToken` is a thin wrapper over `tokio_util::sync::CancellationToken` (see D8).
-- **Trace context is carried, not interpreted:** v0 stores and propagates the header strings; no span API, no exporter. This keeps the #29 observability surface open without blocking on it.
-- **The idempotency key is transported, never honored:** no dedup exists in v0; the accessor's documentation says so, preventing the false-promise failure mode flagged in review.
+Boxed-future signature because native `async fn` in traits is not dyn-compatible; this is the ABI, stated exactly. Generated handles wrap `Arc<dyn ErasedTarget>` plus descriptor-guided encode/decode. The `ContractValue`-level calling surface is `#[doc(hidden)]`-public for bindings, tests, and fixtures; box code uses typed handles only (a checker rule, not a compiler claim — see D9).
 
-### D6 — Handle machinery and erased dispatch
+### D9 — “Supported API” is enforced by generation and checking, not by Rust privacy
 
-The runtime defines one erased call shape; everything typed is generated sugar over it:
+The first draft claimed a sealed `ContractType` with a compile-fail test. That is impossible: Rust privacy cannot admit sibling generated crates while rejecting handwritten ones. Withdrawn and replaced with the feasible boundary: `ContractType` is a public trait; a handwritten impl compiles, **but can never become part of a managed contract**, because contracts exist only via generation — the schema, descriptors, and contract crate are derived outputs whose byte-reproduction and ownership checks (S5) reject hand-edited or hand-added content. The acceptance criterion becomes a checker-level test, not a compile-fail test.
 
-```rust
-// what a dispatch target implements (contract crates define typed dispatch
-// traits; generated adapters erase into this):
-async fn call(&self, capability: CapabilityId, ctx: CallContext, input: ContractValue)
-    -> Result<ContractValue, ErasedCallError>;
-```
+### D10 — Composition assembly: imports and exposures are different operations
 
-Generated handle types (`CustomerClient`) wrap an `Arc<dyn ErasedTarget>` plus the capability's encode/decode glue: encode input → erased call → decode output/domain error. The typed handle is the *only* public calling surface; `ContractValue`-level calling is `#[doc(hidden)]` (bindings and tests need it; box code must not). The dispatch inversion from the build topology holds: the contract crate defines the typed dispatch trait, the implementation's generated adapter implements it, the composition erases and wires.
-
-### D7 — Composition assembly API
-
-`boxology-runtime` owns assembly:
+The first draft's single `.bind()` could not represent the merged Hello composition (which binds `greet` both in-process and over HTTP) and conflated two operations with different cardinalities. Corrected API:
 
 ```text
 CompositionBuilder
-  .register(box_id, erased_dispatch)        // from the impl's generated adapter
-  .bind(box_id, capability_id, Binding)     // InProcess | transport-provided
-  .validate()  -> ValidationReport | errors
-  .start()     -> Composition (typed handle source, transport attach points)
+  .register(BoxDescriptor, Arc<dyn ErasedTarget>)          // implementation joins the composition
+  .resolve_import(consumer_box, import_id, ImportTarget)   // exactly one per declared import slot
+  .expose(provider_box, capability_id, Exposure)           // zero or more per capability
+  .validate() -> ValidationReport | structured errors
+  .start()    -> Composition
 ```
 
-Validation, before any traffic: every declared import of every registered box has exactly one binding (missing and duplicate are errors); every binding's capability exists in the target's contract; every binding's declared exposure does not exceed the capability's declared maximum, over the fixed lattice `code-only < internal < external`; binding conformance hooks let a transport reject a capability it cannot represent (the S3 entry point). Reports are structured (machine-readable), because `boxology check` and the installer's generated composition both consume this validation. Transports plug in through a `TransportBinding` trait owned here — S3 implements it; S1 ships only `InProcess`.
+- **Registration carries the descriptor**, giving validation everything it needs (capabilities, imports, exposure maxima, shapes, idempotency); an erased target alone reveals nothing.
+- **Import resolution** (consumer side): every `ImportDescriptor` slot of every registered box resolves to exactly one target — a registered local box or (later) a transport client. Missing and duplicate resolutions are errors with the import identity named.
+- **Exposure** (provider side): zero-or-more per capability; each names a transport binding (v0: `InProcessHandle` — mints host-level typed handles from the composition — or an S3-provided server exposure) and an exposure level validated against the descriptor's maximum over the accepted order `code-only < internal < external` (implementing `03-runtime.md`'s already-normative rule — recorded as accepted, not open). Duplicate exposures of one capability through *different* transports are legal by design; duplicates within one transport are that transport's validation call.
+- **Transport conformance** happens at `expose`: the transport receives the `CapabilityDescriptor` and may reject shapes or features it cannot represent faithfully, with typed diagnostics (this is where S3 rejects, e.g., a top-level `Field<T>` — a binding-level rule, not a global type-model prohibition; the first draft put that rejection at the wrong layer).
 
-### D8 — Async posture
+### D11 — In-process binding semantics and future ownership
 
-Handles and dispatch are `async` everywhere, including in-process. The core crates are executor-agnostic — they spawn nothing and depend on no runtime — with one pragmatic exception: `tokio_util` for `CancellationToken` rather than hand-rolling a synchronization primitive. Tests and S3 use tokio. If executor-agnosticism ever matters enough to remove that dependency, it is one wrapped type. Flagged as challengeable rather than agonized over.
+In-process dispatch **runs inline in the caller's future** — nothing is spawned. Consequences, stated as contract: cancellation is advisory (token observation is the callee's choice); if the caller drops the future, execution stops with it — **continuation-after-abandonment is a transport-binding property, not an S1 guarantee** (S3 provides it via owned tasks; issue #85 item 8). An already-expired deadline short-circuits to `Deadline` with zero invocation; no timeout is imposed around a live call (transports enforce at their boundary; in-process trusts the callee to observe budget — the intended asymmetry). Panics convert to `Internal` at the dispatch boundary via catch-unwind.
 
-### D9 — In-process binding semantics
+### D12 — Fixtures: exact inventory and the pre-macro rule
 
-Direct dispatch through the erased layer with exactly these behaviors: an already-expired deadline yields `Deadline` without invoking; cancellation is checked before invoke and offered to the implementation via context, never enforced mid-flight; no timeout is imposed around the call (deadline *enforcement* is a transport concern — in-process trust means the callee is expected to honor budget, and wrapping every local call in a timer buys overhead, not honesty). Panics in the target convert to `Internal` at the dispatch boundary (a box panic must not tear down a composition thread pool silently).
+`crates/fixtures/` contains `hello/` and `kitchen-sink/` (every scalar, bool, f32/f64, `Option`/`Field` positions, nested structs, enums with/without payloads, structured errors, `Secret`, `Blob`, string-keyed maps, multi-capability). Per-fixture inventory — exactly what S2 must later emit, hand-written now:
 
-### D10 — Fixtures as the generator's golden targets
+```text
+fixtures/<name>/
+  authoring/          # annotated source (#[boxology::...]) — PARSE-ONLY DATA in S1,
+                      #   not a workspace member; compiles only once S2's macros exist
+  implementation/     # compiled crate, un-annotated methods + handwritten adapter
+                      #   at the emitted-adapter shape, incl. the include! stub layout
+  generated/contract/ # hand-written generated-style crate: types, ContractType impls,
+                      #   descriptors, dispatch trait, handle, test-support module
+  generated/schema.json
+```
 
-S1 ships `crates/fixtures/` containing at least: a `hello`-shaped box (one unary capability, the acceptance shape) and a `kitchen-sink` box exercising the full type subset — every scalar, `Option`/`Field` positions, nested structs, enums with and without payloads, structured errors, `Secret`, `Blob`, string-keyed maps. Each fixture has a hand-written implementation crate and a hand-written contract crate **in exactly the layout the generator must later emit**, plus integration tests driving them through assembly and handles. These are explicitly labeled as S2 golden targets; changing a fixture's shape after S2 exists is a generator-contract change and gets reviewed as one.
+The **test-support module** (programmable contract-level fake per capability — an accepted generator output the first S2 draft dropped) is hand-written here too, so its shape is designed before it is mechanized. Golden-evolution protocol: once S2's byte-equality check exists, fixture shape and generator change **atomically in one task PR** — the first draft's "fixture PR first, generator PR second" would leave required checks red between merges and is withdrawn. Provenance fields in goldens use a placeholder token normalized at comparison (S2 spec, D-golden).
 
 ## Acceptance criteria
 
-1. The presence grid passes exhaustively in both directions at the `ContractValue` layer, including `Unknown`-variant preservation and opaque-payload handling.
-2. The kitchen-sink fixture round-trips every supported type through encode/decode with property tests (arbitrary values, `encode ∘ decode = id`).
-3. The hello fixture runs end-to-end: builder → validation → typed handle → correct output; every `CallError` class constructible by the in-process binding is exercised, including panic-to-`Internal` and expired-deadline short-circuit.
-4. Assembly validation rejects each failure class (missing, duplicate, unknown capability, exposure exceeding maximum) with structured diagnostics.
-5. Handwritten `ContractType` impls outside the platform do not compile (sealing verified by a compile-fail test).
-6. All of it green under S0's PR validation on both platforms.
+1. The presence grid passes exhaustively in both directions at the `ContractValue` layer, under **both decode roles** — strict `ProviderInput` (unknown fields/variants rejected) and tolerant `ConsumerOutput` (unknown fields ignored; unknown variants preserved as `OpaquePayload`) — as table tests per cell.
+2. Typed round-trips state their domains precisely: for every kitchen-sink type and role-valid value, `decode(encode(v)) = v` (typed domain); tolerant-decode cases additionally assert exactly which information is dropped or preserved.
+3. `OpaquePayload` leakage tests pass: redacted `Debug`, no raw value in any diagnostic path, `reveal`/`forward` behave as specified.
+4. Assembly validation rejects each failure class with structured diagnostics: missing import, duplicate import resolution, unknown capability, exposure above maximum, transport-conformance rejection (exercised with a stub transport that refuses a marked capability).
+5. The Hello-shape composition supports simultaneous in-process and stub-transport exposure of one capability — the merged manifest example is representable.
+6. In-process semantics proven: expired deadline → `Deadline` with zero invocations; caller-input violation → `ContractViolation` with zero invocations; provider output failing encoding → `InvalidResponse`; panic → `Internal`; cancellation token observed by a cooperating fixture capability.
+7. A handwritten `ContractType` impl in a non-generated crate compiles (negative of the withdrawn sealing claim) and a checker-level fixture demonstrates it cannot enter a managed contract (asserted structurally against descriptors in v0; mechanically once S5 exists).
+8. All green under S0's validation on both platforms.
 
 ## Task list
 
 | Task | Content | Est. PRs |
 | --- | --- | --- |
-| T1 | `boxology-contract` scaffold: `ContractValue`, construction invariants (finite floats, duplicate-key rejection) | 1 |
-| T2 | Presence machinery: `Field<T>`, the decode/encode grid, `Unknown` preservation | 1–2 |
-| T3 | `ContractType`/`ContractError` traits, sealing, platform impls for scalars/collections, `Secret`, `Blob` | 2 |
-| T4 | `boxology-runtime`: `CallContext`, `Deadline`, `CancelToken`, `TraceContext` | 1 |
-| T5 | `CallError`, erased dispatch layer, typed-handle support machinery | 2 |
-| T6 | Composition builder, validation lattice and report, `TransportBinding` trait, in-process binding | 2 |
-| T7 | Fixture boxes (hello, kitchen-sink) + integration and property test suites | 2 |
+| T1 | `boxology-contract` scaffold: invariant-bearing `ContractValue`, constructors, accessors/visitors | 2 |
+| T2 | Presence machinery + decode roles: `Field<T>`, grid, `OpaquePayload`, role-aware walking | 2 |
+| T3 | `ContractType`/`ContractError`, platform impls (scalars, collections, `Secret`, `Blob`) | 2 |
+| T4 | Descriptor types (`TypeDescriptor`, `CapabilityDescriptor`, `ImportDescriptor`, `BoxDescriptor`) | 1 |
+| T5 | Invocation ABI: `CallContext` + `child()`, `Deadline`, `CancelToken`, `TraceContext`, `CallError`, `ErasedCallError`, `ErasedTarget` | 2 |
+| T6 | `boxology-runtime`: builder, register/resolve_import/expose, validation, transport trait, in-process binding | 2–3 |
+| T7 | Fixtures per D12 inventory (incl. authoring data + test-support) + integration/property suites | 2–3 |
 
-T1→T2→T3 sequence; T4/T5 can start after T1; T6 needs T5; T7 needs everything and lands last.
+T1→T2→T3 sequence; T4/T5 after T1; T6 needs T4+T5; T7 last.
 
 ## Matters left open
 
-- The exact `Caller` shape beyond `Anonymous`/`System` — deliberately minimal until the auth cluster (#8/#9) designs the real principal model.
-- Whether `ContractValue` remains `#[doc(hidden)]`-public or graduates to a documented API — revisit when a third consumer (beyond bindings and tests) appears.
-- Validation metadata (defaults, min/max) representation in the type model — S1 carries the slots; enforcement semantics land with S2's schema emission, since the schema is where declared validation lives.
-- Panic policy configurability (abort vs. convert) — v0 converts; a composition-level strict mode can come later if wanted.
+*(None load-bearing.)*
+
+- The `Caller` shape beyond the placeholder — owned by the post-v0 auth cluster (#8/#9).
+- Whether `ContractValue`'s hidden calling surface ever graduates to documented API — revisit at a third consumer.
+- Replacing `tokio-util`'s token with an owned primitive — only if executor-agnosticism becomes a real requirement.
+
+## Tracker notes
+
+This spec decides part of what #6 listed as open (the erased-dispatch ABI and in-process execution semantics); #6 retains discovery, placement, routing, multi-version coexistence, and overload. The exposure order implements the accepted `03-runtime.md` rule. Issue #85 items 1–5 and 8 are resolved here jointly with the S2/S3 revisions.
