@@ -35,7 +35,7 @@ S0 exists so every subsequent stream inherits, on day one: a workspace whose too
 /.github/workflows/       # pr.yml, scheduled advisory job
 ```
 
-`.gitattributes` (`* text=auto eol=lf` plus explicit binary exceptions) is the enforcement point for line endings — `.editorconfig` only guides cooperating editors, and source bytes feed generation, so Git-level normalization is the rule that matters. Linear history on `main` via squash merge remains **convention** documented here; repository settings currently permit other merge modes and cannot be restricted on the current plan (see D9).
+`.gitattributes` (`* text=auto eol=lf` plus explicit binary exceptions) is the enforcement point for line endings — `.editorconfig` only guides cooperating editors, and source bytes feed generation, so Git-level normalization is the rule that matters. Linear history on `main` via squash merge is the accepted policy (#144), and repository merge-method settings enforce it for pull-request merges: only squash merging is enabled (#154). That setting governs the PR merge method only — branch protection remains unavailable, so direct pushes to `main` are not prevented (see D9).
 
 ### D2 — `xtask` is the automation home, with defined CI parity
 
@@ -109,7 +109,7 @@ Each experiment reports its observational label (real subjects) or asserted caus
 
 ### D9 — Branch protection and plan reality
 
-Fact, verified during review: on the current private-repository plan, branch-protection and rulesets APIs return `403` (Pro or public required). Therefore: protection is **operator guidance, not an S0 deliverable** — this spec records the exact recommended configuration (require the `validation` check; restrict non-squash merges if linear history is promoted from convention to invariant) to be applied if the repository is made public or the plan upgraded. That choice is the operator's, outside this spec. Until then, `main` hygiene is convention plus review.
+Fact, verified during review: on the current private-repository plan, branch-protection and rulesets APIs return `403` (Pro or public required). Therefore: protection is **operator guidance, not an S0 deliverable** — this spec records the exact recommended configuration (require the `validation` check; require linear history so direct pushes cannot introduce merge commits) to be applied if the repository is made public or the plan upgraded. That choice is the operator's, outside this spec. Separately from branch protection, repository merge-method settings — a control that is available on the current plan — now allow only squash merges for pull requests (#144, #154). That setting enforces D1's merge method for PR merges, but it does not require the `validation` check, does not block merging on failing checks, and does not prevent direct pushes to `main`. All other `main` hygiene remains convention plus review.
 
 ### D10 — Bootstrap-to-canonical handoff
 
