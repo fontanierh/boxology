@@ -14,7 +14,7 @@ Record the reconciliation in the pull request or closing issue comment. The full
 
 ## Operational records
 
-Dated situation reports, process reviews, retrospectives, and calibration notes live in [`records/`](records/README.md), one file per record, named `YYYY-MM-DD-topic.md`. Records are historical and never rewritten; corrections are new records citing the old. Decisions bind through the normative documents they cite or amend, not through the record itself. The naming, index, and append-only rules are enforced mechanically by `cargo xtask records` as part of repository validation. To create a record from a conversation, use the [`record` skill](skills/record/SKILL.md) — a portable Agent Skills-format skill in `skills/`, usable by any agent — which defers to the conventions in [`records/README.md`](records/README.md).
+Dated situation reports, process reviews, retrospectives, and calibration notes live in [`records/`](records/README.md), one file per record, named `YYYY-MM-DD-topic.md`. Records are historical and never rewritten; corrections are new records citing the old. Decisions bind through the normative documents they cite or amend, not through the record itself. The naming, index, and append-only rules are enforced mechanically by `cargo xtask records` as part of repository validation. To create a record from a conversation, use the [`record` skill](.agents/skills/record/SKILL.md) — a portable Agent Skills-format skill in `.agents/skills/`, usable by any agent — which defers to the conventions in [`records/README.md`](records/README.md).
 
 ## Issue deliverable kinds
 

@@ -5,7 +5,7 @@ description: Create a dated operational record in records/ capturing the current
 
 # Create an operational record
 
-The convention — what a record is, how it is named and indexed, that it is append-only, and how its decisions bind — is defined in [records/README.md](../../records/README.md) and the Operational records section of [AGENTS.md](../../AGENTS.md). Read both first and follow them; do not restate or improvise the rules.
+The convention — what a record is, how it is named and indexed, that it is append-only, and how its decisions bind — is defined in [records/README.md](../../../records/README.md) and the Operational records section of [AGENTS.md](../../../AGENTS.md). Read both first and follow them; do not restate or improvise the rules.
 
 ## Steps
 
