@@ -115,8 +115,8 @@ fn compute(root: &Path, revision: &str) -> Result<Report, String> {
         entries: parse_numstat(&output.stdout)?,
     })
 }
-const HISTORY_REMEDY: &str = "fetch the missing base object (use `git fetch --unshallow` for a shallow local clone); CI checkout must keep `fetch-depth: 0`";
-fn git_text(root: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) const HISTORY_REMEDY: &str = "fetch the missing base object (use `git fetch --unshallow` for a shallow local clone); CI checkout must keep `fetch-depth: 0`";
+pub(crate) fn git_text(root: &Path, args: &[&str]) -> Result<String, String> {
     let output = git(root, args)?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -124,7 +124,7 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String, String> {
     let text = String::from_utf8(output.stdout).map_err(|_| "git returned non-UTF-8 output")?;
     Ok(text.trim().to_string())
 }
-fn git(root: &Path, args: &[&str]) -> Result<Output, String> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<Output, String> {
     Command::new("git")
         .arg("-C")
         .arg(root)
