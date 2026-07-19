@@ -11,6 +11,7 @@ use std::thread;
 
 const MARKER: &str = ".boxology-determinism-run";
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
+const UNUSUAL_CONTEXT: &str = "päth context 01";
 static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
 type Prepare = fn(&Path) -> std::result::Result<(), String>;
 
@@ -30,6 +31,36 @@ struct Outcome {
     stderr: Capture,
 }
 
+struct Context {
+    home: PathBuf,
+    tmp: PathBuf,
+    cwd: PathBuf,
+    trees: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+enum Delta {
+    None,
+    Path,
+    Env(&'static str, &'static str),
+}
+
+const EXPERIMENTS: [(&str, &str, Delta); 5] = [
+    ("repeat", "repeat mismatch", Delta::None),
+    ("path", "path-context mismatch", Delta::Path),
+    (
+        "time",
+        "env-context mismatch",
+        Delta::Env("SOURCE_DATE_EPOCH", "946684800"),
+    ),
+    (
+        "locale",
+        "env-context mismatch",
+        Delta::Env("LC_ALL", "en_US.UTF-8"),
+    ),
+    ("timezone", "env-context mismatch", Delta::Env("TZ", "EST5")),
+];
+
 #[derive(Debug)]
 enum Failure {
     Finding(String),
@@ -47,16 +78,7 @@ pub fn local(workspace: &Path) -> u8 {
         Ok(root) => root,
         Err(error) => return report(error, None),
     };
-    match baseline(workspace, &root, &subjects) {
-        Ok(_) => match remove_run_root(&root) {
-            Ok(()) => {
-                println!("determinism: PASS (baseline observation)");
-                0
-            }
-            Err(error) => report(error, Some(&root)),
-        },
-        Err(error) => report(error, Some(&root)),
-    }
+    finish_local(&root, protocol(workspace, &root, &subjects))
 }
 pub fn manifest(workspace: &Path, out: &Path) -> u8 {
     let subjects = match registry() {
@@ -80,7 +102,7 @@ fn manifest_with(workspace: &Path, out: &Path, subjects: &[Subject]) -> u8 {
         publish(
             out,
             &root.join("out/base"),
-            &root.join("capture"),
+            &root.join("capture/baseline"),
             &manifest,
             &names,
             &environment,
@@ -216,32 +238,77 @@ fn remove_run_root(root: &Path) -> Result<()> {
     fs::remove_dir_all(root).map_err(|error| infra("remove run root", error))
 }
 
-fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Manifest> {
-    let (home, tmp, cwd, trees) = (
-        root.join("home"),
-        root.join("tmp"),
-        root.join("cwd"),
-        root.join("out/base"),
-    );
-    for directory in [&home, &tmp, &cwd, &trees] {
-        fs::create_dir_all(directory)
-            .map_err(|error| infra("create controlled directory", error))?;
+impl Context {
+    fn at(root: &Path, unusual: bool) -> Self {
+        let base = if unusual {
+            root.join(UNUSUAL_CONTEXT)
+        } else {
+            root.to_path_buf()
+        };
+        Self {
+            home: base.join("home"),
+            tmp: base.join("tmp"),
+            cwd: base.join("cwd"),
+            trees: base.join("out/base"),
+        }
     }
-    let environment = controlled_env(&home, &tmp);
+
+    fn create(&self) -> Result<()> {
+        fs::create_dir_all(self.home.parent().expect("context has parent"))
+            .map_err(|error| infra("create context root", error))?;
+        for directory in [&self.home, &self.tmp, &self.cwd] {
+            fs::create_dir(directory)
+                .map_err(|error| infra("create controlled directory", error))?;
+        }
+        fs::create_dir_all(self.trees.parent().expect("output has parent"))
+            .map_err(|error| infra("create controlled directory", error))?;
+        fs::create_dir(&self.trees).map_err(|error| infra("create subject tree", error))
+    }
+}
+
+fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Manifest> {
+    let context = Context::at(root, false);
+    let environment = controlled_env(&context.home, &context.tmp);
+    run_subjects(
+        workspace,
+        root,
+        &context,
+        subjects,
+        "baseline",
+        &environment,
+    )
+}
+
+fn run_subjects(
+    workspace: &Path,
+    root: &Path,
+    context: &Context,
+    subjects: &[Subject],
+    experiment: &str,
+    environment: &[(OsString, OsString)],
+) -> Result<Manifest> {
+    context.create()?;
     let mut outcomes = Vec::new();
     for subject in subjects {
         if let Some(prepare) = subject.prepare {
             prepare(workspace)
                 .map_err(|error| Failure::Infra(format!("prepare {}: {error}", subject.name)))?;
         }
-        let out = trees.join(subject.name);
+        let out = context.trees.join(subject.name);
         fs::create_dir(&out).map_err(|error| infra("create subject output", error))?;
         outcomes.push((
             subject.name,
-            execute(subject, &out, &cwd, root, &environment)?,
+            execute(
+                subject,
+                &out,
+                &context.cwd,
+                &root.join("capture").join(experiment),
+                experiment,
+                environment,
+            )?,
         ));
     }
-    let manifest = scan_subject_trees(&trees).map_err(Failure::Finding)?;
+    let manifest = scan_subject_trees(&context.trees).map_err(Failure::Finding)?;
     if let Some(record) = manifest.records().iter().find(|record| {
         !subjects
             .iter()
@@ -254,8 +321,9 @@ fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Manif
     }
     for (name, outcome) in outcomes {
         println!(
-            "determinism: PASS subject={} experiment=baseline capture={}/{}{}{}",
+            "determinism: PASS subject={} experiment={} capture={}/{}{}{}",
             name,
+            experiment,
             outcome.stdout.bytes.len(),
             outcome.stderr.bytes.len(),
             if outcome.stdout.truncated { "+" } else { "" },
@@ -263,6 +331,95 @@ fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Manif
         );
     }
     Ok(manifest)
+}
+
+fn protocol(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Vec<String>> {
+    let baseline_context = Context::at(root, false);
+    let reference = baseline(workspace, root, subjects)?;
+    retain_experiment(root, &baseline_context, "baseline")?;
+    let mut findings = Vec::new();
+    for (name, label, delta) in EXPERIMENTS {
+        let context = Context::at(root, matches!(delta, Delta::Path));
+        let mut environment = controlled_env(&context.home, &context.tmp);
+        if let Delta::Env(key, value) = delta {
+            environment
+                .iter_mut()
+                .find(|(name, _)| name == key)
+                .ok_or_else(|| Failure::Infra(format!("controlled environment lacks {key}")))?
+                .1 = value.into();
+        }
+        match run_subjects(workspace, root, &context, subjects, name, &environment) {
+            Ok(observed) => {
+                if let Some(finding) = manifest_finding(&reference, &observed, name, label) {
+                    findings.push(finding);
+                }
+            }
+            Err(Failure::Finding(finding)) => findings.push(finding),
+            Err(error @ Failure::Infra(_)) => return Err(error),
+        }
+        retain_experiment(root, &context, name)?;
+    }
+    Ok(findings)
+}
+
+fn retain_experiment(root: &Path, context: &Context, experiment: &str) -> Result<()> {
+    let retained = root.join("out/retained");
+    fs::create_dir_all(&retained).map_err(|error| infra("create retained directory", error))?;
+    fs::rename(&context.trees, retained.join(experiment))
+        .map_err(|error| infra("retain experiment tree", error))?;
+    let parent = root.join("scratch");
+    fs::create_dir_all(&parent).map_err(|error| infra("create scratch retention", error))?;
+    let scratch = parent.join(experiment);
+    fs::create_dir(&scratch).map_err(|error| infra("create experiment retention", error))?;
+    for (name, source) in [
+        ("home", &context.home),
+        ("tmp", &context.tmp),
+        ("cwd", &context.cwd),
+    ] {
+        fs::rename(source, scratch.join(name))
+            .map_err(|error| infra("retain experiment scratch", error))?;
+    }
+    Ok(())
+}
+
+fn manifest_finding(
+    reference: &Manifest,
+    observed: &Manifest,
+    experiment: &str,
+    label: &str,
+) -> Option<String> {
+    let mut left = reference.records().iter().peekable();
+    let mut right = observed.records().iter().peekable();
+    loop {
+        let (baseline, perturbed) = match (left.peek(), right.peek()) {
+            (Some(a), Some(b)) if a.path == b.path => (left.next(), right.next()),
+            (Some(a), Some(b)) if a.path.as_bytes() < b.path.as_bytes() => (left.next(), None),
+            (Some(_), Some(_)) => (None, right.next()),
+            (Some(_), None) => (left.next(), None),
+            (None, Some(_)) => (None, right.next()),
+            (None, None) => return None,
+        };
+        if baseline != perturbed {
+            let record = baseline.or(perturbed).expect("one record differs");
+            let subject = record.path.split_once('/').expect("validated path").0;
+            return Some(format!(
+                "{} subject={} experiment={} first={} baseline={} perturbed={}",
+                label,
+                subject,
+                experiment,
+                record.path,
+                manifest_side(baseline),
+                manifest_side(perturbed)
+            ));
+        }
+    }
+}
+
+fn manifest_side(record: Option<&crate::determinism::ManifestRecord>) -> String {
+    record.map_or_else(
+        || "absent".into(),
+        |record| format!("{}:{}", record.size, &record.sha256[..16]),
+    )
 }
 
 fn controlled_env(home: &Path, tmp: &Path) -> Vec<(OsString, OsString)> {
@@ -280,7 +437,8 @@ fn execute(
     subject: &Subject,
     out: &Path,
     cwd: &Path,
-    root: &Path,
+    capture_dir: &Path,
+    experiment: &str,
     environment: &[(OsString, OsString)],
 ) -> Result<Outcome> {
     let (program, argv) = (subject.argv)(out);
@@ -305,8 +463,7 @@ fn execute(
         stdout: join_capture(stdout)?,
         stderr: join_capture(stderr)?,
     };
-    let capture_dir = root.join("capture");
-    fs::create_dir_all(&capture_dir).map_err(|error| infra("create capture directory", error))?;
+    fs::create_dir_all(capture_dir).map_err(|error| infra("create capture directory", error))?;
     fs::write(
         capture_dir.join(format!("{}.stdout", subject.name)),
         &outcome.stdout.bytes,
@@ -333,8 +490,8 @@ fn execute(
         Ok(outcome)
     } else {
         Err(Failure::Finding(format!(
-            "SUBJECT-FAILURE subject={} experiment=baseline status={status}",
-            subject.name
+            "SUBJECT-FAILURE subject={} experiment={} status={status}",
+            subject.name, experiment
         )))
     }
 }
@@ -393,6 +550,26 @@ fn report(error: Failure, root: Option<&Path>) -> u8 {
     code
 }
 
+fn finish_local(root: &Path, result: Result<Vec<String>>) -> u8 {
+    match result {
+        Ok(findings) if findings.is_empty() => match remove_run_root(root) {
+            Ok(()) => {
+                println!("determinism: PASS (local protocol)");
+                0
+            }
+            Err(error) => report(error, Some(root)),
+        },
+        Ok(findings) => {
+            for finding in findings {
+                eprintln!("determinism: FINDING: {finding}");
+            }
+            eprintln!("determinism: retained run root: {}", root.display());
+            1
+        }
+        Err(error) => report(error, Some(root)),
+    }
+}
+
 fn infra(context: &str, error: impl std::fmt::Display) -> Failure {
     Failure::Infra(format!("{context}: {error}"))
 }
@@ -400,7 +577,9 @@ fn infra(context: &str, error: impl std::fmt::Display) -> Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    static REPEAT_CALLS: AtomicU64 = AtomicU64::new(0);
 
     fn env_argv(_: &Path) -> (PathBuf, Vec<OsString>) {
         ("/usr/bin/env".into(), Vec::new())
@@ -428,6 +607,47 @@ mod tests {
             vec![
                 "-c".into(),
                 "dd if=/dev/zero of=\"$1/00-over\" bs=1048577 count=1 2>/dev/null; i=1; while [ $i -le 17 ]; do n=$(printf %02d $i); dd if=/dev/zero of=\"$1/$n\" bs=1048576 count=1 2>/dev/null; i=$((i+1)); done".into(),
+                "boxology-test".into(),
+                out.into(),
+            ],
+        )
+    }
+    fn context_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "printf 'HOME=%s\nLC_ALL=%s\nPATH=%s\nPWD=%s\nSOURCE_DATE_EPOCH=%s\nTMPDIR=%s\nTZ=%s\n' \"$HOME\" \"$LC_ALL\" \"$PATH\" \"$PWD\" \"$SOURCE_DATE_EPOCH\" \"$TMPDIR\" \"$TZ\" > \"$1/context.txt\"".into(),
+                "boxology-test".into(),
+                out.into(),
+            ],
+        )
+    }
+    fn repeat_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        let changed = REPEAT_CALLS.fetch_add(1, Ordering::SeqCst) == 1;
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "printf %s \"$2\" > \"$1/value.txt\"; printf %s \"$3\"".into(),
+                "boxology-test".into(),
+                out.into(),
+                if changed { "changed\n" } else { "stable\n" }.into(),
+                if changed {
+                    "repeat-capture\n"
+                } else {
+                    "stable-capture\n"
+                }
+                .into(),
+            ],
+        )
+    }
+    fn scratch_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "test -z \"$(/bin/ls -A \"$HOME\")$(/bin/ls -A \"$TMPDIR\")$(/bin/ls -A .)\" || exit 19; printf %s \"$HOME\" > \"$HOME/seen\"; printf %s \"$TMPDIR\" > \"$TMPDIR/seen\"; printf %s \"$PWD\" > seen; printf stable > \"$1/file.txt\"".into(),
                 "boxology-test".into(),
                 out.into(),
             ],
@@ -473,6 +693,24 @@ mod tests {
     fn read(root: &Path, path: &str) -> Vec<u8> {
         fs::read(root.join(path)).unwrap()
     }
+    fn context(root: &Path, experiment: &str) -> BTreeMap<String, String> {
+        String::from_utf8(read(
+            root,
+            &format!("out/retained/{experiment}/context-probe/context.txt"),
+        ))
+        .unwrap()
+        .lines()
+        .map(|line| line.split_once('=').unwrap())
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect()
+    }
+    fn changed(left: &BTreeMap<String, String>, right: &BTreeMap<String, String>) -> Vec<String> {
+        assert_eq!(left.len(), right.len());
+        left.iter()
+            .filter(|(key, value)| right.get(*key) != Some(*value))
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
     fn child_args(name: &str, flag: &str, out: &Path) -> Vec<String> {
         vec![name.into(), flag.into(), out.to_string_lossy().into_owned()]
     }
@@ -496,7 +734,15 @@ mod tests {
             prepare: None,
             argv: env_argv,
         };
-        let outcome = execute(&subject, &out, &cwd, &root, &environment).unwrap();
+        let outcome = execute(
+            &subject,
+            &out,
+            &cwd,
+            &root.join("capture/baseline"),
+            "baseline",
+            &environment,
+        )
+        .unwrap();
         let actual: BTreeSet<_> = String::from_utf8(outcome.stdout.bytes)
             .unwrap()
             .lines()
@@ -511,6 +757,109 @@ mod tests {
         let data = fs::read(out.join("data.bin")).unwrap();
         assert_eq!(data, (0_u8..=255).collect::<Vec<_>>());
         remove_run_root(&root).unwrap();
+    }
+
+    #[test]
+    fn stable_subject_passes_the_protocol_and_removes_its_root() {
+        let workspace = workspace("protocol-green");
+        let root = create_run_root(&workspace).unwrap();
+        let result = protocol(&workspace, &root, &[subject("stable", file_argv)]);
+        assert_eq!(finish_local(&root, result), 0);
+        assert!(!root.exists());
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn context_probe_isolates_each_controlled_delta() {
+        let workspace = workspace("context-probe");
+        let root = create_run_root(&workspace).unwrap();
+        let findings =
+            protocol(&workspace, &root, &[subject("context-probe", context_argv)]).unwrap();
+        let heads: Vec<_> = findings
+            .iter()
+            .map(|finding| finding.split_once(" baseline=").unwrap().0)
+            .collect();
+        assert_eq!(
+            heads,
+            [
+                "path-context mismatch subject=context-probe experiment=path first=context-probe/context.txt",
+                "env-context mismatch subject=context-probe experiment=time first=context-probe/context.txt",
+                "env-context mismatch subject=context-probe experiment=locale first=context-probe/context.txt",
+                "env-context mismatch subject=context-probe experiment=timezone first=context-probe/context.txt",
+            ]
+        );
+        let baseline = context(&root, "baseline");
+        assert_eq!(baseline, context(&root, "repeat"));
+        assert_eq!(
+            changed(&baseline, &context(&root, "path")),
+            ["HOME", "PWD", "TMPDIR"]
+        );
+        for (experiment, key) in [
+            ("time", "SOURCE_DATE_EPOCH"),
+            ("locale", "LC_ALL"),
+            ("timezone", "TZ"),
+        ] {
+            assert_eq!(changed(&baseline, &context(&root, experiment)), [key]);
+        }
+        remove_run_root(&root).unwrap();
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn unusual_context_has_every_required_path_property() {
+        assert!(UNUSUAL_CONTEXT.len() > "baseline".len());
+        assert!(UNUSUAL_CONTEXT.contains(' '));
+        assert!(!UNUSUAL_CONTEXT.is_ascii());
+    }
+
+    #[test]
+    fn scratch_is_empty_reused_and_retained_for_every_experiment() {
+        let workspace = workspace("scratch-isolation");
+        let root = create_run_root(&workspace).unwrap();
+        let result = protocol(&workspace, &root, &[subject("scratch-probe", scratch_argv)]);
+        assert!(result.as_ref().unwrap().is_empty());
+        for component in ["home", "tmp", "cwd"] {
+            let path = |experiment| format!("scratch/{experiment}/{component}/seen");
+            let baseline = read(&root, &path("baseline"));
+            for experiment in ["repeat", "time", "locale", "timezone"] {
+                assert_eq!(read(&root, &path(experiment)), baseline);
+            }
+            assert_ne!(read(&root, &path("path")), baseline);
+        }
+        assert_eq!(finish_local(&root, result), 0);
+        assert!(!root.exists());
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn repeat_mismatch_is_exact_and_retains_namespaced_evidence() {
+        REPEAT_CALLS.store(0, Ordering::SeqCst);
+        let workspace = workspace("repeat-mismatch");
+        let root = create_run_root(&workspace).unwrap();
+        let findings =
+            protocol(&workspace, &root, &[subject("repeat-probe", repeat_argv)]).unwrap();
+        assert_eq!(
+            findings,
+            [
+                "repeat mismatch subject=repeat-probe experiment=repeat first=repeat-probe/value.txt baseline=7:2b92ea252be0fbc2 perturbed=8:7f8b1dfc466b6249"
+            ]
+        );
+        assert_eq!(
+            read(&root, "out/retained/baseline/repeat-probe/value.txt"),
+            b"stable\n"
+        );
+        assert_eq!(
+            read(&root, "out/retained/repeat/repeat-probe/value.txt"),
+            b"changed\n"
+        );
+        assert_eq!(
+            read(&root, "capture/repeat/repeat-probe.stdout"),
+            b"repeat-capture\n"
+        );
+        assert_eq!(finish_local(&root, Ok(findings)), 1);
+        assert!(root.exists());
+        remove_run_root(&root).unwrap();
+        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
