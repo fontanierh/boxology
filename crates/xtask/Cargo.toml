@@ -3,3 +3,7 @@ name = "xtask"
 version = "0.0.0"
 edition.workspace = true
 publish = false
+
+[dependencies]
+anyhow = { version = "1.0.100", git = "https://github.com/dtolnay/anyhow.git", rev = "18c2598afa0f996f56217ef128aa3a20ea1e9512" }
+bad-license = { version = "0.1.0", path = "../../proof/bad-license" }

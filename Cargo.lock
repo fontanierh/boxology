@@ -3,9 +3,22 @@
 version = 4
 
 [[package]]
+name = "anyhow"
+version = "1.0.100"
+source = "git+https://github.com/dtolnay/anyhow.git?rev=18c2598afa0f996f56217ef128aa3a20ea1e9512#18c2598afa0f996f56217ef128aa3a20ea1e9512"
+
+[[package]]
+name = "bad-license"
+version = "0.1.0"
+
+[[package]]
 name = "generated-style-fmt"
 version = "0.0.0"
 
 [[package]]
 name = "xtask"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bad-license",
+]
