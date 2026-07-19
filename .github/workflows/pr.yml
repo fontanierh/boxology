@@ -277,8 +277,8 @@ jobs:
         run: |
           cargo xtask determinism-verify linux-meta --target x86_64-unknown-linux-gnu --require-image
           cargo xtask determinism-verify macos-meta --target aarch64-apple-darwin --require-image
-      - name: Proof retained absence after verification
-        run: rm macos-meta/trees/meta-platform/platform.txt
+      - name: Proof retained corruption after verification
+        run: printf 'xs=macos\narch=aarch64\n' > macos-meta/trees/meta-platform/platform.txt
       - name: Require expected cross-platform mismatch
         run: cargo xtask determinism-meta-cross linux-meta macos-meta
 
