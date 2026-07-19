@@ -6,8 +6,8 @@ use std::process::{Command, ExitCode};
 mod advisories;
 mod budget;
 mod deny;
-// PR-A stages this public foundation in the binary; PR-B adds its CLI consumers.
 pub mod determinism;
+mod determinism_run;
 mod links;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
@@ -34,6 +34,17 @@ fn main() -> ExitCode {
         {
             budget::run(&root(), base)
         }
+        [command] if command == "determinism" => determinism_run::local(&root()),
+        [command, name, flag, out]
+            if command == "subject-run"
+                && flag == "--out"
+                && !name.is_empty()
+                && !name.starts_with('-')
+                && !out.is_empty()
+                && !out.starts_with('-') =>
+        {
+            determinism_run::child(name, Path::new(out))
+        }
         [command] if command == "links" => run_links(),
         [command] if command == "deny" => deny::run(&root()),
         [command, flag, repo] if command == "advisories" && flag == "--repo" => {
@@ -57,7 +68,7 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask links\n       cargo xtask test"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask links\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
