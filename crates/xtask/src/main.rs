@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+mod budget;
+
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
 const OWNED_FMT_PACKAGES: &[&str] = &["xtask"];
 const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt"];
@@ -19,6 +21,14 @@ fn main() -> ExitCode {
         {
             run_ci(Some(base))
         }
+        [command, flag, base]
+            if command == "budget"
+                && flag == "--base"
+                && !base.is_empty()
+                && !base.starts_with('-') =>
+        {
+            budget::run(&root(), base)
+        }
         [command] if command == "test" => run_test(),
         _ => {
             usage();
@@ -29,7 +39,9 @@ fn main() -> ExitCode {
 }
 
 fn usage() {
-    eprintln!("usage: cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask test");
+    eprintln!(
+        "usage: cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask test"
+    );
 }
 
 fn root() -> PathBuf {
@@ -44,7 +56,7 @@ fn run_ci(base: Option<&str>) -> u8 {
     }
     println!("toolchain: PASS");
 
-    let checks = [
+    let mut checks = vec![
         ("fmt", run_fmt()),
         (
             "clippy",
@@ -65,13 +77,15 @@ fn run_ci(base: Option<&str>) -> u8 {
         ("doc", run_doc()),
         ("whitespace", check_tracked_whitespace()),
     ];
-    for (name, passed) in checks {
+    for &(name, passed) in &checks {
         println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
     }
-    if let Some(base) = base {
-        println!(
-            "budget: SKIPPED — not implemented until S0-T4 (#89); --base {base:?} recorded but unused"
-        );
+    match base {
+        Some(base) => {
+            let code = budget::run(&root(), base);
+            checks.push(("budget", code == 0));
+        }
+        None => println!("budget: SKIPPED (--no-budget)"),
     }
     let failed: Vec<_> = checks
         .iter()
