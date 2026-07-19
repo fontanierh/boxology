@@ -45,12 +45,12 @@ pub enum SlotValue {
 ///
 /// All floating-point values are finite, so structural equality is reflexive
 /// in practice. IEEE equality still treats `0.0` and `-0.0` as equal.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ContractValue {
     repr: Repr,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Repr {
     Null,
     Bool(bool),
@@ -62,6 +62,36 @@ enum Repr {
     Bytes(Vec<u8>),
     List(Vec<ContractValue>),
     Object(Vec<(String, ContractValue)>),
+    Enum {
+        tag: String,
+        payload: Box<SlotValue>,
+    },
+    Opaque,
+    Sensitive(Box<ContractValue>),
+}
+
+impl fmt::Debug for ContractValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.repr {
+            Repr::Null => formatter.write_str("Null"),
+            Repr::Bool(value) => formatter.debug_tuple("Bool").field(value).finish(),
+            Repr::I64(value) => formatter.debug_tuple("I64").field(value).finish(),
+            Repr::U64(value) => formatter.debug_tuple("U64").field(value).finish(),
+            Repr::F32(value) => formatter.debug_tuple("F32").field(value).finish(),
+            Repr::F64(value) => formatter.debug_tuple("F64").field(value).finish(),
+            Repr::String(value) => formatter.debug_tuple("String").field(value).finish(),
+            Repr::Bytes(value) => formatter.debug_tuple("Bytes").field(value).finish(),
+            Repr::List(items) => formatter.debug_tuple("List").field(items).finish(),
+            Repr::Object(entries) => formatter.debug_tuple("Object").field(entries).finish(),
+            Repr::Enum { tag, payload } => formatter
+                .debug_struct("Enum")
+                .field("tag", tag)
+                .field("payload", payload)
+                .finish(),
+            Repr::Opaque => formatter.write_str("Opaque"),
+            Repr::Sensitive(_) => formatter.write_str("Sensitive(<redacted>)"),
+        }
+    }
 }
 
 impl ContractValue {
@@ -163,6 +193,28 @@ impl ContractValue {
         })
     }
 
+    /// Constructs an enum node. A missing payload is legal at this call-slot boundary.
+    pub fn enum_value(tag: impl Into<String>, payload: SlotValue) -> Self {
+        Self {
+            repr: Repr::Enum {
+                tag: tag.into(),
+                payload: Box::new(payload),
+            },
+        }
+    }
+
+    /// Constructs the payload-free placeholder replaced by T2's opaque-value model.
+    pub fn opaque_placeholder() -> Self {
+        Self { repr: Repr::Opaque }
+    }
+
+    /// Marks an entire value subtree as sensitive for diagnostic redaction.
+    pub fn sensitive(inner: ContractValue) -> Self {
+        Self {
+            repr: Repr::Sensitive(Box::new(inner)),
+        }
+    }
+
     /// Borrows this value through its read-only semantic view.
     pub fn view(&self) -> ValueRef<'_> {
         match &self.repr {
@@ -176,6 +228,9 @@ impl ContractValue {
             Repr::Bytes(value) => ValueRef::Bytes(value),
             Repr::List(items) => ValueRef::List(items),
             Repr::Object(entries) => ValueRef::Object(ObjectRef { entries }),
+            Repr::Enum { tag, payload } => ValueRef::Enum { tag, payload },
+            Repr::Opaque => ValueRef::Opaque,
+            Repr::Sensitive(inner) => ValueRef::Sensitive(inner),
         }
     }
 }
@@ -193,6 +248,12 @@ pub enum ValueRef<'a> {
     Bytes(&'a [u8]),
     List(&'a [ContractValue]),
     Object(ObjectRef<'a>),
+    Enum {
+        tag: &'a str,
+        payload: &'a SlotValue,
+    },
+    Opaque,
+    Sensitive(&'a ContractValue),
 }
 
 /// A borrowed read-only view of an insertion-ordered object.
@@ -298,6 +359,17 @@ mod tests {
             ContractValue::bytes([5, 6]),
             ContractValue::list([ContractValue::bool(false)]),
             ContractValue::object([("nested".into(), ContractValue::string("value"))]).unwrap(),
+            ContractValue::enum_value("missing", SlotValue::Missing),
+            ContractValue::enum_value("null", SlotValue::Null),
+            ContractValue::enum_value(
+                "value",
+                SlotValue::Value(ContractValue::list([ContractValue::i64(7)])),
+            ),
+            ContractValue::opaque_placeholder(),
+            ContractValue::sensitive(ContractValue::sensitive(
+                ContractValue::object([("secret".into(), ContractValue::string("hidden"))])
+                    .unwrap(),
+            )),
         ]);
         assert_eq!(rebuild(&values), values);
     }
@@ -319,7 +391,175 @@ mod tests {
                     .map(|(key, value)| (key.into(), rebuild(value))),
             )
             .unwrap(),
+            ValueRef::Enum { tag, payload } => {
+                ContractValue::enum_value(tag, rebuild_slot(payload))
+            }
+            ValueRef::Opaque => ContractValue::opaque_placeholder(),
+            ValueRef::Sensitive(inner) => ContractValue::sensitive(rebuild(inner)),
         }
+    }
+
+    fn rebuild_slot(slot: &SlotValue) -> SlotValue {
+        match slot {
+            SlotValue::Missing => SlotValue::Missing,
+            SlotValue::Null => SlotValue::Null,
+            SlotValue::Value(value) => SlotValue::Value(rebuild(value)),
+        }
+    }
+
+    #[test]
+    fn debug_redacts_sensitive_subtrees_and_marks_opaque_values() {
+        const SENTINEL: &str = "never-print-this-value";
+        let secret = || ContractValue::sensitive(ContractValue::string(SENTINEL));
+        let values = [
+            ContractValue::object([("secret".into(), secret())]).unwrap(),
+            ContractValue::list([secret()]),
+            ContractValue::enum_value("secret", SlotValue::Value(secret())),
+        ];
+        for value in values {
+            let output = format!("{value:?}");
+            assert!(!output.contains(SENTINEL));
+            assert!(output.contains("<redacted>"));
+        }
+        assert_eq!(format!("{:?}", secret()), "Sensitive(<redacted>)");
+        let visible = format!("{:?}", ContractValue::string("ordinary"));
+        assert!(visible.contains("ordinary"));
+        assert_eq!(
+            format!("{:?}", ContractValue::opaque_placeholder()),
+            "Opaque"
+        );
+    }
+
+    #[test]
+    fn generated_values_round_trip_through_public_views() {
+        let mut rng = SplitMix64(0x57a1_1eed_cafe_f00d);
+        let mut kinds = 0_u16;
+        for index in 0..256 {
+            let kind = index % KIND_COUNT;
+            kinds |= 1 << kind;
+            let value = generated_kind(&mut rng, 4, kind);
+            assert_eq!(rebuild(&value), value, "case {index}");
+        }
+        assert_eq!(kinds, (1 << KIND_COUNT) - 1);
+    }
+
+    #[test]
+    fn generated_sensitive_positions_never_leak() {
+        let mut rng = SplitMix64(0xd15c_a11e_5afe_f00d);
+        let mut positions = 0_u8;
+        for _ in 0..256 {
+            let (value, position) = generated_hidden(&mut rng);
+            positions |= 1 << position;
+            let output = format!("{value:?}");
+            assert!(!output.contains(SENTINEL));
+            assert!(output.contains("<redacted>"));
+        }
+        assert_eq!(positions, 0b1111);
+    }
+
+    #[test]
+    fn generated_construction_does_not_panic_and_duplicates_are_exact() {
+        let mut rng = SplitMix64(0xc0de_cafe_1234_5678);
+        for index in 0..256 {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                generated_kind(&mut rng, 4, index % KIND_COUNT)
+            }));
+            assert!(result.is_ok(), "constructor panic in case {index}");
+
+            let mut entries = generated_entries(&mut rng, 3, false);
+            let key = entries[rng.range(entries.len())].0.clone();
+            entries.push((key.clone(), generated(&mut rng, 2)));
+            assert_eq!(
+                ContractValue::object(entries),
+                Err(ValueError::DuplicateObjectKey { key })
+            );
+        }
+    }
+
+    const KIND_COUNT: usize = 13;
+    const SENTINEL: &str = "property-secret-sentinel";
+
+    struct SplitMix64(u64);
+
+    impl SplitMix64 {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut value = self.0;
+            value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            value ^ (value >> 31)
+        }
+
+        fn range(&mut self, upper: usize) -> usize {
+            (self.next() % upper as u64) as usize
+        }
+    }
+
+    fn generated(rng: &mut SplitMix64, depth: usize) -> ContractValue {
+        let kinds = if depth == 0 { 8 } else { KIND_COUNT };
+        let kind = rng.range(kinds);
+        generated_kind(rng, depth, kind)
+    }
+
+    fn generated_kind(rng: &mut SplitMix64, depth: usize, kind: usize) -> ContractValue {
+        match kind {
+            0 => ContractValue::null(),
+            1 => ContractValue::bool(rng.next() & 1 == 1),
+            2 => ContractValue::i64(rng.next() as i64),
+            3 => ContractValue::u64(rng.next()),
+            4 => ContractValue::f32((rng.next() as i32) as f32).unwrap(),
+            5 => ContractValue::f64((rng.next() as i64) as f64).unwrap(),
+            6 => ContractValue::string(format!("s{:x}", rng.next())),
+            7 => ContractValue::bytes(rng.next().to_le_bytes()),
+            8 => ContractValue::list(
+                (0..rng.range(5)).map(|_| generated(rng, depth.saturating_sub(1))),
+            ),
+            9 => ContractValue::object(generated_entries(rng, depth, true)).unwrap(),
+            10 => {
+                let payload = match rng.range(3) {
+                    0 => SlotValue::Missing,
+                    1 => SlotValue::Null,
+                    _ => SlotValue::Value(generated(rng, depth.saturating_sub(1))),
+                };
+                ContractValue::enum_value(format!("e{:x}", rng.next()), payload)
+            }
+            11 => ContractValue::opaque_placeholder(),
+            12 => ContractValue::sensitive(generated(rng, depth.saturating_sub(1))),
+            _ => unreachable!(),
+        }
+    }
+
+    fn generated_entries(
+        rng: &mut SplitMix64,
+        depth: usize,
+        may_be_empty: bool,
+    ) -> Vec<(String, ContractValue)> {
+        let count = rng.range(4) + usize::from(!may_be_empty);
+        (0..count)
+            .map(|index| {
+                (
+                    format!("k{index}-{:x}", rng.next()),
+                    generated(rng, depth.saturating_sub(1)),
+                )
+            })
+            .collect()
+    }
+
+    fn generated_hidden(rng: &mut SplitMix64) -> (ContractValue, usize) {
+        let position = rng.range(4);
+        let secret = ContractValue::sensitive(ContractValue::string(SENTINEL));
+        let value = match position {
+            0 => secret,
+            1 => ContractValue::list([generated(rng, 0), secret]),
+            2 => ContractValue::object([
+                ("noise".into(), generated(rng, 0)),
+                ("secret".into(), secret),
+            ])
+            .unwrap(),
+            3 => ContractValue::enum_value("secret", SlotValue::Value(secret)),
+            _ => unreachable!(),
+        };
+        (value, position)
     }
 
     #[test]
