@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, env, ffi::OsString, fs};
 use std::{path::Path, process::Command};
 
 const MARKER: &str = ".boxology-determinism-publish";
-const FILE_LIMIT: u64 = 1024 * 1024;
+pub(crate) const FILE_LIMIT: u64 = 1024 * 1024;
 const SUBJECT_LIMIT: u64 = 16 * 1024 * 1024;
 
 pub(crate) fn publish(

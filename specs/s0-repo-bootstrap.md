@@ -43,7 +43,7 @@ Repository automation is a private `crates/xtask` binary invoked as `cargo xtask
 
 Parity is defined precisely: **`cargo xtask ci` runs every host-local check** (fmt, clippy, test, doc, whitespace, links, budget, determinism-local). **CI-only orchestration** — cross-platform artifact upload and comparison, event metadata, caching — lives in the workflow, which invokes the same xtask commands per job and adds nothing semantic. Commands that need Git or event inputs take them as explicit arguments (`--base <sha>`); nothing reads GitHub context implicitly.
 
-S0 commands: `ci`, `links`, `budget --base <sha>`, `determinism` (local protocol), `determinism-manifest --out <path>` (CI comparison input). Later streams add commands, not workflows.
+S0 commands: `ci`, `links`, `budget --base <sha>`, `determinism` (local protocol), `determinism-manifest --out <path>` (CI comparison input), `determinism-compare <a> <b>`. Later streams add commands, not workflows.
 
 ### D3 — Toolchain and language posture
 
