@@ -1,4 +1,4 @@
-use crate::determinism::{Manifest, scan_subject_trees};
+use crate::determinism::{Manifest, diff_records, manifest_side, scan_subject_trees};
 use crate::determinism_publish::publish;
 use std::env;
 use std::ffi::OsString;
@@ -62,7 +62,7 @@ const EXPERIMENTS: [(&str, &str, Delta); 5] = [
 ];
 
 #[derive(Debug)]
-enum Failure {
+pub(crate) enum Failure {
     Finding(String),
     Infra(String),
 }
@@ -87,7 +87,7 @@ pub fn manifest(workspace: &Path, out: &Path) -> u8 {
     };
     manifest_with(workspace, out, &subjects)
 }
-fn manifest_with(workspace: &Path, out: &Path, subjects: &[Subject]) -> u8 {
+pub(crate) fn manifest_with(workspace: &Path, out: &Path, subjects: &[Subject]) -> u8 {
     let root = match create_run_root(workspace) {
         Ok(root) => root,
         Err(error) => return report(error, None),
@@ -388,38 +388,18 @@ fn manifest_finding(
     experiment: &str,
     label: &str,
 ) -> Option<String> {
-    let mut left = reference.records().iter().peekable();
-    let mut right = observed.records().iter().peekable();
-    loop {
-        let (baseline, perturbed) = match (left.peek(), right.peek()) {
-            (Some(a), Some(b)) if a.path == b.path => (left.next(), right.next()),
-            (Some(a), Some(b)) if a.path.as_bytes() < b.path.as_bytes() => (left.next(), None),
-            (Some(_), Some(_)) => (None, right.next()),
-            (Some(_), None) => (left.next(), None),
-            (None, Some(_)) => (None, right.next()),
-            (None, None) => return None,
-        };
-        if baseline != perturbed {
-            let record = baseline.or(perturbed).expect("one record differs");
-            let subject = record.path.split_once('/').expect("validated path").0;
-            return Some(format!(
-                "{} subject={} experiment={} first={} baseline={} perturbed={}",
-                label,
-                subject,
-                experiment,
-                record.path,
-                manifest_side(baseline),
-                manifest_side(perturbed)
-            ));
-        }
-    }
-}
-
-fn manifest_side(record: Option<&crate::determinism::ManifestRecord>) -> String {
-    record.map_or_else(
-        || "absent".into(),
-        |record| format!("{}:{}", record.size, &record.sha256[..16]),
-    )
+    let (baseline, perturbed) = diff_records(reference, observed).into_iter().next()?;
+    let record = baseline.or(perturbed).expect("one record differs");
+    let subject = record.path.split_once('/').expect("validated path").0;
+    Some(format!(
+        "{} subject={} experiment={} first={} baseline={} perturbed={}",
+        label,
+        subject,
+        experiment,
+        record.path,
+        manifest_side(baseline),
+        manifest_side(perturbed)
+    ))
 }
 
 fn controlled_env(home: &Path, tmp: &Path) -> Vec<(OsString, OsString)> {
@@ -535,7 +515,7 @@ fn ensure_empty_directory(path: &Path) -> std::result::Result<(), String> {
     Ok(())
 }
 
-fn report(error: Failure, root: Option<&Path>) -> u8 {
+pub(crate) fn report(error: Failure, root: Option<&Path>) -> u8 {
     let (code, message) = match error {
         Failure::Finding(message) => (1, message),
         Failure::Infra(message) => (2, message),

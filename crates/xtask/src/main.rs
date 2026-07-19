@@ -7,6 +7,7 @@ mod advisories;
 mod budget;
 mod deny;
 pub mod determinism;
+mod determinism_compare;
 mod determinism_publish;
 mod determinism_run;
 mod links;
@@ -44,6 +45,12 @@ fn main() -> ExitCode {
         {
             determinism_run::manifest(&root(), Path::new(out))
         }
+        [command, rest @ ..] if command == "determinism-compare" => {
+            determinism_compare::from_args(rest).unwrap_or_else(|| {
+                usage();
+                2
+            })
+        }
         [command, rest @ ..] if command == "subject-run" => determinism_run::child_from_args(rest)
             .unwrap_or_else(|| {
                 usage();
@@ -72,7 +79,7 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask links\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask links\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 

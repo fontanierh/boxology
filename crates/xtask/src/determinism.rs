@@ -89,6 +89,34 @@ impl Manifest {
         Ok(Self(records))
     }
 }
+pub(crate) fn diff_records<'a>(
+    left: &'a Manifest,
+    right: &'a Manifest,
+) -> Vec<(Option<&'a ManifestRecord>, Option<&'a ManifestRecord>)> {
+    let mut left = left.records().iter().peekable();
+    let mut right = right.records().iter().peekable();
+    let mut differences = Vec::new();
+    loop {
+        let pair = match (left.peek(), right.peek()) {
+            (Some(a), Some(b)) if a.path == b.path => (left.next(), right.next()),
+            (Some(a), Some(b)) if a.path.as_bytes() < b.path.as_bytes() => (left.next(), None),
+            (Some(_), Some(_)) => (None, right.next()),
+            (Some(_), None) => (left.next(), None),
+            (None, Some(_)) => (None, right.next()),
+            (None, None) => break,
+        };
+        if pair.0 != pair.1 {
+            differences.push(pair);
+        }
+    }
+    differences
+}
+pub(crate) fn manifest_side(record: Option<&ManifestRecord>) -> String {
+    record.map_or_else(
+        || "absent".into(),
+        |record| format!("{}:{}", record.size, &record.sha256[..16]),
+    )
+}
 fn valid_component(value: &str) -> bool {
     !value.is_empty()
         && value != "."
