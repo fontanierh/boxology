@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 mod budget;
+mod links;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
 const OWNED_FMT_PACKAGES: &[&str] = &["xtask"];
@@ -29,6 +30,7 @@ fn main() -> ExitCode {
         {
             budget::run(&root(), base)
         }
+        [command] if command == "links" => run_links(),
         [command] if command == "test" => run_test(),
         _ => {
             usage();
@@ -40,7 +42,7 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask test"
+        "usage: cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask links\n       cargo xtask test"
     );
 }
 
@@ -76,6 +78,7 @@ fn run_ci(base: Option<&str>) -> u8 {
         ),
         ("doc", run_doc()),
         ("whitespace", check_tracked_whitespace()),
+        ("links", links::check(&root())),
     ];
     for &(name, passed) in &checks {
         println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
@@ -98,6 +101,12 @@ fn run_ci(base: Option<&str>) -> u8 {
         eprintln!("summary: FAIL ({})", failed.join(", "));
         1
     }
+}
+
+fn run_links() -> u8 {
+    let passed = links::check(&root());
+    println!("links: {}", if passed { "PASS" } else { "FAIL" });
+    u8::from(!passed)
 }
 
 fn check_toolchain() -> Result<(), String> {
