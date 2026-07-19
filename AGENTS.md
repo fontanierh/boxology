@@ -12,6 +12,10 @@ Before merging any pull request or closing any issue:
 
 Record the reconciliation in the pull request or closing issue comment. The full design rule is documented in [Quality and Authority](boxology-details/06-quality-and-authority.md#tracker-reconciliation-gate).
 
+## Operational records
+
+Dated situation reports, process reviews, retrospectives, and calibration notes live in [`records/`](records/README.md), one file per record, named `YYYY-MM-DD-topic.md`. Records are historical and never rewritten; corrections are new records citing the old. Decisions bind through the normative documents they cite or amend, not through the record itself.
+
 ## Issue deliverable kinds
 
 Every issue declares its deliverable kind at creation. Issues resolved by modifying or adding markdown carry the `design-docs` label. Issues resolved in code carry no deliverable label; code is the default in the implementation era. The `post-mvp` and `factory` labels remain the sequencing and product axes.

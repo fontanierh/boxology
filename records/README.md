@@ -1,0 +1,13 @@
+# Records
+
+Dated operational records: situation reports, process reviews, retrospectives, and calibration notes produced while executing the project. One file per record, named `YYYY-MM-DD-topic.md`.
+
+Records differ from [`boxology-details/`](../boxology-details/) in kind: design documents are normative and are amended in place when decisions change; records are historical and are never rewritten. A record that later proves wrong is corrected by a new record that cites it, so the reasoning trail — including its errors — stays inspectable. This is the documentation-layer form of the project's own review discipline.
+
+A record may state a decision (for example, a process parameter held or changed after review). The decision is binding through the normative documents it cites or amends — `AGENTS.md`, a design document, a spec — not through the record itself. If a record's decision requires a normative change, that change lands in the same pull request.
+
+The strategy review of 2026-07-18 predates this directory and remains at [`boxology-details/10-strategy-review.md`](../boxology-details/10-strategy-review.md); records of its kind land here from now on.
+
+## Index
+
+- [2026-07-19 — S0 situation report and review of the 400-line PR budget](2026-07-19-s0-sitrep-and-pr-budget-review.md)
