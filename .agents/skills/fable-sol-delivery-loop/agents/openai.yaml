@@ -1,4 +1,0 @@
-interface:
-  display_name: "Fable–Sol Delivery Loop"
-  short_description: "Plan, implement, review, repair, and ship"
-  default_prompt: "Use $fable-sol-delivery-loop to ship these tasks through Fable planning, Sol implementation, and Fable review."
