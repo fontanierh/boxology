@@ -601,6 +601,17 @@ mod tests {
             ],
         )
     }
+    fn time_fail_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "[ \"$SOURCE_DATE_EPOCH\" = \"946684800\" ] && exit 23; printf stable > \"$1/file.txt\"".into(),
+                "boxology-test".into(),
+                out.into(),
+            ],
+        )
+    }
     fn capped_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
         (
             "/bin/sh".into(),
@@ -766,6 +777,39 @@ mod tests {
         let result = protocol(&workspace, &root, &[subject("stable", file_argv)]);
         assert_eq!(finish_local(&root, result), 0);
         assert!(!root.exists());
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn subject_failure_is_a_finding_and_later_experiments_still_run() {
+        let workspace = workspace("subject-failure");
+        let root = create_run_root(&workspace).unwrap();
+        let findings =
+            protocol(&workspace, &root, &[subject("fail-probe", time_fail_argv)]).unwrap();
+        assert_eq!(
+            findings,
+            ["SUBJECT-FAILURE subject=fail-probe experiment=time status=exit status: 23"]
+        );
+        for experiment in ["baseline", "repeat", "path", "time", "locale", "timezone"] {
+            assert!(
+                root.join(format!("out/retained/{experiment}/fail-probe"))
+                    .is_dir()
+            );
+            assert!(root.join(format!("scratch/{experiment}/home")).is_dir());
+        }
+        for experiment in ["locale", "timezone"] {
+            assert_eq!(
+                read(
+                    &root,
+                    &format!("out/retained/{experiment}/fail-probe/file.txt")
+                ),
+                b"stable"
+            );
+        }
+        assert!(root.join("capture/time/fail-probe.stderr").is_file());
+        assert_eq!(finish_local(&root, Ok(findings)), 1);
+        assert!(root.is_dir());
+        remove_run_root(&root).unwrap();
         fs::remove_dir_all(workspace).unwrap();
     }
 
