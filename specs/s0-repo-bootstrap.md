@@ -43,7 +43,7 @@ Repository automation is a private `crates/xtask` binary invoked as `cargo xtask
 
 Parity is defined precisely: **`cargo xtask ci` runs every host-local check** (fmt, clippy, test, doc, whitespace, links, budget, determinism-local). **CI-only orchestration** — cross-platform artifact upload and comparison, event metadata, caching — lives in the workflow, which invokes the same xtask commands per job and adds nothing semantic. Commands that need Git or event inputs take them as explicit arguments (`--base <sha>`); nothing reads GitHub context implicitly.
 
-S0 commands: `ci`, `links`, `budget --base <sha>`, `determinism` (local protocol), `determinism-manifest --out <path>` (CI comparison input), `determinism-compare <a> <b>`. Later streams add commands, not workflows.
+S0 commands: `ci`, `links`, `budget --base <sha>`, `determinism` (local protocol), `determinism-manifest --out <path>` (CI comparison input), `determinism-compare <a> <b>`, `determinism-verify <dir> --target <triple>` (with CI-only strictness flag `--require-image`). Later streams add commands, not workflows.
 
 ### D3 — Toolchain and language posture
 
@@ -62,7 +62,7 @@ Exact stable pin in `rust-toolchain.toml` (latest stable at T1 time, recorded th
 | determinism-meta-cross | download meta-fixture artifacts; run the comparator on the deliberately platform-dependent fixture; **succeed only if the comparator fails with the expected mismatch diagnostic**; fail on comparator success or infrastructure error | `ubuntu-24.04` |
 | **validation** | aggregator: `needs:` every job above **including determinism-meta-cross**, `if: always()`, fails unless all succeeded | `ubuntu-24.04` |
 
-Command inventory (all defined in xtask): `ci`, `test`, `links`, `budget`, `deny`, `determinism`, `determinism-manifest --out <dir>`, `determinism-compare <a> <b>`. The producer → upload → download → compare data flow above is the executable contract; the compare job consumes exactly what the platform jobs upload. This table is the **end state after T7**; each task enables only the jobs whose commands exist, adding its job to the aggregator's `needs` in the same PR (staged, never dangling).
+Command inventory (all defined in xtask): `ci`, `test`, `links`, `budget`, `deny`, `determinism`, `determinism-manifest --out <dir>`, `determinism-compare <a> <b>`, `determinism-verify <dir> --target <triple>` (`--require-image` requires CI runner image evidence). The producer → upload → download → compare data flow above is the executable contract; the compare job consumes exactly what the platform jobs upload. This table is the **end state after T7**; each task enables only the jobs whose commands exist, adding its job to the aggregator's `needs` in the same PR (staged, never dangling).
 
 Rules:
 
