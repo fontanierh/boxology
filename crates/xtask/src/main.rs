@@ -15,6 +15,7 @@ mod determinism_publish;
 mod determinism_run;
 mod determinism_verify;
 mod links;
+mod records;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
 const OWNED_FMT_PACKAGES: &[&str] = &["xtask"];
@@ -83,6 +84,15 @@ fn main() -> ExitCode {
                 2
             }),
         [command] if command == "links" => run_links(),
+        [command] if command == "records" => records::run(&root(), None),
+        [command, flag, base]
+            if command == "records"
+                && flag == "--base"
+                && !base.is_empty()
+                && !base.starts_with('-') =>
+        {
+            records::run(&root(), Some(base))
+        }
         [command] if command == "deny" => deny::run(&root()),
         [command, flag, repo] if command == "advisories" && flag == "--repo" => {
             advisories::run(&root(), repo, None)
@@ -105,7 +115,7 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask links\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -142,6 +152,7 @@ fn run_ci(base: Option<&str>) -> u8 {
         ("doc", run_doc()),
         ("whitespace", check_tracked_whitespace()),
         ("links", links::check(&root())),
+        ("records", records::run(&root(), base) == 0),
         ("deny", deny::run(&root()) == 0),
         ("determinism", determinism_run::local(&root()) == 0),
     ];
