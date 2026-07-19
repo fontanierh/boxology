@@ -69,8 +69,6 @@ jobs:
         run: cargo xtask ci --no-budget
 
   checks-macos:
-    # red-run: prove skipped => validation fails
-    if: false
     runs-on: macos-15
     timeout-minutes: 30
     steps:
