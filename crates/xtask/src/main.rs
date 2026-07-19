@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+mod advisories;
 mod budget;
 mod deny;
 // PR-A stages this public foundation in the binary; PR-B adds its CLI consumers.
@@ -35,6 +36,16 @@ fn main() -> ExitCode {
         }
         [command] if command == "links" => run_links(),
         [command] if command == "deny" => deny::run(&root()),
+        [command, flag, repo] if command == "advisories" && flag == "--repo" => {
+            advisories::run(&root(), repo, None)
+        }
+        [command, repo_flag, repo, simulate_flag, advisory]
+            if command == "advisories"
+                && repo_flag == "--repo"
+                && simulate_flag == "--simulate" =>
+        {
+            advisories::run(&root(), repo, Some(advisory))
+        }
         [command] if command == "test" => run_test(),
         _ => {
             usage();
@@ -46,7 +57,7 @@ fn main() -> ExitCode {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask links\n       cargo xtask test"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask links\n       cargo xtask test"
     );
 }
 
