@@ -2,17 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const VERSION: &str = "0.20.2";
+pub(crate) const VERSION: &str = "0.20.2";
 const INSTALL: &str = "cargo install cargo-deny --version 0.20.2 --locked";
 const CHECKS: &[&str] = &["deny", "check", "bans", "licenses", "sources"];
 
 pub fn run(root: &Path) -> u8 {
-    let version = Command::new("cargo")
-        .args(["deny", "--version"])
-        .current_dir(root)
-        .output();
-    if !version.is_ok_and(|output| output.status.success() && exact_version(&output.stdout)) {
-        eprintln!("cargo-deny: expected exactly {VERSION}; install it with: {INSTALL}");
+    if let Err(error) = require_version(root) {
+        eprintln!("{error}");
         return 1;
     }
 
@@ -31,6 +27,19 @@ pub fn run(root: &Path) -> u8 {
             1
         }
     }
+}
+
+pub fn require_version(root: &Path) -> Result<(), String> {
+    let version = Command::new("cargo")
+        .args(["deny", "--version"])
+        .current_dir(root)
+        .output();
+    if !version.is_ok_and(|output| output.status.success() && exact_version(&output.stdout)) {
+        return Err(format!(
+            "cargo-deny: expected exactly {VERSION}; install it with: {INSTALL}"
+        ));
+    }
+    Ok(())
 }
 
 fn exact_version(bytes: &[u8]) -> bool {
@@ -192,7 +201,7 @@ fn percent_encode_path(path: &str) -> String {
     encoded
 }
 
-fn command_error(output: Output, label: &str) -> Result<(), String> {
+pub(crate) fn command_error<T>(output: Output, label: &str) -> Result<T, String> {
     Err(format!(
         "{label} exited with {}; stderr: {}",
         output.status,

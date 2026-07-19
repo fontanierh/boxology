@@ -1,0 +1,49 @@
+name: advisories
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      simulate_advisory:
+        description: Optional RUSTSEC-YYYY-NNNN smoke-test identifier
+        required: false
+        type: string
+permissions:
+  contents: read
+  issues: write
+concurrency: dependency-advisories
+env:
+  CARGO_DENY_VERSION: "0.20.2"
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/bin/cargo-deny
+          key: cargo-advisories-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}
+      - name: Install exact cargo-deny
+        run: |
+          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
+            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
+          fi
+          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
+      - name: Check advisories and upsert exact-title issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIMULATE_ADVISORY: ${{ inputs.simulate_advisory }}
+        run: |
+          args=(--repo "$GITHUB_REPOSITORY")
+          if test -n "$SIMULATE_ADVISORY"; then
+            args+=(--simulate "$SIMULATE_ADVISORY")
+          fi
+          cargo xtask advisories "${args[@]}"
