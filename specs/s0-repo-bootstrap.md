@@ -1,161 +1,144 @@
 # S0 Spec — Product-Repo Bootstrap and CI
 
-[Stream definition](../boxology-details/11-v0-streams.md#s0--product-repo-bootstrap-and-ci) · Status: **proposed**
+[Stream definition](../boxology-details/11-v0-streams.md#s0--product-repo-bootstrap-and-ci) · Status: **revised, awaiting re-review** (first review addressed; cross-stream contract in issue #85)
 
-This is the stream specification for S0 under the [v0 execution methodology](../AGENTS.md#v0-execution-methodology). It defines the infrastructure the product repository needs before any platform code lands: the Rust workspace, the pinned toolchain, pull-request validation, mechanical enforcement of the repository's own working rules, and the cross-platform determinism harness. When this spec merges, its task list becomes tracker issues; each task is specified and implemented as a stack of pull requests under the 400-line review budget.
+This is the stream specification for S0 under the [v0 execution methodology](../AGENTS.md#v0-execution-methodology). It defines the infrastructure the product repository needs before any platform code lands: the Rust workspace, the pinned toolchain, pull-request validation, mechanical enforcement of the repository's working rules, and the cross-platform determinism harness — proven against synthetic subjects before the generator exists.
 
 ## Purpose
 
-S0 exists so that every subsequent stream inherits, on day one:
-
-1. A workspace whose toolchain, formatting, and lint posture cannot drift silently.
-2. Pull-request validation that mechanically enforces what the repository currently enforces by assertion — including claims this project has been making by hand in every PR description ("all relative Markdown links resolve", "git diff --check") and the methodology's review budget.
-3. A determinism harness that is **proven to catch every known class of nondeterminism before the contract generator exists**, so that when S2 registers the generator as a subject, a green harness means something.
-
-The third point is the heart of S0. Cross-platform byte determinism is a normative platform guarantee ([Rust Build Topology](../boxology-details/08-rust-build-topology.md)); a harness built alongside the generator would co-evolve with its bugs. Building and validating the harness against synthetic subjects first inverts that risk.
+S0 exists so every subsequent stream inherits, on day one: a workspace whose toolchain, formatting, and lint posture cannot drift silently; pull-request validation that mechanically enforces what is currently enforced by assertion; and a determinism harness whose detection power is itself tested, so a green harness is a tested claim when S2 registers the real generator.
 
 ## Non-goals
 
 - No platform functionality: no runtime, generator, binding, manifest, or installer code.
-- No `boxology.toml` on this repository — that is stage-2 self-hosting (S7), which requires S5's tooling to exist.
-- No publishing or distribution (recorded v0 exclusion; v0 is consumed from source).
-- No Windows (recorded v0 exclusion).
-- No coverage tracking, benchmarking, or release automation — post-v0 unless a stream spec pulls one in with justification.
+- No `boxology.toml` on this repository — stage-2 self-hosting (S7) requires S5's tooling.
+- No publishing, no Windows, no coverage/benchmarking/release automation (recorded v0 exclusions).
+- **No semantic self-protection.** S0's CI definitions (`pr.yml`, `crates/xtask`) are candidate-writable: a pull request can modify the very checks that judge it, and the same-named check would pass. Until S5/S7 provide base-revision policy evaluation, this bootstrap CI is protected only by human review of changes to those paths. This is stated honestly rather than implied away; issue #17 is reconciled with this position.
 
 ## Decisions
 
-### D1 — Repository layout
+### D1 — Repository layout and hygiene
 
 ```text
 /Cargo.toml               # workspace root (virtual manifest)
 /Cargo.lock               # committed
 /rust-toolchain.toml      # pinned toolchain
-/rustfmt.toml             # committed formatting config
+/rustfmt.toml             # committed formatting config, including ignore list for derived Rust
 /deny.toml                # dependency policy (D6)
-/.editorconfig
-/crates/                  # platform crates arrive here from S1 onward
-/crates/xtask/            # repo automation (D2) — the workspace's first member
+/.cargo/config.toml       # [alias] xtask = "run -p xtask --"
+/.gitattributes           # LF normalization + binary exceptions (authoritative for bytes)
+/.editorconfig            # editor guidance only
+/crates/                  # platform crates arrive from S1 onward
+/crates/xtask/            # repo automation — the workspace's first member
 /specs/                   # stream and task specs
 /boxology-details/        # design documents (unchanged)
-/.github/workflows/       # PR validation and scheduled jobs
+/.github/workflows/       # pr.yml, scheduled advisory job
 ```
 
-Design documents and specs stay in Markdown at their current locations. All Rust code lives under `crates/`; the `boxology-` crate-name prefix is reserved for platform crates, which arrive with their owning streams (S1+), not with S0.
+`.gitattributes` (`* text=auto eol=lf` plus explicit binary exceptions) is the enforcement point for line endings — `.editorconfig` only guides cooperating editors, and source bytes feed generation, so Git-level normalization is the rule that matters. Linear history on `main` via squash merge remains **convention** documented here; repository settings currently permit other merge modes and cannot be restricted on the current plan (see D9).
 
-### D2 — `xtask` is the automation home
+### D2 — `xtask` is the automation home, with defined CI parity
 
-Repository automation uses the cargo-xtask pattern: a private, unpublished `crates/xtask` binary invoked as `cargo xtask <command>`. Rationale: every check we add (link checking, budget checking, determinism) is thereby ordinary tested Rust code in the workspace rather than untested shell embedded in workflow YAML, runs identically on a developer laptop and in CI, and keeps workflow files down to "checkout, install toolchain, run xtask". This matters doubly here because CI configuration is protected control-plane material in this project's own philosophy — the less logic lives in YAML, the more of the control plane is reviewable, testable code.
+Repository automation is a private `crates/xtask` binary invoked as `cargo xtask <command>` via the checked-in `.cargo/config.toml` alias (it is not a Cargo built-in). Checks are tested Rust code, not YAML logic — deliberate, since CI is control-plane material by this project's own philosophy.
 
-S0 xtask commands: `cargo xtask ci` (everything PR validation runs), `cargo xtask links`, `cargo xtask budget`, `cargo xtask determinism`. Later streams add commands rather than workflows.
+Parity is defined precisely: **`cargo xtask ci` runs every host-local check** (fmt, clippy, test, doc, whitespace, links, budget, determinism-local). **CI-only orchestration** — cross-platform artifact upload and comparison, event metadata, caching — lives in the workflow, which invokes the same xtask commands per job and adds nothing semantic. Commands that need Git or event inputs take them as explicit arguments (`--base <sha>`); nothing reads GitHub context implicitly.
+
+S0 commands: `ci`, `links`, `budget --base <sha>`, `determinism` (local protocol), `determinism-manifest --out <path>` (CI comparison input). Later streams add commands, not workflows.
 
 ### D3 — Toolchain and language posture
 
-- `rust-toolchain.toml` pins an **exact stable version** (the latest stable at implementation time), with `rustfmt` and `clippy` components. `rustup` makes the pin self-enforcing for every contributor and CI job.
-- Workspace edition: 2024. No MSRV commitment in v0 — nothing is published, and the pin *is* the supported version.
-- Toolchain bumps are deliberate, dedicated PRs (never riders), titled as such, running full validation including the determinism matrix — consistent with the merged rule that toolchain changes are platform-package changes with whole-workspace blast radius. This is also what makes `clippy -D warnings` a stable gate: new lints arrive only when a bump PR chooses to absorb them.
-- Formatting is default rustfmt with the config committed (an empty-but-present `rustfmt.toml` plus edition), so "default" is pinned rather than ambient.
+Exact stable pin in `rust-toolchain.toml` (latest stable at T1 time, recorded there), components `rustfmt` + `clippy`; edition 2024; no MSRV (nothing is published; the pin is the supported version). Toolchain bumps are dedicated PRs, never riders, running full validation including the determinism matrix — this is also what makes `clippy -D warnings` a stable gate. Committed `rustfmt.toml` pins "default" formatting explicitly and carries the **ignore list for declared derived Rust** (generated crates are not formatted by the toolchain's rustfmt; they are printed deterministically by the generator's pinned printer — see the S2 spec). This ignore list is **bootstrap-only state**: when S5's manifests become authoritative for derived outputs, the list is derived from manifests, not maintained by hand (D10).
 
 ### D4 — PR validation workflow
 
-One workflow, `pr.yml`, runs on every pull request and on `main` pushes:
+`pr.yml` runs on pull requests and pushes to `main`:
 
-| Check | Command | Platform |
+| Job | Command | Runner |
 | --- | --- | --- |
-| Whitespace | `git diff --check` against merge base | Linux |
-| Format | `cargo fmt --all --check` | Linux |
-| Lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Linux |
-| Test | `cargo test --workspace --all-features` | Linux + macOS |
-| Docs | `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS="-D warnings"` | Linux |
-| Markdown links | `cargo xtask links` (D5) | Linux |
-| Review budget | `cargo xtask budget` (D7) | Linux |
-| Determinism | `cargo xtask determinism` + cross-platform comparison (D8) | Linux + macOS |
+| checks-linux | `cargo xtask ci --base <event base>` | `ubuntu-24.04` |
+| checks-macos | `cargo xtask test` + `cargo xtask determinism` | `macos-15` |
+| deny | pinned `cargo-deny check bans licenses sources` | `ubuntu-24.04` |
+| determinism-compare | download both manifests + bounded artifacts, compare | `ubuntu-24.04` |
+| **validation** | aggregator: `needs:` every job above, `if: always()`, fails unless all succeeded | `ubuntu-24.04` |
 
-Operational rules:
+Rules:
 
-- **Runner images are pinned by name** (`ubuntu-24.04`, `macos-15`), never `-latest`. The CI environment is an input to determinism claims; it does not get to drift implicitly.
-- **Actions are pinned by full commit SHA.** The repository's CI is its control plane, and unpinned third-party actions are the textbook supply-chain hole; this applies the project's own #24-adjacent posture to itself.
-- Dependency caching (rust-cache or equivalent, SHA-pinned) and concurrency groups that cancel superseded runs on the same PR.
-- Wall-clock budget: PR validation completes in **under 10 minutes** on a warm cache. If a later stream breaks this, that stream's spec must address it (test sharding, check tiering) rather than silently absorbing slow CI.
-- After T2 lands, the operator enables branch protection on `main` requiring the validation check — an operator action, per the merged authority model, not something automation performs.
-
-macOS runs the two checks where platform variance is load-bearing (tests, determinism) on every PR. This is deliberately conservative; if macOS minutes become a real cost, the fallback (macOS on merge-queue/`main` only) is a one-line change that a future PR can make with justification.
+- **`validation` is the single stable required-check name.** New jobs must be added to its `needs` list; because it runs `if: always()`, a skipped or failed dependency cannot silently produce a green aggregate. This exact check is the branch-protection target if/when protection is available (D9).
+- **Budget inputs are event-defined:** on pull requests, `--base` is the PR base SHA from the event payload; on `main` pushes the budget check is skipped (the PR already enforced it; a push has no meaningful base).
+- **Runner labels are fixed major-OS labels, not immutable pins.** GitHub updates `ubuntu-24.04`/`macos-15` images continuously; each job therefore records the runner image version and target triple into the job log and the determinism evidence. The supported triples are stated: `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` — the matrix is deliberately cross-architecture as well as cross-OS. If truly immutable environments are ever required, hosted runners cannot provide them; that would be a containerized-runner decision taken then.
+- Actions pinned by full commit SHA; dependency caching; concurrency groups cancel superseded runs.
+- **Wall-clock is a monitored target, not an acceptance invariant:** the measured quantity is job duration excluding queue time, on cache-hit runs, tracked as the median of the last ten `main` runs, with 10 minutes as the alarm threshold. A stream that pushes it over addresses it in that stream's spec.
 
 ### D5 — Markdown link and anchor checking
 
-`cargo xtask links` walks every tracked `.md` file and verifies that (a) every repository-relative link resolves to an existing file, and (b) every intra-document and cross-document `#anchor` matches a real heading slug (GitHub slugging rules). External URLs are **not** fetched — network-dependent CI is flaky CI; external-link rot is handled by humans.
-
-This mechanizes a claim currently made by hand in every documentation PR, and this repository is document-heavy enough that the check pays for itself immediately (the design docs cross-reference each other and the tracker extensively).
+`cargo xtask links`: every tracked `.md` file's repository-relative links must resolve; intra- and cross-document `#anchors` must match real heading slugs (GitHub slugging). External URLs are not fetched. This mechanizes the claim currently hand-asserted in every documentation PR.
 
 ### D6 — Dependency policy
 
-- `Cargo.lock` is committed. Dependency additions and upgrades must be visible: a PR whose lock diff includes crates not required by its own manifest changes fails review by policy (mechanical enforcement of this arrives with S5's tooling; until then it is a review rule stated here).
-- `cargo-deny` with a committed `deny.toml`: license allowlist (permissive licenses only for v0), duplicate-version warnings, and a source allowlist (crates.io only).
-- **Advisory checking is a scheduled job, not a PR gate.** A CVE published overnight must not fail an unrelated PR; the scheduled job (daily) files/updates a tracker issue instead, which is triaged like any other work. Bans and license violations *do* gate PRs, because those only change when the PR itself changes dependencies.
+- `Cargo.lock` committed. A PR whose lock diff includes crates not required by its own manifest changes fails review by policy (mechanical enforcement arrives with S5).
+- `cargo-deny` at an **exact pinned version**, installed via `cargo install cargo-deny --version <pinned> --locked` (cached); the version is recorded in the workflow and bumped only by dedicated PRs. `deny.toml`: permissive-license allowlist, source allowlist (crates.io only), bans. **Bans/licenses/sources gate PRs** via the `deny` job in D4's matrix. **Advisories never gate PRs**: a daily scheduled workflow runs `cargo-deny check advisories` and files/updates a tracker issue — a CVE published overnight must not fail an unrelated PR.
 
 ### D7 — Review-budget check
 
-`cargo xtask budget` computes hand-authored added lines against the PR's merge base and fails above **400**, implementing the methodology's cap mechanically.
+`cargo xtask budget --base <sha>` computes hand-authored added lines against the given base and **fails above 400 — absolutely, with no override and no exemption**, implementing AGENTS.md exactly as merged. Oversized work is split or its task re-scoped; that is the methodology, and the check is its mechanical form.
 
-- **Counted:** added lines in all files except exclusions.
-- **Excluded:** `Cargo.lock`; files under any path declared as derived output (none exist yet; the declaration list lives in xtask and grows when generated trees appear); pure renames/moves as detected by git.
-- **Override:** a `budget-override` label on the PR converts failure into a warning annotation. The label is applied by a human, is visible in history, and the PR description must say why — explicit and auditable, matching the house rule that policy downgrades are never silent side effects.
-- **Proposed methodology clarification (flagged for review, not yet applied):** the budget applies to **code**; Markdown-only PRs are exempt. Rationale: every design and spec document merged to date — including this one — exceeds 400 lines, and the methodology's recorded intent is bounding *implementation review* attention; documentation review is governed by the tracker-reconciliation gate instead. If the reviewer accepts this, AGENTS.md gets the one-line clarification when this spec merges; if not, `budget` counts Markdown and doc PRs must be split.
+- Counted: added lines in all hand-authored files, Markdown included.
+- Excluded: `Cargo.lock`, paths declared as derived outputs (bootstrap list in xtask, per D10), and pure renames as detected by Git.
+- Correction from the first draft, recorded for honesty: the earlier proposal claimed merged documentation PRs routinely exceeded 400 added lines; review checked, and the largest merged PR to date is +370. The factual basis for a Markdown exemption was wrong, and the absolute rule stands. A future spec that genuinely cannot fit is evidence to bring to a methodology amendment, not routed around via labels — which the v0 authority model could not verify as human-applied anyway.
 
 ### D8 — Determinism harness
 
-The harness is S0's largest deliverable and is designed to be **complete and self-validating before the generator exists**.
+A *determinism subject* is a registered command producing an output tree that must be byte-identical whenever inputs are unchanged. Subjects are registered in xtask code; S2 registers the real generator.
 
-**Model.** A *determinism subject* is a named, registered command (a function in xtask, later a generator invocation) that writes an output tree into a supplied directory and must produce byte-identical trees whenever inputs are unchanged, regardless of platform, path, time, or environment. Subjects are registered in xtask code; S2 registers the real generator later. Registration is code, not configuration, so adding a subject is a reviewed change.
+**Experimental protocol — one controlled perturbation per experiment.** The first draft's protocol varied several dimensions at once and could not attribute failures; corrected:
 
-**Local protocol** (`cargo xtask determinism`), per subject:
+1. **Repeat experiment:** two runs, *identical* conditions — same canonical path, frozen environment (`TZ=UTC`, `LC_ALL=C`, fixed `SOURCE_DATE_EPOCH`). Any difference is intra-run nondeterminism (map ordering, randomness), attributable as such.
+2. **Path experiment:** baseline vs. a run whose only change is a different, deliberately unusual absolute path (different length, a space, a non-ASCII segment). Differences attribute to path leakage.
+3. **Time experiment:** baseline vs. changed `SOURCE_DATE_EPOCH` and system-time-visible env. Under the accepted platform guarantee, **generated bytes may never vary with time** — the harness varies the inputs precisely to prove invariance; S2 may not reopen this (it may ignore or sanitize internally, but output bytes are invariant, full stop).
+4. **Locale/timezone experiments:** baseline vs. changed `LC_ALL`, then vs. changed `TZ`, separately.
 
-1. **Repeat run:** execute twice in fresh temp directories; compare trees byte-for-byte. Catches intra-platform nondeterminism — unordered map iteration, random seeds — the most common class, immediately, on one machine.
-2. **Path variation:** the two runs use deliberately different, deliberately unusual absolute paths (differing lengths, a space, a non-ASCII segment). Catches absolute-path and path-length leakage into output.
-3. **Environment variation:** runs differ in `TZ`, `LANG`/`LC_ALL`, and (where the subject reads it) `SOURCE_DATE_EPOCH` absence/presence. Catches timestamp and locale leakage.
-4. The result is a **manifest**: a deterministic JSON document mapping each output path to its SHA-256 and size, with a schema-version field, sorted by path, itself byte-stable.
+Each experiment reports its own attributed failure class. Output is a deterministic manifest (sorted path → SHA-256 + size, versioned schema, byte-stable).
 
-**Cross-platform protocol (CI):** the Linux and macOS jobs each run the local protocol and upload their manifests; a comparison job diffs the two manifests and fails with the differing paths and hashes. Comparison is on raw output bytes — no normalization at comparison time, because the normative requirement is that the *producer* normalizes (LF endings, sorted emission, no timestamps); the harness's job is to refuse to forgive.
+**Cross-platform protocol:** Linux and macOS each run the local protocol, upload manifests **plus the output trees themselves (bounded: subjects are size-capped so artifacts stay small)**; `determinism-compare` diffs manifests and, on mismatch, produces the bounded byte-level diff from the retained artifacts — the first draft promised diffs from hashes alone, which is impossible.
 
-**Self-validation.** The harness ships with fixture subjects that deliberately exhibit each failure class — map-iteration ordering, embedded timestamp, embedded absolute path, platform line-endings, locale-dependent formatting — each toggleable. The harness's own test suite asserts that every fixture failure class is *detected* (and that the clean fixture passes). A green harness is therefore a tested claim, not a hopeful one. The fixtures also serve as executable documentation of the determinism rules for S2's implementers.
+**Negative fixtures are fault-injection meta-tests, not registry members.** Deliberately nondeterministic fixture subjects (map-order, timestamp, absolute-path, CRLF, locale-format) live outside the normal registry; the harness's own test suite runs each under the protocol, **asserts the comparator reports the expected failure class, and itself exits successfully**. Registered-subject runs must always be green. Where a class is inherently probabilistic (natural `HashMap` ordering), the fixture forces the failure deterministically (seeded/explicit ordering difference) rather than sampling. The cross-platform analogue: one meta-fixture intentionally emits platform-dependent bytes; the workflow runs it in a dedicated non-gating job and asserts `determinism-compare` *fails* on it — an expected-failure lane, separate from the gating lane.
 
-**Failure UX.** A determinism failure names the subject, the varied dimension (repeat/path/env/platform), the first differing file, and a bounded hex diff around the first differing byte. Nondeterminism bugs are miserable to localize; the harness's diagnostics are part of its contract, not garnish.
+### D9 — Branch protection and plan reality
 
-### D9 — Repository hygiene
+Fact, verified during review: on the current private-repository plan, branch-protection and rulesets APIs return `403` (Pro or public required). Therefore: protection is **operator guidance, not an S0 deliverable** — this spec records the exact recommended configuration (require the `validation` check; restrict non-squash merges if linear history is promoted from convention to invariant) to be applied if the repository is made public or the plan upgraded. That choice is the operator's, outside this spec. Until then, `main` hygiene is convention plus review.
 
-`.gitignore` (`/target`, editor droppings), `.editorconfig` (LF, final newline, UTF-8 — LF matters: line endings are a determinism dimension and the repo itself should model the rule). No CODEOWNERS in v0 (single accountable maintainer; roles arrive with the factory). Git history stays linear on `main` via squash merges, matching existing practice.
+### D10 — Bootstrap-to-canonical handoff
+
+`cargo xtask ci` is **temporary bootstrap orchestration**. When S5 ships `boxology check` and S7 adopts manifests on this repository: platform validation (ownership, edges, regeneration, classification) is delegated to `boxology check` invoked by `xtask ci`; xtask retains only repository-specific checks (links, budget, determinism meta-tests) under clearly separate names; and every bootstrap registry duplicated here — the derived-output exclusion list, the rustfmt ignore list — is replaced by manifest-derived data, with the xtask copies deleted. Manifests are authoritative from S7 onward; S0 never becomes a second registry that survives.
 
 ## Acceptance criteria
 
-S0 is complete when all of the following are demonstrably true:
-
-1. `cargo xtask ci` passes locally on Linux and macOS and is byte-identical in behavior to what PR validation runs.
-2. A PR introducing a clippy warning, a formatting violation, a broken relative Markdown link, a broken anchor, or trailing whitespace fails validation.
-3. A PR adding more than 400 hand-authored code lines fails the budget check; adding the `budget-override` label converts the failure to a visible warning.
-4. Every deliberately nondeterministic fixture subject fails the harness with a diagnostic naming the correct failure class and file; the clean fixture passes on both platforms with identical manifests.
-5. A synthetic cross-platform difference (a fixture that intentionally emits platform-dependent bytes) is caught by the CI comparison job.
-6. PR validation completes in under 10 minutes on a warm cache.
-7. Branch protection requiring validation is enabled on `main` (operator action, recorded in the closing issue comment).
+1. `cargo xtask ci` passes locally on both supported triples and runs exactly the host-local checks CI runs.
+2. A PR introducing a clippy warning, fmt violation, broken relative link, broken anchor, or trailing whitespace fails `validation`.
+3. A PR adding >400 hand-authored lines fails `validation`; there is no bypass mechanism.
+4. Every fault-injection meta-fixture yields its expected failure class under the local protocol, with the meta-test suite itself green; the platform-dependent meta-fixture makes `determinism-compare` fail in the expected-failure lane.
+5. The `deny` job fails a PR introducing a disallowed license or non-crates.io source; the scheduled advisory job files an issue for a known advisory (verified once with a pinned historical advisory in a throwaway branch).
+6. The `validation` aggregator fails when any needed job fails or is skipped (verified by a deliberate red run).
+7. Runner image version and target triple appear in determinism evidence for both platforms.
 
 ## Task list
 
-Derived tasks, each becoming a tracker issue with its own spec, implemented in PR stacks under the budget:
-
 | Task | Content | Est. PRs |
 | --- | --- | --- |
-| T1 | Workspace scaffold: root manifest, toolchain pin, rustfmt config, editorconfig, gitignore, empty xtask skeleton with `ci` command | 1 |
-| T2 | PR validation workflow: fmt/clippy/test/doc jobs, SHA-pinned actions, caching, concurrency, runner pins | 1–2 |
-| T3 | `xtask links`: relative-link and anchor checker + CI wiring | 1 |
-| T4 | `xtask budget`: merge-base diff accounting, exclusions, override label protocol + CI wiring | 1 |
-| T5 | Dependency policy: `deny.toml`, PR-gating bans/licenses, scheduled advisory job filing tracker issues | 1 |
-| T6 | Determinism harness core: subject model, repeat/path/env protocol, manifest format, diagnostics | 2 |
-| T7 | Determinism fixtures and self-validation suite; cross-platform CI comparison job | 1–2 |
+| T1 | Workspace scaffold: manifests, toolchain pin, rustfmt config, `.cargo` alias, `.gitattributes`, `.editorconfig`, xtask skeleton with `ci` | 1 |
+| T2 | `pr.yml`: job matrix, SHA-pinned actions, caching, concurrency, `validation` aggregator, evidence recording | 1–2 |
+| T3 | `xtask links` + wiring | 1 |
+| T4 | `xtask budget` (absolute rule, exclusions, base-SHA input) + wiring | 1 |
+| T5 | `deny.toml`, pinned cargo-deny gate job, scheduled advisory workflow | 1 |
+| T6 | Determinism harness core: subject model, per-experiment protocol, manifest format, diagnostics | 2 |
+| T7 | Meta-fixtures + expected-failure lanes (local and cross-platform) + artifact retention and compare job | 2 |
 
-T1 → T2 sequence strictly; T3–T5 are independent after T2; T6 → T7 sequence and can proceed in parallel with T3–T5.
+T1 → T2 strictly; T3–T5 independent after T2; T6 → T7, parallel with T3–T5.
 
 ## Matters left open
 
-- The exact pinned toolchain version and runner image tags — resolved at T1/T2 implementation time to current values, recorded in the task PRs.
-- Whether macOS validation later narrows to merge-time only — deferred until CI cost is a measured problem.
-- The budget check's Markdown exemption — explicitly awaiting review (D7); the check ships with whichever scope review decides.
-- Coverage, benchmarking, and mutation testing — not S0; a later stream may propose them with justification.
-- `SOURCE_DATE_EPOCH` semantics for the real generator — S2's spec decides whether the generator honors or ignores it; the harness only varies it.
+*(None load-bearing; per review, load-bearing items may not hide here.)*
+
+- Exact toolchain version, runner-image versions, and pinned cargo-deny version — resolved at implementation time and recorded in the task PRs.
+- Whether macOS validation later narrows to merge-time only — deferred until CI cost is measured against the D4 target.
+- Containerized runners for truly immutable environments — only if hosted-runner drift is ever observed to matter.
