@@ -44,16 +44,11 @@ fn main() -> ExitCode {
         {
             determinism_run::manifest(&root(), Path::new(out))
         }
-        [command, name, flag, out]
-            if command == "subject-run"
-                && flag == "--out"
-                && !name.is_empty()
-                && !name.starts_with('-')
-                && !out.is_empty()
-                && !out.starts_with('-') =>
-        {
-            determinism_run::child(name, Path::new(out))
-        }
+        [command, rest @ ..] if command == "subject-run" => determinism_run::child_from_args(rest)
+            .unwrap_or_else(|| {
+                usage();
+                2
+            }),
         [command] if command == "links" => run_links(),
         [command] if command == "deny" => deny::run(&root()),
         [command, flag, repo] if command == "advisories" && flag == "--repo" => {

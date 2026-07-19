@@ -114,14 +114,32 @@ pub fn child(name: &str, out: &Path) -> u8 {
         Err(error) => report(Failure::Finding(error), None),
     }
 }
+pub(crate) fn child_from_args(args: &[String]) -> Option<u8> {
+    match args {
+        [name, flag, out]
+            if flag == "--out"
+                && !name.is_empty()
+                && !name.starts_with('-')
+                && !out.is_empty()
+                && !out.starts_with('-') =>
+        {
+            Some(child(name, Path::new(out)))
+        }
+        _ => None,
+    }
+}
 fn registry() -> std::result::Result<Vec<Subject>, String> {
     let subjects = vec![Subject {
         name: "trivial-tree",
         prepare: None,
         argv: trivial_argv,
     }];
+    validate_registry(&subjects)?;
+    Ok(subjects)
+}
+fn validate_registry(subjects: &[Subject]) -> std::result::Result<(), String> {
     let mut previous: Option<&str> = None;
-    for subject in &subjects {
+    for subject in subjects {
         let mut bytes = subject.name.bytes();
         if !bytes
             .next()
@@ -133,7 +151,7 @@ fn registry() -> std::result::Result<Vec<Subject>, String> {
         }
         previous = Some(subject.name);
     }
-    Ok(subjects)
+    Ok(())
 }
 fn trivial_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
     (
@@ -390,6 +408,9 @@ mod tests {
     fn true_argv(_: &Path) -> (PathBuf, Vec<OsString>) {
         ("/usr/bin/true".into(), Vec::new())
     }
+    fn false_argv(_: &Path) -> (PathBuf, Vec<OsString>) {
+        ("/usr/bin/false".into(), Vec::new())
+    }
     fn file_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
         (
             "/bin/sh".into(),
@@ -412,6 +433,26 @@ mod tests {
             ],
         )
     }
+    fn flood_payload() -> Vec<u8> {
+        (0..(MAX_CAPTURE_BYTES * 32 + 123))
+            .map(|index| ((index * 31 + 7) % 251) as u8)
+            .collect()
+    }
+    fn flood_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        fs::write(out.join("payload"), flood_payload()).unwrap();
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "/bin/cat \"$1/payload\" & /bin/cat \"$1/payload\" >&2 & wait".into(),
+                "boxology-test".into(),
+                out.into(),
+            ],
+        )
+    }
+    fn fail_prepare(_: &Path) -> std::result::Result<(), String> {
+        Err("forced setup failure".into())
+    }
     fn subject(name: &'static str, argv: fn(&Path) -> (PathBuf, Vec<OsString>)) -> Subject {
         Subject {
             name,
@@ -431,6 +472,9 @@ mod tests {
     }
     fn read(root: &Path, path: &str) -> Vec<u8> {
         fs::read(root.join(path)).unwrap()
+    }
+    fn child_args(name: &str, flag: &str, out: &Path) -> Vec<String> {
+        vec![name.into(), flag.into(), out.to_string_lossy().into_owned()]
     }
 
     #[test]
@@ -467,6 +511,153 @@ mod tests {
         let data = fs::read(out.join("data.bin")).unwrap();
         assert_eq!(data, (0_u8..=255).collect::<Vec<_>>());
         remove_run_root(&root).unwrap();
+    }
+
+    #[test]
+    fn capture_drains_both_pipes_and_persists_exact_bounded_prefixes() {
+        let workspace = workspace("capture");
+        let published = workspace.join("published");
+        assert_eq!(
+            manifest_with(
+                &workspace,
+                &published,
+                &[subject("capture-probe", flood_argv)]
+            ),
+            0
+        );
+        let payload = flood_payload();
+        let expected = &payload[..MAX_CAPTURE_BYTES];
+        for stream in ["stdout", "stderr"] {
+            let actual = read(
+                &published,
+                &format!("evidence/subjects/capture-probe/{stream}.bin"),
+            );
+            assert_eq!(actual.len(), MAX_CAPTURE_BYTES);
+            assert_eq!(
+                actual, expected,
+                "published {stream} retained the wrong prefix"
+            );
+        }
+        let envelope: serde_json::Value = serde_json::from_slice(&read(
+            &published,
+            "evidence/subjects/capture-probe/envelope.json",
+        ))
+        .unwrap();
+        assert_eq!(envelope["capture"]["stdout_truncated"], true);
+        assert_eq!(envelope["capture"]["stderr_truncated"], true);
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn run_root_guard_refuses_recursive_deletion_and_preserves_contents() {
+        let workspace = workspace("deletion-guard");
+        for (name, marker) in [("absent", None), ("invalid", Some(b"not-v1\n"))] {
+            let root = workspace.join(name);
+            fs::create_dir(&root).unwrap();
+            if let Some(marker) = marker {
+                fs::write(root.join(MARKER), marker).unwrap();
+            }
+            fs::write(root.join("sentinel"), b"preserve me").unwrap();
+            assert!(matches!(remove_run_root(&root), Err(Failure::Infra(_))));
+            assert_eq!(read(&root, "sentinel"), b"preserve me");
+            assert!(root.is_dir());
+        }
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn registry_validation_accepts_only_canonical_unique_sorted_names() {
+        let subjects = |names: &[&'static str]| {
+            names
+                .iter()
+                .map(|name| subject(name, true_argv))
+                .collect::<Vec<_>>()
+        };
+        assert!(validate_registry(&subjects(&["alpha", "beta-2"])).is_ok());
+        for (label, names) in [
+            ("noncanonical", &["Alpha"][..]),
+            ("duplicate", &["alpha", "alpha"][..]),
+            ("unsorted", &["beta", "alpha"][..]),
+        ] {
+            assert!(
+                validate_registry(&subjects(names)).is_err(),
+                "accepted {label} registry"
+            );
+        }
+    }
+
+    #[test]
+    fn command_exit_classes_are_complete_and_table_driven() {
+        #[derive(Clone, Copy, Debug)]
+        enum Case {
+            Success,
+            Unknown,
+            Malformed,
+            MissingOutput,
+            FileOutput,
+            NonemptyOutput,
+            Setup,
+            SubprocessNonzero,
+            InvalidTree,
+        }
+        let cases = [
+            (Case::Success, 0),
+            (Case::Unknown, 2),
+            (Case::Malformed, 2),
+            (Case::MissingOutput, 2),
+            (Case::FileOutput, 2),
+            (Case::NonemptyOutput, 2),
+            (Case::Setup, 2),
+            (Case::SubprocessNonzero, 1),
+            (Case::InvalidTree, 1),
+        ];
+        let workspace = workspace("exit-classes");
+        for (index, (case, expected)) in cases.into_iter().enumerate() {
+            let out = workspace.join(format!("case-{index}"));
+            let code = match case {
+                Case::Success | Case::Unknown => {
+                    fs::create_dir(&out).unwrap();
+                    let name = if matches!(case, Case::Success) {
+                        "trivial-tree"
+                    } else {
+                        "unknown"
+                    };
+                    child_from_args(&child_args(name, "--out", &out)).unwrap_or(2)
+                }
+                Case::Malformed => {
+                    child_from_args(&child_args("trivial-tree", "--bad", &out)).unwrap_or(2)
+                }
+                Case::MissingOutput => {
+                    child_from_args(&child_args("trivial-tree", "--out", &out)).unwrap_or(2)
+                }
+                Case::FileOutput => {
+                    fs::write(&out, b"not a directory").unwrap();
+                    child_from_args(&child_args("trivial-tree", "--out", &out)).unwrap_or(2)
+                }
+                Case::NonemptyOutput => {
+                    fs::create_dir(&out).unwrap();
+                    fs::write(out.join("sentinel"), b"occupied").unwrap();
+                    child_from_args(&child_args("trivial-tree", "--out", &out)).unwrap_or(2)
+                }
+                Case::Setup => manifest_with(
+                    &workspace,
+                    &out,
+                    &[Subject {
+                        name: "setup",
+                        prepare: Some(fail_prepare),
+                        argv: file_argv,
+                    }],
+                ),
+                Case::SubprocessNonzero => {
+                    manifest_with(&workspace, &out, &[subject("nonzero", false_argv)])
+                }
+                Case::InvalidTree => {
+                    manifest_with(&workspace, &out, &[subject("invalid-tree", true_argv)])
+                }
+            };
+            assert_eq!(code, expected, "wrong exit class for {case:?}");
+        }
+        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
