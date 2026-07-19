@@ -1,0 +1,111 @@
+# S0-T2 (#87) — spec D4, bootstrap subset. The D4 table is the T7 end state;
+# this file wires only the jobs whose xtask commands exist after T1.
+# Staged enablement: each later task (T3-T7) adds its command and/or job AND
+# extends validation.needs in the same PR. `validation` is the single stable
+# required-check name (branch-protection target per D9, when available).
+#
+# Candidate-writable (spec non-goal): a PR can modify this file and the checks
+# that judge it. Until S5/S7, protection is human review of changes to
+# .github/workflows/ and crates/xtask.
+#
+# Wall-clock monitored target (D4, not an acceptance invariant): per-job
+# duration excluding queue time, on cache-hit runs, median of the last ten
+# main runs; alarm threshold 10 minutes. Measure with:
+#   gh run list --workflow pr.yml --branch main --status success --limit 10
+#   gh api repos/<owner>/<repo>/actions/runs/<id>/jobs   # started_at -> completed_at
+
+name: pr
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  checks-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "x86_64-unknown-linux-gnu"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
+      - name: cargo xtask ci (pull request)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: cargo xtask ci --base "$BASE_SHA"
+      - name: cargo xtask ci (main push)
+        if: github.event_name == 'push'
+        run: cargo xtask ci --no-budget
+
+  checks-macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-checks-macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            cargo-checks-macos-${{ runner.os }}-${{ runner.arch }}-
+      - name: cargo xtask test
+        run: cargo xtask test
+
+  validation:
+    needs: [checks-linux, checks-macos]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail unless every needed job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS"
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")'
