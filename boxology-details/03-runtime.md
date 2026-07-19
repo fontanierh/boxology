@@ -186,7 +186,7 @@ The v1 HTTP binding is deliberately RPC-shaped. Every unary capability uses:
 POST /rpc/{box_id}/{capability_id}
 ```
 
-Both identifiers come from the canonical contract and are encoded as individual percent-encoded path segments. V1 has no configurable REST verbs, resource paths, or transport-specific error annotations. A later handwritten REST adapter may translate into and out of the same typed capability, but it does not create a second public contract.
+Both identifiers come from the canonical contract. Identifier grammars contain only unreserved URI characters, and the binding accepts **no percent-escapes**: any `%` in a segment is not an identifier and yields `404`, so no URI aliases exist for one capability. The binding serves HTTP/1.1 only in v1. V1 has no configurable REST verbs, resource paths, or transport-specific error annotations. A later handwritten REST adapter may translate into and out of the same typed capability, but it does not create a second public contract.
 
 Requests and responses use `application/json`. The composition default request-body limit is 1 MiB and may be lowered or raised explicitly. An oversized body returns `413`; an unsupported media type returns `415`; malformed JSON or a value rejected by contract validation returns `400` before invocation.
 
@@ -227,12 +227,17 @@ Declared domain errors always return `422`; the structured error variant remains
 | --- | --- |
 | `400` | Malformed JSON or contract validation failure. |
 | `404` | Unknown box or capability identity, with a diagnostic that distinguishes the two cases. |
+| `405` | Method other than POST on a valid route (`Allow: POST`). |
+| `413` | Request body over the configured limit. |
+| `415` | Unsupported media type or content coding. |
 | `504` | Deadline exceeded. |
 | `503` | Bound target unavailable. |
 | `502` | Bound target returned an invalid contract response. |
 | `500` | Internal runtime failure. |
 
 Cancellation, disconnection, or transport failure that produces no valid HTTP response becomes a client-side `CallError`; it has no invented HTTP status.
+
+Every emitted error status carries the call-error envelope with one of the stable codes: `unknown_box`, `unknown_capability`, `invalid_request`, `method_not_allowed`, `payload_too_large`, `unsupported_media_type`, `deadline_exceeded`, `unavailable`, `invalid_upstream_response`, `internal`. These codes are wire contract; the S3 conformance suite asserts them.
 
 The binding carries remaining deadline budget in `Boxology-Timeout-Ms`, W3C trace context in `traceparent` and `tracestate`, and a declared idempotency key in `Idempotency-Key`. Missing headers mean composition-default deadline, a newly created trace, and no idempotency key respectively. The foundation transports the idempotency key into `CallContext`; it does not provide a deduplication store or imply retry-safe replay by itself. Client disconnection requests advisory cancellation of the in-flight capability. The anonymous Hello endpoint constructs anonymous caller context inside the binding; v1 does not trust caller-supplied identity headers, and authenticated caller propagation remains part of the later authentication design.
 
