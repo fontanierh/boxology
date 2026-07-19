@@ -288,5 +288,3 @@ mod tests {
         );
     }
 }
-
-fn red_run_scratch () { let unused = 1; }
