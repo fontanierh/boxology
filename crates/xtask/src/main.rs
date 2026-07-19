@@ -5,6 +5,8 @@ use std::process::{Command, ExitCode};
 
 mod budget;
 mod deny;
+// PR-A stages this public foundation in the binary; PR-B adds its CLI consumers.
+pub mod determinism;
 mod links;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
