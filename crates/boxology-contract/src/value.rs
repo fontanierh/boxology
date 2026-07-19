@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::OpaquePayload;
+
 /// A failure to construct a contract value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -66,7 +68,7 @@ enum Repr {
         tag: String,
         payload: Box<SlotValue>,
     },
-    Opaque,
+    Opaque(OpaquePayload),
     Sensitive(Box<ContractValue>),
 }
 
@@ -88,7 +90,7 @@ impl fmt::Debug for ContractValue {
                 .field("tag", tag)
                 .field("payload", payload)
                 .finish(),
-            Repr::Opaque => formatter.write_str("Opaque"),
+            Repr::Opaque(_) => formatter.write_str("Opaque(<redacted>)"),
             Repr::Sensitive(_) => formatter.write_str("Sensitive(<redacted>)"),
         }
     }
@@ -203,9 +205,11 @@ impl ContractValue {
         }
     }
 
-    /// Constructs the payload-free placeholder replaced by T2's opaque-value model.
-    pub fn opaque_placeholder() -> Self {
-        Self { repr: Repr::Opaque }
+    /// Constructs an opaque transport-neutral value.
+    pub fn opaque(payload: OpaquePayload) -> Self {
+        Self {
+            repr: Repr::Opaque(payload),
+        }
     }
 
     /// Marks an entire value subtree as sensitive for diagnostic redaction.
@@ -229,7 +233,7 @@ impl ContractValue {
             Repr::List(items) => ValueRef::List(items),
             Repr::Object(entries) => ValueRef::Object(ObjectRef { entries }),
             Repr::Enum { tag, payload } => ValueRef::Enum { tag, payload },
-            Repr::Opaque => ValueRef::Opaque,
+            Repr::Opaque(payload) => ValueRef::Opaque(payload),
             Repr::Sensitive(inner) => ValueRef::Sensitive(inner),
         }
     }
@@ -252,7 +256,7 @@ pub enum ValueRef<'a> {
         tag: &'a str,
         payload: &'a SlotValue,
     },
-    Opaque,
+    Opaque(&'a OpaquePayload),
     Sensitive(&'a ContractValue),
 }
 
@@ -287,6 +291,7 @@ impl<'a> ObjectRef<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OpaqueTree;
 
     #[test]
     fn rejects_every_non_finite_float() {
@@ -365,7 +370,10 @@ mod tests {
                 "value",
                 SlotValue::Value(ContractValue::list([ContractValue::i64(7)])),
             ),
-            ContractValue::opaque_placeholder(),
+            ContractValue::opaque(OpaquePayload::new(OpaqueTree::List(vec![
+                OpaqueTree::Bool(true),
+                OpaqueTree::String("opaque".into()),
+            ]))),
             ContractValue::sensitive(ContractValue::sensitive(
                 ContractValue::object([("secret".into(), ContractValue::string("hidden"))])
                     .unwrap(),
@@ -394,7 +402,7 @@ mod tests {
             ValueRef::Enum { tag, payload } => {
                 ContractValue::enum_value(tag, rebuild_slot(payload))
             }
-            ValueRef::Opaque => ContractValue::opaque_placeholder(),
+            ValueRef::Opaque(payload) => ContractValue::opaque(payload.forward()),
             ValueRef::Sensitive(inner) => ContractValue::sensitive(rebuild(inner)),
         }
     }
@@ -408,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_redacts_sensitive_subtrees_and_marks_opaque_values() {
+    fn debug_redacts_sensitive_and_opaque_subtrees() {
         const SENTINEL: &str = "never-print-this-value";
         let secret = || ContractValue::sensitive(ContractValue::string(SENTINEL));
         let values = [
@@ -424,9 +432,37 @@ mod tests {
         assert_eq!(format!("{:?}", secret()), "Sensitive(<redacted>)");
         let visible = format!("{:?}", ContractValue::string("ordinary"));
         assert!(visible.contains("ordinary"));
+
+        let payload = OpaquePayload::new(OpaqueTree::Object(vec![(
+            "raw".into(),
+            OpaqueTree::String(SENTINEL.into()),
+        )]));
+        for payload in [payload.clone(), payload.forward()] {
+            let values = [
+                ContractValue::list([ContractValue::opaque(payload.forward())]),
+                ContractValue::object([(
+                    "opaque".into(),
+                    ContractValue::opaque(payload.forward()),
+                )])
+                .unwrap(),
+                ContractValue::enum_value(
+                    "opaque",
+                    SlotValue::Value(ContractValue::opaque(payload.forward())),
+                ),
+                ContractValue::sensitive(ContractValue::opaque(payload.forward())),
+            ];
+            for value in values {
+                let contract_debug = format!("{value:?}");
+                let slot_debug = format!("{:?}", SlotValue::Value(value));
+                assert!(!contract_debug.contains(SENTINEL));
+                assert!(!slot_debug.contains(SENTINEL));
+                assert!(contract_debug.contains("<redacted>"));
+                assert!(slot_debug.contains("<redacted>"));
+            }
+        }
         assert_eq!(
-            format!("{:?}", ContractValue::opaque_placeholder()),
-            "Opaque"
+            format!("{:?}", ContractValue::opaque(payload)),
+            "Opaque(<redacted>)"
         );
     }
 
@@ -523,7 +559,10 @@ mod tests {
                 };
                 ContractValue::enum_value(format!("e{:x}", rng.next()), payload)
             }
-            11 => ContractValue::opaque_placeholder(),
+            11 => ContractValue::opaque(OpaquePayload::new(OpaqueTree::List(vec![
+                OpaqueTree::Bool(rng.next() & 1 == 1),
+                OpaqueTree::String(format!("o{:x}", rng.next())),
+            ]))),
             12 => ContractValue::sensitive(generated(rng, depth.saturating_sub(1))),
             _ => unreachable!(),
         }
