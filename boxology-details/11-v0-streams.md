@@ -8,7 +8,7 @@ Streams partition the v0 scope defined by the [product contract](07-product-cont
 
 ## S0 — Product-repo bootstrap and CI
 
-The infrastructure every other stream stands on: the Cargo workspace scaffold for Boxology's own crates, pull-request validation for this repository, the pinned toolchain, and the **cross-platform determinism harness** — the Linux/macOS matrix that byte-compares generator output across platforms so a platform-dependent generator bug fails in this repository's CI rather than in a user's first pull request. Lands first; serves everyone.
+The infrastructure every other stream stands on: the Cargo workspace scaffold for Boxology's own crates, pull-request validation for this repository, the pinned toolchain, and the **cross-platform determinism harness** — the Linux/macOS matrix that byte-compares generator output across platforms so a platform-dependent generator bug fails in this repository's CI rather than in a user's first pull request. Lands first; serves everyone. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
 
 ## S1 — Runtime core and composition assembly
 
