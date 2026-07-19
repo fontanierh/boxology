@@ -1,111 +1,109 @@
 # S3 Spec — HTTP Binding
 
-[Stream definition](../boxology-details/11-v0-streams.md#s3--http-binding) · Status: **proposed**
+[Stream definition](../boxology-details/11-v0-streams.md#s3--http-binding) · Status: **revised, awaiting re-review** (first review addressed; cross-stream contract in issue #85)
 
-S3 implements the v1 HTTP transport against S1's assembly API. The wire contract itself — routing, JSON mapping, envelopes, status table, headers — is already normative in the [Foundation HTTP binding section of Runtime](../boxology-details/03-runtime.md); **this spec does not restate it.** It records the implementation decisions, resolves the wire-level details the normative text delegates, and defines the conformance suite that makes every choice observable.
+S3 implements the v1 HTTP transport against S1's assembly API. The wire contract — routing, JSON mapping, envelopes, status table, headers — is normative in the [Foundation HTTP binding section of Runtime](../boxology-details/03-runtime.md); this spec does not restate it. It records implementation decisions, resolves the details the normative text delegates, and defines the conformance suite that makes every choice observable.
 
 ## Purpose
 
-The HTTP binding is the proof that "defined once, invoked through Rust and HTTP" is a property of the platform rather than two implementations that happen to agree. Because S1 centralized semantics in `ContractValue`, S3's essential job is narrow: a faithful syntax mapping (`ContractValue ↔ HTTP/JSON`), the context/header envelope, and the lifecycle behaviors (limits, cancellation, deadlines) — plus the test suite that pins all of it.
+The HTTP binding proves "defined once, invoked through Rust and HTTP" is a platform property. With S1's descriptor-guided, role-aware decoding, S3's job is a faithful syntax layer over `ContractValue`, the context/header envelope, an explicitly specified request/task lifecycle, and the suite that pins everything.
 
-## Scope decision: server and client
+## Scope decisions
 
-S3 ships **both directions**:
-
-- The **server binding**: a `TransportBinding` implementation exposing composition-selected capabilities over HTTP.
-- The **client binding**: a typed handle bound to a remote base URL, synthesizing client-side `CallError`s per the normative rules.
-
-The client is in scope for three reasons: the normative text already specifies client-side `CallError` synthesis (someone must implement it); the conformance suite needs a driver, and a typed client exercising the same `ContractValue` layer *is* the strongest driver; and the client is the executable form of the claim that moving a capability behind HTTP changes no consumer types. The acceptance milestone itself only requires the server plus any HTTP caller — flagged so review can strike the client if leanness wins.
-
-## Non-goals
-
-- No TLS: v0 serves plaintext HTTP for local development and behind-proxy deployment; stated plainly rather than implied. TLS termination is the operator's proxy's job until a future slice says otherwise.
-- No authentication: the anonymous caller context is constructed inside the binding per the normative text; no identity headers are read (they are explicitly untrusted).
-- No streaming shapes, no compression negotiation, no CORS, no metrics/tracing export (trace headers are carried into `CallContext` and no further).
-- No REST ergonomics: `POST /rpc/{box_id}/{capability_id}` only; handwritten REST adapters remain a later, behind-the-contract pattern.
-- No connection-level tuning surface beyond the few knobs in D6.
+- **Server and client both ship.** Confirmed (the first review asked for the decision before tasks): the normative text specifies client-side `CallError` synthesis, the suite needs a typed driver, and the client is the executable proof that moving a capability behind HTTP changes no consumer types.
+- **HTTP/1.1 only, stated and tested.** The first draft claimed HTTP/2 "as negotiated" while testing only 1.1 — an untested support claim, withdrawn. The server serves HTTP/1.1 (`http1`-only stack configuration); the client speaks HTTP/1.1. HTTP/2 (including any h2c posture) is post-v0 and arrives only with conformance coverage.
+- **TLS out**: plaintext for local development and behind-proxy deployment; exactly a support statement, no Internet-facing claim implied.
+- No auth (anonymous context constructed in-binding; identity headers untrusted), no streaming, no compression (`Content-Encoding` present → `415`), no CORS, no metrics export.
 
 ## Decisions
 
-### D1 — Stack: axum on tokio, pinned
+### D1 — Stack and features
 
-`axum` (with `hyper`/`tokio` underneath) is the dominant, maintained, tower-compatible choice; the binding uses a deliberately thin slice of it — one route, no extractors beyond raw body/headers, no middleware stack in v0 — so that a later swap to raw `hyper` is plausible if wanted. The client binding uses `reqwest` with the same posture. Both pinned in the workspace lockfile like everything else. HTTP/1.1 and HTTP/2 are both accepted as whatever the stack negotiates; the wire contract is version-agnostic and the conformance suite runs over HTTP/1.1.
+`boxology-http`, one crate, **feature-isolated**: `server` (axum/hyper, default-on), `client` (reqwest, off by default), shared codec always. Exact versions and feature sets pinned at T1 and recorded there. Both sides use a deliberately thin slice: one route, raw body/headers, no middleware stack.
 
-### D2 — Crate layout
+### D2 — Codec: descriptor-guided, role-aware, over a lossless syntax layer
 
-One crate, `boxology-http`, with `server` and `client` modules (a single crate because both sides share the wire codec, and splitting would either duplicate it or force a third micro-crate before any need exists). It depends on `boxology-runtime` + `boxology-contract`; generated contract crates never depend on it — the edge discipline again.
+Per issue #85 item 1, the codec does **not** parse JSON "directly into `ContractValue`". Layering:
 
-### D3 — The wire codec is a pure module over `ContractValue`
+1. **Syntax layer:** bytes → a lossless JSON syntax tree that *preserves duplicate keys and key order* (parsed with a depth guard, default 128, and the byte cap enforced before/while reading — not via `serde_json::Value`, which collapses duplicates).
+2. **Semantic layer:** syntax tree + `TypeDescriptor` + `DecodeRole` → `ContractValue`, applying S1's role rules (strict `ProviderInput`, tolerant `ConsumerOutput`), resolving descriptor-directed representation (`"42"` as `u64` where the descriptor says integer-64, `{"base64":…}` as `Blob` where it says blob, enum envelopes where it says enum), and rejecting duplicate keys, non-canonical integer strings (`"007"`, signs on `u64`, whitespace), fractional/exponent integer syntax, and invalid UTF-8.
 
-`ContractValue ↔ JSON bytes` lives in one pure module used identically by server decode/encode and client encode/decode. Wire-level rules the normative text fixes are implemented here (u64/i64 as decimal strings, adjacent enum tagging, `{"base64": …}` blobs, tri-state field presence, strict unknown-input rejection). Rules the normative text delegates, resolved now:
+Encode is the reverse: `ContractValue` → **canonical bytes** (D3). Non-finite floats are unrepresentable in `ContractValue` (S1) — recorded so the wire never re-litigates it.
 
-- **Duplicate JSON keys are rejected** (contract violation → `400`). Strict-input posture; last-wins would be a silent semantic lottery. This requires parsing with duplicate detection — the codec parses to `ContractValue` directly rather than through `serde_json::Value` (which collapses duplicates), which the IR design anticipated.
-- **Non-finite floats**: unrepresentable in `ContractValue` by construction (S1); on decode, JSON has no NaN/Inf literal so the case is moot inbound; a handler can never emit one outbound because the IR rejects it at construction. Recorded so nobody re-litigates it at the wire.
-- **Number syntax**: integers reject fractional parts and exponents (`1e2` is not a valid `u32` on this wire); floats accept standard JSON number syntax. Leading zeros and `-0` follow strict JSON.
-- **String-encoded 64-bit integers** reject signs on `u64`, whitespace, and non-canonical forms (`"007"` is invalid) — canonical decimal only, so encode∘decode is identity on bytes, which classification and caching downstream may rely on.
-- **UTF-8 is enforced** at body decode; invalid UTF-8 is malformed input (`400`), not lossy-replaced.
-- **Depth and size guards in the codec itself**: a nesting-depth limit (default 128) and the composition's byte limit enforced pre-parse via `Content-Length` and streamed-body cap — malformed-input handling must not be an allocation amplifier.
+### D3 — Canonical response encoding (byte-assertable)
 
-### D4 — Routing and identifier edge cases
+The first draft demanded byte assertions without defining bytes. The canonical encoder is fully specified: UTF-8; no insignificant whitespace; struct keys in descriptor field order, envelope keys in the exact order given by the normative envelope examples; map keys sorted bytewise; minimal string escaping (only JSON-mandatory escapes, no gratuitous `\uXXXX`); floats via shortest-round-trip (Ryu); integers per the canonical rules; standard padded Base64; no trailing newline. **Byte-identity claims apply to canonical encoder output only** — accepted non-canonical *request* bytes (extra whitespace) need not round-trip byte-for-byte, and the suite states each assertion's domain.
 
-Exact-match routing: no trailing-slash tolerance, no case folding — ids are already lowercase by manifest grammar, and tolerance creates aliases that classification can never see. Percent-decoding per segment before matching; an id that decodes to something outside the id grammar is a `404` (unknown), not a `400` — the path namespace is closed. Unknown box vs. unknown capability both `404` per the normative table, with **distinct machine-readable `detail` values** in the call-error envelope so the conformance suite (and agents) can tell them apart.
+### D4 — Routing and identifier canonicality
 
-### D5 — Context headers, precisely
+Exact match on `POST /rpc/{box_id}/{capability_local_name}` (the qualified `box.capability` id is a schema/manifest spelling; the route uses the two components — the S2 identity decision). The first draft's decode-then-match created aliases (`h%65llo` ≡ `hello`); corrected: **no percent-escapes are accepted** — id grammars contain only unreserved characters, so any `%` in a segment is a non-identifier and yields `404`. No trailing-slash or case tolerance. A present query string is `400 invalid_request` (strict-input posture). Raw-path tests, not framework-extracted parameters. Unknown box vs. unknown capability: both `404`, distinguished by the now-**named** stable codes below.
 
-- `Boxology-Timeout-Ms`: non-negative integer, no units, no float. Invalid value → `400` contract violation (silently ignoring a malformed deadline turns a caller's safety mechanism into a no-op). Absent → composition-default deadline. The resulting deadline is absolute at request start; the handler's remaining-budget view flows through S1 semantics. Response includes no deadline echo.
-- `traceparent`/`tracestate`: validated structurally; an invalid `traceparent` is **ignored** (fresh trace context) rather than rejected — tracing is observability, not semantics, and a broken tracing proxy must not break calls. Carried, not interpreted, per S1.
-- `Idempotency-Key`: opaque string ≤ 256 bytes (over-length → `400`); carried into `CallContext`; *transported, never honored* — no dedup exists in v0 and the conformance suite asserts a repeated key does **not** dedup, pinning honesty as behavior.
-- Responses carry `Content-Type: application/json` and nothing else contractual. No server version header (fingerprinting surface with no consumer).
+### D5 — Stable wire error codes
 
-### D6 — Server lifecycle
+Promised-but-unnamed codes are named; these are wire contract, in the call-error envelope's `code` field, and enter the conformance traceability table: `unknown_box`, `unknown_capability`, `invalid_request` (malformed syntax, contract violation, bad header grammar, query present, empty body, trailing bytes), `deadline_exceeded`, `unavailable`, `invalid_upstream_response`, `internal`. Status mapping stays the normative table's. Merge notes carry these codes into `03-runtime.md` as the normative enumeration.
 
-The server binding attaches to a validated composition (S1's `TransportBinding` hook — binding conformance runs there: any non-unary shape or unsupported feature is rejected at composition validation, before traffic). Configuration surface, deliberately small: bind address, request-byte limit (default 1 MiB per normative text), default deadline, header read timeout, and graceful-shutdown drain timeout. Behaviors:
+### D6 — Header grammars, exactly
 
-- **Deadline enforcement**: dispatch is wrapped in a timeout at the remaining-budget boundary → `504` with the deadline call-error; the handler simultaneously observes the same budget via context. In-process trust defers to the callee (S1 D9); at a transport boundary the transport enforces — this is the intended asymmetry, stated.
-- **Client disconnect** triggers advisory cancellation on the request's `CancelToken`; work may complete anyway; nothing is rolled back. If the handler finishes after disconnect, the response is discarded — with no observable server-side error.
-- **Graceful shutdown**: stop accepting, drain in-flight up to the drain timeout, then cancel-and-close. Needed by the conformance suite itself (clean start/stop per test) — correctness tooling first, production nicety second.
-- **Panic in a handler** surfaces as `500 internal` (S1 already converts at dispatch; the transport maps it), never a connection reset.
+- `Boxology-Timeout-Ms`: grammar `0|[1-9][0-9]{0,9}` (≤ ~11.5 days), single occurrence. Duplicate header, sign, whitespace, non-digit, or overflow → `400 invalid_request` — a malformed deadline must not silently become no-deadline. Absent → composition default.
+- `Idempotency-Key`: 1–256 bytes of visible ASCII, single occurrence; violations → `400`. Carried into `CallContext`; **transported, never honored** — the suite asserts a repeated key does not dedup.
+- `traceparent`: W3C grammar; invalid or duplicated → **ignored**, fresh trace (observability must not break calls — the deliberate asymmetry with the timeout header, stated). `tracestate` without a valid parent → ignored.
+- Client encoding of remaining budget: milliseconds, rounded **up** (a positive remaining budget never encodes as `0`).
+- Request `Content-Type`: `application/json` with optional `charset=utf-8` parameter (case-insensitive), single occurrence; anything else → `415`; duplicates → `400`. Responses: `Content-Type: application/json` only.
+- Method/media table completed: non-POST on a valid path → `405` with `Allow: POST` (OPTIONS included — no CORS in v0); empty body → `400`; trailing bytes after the JSON document → `400`; maximum header block size configured explicitly (default 16 KiB) — a header-read timeout alone is not a resource bound.
 
-### D7 — Client binding
+### D7 — Request lifecycle, deadline coverage, and task ownership
 
-A remote binding for a typed handle: base URL + the same codec. `CallError` synthesis per the normative table: connect/DNS/refused → `Unavailable`; local deadline expiry or cancellation before/mid-flight → `Deadline`/`Cancelled`; a response that fails envelope or contract decode → `InvalidResponse`; transport failure with no usable response → the corresponding client-side class, never an invented status. The client sets the context headers from `CallContext` (the propagation direction the server reads). It performs **no retries** — retry policy belongs to callers under declared idempotency metadata, and v0 ships none; the client doing "helpful" retries would violate the transported-never-honored honesty.
+Resolving issue #85 item 8 and the S1 contradiction:
 
-### D8 — The conformance suite is the deliverable
+- **The request budget starts at head receipt** and covers body ingestion, decode, and dispatch. A trickled body exhausts the same deadline as a slow handler; pre-dispatch expiry → `504 deadline_exceeded` with **zero invocations**. (The first draft's AC — expired budget *and* handler-observed zero — was self-contradictory with S1's short-circuit; split per the review: expired-before-dispatch asserts zero invocations; a separate small-positive-budget case asserts the handler observes a shrinking budget and then expiry.)
+- **Dispatch runs as an owned, spawned task** registered in a composition-held tracker; the request future awaits its join handle. This is the explicit mechanism (not incidental stack behavior) behind three guarantees: *disconnect* — a drop-guard in the request future signals the request's child `CancelToken` when hyper drops it, while the spawned task keeps running (advisory cancellation; work may complete; its result is discarded with no server-side error); *timeout* — the join is raced against the deadline; on expiry the response is `504`, the token is signalled, and the task remains tracked; *panic* — a `JoinError` maps to `500 internal`, never a reset. Completion-vs-timeout races resolve by first-to-complete at the race point, stated as such.
+- **Graceful shutdown**: stop accepting; await tracked tasks up to the drain timeout; then signal all tokens, grace-wait, abort. The suite itself uses clean start/stop per case.
 
-Structure: an in-process harness that assembles a fixture composition (S1's kitchen-sink + hello), attaches the server binding on an ephemeral port, and drives it two ways:
+### D8 — Client binding
 
-1. **Typed-client cases** — the presence grid and type round-trips replayed *over the wire* (S1's table cases, reused by construction), envelope selection, status mapping, header behaviors, disconnect-cancellation, deadline expiry.
-2. **Raw-socket cases** — everything a correct typed client can never send: malformed JSON, duplicate keys, wrong media type, oversized bodies, invalid timeout header, bad percent-encoding, non-canonical integer strings, unknown input fields/variants, depth-bomb payloads. Raw cases are table-driven `(request bytes, expected status, expected error code)` so adding a case is data, not code.
+Feature `client`: a remote `ImportTarget`/handle binding with base URL and the same codec. Sets context headers per D6; performs **no retries** (retry policy belongs to callers under declared idempotency; v0 declares none). **Resource limits**: response byte cap (default 8 MiB) and the codec depth guard apply before decode; bounded error-body reads. **Response classification table** (the first draft's "fails decode" was not a specification): every `(status, envelope, content-type)` combination is classified — `200`+`result` and `422`+`domain` decode strictly *at the envelope*, with the accepted tolerant rules applying inside result/domain payloads via `ConsumerOutput` role; call-error statuses require the matching `call` envelope; any other combination — wrong/missing content type, mismatched envelope, unknown call-error `code`, extra top-level fields, 1xx/204/3xx (redirects are not followed), truncated bodies — is `InvalidResponse` with the observed detail retained. Connect/DNS/refused → `Unavailable`; local deadline/cancellation → `Deadline`/`Cancelled`; races with response completion resolve first-to-complete. Unknown-`code` → `InvalidResponse` is recorded as a v0 posture (client and server ship from one source tree in bootstrap; forward-compat codes are a post-v0 concern).
 
-The suite is structured as a reusable library (`boxology-http` dev-dependency now; future bindings will want the value-layer half), and it is the executable form of the normative section: **every rule in the normative wire text and every decision in this spec must map to at least one conformance case** — the task specs carry the traceability table.
+### D9 — Conformance suite
+
+Packaging corrected: a separate **`boxology-http-conformance`** dev-only crate (unpublished) — a crate cannot be its own reusable dev-dependency. It assembles fixture compositions (hello + kitchen-sink), attaches the server on an ephemeral port, and drives:
+
+1. **Typed-client cases**: S1's presence-grid and round-trip tables replayed over the wire in both roles; envelopes; status mapping; header behaviors incl. rounding; disconnect-cancellation observability (fixture capability with a barrier + cancellation observer, deterministic); deadline cases per D7; no-dedup assertion.
+2. **Raw-socket cases**, table-driven `(request bytes, expected status, expected code)`: malformed/duplicate-key JSON, wrong/duplicate media type, Content-Encoding, oversized body and header block, slow-trickled body vs. budget, invalid/duplicate timeout header, `%`-containing paths, query strings, non-POST/OPTIONS, empty body, trailing bytes, non-canonical integer strings, unknown fields/variants (role-checked), depth bombs.
+3. **Adversarial raw-server cases** (client side): every classification row of D8's table, truncated bodies, oversized responses, redirect/204.
+
+**Traceability is mandatory**: every rule in the normative wire text and every decision in this spec maps to at least one case; the T6 task spec carries the matrix and CI fails on unmapped rules.
 
 ## Acceptance criteria
 
-1. Conformance suite green on both platforms, including every raw-socket case and the distinct-`404`-details assertion.
-2. The hello fixture answers `greet("Ada") → "Hello, Ada!"` over a real socket via both the typed client and a raw `curl`-equivalent request, byte-asserted envelope.
-3. Disconnect-cancellation is observable: a fixture capability that records cancellation observes it when the test client disconnects mid-call; a completing handler after disconnect produces no server error.
-4. A repeated `Idempotency-Key` demonstrably does not dedup (two executions observed).
-5. Deadline behavior: an expired budget produces `504` and the handler observed a non-positive budget; `Boxology-Timeout-Ms: garbage` produces `400`.
-6. Binding conformance rejection: a synthetic non-unary capability in a fixture schema is rejected at composition validation with the capability and feature named.
-7. No dependency edge from any generated contract crate to `boxology-http` (checked mechanically once S5's edge checker exists; asserted by review until then).
+1. Conformance suite green on both platforms, including all raw-socket and raw-server tables and the named-code assertions for both `404` kinds.
+2. `greet("Ada") → "Hello, Ada!"` over a real socket via typed client **and** via a raw request, with the response byte-asserted against the canonical encoder.
+3. Disconnect: the observer fixture sees cancellation; the completing-after-disconnect case produces no server-side error and a discarded response; both proven via the D7 task-ownership mechanism (asserted on the tracker, not incidental behavior).
+4. Repeated `Idempotency-Key` demonstrably executes twice.
+5. Deadline: expired-before-dispatch → `504` + zero invocations; small-positive-budget → handler observes decreasing budget then `504`; trickled-body pre-dispatch expiry → `504`; `Boxology-Timeout-Ms: garbage` and duplicates → `400`.
+6. Composition validation rejects a synthetic non-unary capability and a top-level-`Field` capability at `expose` time with the capability and feature named (the binding-level rejection, per S1 D10).
+7. An S3-local `cargo metadata` test asserts no fixture contract crate depends on `boxology-http` (mechanical now; S5 owns the global rule later — replacing the first draft's non-demonstrable criterion).
 
 ## Task list
 
 | Task | Content | Est. PRs |
 | --- | --- | --- |
-| T1 | Wire codec: `ContractValue ↔ JSON` with strictness rules, duplicate/depth/UTF-8 guards | 2 |
-| T2 | Server binding: routing, envelopes, status mapping, `TransportBinding` integration | 2 |
-| T3 | Context headers, deadline enforcement, disconnect cancellation, lifecycle/shutdown | 1–2 |
-| T4 | Client binding: header propagation, `CallError` synthesis, no-retry posture | 1–2 |
-| T5 | Conformance harness + typed-client cases (reusing S1 grid data) | 1–2 |
-| T6 | Raw-socket case table + traceability table to the normative text | 1–2 |
+| T1 | Syntax layer (lossless tree, guards) + descriptor-guided role-aware semantic codec | 2 |
+| T2 | Canonical encoder + envelopes + status/code mapping | 1–2 |
+| T3 | Server: routing/canonicality, header grammars, lifecycle/task-ownership, limits, shutdown | 2 |
+| T4 | Client: headers, limits, classification table, `CallError` synthesis | 2 |
+| T5 | `boxology-http-conformance` harness + typed-client cases | 1–2 |
+| T6 | Raw-socket + raw-server tables + traceability matrix with unmapped-rule gate | 2 |
 
-T1 first; T2/T4 fan out; T3 completes the server; T5–T6 close. Depends on S1 (assembly, IR, fixtures) and S2 only for regenerated fixtures late in the stream — hand-written S1 fixtures suffice to start.
+T1 → T2 → {T3, T4} → T5 → T6. Depends on S1 (descriptors, roles, assembly, fixtures); S2 only for regenerated fixtures late — hand-written S1 fixtures suffice to start.
 
 ## Matters left open
 
-- Whether the client binding survives review or is cut to a test-only crate (scope flag above).
-- Default header-read and drain timeouts — set at T3 with measured values, recorded in the task PR.
-- The nesting-depth default (128) — revisit if real schemas approach it.
-- HTTP/2-specific conformance cases — deferred until a consumer negotiates HTTP/2 in practice.
-- Whether the raw-case table format graduates into a cross-binding conformance format — decided when a second remote binding exists.
+*(None load-bearing.)*
+
+- Default drain and header-read timeouts — set at T3 with measured values, recorded in the task PR.
+- Depth-guard default (128) and response cap (8 MiB) — revisit on evidence.
+- Raw-case table graduating to a cross-binding conformance format — at the second remote binding.
+
+## Tracker notes
+
+This spec decides parts of what #6 listed as open (foundation routing, server lifecycle, transport-boundary deadline enforcement); #6 retains discovery, placement, multi-box topology, and overload. #29's reconciliation notes v0 carries and validates W3C context without export. The axum/hyper/reqwest intake passes S0's deny gates. Issue #85 items 1, 3 (server side), and 8 are resolved here jointly with the S1/S2 revisions.
