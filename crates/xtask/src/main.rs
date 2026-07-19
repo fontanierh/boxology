@@ -287,6 +287,11 @@ fn check_tracked_whitespace() -> bool {
     {
         let relative = String::from_utf8_lossy(name);
         let path = root().join(relative.as_ref());
+        // Tracked symlinks (`.claude` -> `.agents`) are aliases; their targets
+        // are tracked and checked as their own entries.
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            continue;
+        }
         let Ok(bytes) = fs::read(&path) else {
             eprintln!("cannot read {}", relative);
             passed = false;
@@ -372,6 +377,17 @@ mod tests {
         assert!(compare_rustc_version("1.97.1", "not rustc").is_err());
         assert!(parse_channel("channel = 1.97.1").is_err());
         assert!(parse_channel("[toolchain]").is_err());
+    }
+
+    #[test]
+    fn tracked_whitespace_check_passes_with_committed_symlink() {
+        assert!(
+            fs::symlink_metadata(root().join(".claude"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(check_tracked_whitespace());
     }
 
     #[test]
