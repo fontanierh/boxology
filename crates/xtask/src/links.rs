@@ -79,17 +79,6 @@ fn scan(text: &str, mut emit: impl FnMut(usize, Result<&str, String>)) {
         let indent = syntax.iter().take_while(|byte| **byte == b' ').count();
         let trimmed = &syntax[indent..];
         if indent <= 3
-            && trimmed.first() == Some(&b'[')
-            && balanced(trimmed, 0, b'[', b']')
-                .is_some_and(|close| trimmed.get(close + 1) == Some(&b':'))
-        {
-            emit(
-                number,
-                Err("unsupported reference-style link definition".into()),
-            );
-            continue;
-        }
-        if indent <= 3
             && !trimmed.is_empty()
             && trimmed.iter().take_while(|byte| **byte == b'=').count() > 0
             && trimmed
@@ -121,6 +110,14 @@ fn scan(text: &str, mut emit: impl FnMut(usize, Result<&str, String>)) {
                 cursor = open + 1;
                 continue;
             };
+            if syntax.get(close + 1) == Some(&b':') {
+                emit(
+                    number,
+                    Err("unsupported reference-style link definition".into()),
+                );
+                cursor = close + 1;
+                continue;
+            }
             if syntax.get(close + 1) != Some(&b'(') {
                 if syntax.get(close + 1) == Some(&b'[') {
                     emit(
@@ -203,13 +200,15 @@ fn fenced(line: &str, active: &mut Option<(u8, usize)>) -> bool {
 
 // This deliberate loud subset does not model four-space indented code, fences indented
 // over three spaces, multiline code spans, or heading structure: link shapes there are
-// parsed as prose. HTML comments and blockquotes are likewise not suppressed.
+// parsed as prose. HTML comments and blockquotes are not suppressed; raw HTML anchors can
+// pass silently until the parser's supported shape grows.
 fn syntax(line: &str) -> Vec<u8> {
     let raw = line.as_bytes();
     let mut visible = raw.to_vec();
     let mut cursor = 0;
-    while cursor + 1 < raw.len() {
-        if raw[cursor] == b'\\' && raw[cursor + 1].is_ascii_punctuation() {
+    while cursor < raw.len() {
+        if cursor + 1 < raw.len() && raw[cursor] == b'\\' && raw[cursor + 1].is_ascii_punctuation()
+        {
             visible[cursor] = 0;
             visible[cursor + 1] = 0;
             if raw[cursor + 1] == b'['
@@ -219,41 +218,37 @@ fn syntax(line: &str) -> Vec<u8> {
             }
             cursor += 2;
         } else {
-            cursor += 1;
-        }
-    }
-    cursor = 0;
-    while cursor < visible.len() {
-        if visible[cursor] != b'`' {
-            cursor += 1;
-            continue;
-        }
-        let length = visible[cursor..]
-            .iter()
-            .take_while(|byte| **byte == b'`')
-            .count();
-        let mut search = cursor + length;
-        let mut close = None;
-        while search < visible.len() {
-            if visible[search] != b'`' {
-                search += 1;
+            if raw[cursor] != b'`' {
+                cursor += 1;
                 continue;
             }
-            let run = visible[search..]
+            let length = raw[cursor..]
                 .iter()
                 .take_while(|byte| **byte == b'`')
                 .count();
-            if run == length {
-                close = Some(search + run);
-                break;
+            let mut search = cursor + length;
+            let mut close = None;
+            while search < raw.len() {
+                if raw[search] != b'`' {
+                    search += 1;
+                    continue;
+                }
+                let run = raw[search..]
+                    .iter()
+                    .take_while(|byte| **byte == b'`')
+                    .count();
+                if run == length {
+                    close = Some(search + run);
+                    break;
+                }
+                search += run;
             }
-            search += run;
-        }
-        if let Some(end) = close {
-            visible[cursor..end].fill(b' ');
-            cursor = end;
-        } else {
-            cursor += length;
+            if let Some(end) = close {
+                visible[cursor..end].fill(b' ');
+                cursor = end;
+            } else {
+                cursor += length;
+            }
         }
     }
     visible
@@ -323,8 +318,7 @@ fn external(destination: &str) -> bool {
 }
 
 fn markdown(path: &str) -> bool {
-    path.rsplit_once('.')
-        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("md"))
+    matches!(path.rsplit_once('.'), Some((_, extension)) if extension.eq_ignore_ascii_case("md"))
 }
 
 #[cfg(test)]
@@ -337,11 +331,12 @@ mod tests {
 
     #[test]
     fn unsupported_shapes_fail_closed() {
-        let text = "[ref]: x\noops](x)\n[a][ref]\n[a](<x>)\n[a](x \"title\")\n[a]()\n[a](/x)\n[a](x%20y)\n[a](x\\y)\n====\n";
+        let text = "[ref]: x\n> [quote]: x\n- [list]: x\noops](x)\n[a][ref]\n[a](<x>)\n[a](x \"title\")\n[a]()\n[a](/x)\n[a](x%20y)\n[a](x\\y)\n====\n";
         let got = checked(text);
-        assert_eq!(got.len(), 10);
+        assert_eq!(got.len(), 12);
+        let references = got.iter().filter(|item| item.message.contains("reference"));
+        assert_eq!(references.count(), 3);
         for needle in [
-            "reference",
             "residue",
             "angle",
             "whitespace",
@@ -377,6 +372,13 @@ mod tests {
         );
         assert!(got.iter().any(|item| item.message.contains("whitespace")));
         assert!(got.iter().any(|item| item.message.contains("backslash")));
+    }
+
+    #[test]
+    fn escaped_backtick_can_close_a_span_without_hiding_a_live_link() {
+        let got = checked(r#"The pattern `\` matches; see [x](gone.md "title") and `code`."#);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].message.contains("whitespace"));
     }
 
     #[test]
