@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+    process::Command,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Diagnostic {
@@ -8,21 +13,21 @@ struct Diagnostic {
 }
 
 pub(crate) fn check(root: &Path) -> bool {
-    let files = match load(root) {
-        Ok(files) => files,
+    let (files, tracked) = match load(root) {
+        Ok(tree) => tree,
         Err(error) => {
             eprintln!("links: ERROR: {error}");
             return false;
         }
     };
-    let diagnostics = check_files(files);
+    let diagnostics = check_files(files, tracked);
     for item in &diagnostics {
         eprintln!("{}:{}: {}", item.file, item.line, item.message);
     }
     diagnostics.is_empty()
 }
 
-fn load(root: &Path) -> Result<BTreeMap<String, String>, String> {
+fn load(root: &Path) -> Result<(BTreeMap<String, String>, BTreeSet<String>), String> {
     let output = Command::new("git")
         .args(["ls-files", "-z"])
         .current_dir(root)
@@ -32,6 +37,7 @@ fn load(root: &Path) -> Result<BTreeMap<String, String>, String> {
         return Err(format!("git ls-files exited with {}", output.status));
     }
     let mut files = BTreeMap::new();
+    let mut tracked = BTreeSet::new();
     for raw in output
         .stdout
         .split(|byte| *byte == 0)
@@ -39,6 +45,7 @@ fn load(root: &Path) -> Result<BTreeMap<String, String>, String> {
     {
         let name =
             std::str::from_utf8(raw).map_err(|_| "git returned a non-UTF-8 path".to_string())?;
+        tracked.insert(name.to_string());
         if markdown(name) {
             let bytes = fs::read(root.join(name)).map_err(|error| format!("{name}: {error}"))?;
             let text = String::from_utf8(bytes)
@@ -49,14 +56,22 @@ fn load(root: &Path) -> Result<BTreeMap<String, String>, String> {
     if files.is_empty() {
         return Err("repository has no tracked Markdown files".into());
     }
-    Ok(files)
+    Ok((files, tracked))
 }
 
-fn check_files(files: BTreeMap<String, String>) -> Vec<Diagnostic> {
+fn check_files(files: BTreeMap<String, String>, tracked: BTreeSet<String>) -> Vec<Diagnostic> {
+    let anchors: BTreeMap<_, _> = files
+        .iter()
+        .map(|(name, text)| (name.clone(), headings(text)))
+        .collect();
+    let directories = directories(&tracked);
     let mut diagnostics = Vec::new();
-    for (file, text) in files {
-        scan(&text, |line, finding| {
-            if let Err(message) = finding.and_then(validate) {
+    for (file, text) in &files {
+        scan(text, |line, finding| {
+            let result = finding.and_then(|(image, destination)| {
+                validate(file, image, destination, &tracked, &directories, &anchors)
+            });
+            if let Err(message) = result {
                 diagnostics.push(Diagnostic {
                     file: file.clone(),
                     line,
@@ -68,7 +83,7 @@ fn check_files(files: BTreeMap<String, String>) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn scan(text: &str, mut emit: impl FnMut(usize, Result<&str, String>)) {
+fn scan(text: &str, mut emit: impl FnMut(usize, Result<(bool, &str), String>)) {
     let mut fence = None;
     for (index, line) in text.lines().enumerate() {
         let number = index + 1;
@@ -90,10 +105,10 @@ fn scan(text: &str, mut emit: impl FnMut(usize, Result<&str, String>)) {
         }
         let mut cursor = 0;
         while cursor < syntax.len() {
-            let open = if syntax[cursor] == b'[' {
-                cursor
+            let (image, open) = if syntax[cursor] == b'[' {
+                (false, cursor)
             } else if syntax[cursor] == b'!' && syntax.get(cursor + 1) == Some(&b'[') {
-                cursor + 1
+                (true, cursor + 1)
             } else {
                 if syntax[cursor..].starts_with(b"](") || syntax[cursor..].starts_with(b"][") {
                     emit(
@@ -162,7 +177,7 @@ fn scan(text: &str, mut emit: impl FnMut(usize, Result<&str, String>)) {
                     )),
                 );
             } else {
-                emit(number, Ok(destination));
+                emit(number, Ok((image, destination)));
             }
             cursor = end + 1;
         }
@@ -269,10 +284,16 @@ fn balanced(bytes: &[u8], start: usize, open: u8, close: u8) -> Option<usize> {
     None
 }
 
-// Stack layer one validates syntax only. Tracked-target and anchor resolution follow in PR 2.
-fn validate(destination: &str) -> Result<&str, String> {
+fn validate(
+    file: &str,
+    image: bool,
+    destination: &str,
+    tracked: &BTreeSet<String>,
+    directories: &BTreeSet<String>,
+    anchors: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<(), String> {
     if external(destination) {
-        return Ok(destination);
+        return Ok(());
     }
     let (before_fragment, fragment) = destination
         .split_once('#')
@@ -300,7 +321,171 @@ fn validate(destination: &str) -> Result<&str, String> {
             "unsupported destination {destination:?}: backslashes are not supported"
         ));
     }
-    Ok(destination)
+    let target =
+        resolve(file, path).map_err(|error| format!("destination {destination:?}: {error}"))?;
+    if image && fragment.is_some() {
+        return Err(format!(
+            "image destination {destination:?} resolves to {target:?}, but image fragments are unsupported"
+        ));
+    }
+    let is_file = tracked.contains(&target);
+    let is_directory = directories.contains(&target);
+    if !is_file && !is_directory {
+        return Err(format!(
+            "broken destination {destination:?}: resolved target {target:?} is not tracked"
+        ));
+    }
+    let Some(fragment) = fragment else {
+        return Ok(());
+    };
+    if is_directory {
+        return Err(format!(
+            "destination {destination:?} resolves to directory {target:?}, which cannot have a fragment"
+        ));
+    }
+    if !markdown(&target) {
+        return Err(format!(
+            "destination {destination:?} resolves to non-Markdown target {target:?}, which cannot have a fragment"
+        ));
+    }
+    if fragment.is_empty() {
+        return Err(format!(
+            "destination {destination:?} has an empty fragment for target {target:?}"
+        ));
+    }
+    if !anchors
+        .get(&target)
+        .is_some_and(|set| set.contains(fragment))
+    {
+        return Err(format!(
+            "broken fragment in destination {destination:?}: target {target:?} has no anchor {fragment:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn resolve(file: &str, path: &str) -> Result<String, &'static str> {
+    if path.is_empty() {
+        return Ok(file.to_string());
+    }
+    let mut parts: Vec<_> = file.split('/').collect();
+    parts.pop();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.pop().is_none() => return Err("path traverses above repository root"),
+            ".." => {}
+            part => parts.push(part),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+fn directories(tracked: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut directories = BTreeSet::from([String::new()]);
+    for name in tracked {
+        let mut current = name.as_str();
+        while let Some((parent, _)) = current.rsplit_once('/') {
+            directories.insert(parent.to_string());
+            current = parent;
+        }
+    }
+    directories
+}
+
+fn headings(text: &str) -> BTreeSet<String> {
+    let mut result = BTreeSet::new();
+    let mut fence = None;
+    for line in text.lines() {
+        if fenced(line, &mut fence) {
+            continue;
+        }
+        let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+        if indent > 3 {
+            continue;
+        }
+        let tail = &line[indent..];
+        let hashes = tail.bytes().take_while(|byte| *byte == b'#').count();
+        if !(1..=6).contains(&hashes)
+            || !tail[hashes..].is_empty() && !matches!(tail.as_bytes()[hashes], b' ' | b'\t')
+        {
+            continue;
+        }
+        let mut title = tail[hashes..].trim();
+        let closing = title.bytes().rev().take_while(|byte| *byte == b'#').count();
+        if closing > 0 && title[..title.len() - closing].ends_with(char::is_whitespace) {
+            title = title[..title.len() - closing].trim_end();
+        }
+        let base = slug(&render_heading(title));
+        let mut candidate = base.clone();
+        let mut suffix = 1;
+        while result.contains(&candidate) {
+            candidate = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        result.insert(candidate);
+    }
+    result
+}
+
+fn render_heading(title: &str) -> String {
+    let visible = syntax(title);
+    let mut rendered = String::new();
+    let mut copied = 0;
+    let mut cursor = 0;
+    while cursor < visible.len() {
+        let (prefix, open) = if visible[cursor] == b'[' {
+            (cursor, cursor)
+        } else if visible[cursor] == b'!' && visible.get(cursor + 1) == Some(&b'[') {
+            (cursor, cursor + 1)
+        } else {
+            cursor += 1;
+            continue;
+        };
+        let Some(close) = balanced(&visible, open, b'[', b']') else {
+            cursor = open + 1;
+            continue;
+        };
+        if visible.get(close + 1) != Some(&b'(') {
+            cursor = close + 1;
+            continue;
+        }
+        let Some(end) = balanced(&visible, close + 1, b'(', b')') else {
+            break;
+        };
+        rendered.push_str(&title[copied..prefix]);
+        rendered.push_str(&title[open + 1..close]);
+        copied = end + 1;
+        cursor = copied;
+    }
+    rendered.push_str(&title[copied..]);
+    rendered
+}
+
+// GitHub-compatible for the current corpus; combining marks, emoji, and emphasis-heavy
+// headings remain divergences. Dash-setext/thematic-break lines deliberately create no
+// anchor, so a fragment cannot silently pass; '=' setext is rejected by the shape parser.
+// ATX-looking lines inside HTML comments may create phantom anchors under the accepted
+// raw-HTML boundary.
+fn slug(title: &str) -> String {
+    let mut escaped = false;
+    title
+        .chars()
+        .filter(|character| {
+            if escaped {
+                escaped = false;
+                return true;
+            }
+            if *character == '\\' {
+                escaped = true;
+                return false;
+            }
+            *character != '`'
+        })
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric() || matches!(character, ' ' | '-' | '_'))
+        .map(|character| if character == ' ' { '-' } else { character })
+        .collect()
 }
 
 fn external(destination: &str) -> bool {
@@ -326,7 +511,10 @@ mod tests {
     use super::*;
 
     fn checked(text: &str) -> Vec<Diagnostic> {
-        check_files(BTreeMap::from([("test.md".into(), text.into())]))
+        check_files(
+            BTreeMap::from([("test.md".into(), text.into())]),
+            BTreeSet::from(["test.md".into(), "relative.md".into()]),
+        )
     }
 
     #[test]
@@ -382,9 +570,102 @@ mod tests {
     }
 
     #[test]
+    fn heading_slugs_use_immutable_base_suffixes() {
+        let third_a = headings("# A\n# A\n# A\n");
+        let expected = ["a", "a-1", "a-2"];
+        assert_eq!(third_a, expected.into_iter().map(str::to_string).collect());
+
+        let colliding = headings("# A\n# A\n# A-1\n# S0 — Product-Repo Bootstrap and CI\n");
+        let expected = ["a", "a-1", "a-1-1", "s0--product-repo-bootstrap-and-ci"];
+        assert_eq!(
+            colliding,
+            expected.into_iter().map(str::to_string).collect()
+        );
+    }
+
+    #[test]
+    fn heading_links_slug_their_rendered_labels() {
+        let text = "# [Product](p.md)\n# [Boxes](b.md)\n# [Packages](p.md)\n# [Runtime](r.md)\n# [Evolution](e.md)\n# [Software Factory](f.md) — the flagship application\n# [Quality and Authority](q.md)\n";
+        let expected = [
+            "product",
+            "boxes",
+            "packages",
+            "runtime",
+            "evolution",
+            "software-factory--the-flagship-application",
+            "quality-and-authority",
+        ];
+        assert_eq!(
+            headings(text),
+            expected.into_iter().map(str::to_string).collect()
+        );
+        let got = checked("# [Product](missing.md)\n");
+        assert!(got[0].message.contains("missing.md"));
+    }
+
+    #[test]
+    fn tracked_relative_self_query_directory_and_paren_targets_pass() {
+        let source = "# Here\n[relative](../target.md#target) [self](#here) [query](../target.md?q=1#target)\n[directory](../assets) [directory-slash](../assets/) [paren](../assets/(name).bin) ![image](../image.png)\n";
+        let files = BTreeMap::from([
+            ("docs/source.md".into(), source.into()),
+            ("target.md".into(), "# Target\n".into()),
+        ]);
+        let tracked = [
+            "docs/source.md",
+            "target.md",
+            "assets/file.bin",
+            "assets/(name).bin",
+            "image.png",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        assert!(check_files(files, tracked).is_empty());
+    }
+
+    #[test]
+    fn exact_tracked_targets_and_fragments_fail_loudly() {
+        let source = "[missing](../missing.md)\n[case](../Target.md)\n[untracked](../ghost.md)\n[above](../../bad)\n[anchor](../target.md#missing)\n[empty](../target.md#)\n[dir](../assets#x)\n[non-md](../image.png#x)\n![image](../target.md#target)\n";
+        let files = BTreeMap::from([
+            ("docs/source.md".into(), source.into()),
+            ("target.md".into(), "# Target\n".into()),
+            ("ghost.md".into(), "# Ghost\n".into()),
+        ]);
+        let tracked = ["docs/source.md", "target.md", "assets/file", "image.png"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let got = check_files(files, tracked);
+        assert_eq!(got.len(), 9);
+        for needle in [
+            "missing.md",
+            "Target.md",
+            "ghost.md",
+            "above repository",
+            "#missing",
+            "empty fragment",
+            "directory",
+            "non-Markdown",
+            "image fragments",
+        ] {
+            assert!(got.iter().any(|item| item.message.contains(needle)));
+        }
+        assert!(got[1].message.contains("resolved target \"Target.md\""));
+    }
+
+    #[test]
+    fn dash_setext_does_not_create_a_silent_anchor() {
+        let files = BTreeMap::from([("dash.md".into(), "Title\n---\n[bad](#title)\n".into())]);
+        let got = check_files(files, BTreeSet::from(["dash.md".into()]));
+        assert_eq!(got.len(), 1);
+        assert!(got[0].message.contains("no anchor \"title\""));
+    }
+
+    #[test]
     fn live_tracked_markdown_is_nonempty_and_shape_clean() {
-        let files = load(&crate::root()).unwrap();
+        let (files, tracked) = load(&crate::root()).unwrap();
         assert!(!files.is_empty());
-        assert!(check_files(files).is_empty());
+        assert!(tracked.len() >= files.len());
+        assert!(check_files(files, tracked).is_empty());
     }
 }
