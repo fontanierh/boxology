@@ -190,7 +190,7 @@ fn trivial_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
 fn run_trivial(out: &Path) -> std::result::Result<(), String> {
     fs::write(
         out.join("README.txt"),
-        b"boxology determinism trivial subject v1\n",
+        format!("boxology determinism trivial subject v1 {}\n", env::consts::OS),
     )
     .map_err(|error| format!("write README.txt: {error}"))?;
     fs::write(out.join("empty.txt"), []).map_err(|error| format!("write empty.txt: {error}"))?;
