@@ -196,6 +196,11 @@ fn run_trivial(out: &Path) -> std::result::Result<(), String> {
     fs::write(out.join("empty.txt"), []).map_err(|error| format!("write empty.txt: {error}"))?;
     fs::write(out.join("data.bin"), (0..=255).collect::<Vec<u8>>())
         .map_err(|error| format!("write data.bin: {error}"))?;
+    fs::write(
+        out.join("epoch.txt"),
+        env::var("SOURCE_DATE_EPOCH").unwrap_or_default(),
+    )
+    .map_err(|error| format!("write epoch.txt: {error}"))?;
     fs::create_dir(out.join("sub")).map_err(|error| format!("create sub: {error}"))?;
     fs::write(out.join("sub/nested.txt"), b"nested\n")
         .map_err(|error| format!("write nested.txt: {error}"))
