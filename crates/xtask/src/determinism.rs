@@ -111,6 +111,18 @@ fn validate_manifest_path(path: &str) -> Result<(), String> {
 pub fn scan_tree(subject: &str, root: &Path) -> Result<Manifest, String> {
     scan_tree_with_limits(subject, root, MAX_TREE_ENTRIES, MAX_TREE_BYTES)
 }
+/// Scan the globally bounded `trees/<subject>/...` artifact layout.
+pub fn scan_subject_trees(root: &Path) -> Result<Manifest, String> {
+    let mut manifest = scan_tree("registry", root)?;
+    for record in &mut manifest.0 {
+        record.path = record
+            .path
+            .strip_prefix("registry/")
+            .ok_or("invalid registered-subject path")?
+            .into();
+    }
+    Manifest::parse(&manifest.serialize())
+}
 fn scan_tree_with_limits(
     subject: &str,
     root: &Path,
