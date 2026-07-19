@@ -150,7 +150,7 @@ pub(crate) fn child_from_args(args: &[String]) -> Option<u8> {
         _ => None,
     }
 }
-fn registry() -> std::result::Result<Vec<Subject>, String> {
+pub(crate) fn registry() -> std::result::Result<Vec<Subject>, String> {
     let subjects = vec![Subject {
         name: "trivial-tree",
         prepare: None,
@@ -159,7 +159,7 @@ fn registry() -> std::result::Result<Vec<Subject>, String> {
     validate_registry(&subjects)?;
     Ok(subjects)
 }
-fn validate_registry(subjects: &[Subject]) -> std::result::Result<(), String> {
+pub(crate) fn validate_registry(subjects: &[Subject]) -> std::result::Result<(), String> {
     let mut previous: Option<&str> = None;
     for subject in subjects {
         let mut bytes = subject.name.bytes();
@@ -201,7 +201,7 @@ fn run_trivial(out: &Path) -> std::result::Result<(), String> {
         .map_err(|error| format!("write nested.txt: {error}"))
 }
 
-fn create_run_root(workspace: &Path) -> Result<PathBuf> {
+pub(crate) fn create_run_root(workspace: &Path) -> Result<PathBuf> {
     let parent = workspace.join("target/xtask-determinism");
     fs::create_dir_all(&parent).map_err(|error| infra("create run parent", error))?;
     let root = loop {
@@ -229,7 +229,7 @@ fn create_run_root(workspace: &Path) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn remove_run_root(root: &Path) -> Result<()> {
+pub(crate) fn remove_run_root(root: &Path) -> Result<()> {
     if fs::read(root.join(MARKER)).ok().as_deref() != Some(b"v1\n") {
         return Err(Failure::Infra(
             "refusing unmarked recursive deletion".into(),
@@ -333,7 +333,7 @@ fn run_subjects(
     Ok(manifest)
 }
 
-fn protocol(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Vec<String>> {
+pub(crate) fn protocol(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Vec<String>> {
     let baseline_context = Context::at(root, false);
     let reference = baseline(workspace, root, subjects)?;
     retain_experiment(root, &baseline_context, "baseline")?;
@@ -530,7 +530,7 @@ pub(crate) fn report(error: Failure, root: Option<&Path>) -> u8 {
     code
 }
 
-fn finish_local(root: &Path, result: Result<Vec<String>>) -> u8 {
+pub(crate) fn finish_local(root: &Path, result: Result<Vec<String>>) -> u8 {
     match result {
         Ok(findings) if findings.is_empty() => match remove_run_root(root) {
             Ok(()) => {

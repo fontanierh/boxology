@@ -8,6 +8,8 @@ mod budget;
 mod deny;
 pub mod determinism;
 mod determinism_compare;
+#[cfg(test)]
+mod determinism_meta;
 mod determinism_publish;
 mod determinism_run;
 mod links;
