@@ -219,7 +219,7 @@ fn walk(
     }
     Ok(())
 }
-fn hash_file(path: &Path, remaining: u64) -> Result<(u64, String), String> {
+pub(crate) fn hash_file(path: &Path, remaining: u64) -> Result<(u64, String), String> {
     let mut file = File::open(path).map_err(|error| format!("open output file: {error}"))?;
     let mut digest = Sha256::new();
     let mut size = 0_u64;

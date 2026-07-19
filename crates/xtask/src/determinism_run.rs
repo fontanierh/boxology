@@ -1,4 +1,5 @@
-use crate::determinism::scan_subject_trees;
+use crate::determinism::{Manifest, scan_subject_trees};
+use crate::determinism_publish::publish;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -47,9 +48,50 @@ pub fn local(workspace: &Path) -> u8 {
         Err(error) => return report(error, None),
     };
     match baseline(workspace, &root, &subjects) {
-        Ok(()) => match remove_run_root(&root) {
+        Ok(_) => match remove_run_root(&root) {
             Ok(()) => {
                 println!("determinism: PASS (baseline observation)");
+                0
+            }
+            Err(error) => report(error, Some(&root)),
+        },
+        Err(error) => report(error, Some(&root)),
+    }
+}
+pub fn manifest(workspace: &Path, out: &Path) -> u8 {
+    let subjects = match registry() {
+        Ok(subjects) => subjects,
+        Err(error) => return report(Failure::Infra(error), None),
+    };
+    manifest_with(workspace, out, &subjects)
+}
+fn manifest_with(workspace: &Path, out: &Path, subjects: &[Subject]) -> u8 {
+    let root = match create_run_root(workspace) {
+        Ok(root) => root,
+        Err(error) => return report(error, None),
+    };
+    let result = baseline(workspace, &root, subjects).and_then(|manifest| {
+        let environment = controlled_env(&root.join("home"), &root.join("tmp"));
+        let names: Vec<_> = subjects.iter().map(|subject| subject.name).collect();
+        let run_id = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| Failure::Infra("run root has no UTF-8 identifier".into()))?;
+        publish(
+            out,
+            &root.join("out/base"),
+            &root.join("capture"),
+            &manifest,
+            &names,
+            &environment,
+            run_id,
+        )
+        .map_err(Failure::Infra)
+    });
+    match result {
+        Ok(()) => match remove_run_root(&root) {
+            Ok(()) => {
+                println!("determinism-manifest: PASS {}", out.display());
                 0
             }
             Err(error) => report(error, Some(&root)),
@@ -156,7 +198,7 @@ fn remove_run_root(root: &Path) -> Result<()> {
     fs::remove_dir_all(root).map_err(|error| infra("remove run root", error))
 }
 
-fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<()> {
+fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<Manifest> {
     let (home, tmp, cwd, trees) = (
         root.join("home"),
         root.join("tmp"),
@@ -181,7 +223,17 @@ fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<()> {
             execute(subject, &out, &cwd, root, &environment)?,
         ));
     }
-    scan_subject_trees(&trees).map_err(Failure::Finding)?;
+    let manifest = scan_subject_trees(&trees).map_err(Failure::Finding)?;
+    if let Some(record) = manifest.records().iter().find(|record| {
+        !subjects
+            .iter()
+            .any(|subject| record.path.starts_with(&format!("{}/", subject.name)))
+    }) {
+        return Err(Failure::Finding(format!(
+            "unregistered subject output: {}",
+            record.path
+        )));
+    }
     for (name, outcome) in outcomes {
         println!(
             "determinism: PASS subject={} experiment=baseline capture={}/{}{}{}",
@@ -192,7 +244,7 @@ fn baseline(workspace: &Path, root: &Path, subjects: &[Subject]) -> Result<()> {
             if outcome.stderr.truncated { "+" } else { "" }
         );
     }
-    Ok(())
+    Ok(manifest)
 }
 
 fn controlled_env(home: &Path, tmp: &Path) -> Vec<(OsString, OsString)> {
@@ -335,6 +387,51 @@ mod tests {
     fn env_argv(_: &Path) -> (PathBuf, Vec<OsString>) {
         ("/usr/bin/env".into(), Vec::new())
     }
+    fn true_argv(_: &Path) -> (PathBuf, Vec<OsString>) {
+        ("/usr/bin/true".into(), Vec::new())
+    }
+    fn file_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "printf stable > \"$1/file.txt\"".into(),
+                "boxology-test".into(),
+                out.into(),
+            ],
+        )
+    }
+    fn capped_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                "dd if=/dev/zero of=\"$1/00-over\" bs=1048577 count=1 2>/dev/null; i=1; while [ $i -le 17 ]; do n=$(printf %02d $i); dd if=/dev/zero of=\"$1/$n\" bs=1048576 count=1 2>/dev/null; i=$((i+1)); done".into(),
+                "boxology-test".into(),
+                out.into(),
+            ],
+        )
+    }
+    fn subject(name: &'static str, argv: fn(&Path) -> (PathBuf, Vec<OsString>)) -> Subject {
+        Subject {
+            name,
+            prepare: None,
+            argv,
+        }
+    }
+    fn workspace(name: &str) -> PathBuf {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/determinism-run-tests")
+            .join(format!(
+                "{name}-{}",
+                NEXT_RUN.fetch_add(1, Ordering::Relaxed)
+            ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+    fn read(root: &Path, path: &str) -> Vec<u8> {
+        fs::read(root.join(path)).unwrap()
+    }
 
     #[test]
     fn executor_passes_only_the_controlled_environment() {
@@ -370,5 +467,89 @@ mod tests {
         let data = fs::read(out.join("data.bin")).unwrap();
         assert_eq!(data, (0_u8..=255).collect::<Vec<_>>());
         remove_run_root(&root).unwrap();
+    }
+
+    #[test]
+    fn manifest_publication_is_stable_with_separate_variable_evidence() {
+        let workspace = workspace("manifest");
+        let subjects = [subject("fixture", file_argv)];
+        let (first, second) = (workspace.join("first"), workspace.join("second"));
+        assert_eq!(manifest_with(&workspace, &first, &subjects), 0);
+        assert_eq!(manifest_with(&workspace, &second, &subjects), 0);
+        assert_eq!(read(&first, "MANIFEST"), read(&second, "MANIFEST"));
+        assert_ne!(
+            read(&first, "evidence/run.json"),
+            read(&second, "evidence/run.json")
+        );
+        let top: BTreeSet<_> = fs::read_dir(&first)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            top,
+            ["MANIFEST", "evidence", "trees"].map(OsString::from).into()
+        );
+        assert_eq!(read(&first, "trees/fixture/file.txt"), b"stable");
+        let atomic = workspace.join("atomic");
+        let source = workspace.join("source/fixture");
+        let capture = workspace.join("capture");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir(&capture).unwrap();
+        fs::write(source.join("file.txt"), b"stable").unwrap();
+        let manifest = scan_subject_trees(&workspace.join("source")).unwrap();
+        fs::write(source.join("file.txt"), b"mutant").unwrap();
+        for stream in ["stdout", "stderr"] {
+            fs::write(capture.join(format!("fixture.{stream}")), []).unwrap();
+        }
+        let error = publish(
+            &atomic,
+            &workspace.join("source"),
+            &capture,
+            &manifest,
+            &["fixture"],
+            &[],
+            "atomic",
+        )
+        .unwrap_err();
+        assert!(error.contains("retained bytes differ from manifest"));
+        assert!(!atomic.exists());
+        assert!(
+            !workspace
+                .join(format!(".boxology-publish-{}-atomic", std::process::id()))
+                .exists()
+        );
+        assert_eq!(
+            manifest_with(
+                &workspace,
+                &workspace.join("invalid"),
+                &[subject("bad", true_argv)]
+            ),
+            1
+        );
+        assert!(!workspace.join("invalid").exists());
+        let prior_manifest = read(&first, "MANIFEST");
+        let prior_body = read(&first, "trees/fixture/file.txt");
+        assert_eq!(manifest_with(&workspace, &first, &subjects), 2);
+        assert_eq!(read(&first, "MANIFEST"), prior_manifest);
+        assert_eq!(read(&first, "trees/fixture/file.txt"), prior_body);
+        assert!(!fs::read_dir(&workspace).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".boxology-publish-")
+        }));
+        let capped = workspace.join("capped");
+        assert_eq!(
+            manifest_with(&workspace, &capped, &[subject("cap", capped_argv)]),
+            0
+        );
+        let envelope =
+            String::from_utf8(read(&capped, "evidence/subjects/cap/envelope.json")).unwrap();
+        assert!(envelope.contains("file-limit") && envelope.contains("subject-limit"));
+        assert!(!capped.join("trees/cap/00-over").exists());
+        assert!(capped.join("trees/cap/16").exists());
+        assert!(!capped.join("trees/cap/17").exists());
+        fs::remove_dir_all(workspace).unwrap();
     }
 }
