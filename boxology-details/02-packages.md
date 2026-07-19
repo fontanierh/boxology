@@ -85,8 +85,8 @@ role = "box-contract"
 [[derived]]
 id = "contract"
 generator = "boxology-contract"
-inputs = ["implementation/src/**"]
-outputs = ["generated/contract/**", "generated/schema.json"]
+inputs = ["boxology.toml", "implementation/src/**", "../customer/generated/schema.json"]
+outputs = ["generated/contract/**", "generated/adapter/**", "generated/schema.json"]
 ```
 
 The generator value is a logical workspace-tool identity, not a per-box version pin. The current workspace tool resolves the executable; generated outputs record its resolved version as provenance.

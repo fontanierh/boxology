@@ -1,6 +1,6 @@
 # S2 Spec — Contract Generator
 
-[Stream definition](../boxology-details/11-v0-streams.md#s2--contract-generator) · Status: **revised, awaiting re-review** (first review addressed; cross-stream contract in issue #85)
+[Stream definition](../boxology-details/11-v0-streams.md#s2--contract-generator) · Status: **accepted at merge** (two review rounds addressed; cross-stream contract in issue #85)
 
 S2 builds the deterministic pre-Cargo generator: it reads annotated implementation source and emits the generated contract crate (types, descriptors, dispatch, handle, test support), the language-neutral schema, and the implementation-side adapter. It is the v0 long pole. Normative inputs: [Rust Build Topology](../boxology-details/08-rust-build-topology.md), [Canonical Capability Contract](../boxology-details/09-capability-contract.md). Classification is *not* here — S2 emits schemas and revisions; S4 judges changes.
 
@@ -20,12 +20,12 @@ The generator mechanizes the shape S1 designs by hand: its correctness definitio
 
 ### D1 — Crates and the pure-request invocation model
 
-- **`boxology-generator`** — a library with **no filesystem access at all**. Its API is `generate(GenerationRequest) -> Result<GeneratedTree, Diagnostics>` where `GenerationRequest` carries the box identity/metadata, the complete set of logical inputs as `(relative path, bytes)`, declared imports, and declared logical outputs; `GeneratedTree` is `(relative path, bytes)` pairs plus the schema and computed fingerprint. Purity is structural, not disciplinary — the crate has no `std::fs` dependency, which *is* the fail-closed input rule: an undeclared input cannot be read because inputs arrive by value. Callers own resolution and projection: S5 resolves manifests and projects outputs atomically (preserving mtimes on unchanged files); S0's harness constructs requests in temp roots; tests construct them inline. This replaces the first draft's incoherent pure-but-does-I/O posture.
+- **`boxology-generator`** — a library whose API is `generate(GenerationRequest) -> Result<GeneratedTree, Diagnostics>`: the request carries box identity/metadata, the complete logical inputs as `(relative path, bytes)` — **including the package's `boxology.toml` and each imported package's checked-in `schema.json`, which are declared semantic inputs** — declared imports, and declared logical outputs; `GeneratedTree` is `(relative path, bytes)` pairs plus schema and fingerprint. Honesty correction from review: `std::fs` is a standard-library module, so "no filesystem access" is a **tested implementation rule**, not a structural impossibility — enforced by a clippy `disallowed-methods` deny-list (fs, env, network, clock APIs) on the crate plus review; the request/tree seam remains the design boundary, and process-level fail-closed input enforcement is owned by S5's resolver/projection. Callers own resolution and projection: S5 resolves manifests and projects outputs atomically (preserving mtimes on unchanged files); S0's harness constructs requests in temp roots; tests construct them inline. This replaces the first draft's incoherent pure-but-does-I/O posture.
 - **`boxology-macros`** — compile-time companions `#[boxology::capability]` / `#[boxology::contract]`: validate placement/signature shape and expand contract declarations into re-exports. They share the parse/model crate with the generator so the two views cannot drift. They never generate contract content.
 
 ### D2 — Source discovery, self-containment, and `cfg` rules
 
-Every file in the declared input set is authoritative — "every declared file counts," deliberately, rather than module-graph traversal (deterministic, simple, and dead-file annotations become *visible* rather than silently ignored; duplicate definitions across files get a dedicated diagnostic). Self-containment rules, each with a coded diagnostic: boundary types spelled from the supported grammar only (no aliases, no macro-generated fields, no `use`-renames in boundary position); **`cfg`/`cfg_attr` anywhere on an exported item, its fields/variants, an enclosing module declaration, or the surrounding `impl` block is an error** — ancestors included, closing the first draft's item-only gap; derives on contract declarations survive only from the allowlist (`Debug`, `Clone`, `PartialEq`), everything else errors by name; doc comments lift verbatim.
+Review established that ancestor-`cfg` checks require module resolution, so "every declared file counts" alone was insufficient. Corrected: the generator performs **deterministic in-crate module resolution** over the declared inputs — starting at the crate root within the inputs, following plain `mod x;` declarations; `#[path]` is a coded rejection; an annotated item in a file *not reachable* through that module tree is a coded error (`annotated item in unreachable file`), so dead files are visible, not silent. With the resolved chain, **`cfg`/`cfg_attr` on an exported item, its fields/variants, the surrounding `impl`, or any ancestor `mod` declaration in the resolved chain is an error**. Two contract types resolving to the same lifted name from different modules is a coded collision error (the lifted namespace is flat in v0). Self-containment rules keep their coded diagnostics: boundary types from the supported grammar only (no aliases, no macro-generated fields, no `use`-renames in boundary position); doc comments lift verbatim. **Attribute policy is a complete allowlist**: `doc`, `boxology::*`, allowlisted derives (`Debug`, `Clone`, `PartialEq`), and `#[deprecated]` (lifted — see D5a); any other attribute is a coded error by name.
 
 ### D3 — The supported source grammar is the normative subset, referenced not re-listed
 
@@ -37,9 +37,14 @@ The first draft's illustrative type list was phrased as exhaustive and contradic
 - **Capability local name**: the Rust fn name, or explicit `name = "..."` override (`[a-z][a-z0-9_]*`); the override is the rename-preserving mechanism for capabilities.
 - **Qualified capability id**: `<box id>.<local name>` — used in schemas and manifests; wire routing uses the two segments separately (`/rpc/{box_id}/{capability_local_name}`), reconciling the previously inconsistent spellings.
 - **Type identity**: the lifted type's name (PascalCase). **v0 has no type-rename override**: renaming a boundary type is remove+add and will classify as breaking — recorded as an accepted v0 limitation (rename machinery arrives with the #3-adjacent lifecycle work).
+- **Import-slot identity**: the imported package id (v0 permits at most one import per foreign package; aliases post-v0). The imported capability set and expected contract revision are read from the imported package's checked-in `schema.json` — a declared generation input — so `ImportDescriptor` values are deterministic.
 - **Field identity**: field name. **Variant identity**: variant name. Same v0 no-override rule.
 
 These namespaces are emitted into schema and descriptors identically; S4 diffs on them.
+
+### D5a — Metadata coverage: deprecation supported, defaults defined
+
+Completing the fail-closed table per review: **deprecation is supported, not rejected** — `#[deprecated]` (optionally with `note`) on an exported capability, type, field, or variant lifts into schema and descriptors as classification-relevant metadata. **Omission defaults are fail-safe and explicit**: an unannotated capability's exposure defaults to `code-only` (the narrowest); unannotated idempotency defaults to `None`. Everything outside the D2 allowlist and the supported metadata set errors by name with a stable code.
 
 ### D5 — Emission inventory and placement
 
@@ -54,6 +59,7 @@ generated/adapter/adapter.rs # implementation-side adapter, include!-d via a han
                              #   one-line stub inside the implementation crate
 ```
 
+- **Descriptors follow S1's outward/implementation split**: the public contract crate emits the `ContractDescriptor` only; the `ImplementationDescriptor` (with `ImportDescriptor`s) is emitted in the adapter. Private import changes never touch the outward artifact or its revision.
 - **Consumer `Imports` support is implementation-local, not contract-crate content.** The first draft put a box's import aggregation and foreign-contract dependencies into its *public* contract crate, recreating exactly the contract-to-contract edges the topology forbids (A-impl imports B and B-impl imports A would have made A-contract ↔ B-contract a Cargo cycle) and leaking private dependencies to every consumer. Corrected: the provider contract crate contains only the outward contract; import wiring (typed import handles bundle) is emitted into the adapter file, which lives in the implementation crate's dependency scope where foreign *contract* dependencies are legal by the edge table.
 - **The adapter path is disjoint from inputs by construction**: inputs are `implementation/src/**`; the adapter lives under `generated/`, included via a checked-in handwritten stub (`mod generated { include!("../../generated/adapter/adapter.rs"); }`) that is ordinary owned source. Output never feeds the next input digest; every path classifies exactly once. The normative manifest example gains `generated/adapter/**` in the derived outputs — a reconciliation this PR's merge notes carry to `02-packages.md`.
 - **Test support is restored** (an accepted generator output the first draft dropped): a programmable contract-level fake per capability, generated into the contract crate behind a `test-support` feature, hand-modeled first in the S1 fixtures. Behavioral conformance is part of acceptance; #44's reconciliation notes the placement decision.
@@ -69,7 +75,7 @@ Generated Rust is printed by pinned `prettyplease` (a locked library dependency 
 
 ### D8 — Adapter and the v0 receiver model
 
-The accepted design promises no prescribed internal organization; v0 constrains it honestly rather than silently: **all annotated capabilities of a box must be inherent `&self` methods on a single receiver type** — multi-receiver boxes and free-function capabilities are coded "not supported in v0" diagnostics. The adapter emits `pub fn into_dispatch(receiver: TheService) -> impl ErasedTarget + use<>`, the value registration consumes; construction of the receiver is the composition author's ordinary Rust. The broader-organization promise is recorded as narrowed-for-v0 in the merge notes.
+The accepted design promises no prescribed internal organization; v0 constrains it honestly rather than silently: **all annotated capabilities of a box must be inherent `&self` methods on a single receiver type** — multi-receiver boxes and free-function capabilities are coded "not supported in v0" diagnostics. The adapter emits the generated factory surface S1 D11 consumes (`Imports` bundle + `FnOnce(Imports) -> TheService` registration), with **explicit `Send + Sync + 'static` bounds on the receiver and `Send` bounds on method futures** — so a receiver holding `Rc`, or a method holding a non-`Send` guard across `.await`, fails at implementation-crate compile time with a pointed error at the generated bound; a compile-fail fixture pins this. Construction of the receiver is the composition author's ordinary Rust, executed inside the factory. The broader-organization promise is recorded as narrowed-for-v0 in the merge notes.
 
 ### D9 — Determinism
 
@@ -81,7 +87,7 @@ Every error: stable code (`BXG####`), workspace-relative file + span, offending 
 
 ### D11 — Golden protocol against S1 fixtures
 
-Inputs: each fixture's `authoring/` tree (parse-only data in S1; compiles only once `boxology-macros` exists). Expected outputs: the fixture's hand-written `generated/contract/` crate, `generated/schema.json`, and adapter golden — compared **byte-for-byte with provenance normalization**: golden files carry a `@PROVENANCE@` placeholder token; the comparison substitutes the actual provenance line before comparing, so generator-version churn never touches goldens. Fixture shape and generator change **atomically in one task PR** (the first draft's two-PR sequence would strand required checks red). A compile-and-run test regenerates `hello`, builds it, and passes S1's integration suite — proving the emitted code works, not just matches.
+Inputs: each fixture's `authoring/` tree (parse-only data in S1; compiles only once `boxology-macros` exists). Expected outputs: the fixture's hand-written `generated/contract/` crate, `generated/schema.json`, and the adapter golden at `generated/adapter/adapter.rs` (the S1 D13 inventory, now aligned) — compared **byte-for-byte under the complete provenance-normalization protocol**: (a) for `schema.json`, the golden stores `"provenance": "@PROVENANCE@"`; comparison parses both documents, replaces the *entire* provenance object (generator version, printer version, input digest) with the token, re-serializes canonically, and compares — exactly one provenance object is required, and extra or missing tokens fail the comparison; (b) for Rust artifacts, the golden's first line is the token line; comparison replaces exactly the first header line matching `^// Generated by boxology-generator .*$` — one occurrence required per artifact, anything else fails; (c) the fingerprint participates in comparison and excludes provenance by construction, so drift outside provenance can never be hidden by normalization. Fixture shape and generator change **atomically in one task PR** (the first draft's two-PR sequence would strand required checks red). A compile-and-run test regenerates `hello`, builds it, and passes S1's integration suite — proving the emitted code works, not just matches.
 
 ## Acceptance criteria
 
@@ -89,7 +95,7 @@ Inputs: each fixture's `authoring/` tree (parse-only data in S1; compiles only o
 2. Regenerated `hello` compiles and passes S1's integration suite unmodified; its emitted descriptors validate under S1 assembly.
 3. Every diagnostic code has a failing-input test asserting code and span, including: each fail-closed rejection (Keyed, auth metadata, validation annotations, non-unary shape, foreign boundary type, multi-receiver, free function), ancestor-`cfg`, aliased boundary type, non-allowlisted derive, duplicate definitions across declared files.
 4. Fingerprint properties hold against the frozen projection: the fixture projection bytes match pinned goldens; every mutation in the enumerated corpus changes the fingerprint; provenance-only and stored-encoding-only changes do not.
-5. Test-support fakes behaviorally conform: programmed responses round-trip through typed handles; a fake refusing an unprogrammed capability yields the specified error.
+5. Test-support fakes behaviorally conform: programmed responses round-trip through typed handles; an unprogrammed capability yields `ErasedCallError::Internal` with detail code `unprogrammed_capability` (named per review).
 6. The T1-registered determinism subject is green in S0's gating lane from its first PR onward.
 
 ## Task list
@@ -113,8 +119,8 @@ T1 first; T2–T5 fan out; T6 alongside; T8 last. S1's fixture shape must be mer
 
 - The derive allowlist may grow with fixture-level justification.
 - Adapter include-stub ergonomics (module name, path constant) — T5 detail.
-- Whether `f32` stays in the v0 grammar or is deferred with a diagnostic — decided by the kitchen-sink fixture at S1 T7; either way the grammar table is the single source.
+- *(f32 is settled: it is in the v0 grammar and the kitchen-sink fixture — removed from open matters per review.)*
 
 ## Tracker notes
 
-Merge-time reconciliation: `02-packages.md` manifest example gains the adapter/test-support/descriptor outputs and disjoint globs; normative "the generator classifies" phrasings are reworded to classifier-consumes-S2-schemas; #44 notes test-binding placement; #6 notes descriptor/dispatch decisions land in S1/S2. Issue #85 items 2, 4, 5, 6, 7 are resolved here jointly with the S1/S3 revisions.
+Normative reconciliation is **in this PR's diff** (review correctly rejected "merge notes carry"): `02-packages.md`'s manifest example now declares `boxology.toml` and imported schemas as inputs and `generated/adapter/**` among outputs; `08-rust-build-topology.md` now records test-support placement (contract crate, `test-support` feature) and formats hand-authored packages by selection rather than `--all`. #44's note stands; #6's note stands. Issue #85's S2 items (import contract, declared inputs, formatting mechanism, fixture inventory, metadata coverage, module resolution, purity honesty, f32, provenance protocol, Send bounds, normative edits, named fake error) are resolved in this revision.
