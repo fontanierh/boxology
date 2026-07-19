@@ -30,6 +30,7 @@ concurrency:
 
 env:
   CARGO_INCREMENTAL: "0"
+  CARGO_DENY_VERSION: "0.20.2"
 
 jobs:
   checks-linux:
@@ -55,10 +56,17 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+            ~/.cargo/bin/cargo-deny
             target
-          key: cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
             cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install pinned cargo-deny
+        run: |
+          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
+            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
+          fi
+          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
       - name: cargo xtask ci (pull request)
         if: github.event_name == 'pull_request'
         env:
@@ -97,8 +105,38 @@ jobs:
       - name: cargo xtask test
         run: cargo xtask test
 
+  deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "x86_64-unknown-linux-gnu"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_DENY_VERSION }}
+      - name: Install pinned cargo-deny
+        run: |
+          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
+            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
+          fi
+          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
+      - name: cargo xtask deny
+        run: cargo xtask deny
+
   validation:
-    needs: [checks-linux, checks-macos]
+    needs: [checks-linux, checks-macos, deny]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
