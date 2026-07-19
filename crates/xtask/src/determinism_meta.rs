@@ -1,5 +1,6 @@
 use crate::determinism::{ByteDiff, byte_diff};
 use crate::determinism_compare::compare;
+use crate::determinism_cross::fixture as platform_fixture;
 use crate::determinism_run::{
     Subject, create_run_root, finish_local, manifest_with, protocol, registry, remove_run_root,
     validate_registry,
@@ -296,8 +297,20 @@ fn meta_fixtures_are_canonical_and_outside_the_live_registry() {
         subject("meta-crlf", crlf_argv),
         subject("meta-locale-format", locale_argv),
         subject("meta-map-order", map_argv),
+        platform_fixture(),
         subject("meta-timestamp", timestamp_argv),
     ];
+    assert_eq!(
+        fixtures.iter().map(|item| item.name).collect::<Vec<_>>(),
+        [
+            "meta-absolute-path",
+            "meta-crlf",
+            "meta-locale-format",
+            "meta-map-order",
+            "meta-platform",
+            "meta-timestamp",
+        ]
+    );
     validate_registry(&fixtures).unwrap();
     assert!(fixtures.iter().all(|fixture| {
         registered

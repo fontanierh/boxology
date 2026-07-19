@@ -1,0 +1,311 @@
+use crate::determinism::{ManifestRecord, byte_diff, manifest_side};
+use crate::determinism_compare::hex;
+use crate::determinism_run::{Failure, Subject, manifest_with, report, validate_registry};
+use sha2::{Digest, Sha256};
+use std::env;
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const LINUX: &[u8] = b"os=linux\narch=x86_64\n";
+const MACOS: &[u8] = b"os=macos\narch=aarch64\n";
+
+fn fixed(out: &Path, value: &str) -> (PathBuf, Vec<OsString>) {
+    (
+        "/bin/sh".into(),
+        vec![
+            "-c".into(),
+            "printf %s \"$3\" > \"$1/$2\"".into(),
+            "boxology-meta".into(),
+            out.into(),
+            "platform.txt".into(),
+            value.into(),
+        ],
+    )
+}
+
+fn platform_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+    fixed(
+        out,
+        &format!(
+            "os={}\narch={}\n",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    )
+}
+
+pub(crate) fn fixture() -> Subject {
+    Subject {
+        name: "meta-platform",
+        prepare: None,
+        argv: platform_argv,
+    }
+}
+
+pub(crate) fn manifest(workspace: &Path, out: &Path) -> u8 {
+    let subjects = [fixture()];
+    if let Err(error) = validate_registry(&subjects) {
+        return report(Failure::Infra(error), None);
+    }
+    manifest_with(workspace, out, &subjects)
+}
+
+fn record(bytes: &[u8]) -> ManifestRecord {
+    ManifestRecord {
+        path: "meta-platform/platform.txt".into(),
+        size: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+    }
+}
+
+fn expected_finding() -> String {
+    let (left, right) = (record(LINUX), record(MACOS));
+    let difference = byte_diff(LINUX, MACOS).expect("platform fixtures differ");
+    format!(
+        "cross-platform mismatch subject=meta-platform experiment=baseline first=meta-platform/platform.txt left={} right={} offset={} left_window={} right_window={} left_len={} right_len={} differing=1",
+        manifest_side(Some(&left)),
+        manifest_side(Some(&right)),
+        difference.first_offset,
+        hex(&difference.left_window),
+        hex(&difference.right_window),
+        difference.left_len,
+        difference.right_len,
+    )
+}
+
+fn canonical(root: &Path, platform: &str) -> Result<PathBuf, String> {
+    fs::canonicalize(root)
+        .map_err(|error| format!("canonicalize {platform} root {}: {error}", root.display()))
+}
+
+fn print_stderr(stderr: &[u8]) {
+    eprintln!("determinism-meta-cross: actual stderr:");
+    eprint!("{}", String::from_utf8_lossy(stderr));
+    if !stderr.ends_with(b"\n") {
+        eprintln!();
+    }
+}
+
+fn gate(workspace: &Path, linux: &Path, macos: &Path) -> u8 {
+    let linux = match canonical(linux, "linux") {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("determinism-meta-cross: ERROR: {error}");
+            return 2;
+        }
+    };
+    let macos = match canonical(macos, "macos") {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("determinism-meta-cross: ERROR: {error}");
+            return 2;
+        }
+    };
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = match Command::new(cargo)
+        .args(["run", "-p", "xtask", "--quiet", "--", "determinism-compare"])
+        .arg(linux)
+        .arg(macos)
+        .current_dir(workspace)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("determinism-meta-cross: ERROR: start comparator: {error}");
+            return 2;
+        }
+    };
+    if output.status.success() {
+        eprintln!("determinism-meta-cross: FAIL: comparator unexpectedly passed");
+        return 1;
+    }
+    if output.status.code() != Some(1) {
+        eprintln!(
+            "determinism-meta-cross: ERROR: comparator exited with {}",
+            output.status
+        );
+        print_stderr(&output.stderr);
+        return 2;
+    }
+    let expected = format!("determinism: FINDING: {}", expected_finding());
+    if output
+        .stderr
+        .split(|byte| *byte == b'\n')
+        .any(|line| line == expected.as_bytes())
+    {
+        eprintln!("{expected}");
+        println!("determinism-meta-cross: PASS");
+        0
+    } else {
+        eprintln!("determinism-meta-cross: FAIL: comparator finding did not match");
+        eprintln!("determinism-meta-cross: expected: {expected}");
+        print_stderr(&output.stderr);
+        1
+    }
+}
+
+pub(crate) fn from_args(workspace: &Path, args: &[String]) -> Option<u8> {
+    match args {
+        [linux, macos]
+            if !linux.is_empty()
+                && !linux.starts_with('-')
+                && !macos.is_empty()
+                && !macos.starts_with('-') =>
+        {
+            Some(gate(workspace, Path::new(linux), Path::new(macos)))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::determinism_run::{create_run_root, finish_local, protocol};
+    use crate::determinism_verify::verify;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct Temp(PathBuf);
+    impl Temp {
+        fn new(name: &str) -> Self {
+            let path = workspace()
+                .join("target/determinism-cross-tests")
+                .join(format!(
+                    "{name}-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn workspace() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn host() -> (&'static [u8], &'static str) {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => (LINUX, "x86_64-unknown-linux-gnu"),
+            ("macos", "aarch64") => (MACOS, "aarch64-apple-darwin"),
+            pair => panic!("unsupported fixture host: {pair:?}"),
+        }
+    }
+
+    fn linux_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        fixed(out, std::str::from_utf8(LINUX).unwrap())
+    }
+
+    fn macos_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+        fixed(out, std::str::from_utf8(MACOS).unwrap())
+    }
+
+    fn variants(temp: &Temp) -> (PathBuf, PathBuf) {
+        let (linux, macos) = (temp.0.join("linux"), temp.0.join("macos"));
+        for (out, argv) in [
+            (&linux, linux_argv as fn(&Path) -> (PathBuf, Vec<OsString>)),
+            (&macos, macos_argv),
+        ] {
+            assert_eq!(
+                manifest_with(
+                    &workspace(),
+                    out,
+                    &[Subject {
+                        name: "meta-platform",
+                        prepare: None,
+                        argv,
+                    }]
+                ),
+                0
+            );
+        }
+        (linux, macos)
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn host_fixture_passes_protocol_publishes_and_verifies() {
+        let (host_bytes, target) = host();
+        let expected = format!(
+            "os={}\narch={}\n",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        assert_eq!(expected.as_bytes(), host_bytes);
+        let workspace = workspace();
+        let run = create_run_root(&workspace).unwrap();
+        let result = protocol(&workspace, &run, &[fixture()]);
+        assert!(result.as_ref().unwrap().is_empty());
+        assert_eq!(finish_local(&run, result), 0);
+        let temp = Temp::new("host");
+        let published = temp.0.join("published");
+        assert_eq!(manifest(&workspace, &published), 0);
+        assert_eq!(
+            fs::read(published.join("trees/meta-platform/platform.txt")).unwrap(),
+            host_bytes
+        );
+        assert_eq!(verify(&published, target, false), Ok(()));
+    }
+
+    #[test]
+    fn expected_finding_is_frozen() {
+        assert_eq!(
+            expected_finding(),
+            "cross-platform mismatch subject=meta-platform experiment=baseline first=meta-platform/platform.txt left=21:43a0205f7d464fbe right=22:dcd00cef10fb8eac offset=3 left_window=6c696e75780a617263683d7838365f36 right_window=6d61636f730a617263683d6161726368 left_len=21 right_len=22 differing=1"
+        );
+    }
+
+    #[test]
+    fn argv_is_exact_and_fixed_order_gate_passes() {
+        for args in [
+            vec![],
+            vec!["one"],
+            vec!["a", "b", "c"],
+            vec!["", "b"],
+            vec!["a", ""],
+            vec!["-a", "b"],
+            vec!["a", "--b"],
+        ] {
+            assert_eq!(from_args(&workspace(), &strings(&args)), None);
+        }
+        let temp = Temp::new("argv");
+        let (linux, macos) = variants(&temp);
+        let (linux, macos) = (
+            linux.to_string_lossy().into_owned(),
+            macos.to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            from_args(&workspace(), &[linux.clone(), macos.clone()]),
+            Some(0)
+        );
+        assert_eq!(from_args(&workspace(), &[macos, linux]), Some(1));
+    }
+
+    #[test]
+    fn gate_rejects_success_missing_corrupt_and_malformed_inputs() {
+        let temp = Temp::new("reject");
+        let (linux, macos) = variants(&temp);
+        assert_eq!(gate(&workspace(), &linux, &linux), 1);
+        let retained = linux.join("trees/meta-platform/platform.txt");
+        fs::remove_file(&retained).unwrap();
+        assert_eq!(gate(&workspace(), &linux, &macos), 1);
+        let mut corrupt = LINUX.to_vec();
+        corrupt[0] = b'x';
+        fs::write(&retained, corrupt).unwrap();
+        assert_eq!(gate(&workspace(), &linux, &macos), 2);
+        fs::write(&retained, LINUX).unwrap();
+        fs::write(linux.join("MANIFEST"), b"bad\n").unwrap();
+        assert_eq!(gate(&workspace(), &linux, &macos), 2);
+    }
+}
