@@ -1,8 +1,5 @@
-# S0-T2 (#87) — spec D4, bootstrap subset. The D4 table is the T7 end state;
-# this file wires only the jobs whose xtask commands exist after T1.
-# Staged enablement: each later task (T3-T7) adds its command and/or job AND
-# extends validation.needs in the same PR. `validation` is the single stable
-# required-check name (branch-protection target per D9, when available).
+# The S0 D4 validation matrix is fully wired. `validation` is the single stable
+# aggregate required-check name (branch-protection target per D9, when available).
 #
 # Candidate-writable (spec non-goal): a PR can modify this file and the checks
 # that judge it. Until S5/S7, protection is human review of changes to
@@ -75,6 +72,28 @@ jobs:
       - name: cargo xtask ci (main push)
         if: github.event_name == 'push'
         run: cargo xtask ci --no-budget
+      - name: Produce determinism artifacts
+        run: |
+          rm -rf target/determinism-linux target/determinism-linux-meta
+          rm -f target/determinism-linux.tar target/determinism-linux-meta.tar
+          cargo xtask determinism-manifest --out target/determinism-linux
+          cargo xtask determinism-manifest --out target/determinism-linux-meta --meta-cross
+          tar -cf target/determinism-linux.tar -C target/determinism-linux .
+          tar -cf target/determinism-linux-meta.tar -C target/determinism-linux-meta .
+      - name: Upload determinism-linux
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-linux
+          path: target/determinism-linux.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload determinism-linux-meta
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-linux-meta
+          path: target/determinism-linux-meta.tar
+          if-no-files-found: error
+          overwrite: true
 
   checks-macos:
     runs-on: macos-15
@@ -106,6 +125,30 @@ jobs:
         run: cargo xtask test
       - name: cargo xtask determinism
         run: cargo xtask determinism
+      - name: Produce determinism artifacts
+        env:
+          COPYFILE_DISABLE: "1"
+        run: |
+          rm -rf target/determinism-macos target/determinism-macos-meta
+          rm -f target/determinism-macos.tar target/determinism-macos-meta.tar
+          cargo xtask determinism-manifest --out target/determinism-macos
+          cargo xtask determinism-manifest --out target/determinism-macos-meta --meta-cross
+          tar -cf target/determinism-macos.tar -C target/determinism-macos .
+          tar -cf target/determinism-macos-meta.tar -C target/determinism-macos-meta .
+      - name: Upload determinism-macos
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-macos
+          path: target/determinism-macos.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload determinism-macos-meta
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-macos-meta
+          path: target/determinism-macos-meta.tar
+          if-no-files-found: error
+          overwrite: true
 
   deny:
     runs-on: ubuntu-24.04
@@ -137,8 +180,108 @@ jobs:
       - name: cargo xtask deny
         run: cargo xtask deny
 
+  determinism-compare:
+    needs: [checks-linux, checks-macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "x86_64-unknown-linux-gnu"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/cargo-deny
+            target
+          key: cargo-compare-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
+      - name: Download determinism-linux
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-linux
+          path: incoming/linux
+      - name: Download determinism-macos
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-macos
+          path: incoming/macos
+      - name: Unpack determinism artifacts
+        run: |
+          mkdir linux macos
+          tar -xf incoming/linux/determinism-linux.tar -C linux
+          tar -xf incoming/macos/determinism-macos.tar -C macos
+      - name: Verify determinism artifacts
+        run: |
+          cargo xtask determinism-verify linux --target x86_64-unknown-linux-gnu --require-image
+          cargo xtask determinism-verify macos --target aarch64-apple-darwin --require-image
+      - name: Compare determinism artifacts
+        run: cargo xtask determinism-compare linux macos
+
+  determinism-meta-cross:
+    needs: [checks-linux, checks-macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "x86_64-unknown-linux-gnu"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/cargo-deny
+            target
+          key: cargo-meta-cross-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
+      - name: Download determinism-linux-meta
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-linux-meta
+          path: incoming/linux-meta
+      - name: Download determinism-macos-meta
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-macos-meta
+          path: incoming/macos-meta
+      - name: Unpack meta-cross artifacts
+        run: |
+          mkdir linux-meta macos-meta
+          tar -xf incoming/linux-meta/determinism-linux-meta.tar -C linux-meta
+          tar -xf incoming/macos-meta/determinism-macos-meta.tar -C macos-meta
+      - name: Verify meta-cross artifacts
+        run: |
+          cargo xtask determinism-verify linux-meta --target x86_64-unknown-linux-gnu --require-image
+          cargo xtask determinism-verify macos-meta --target aarch64-apple-darwin --require-image
+      - name: Require expected cross-platform mismatch
+        run: cargo xtask determinism-meta-cross linux-meta macos-meta
+
   validation:
-    needs: [checks-linux, checks-macos, deny]
+    needs: [checks-linux, checks-macos, deny, determinism-compare, determinism-meta-cross]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
