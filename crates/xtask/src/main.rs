@@ -110,6 +110,7 @@ fn run_ci(base: Option<&str>) -> u8 {
         ("whitespace", check_tracked_whitespace()),
         ("links", links::check(&root())),
         ("deny", deny::run(&root()) == 0),
+        ("determinism", determinism_run::local(&root()) == 0),
     ];
     for &(name, passed) in &checks {
         println!("{name}: {}", if passed { "PASS" } else { "FAIL" });

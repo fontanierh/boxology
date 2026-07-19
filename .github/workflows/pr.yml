@@ -104,6 +104,8 @@ jobs:
             cargo-checks-macos-${{ runner.os }}-${{ runner.arch }}-
       - name: cargo xtask test
         run: cargo xtask test
+      - name: cargo xtask determinism
+        run: cargo xtask determinism
 
   deny:
     runs-on: ubuntu-24.04
