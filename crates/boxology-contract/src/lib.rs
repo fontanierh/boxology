@@ -6,6 +6,7 @@
 #[cfg(test)]
 mod ac9_demo;
 mod conform;
+mod contract;
 mod descriptor;
 mod identity;
 mod opaque;
@@ -14,6 +15,10 @@ mod typed;
 mod value;
 
 pub use conform::{ConformanceError, ConformanceErrorKind};
+pub use contract::{
+    CapabilityDescriptor, CapabilityShape, ContractDescriptor, ContractDescriptorError,
+    ExposureLevel, Idempotency,
+};
 pub use descriptor::{
     Deprecation, DescriptorError, DescriptorRef, FieldDescriptor, TypeDescriptor,
     VariantDescriptor, VariantPayload,
