@@ -7,6 +7,8 @@
 
 mod assembly;
 mod composition;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 mod transport;
 
 pub use assembly::{AssemblyError, AssemblyErrors};
@@ -153,6 +155,15 @@ mod tests {
     struct Target {
         calls: Arc<AtomicUsize>,
         behavior: Behavior,
+        drops: Option<Arc<AtomicUsize>>,
+    }
+
+    impl Drop for Target {
+        fn drop(&mut self) {
+            if let Some(drops) = &self.drops {
+                drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
     }
 
     impl ErasedTarget for Target {
@@ -206,6 +217,7 @@ mod tests {
         Arc::new(Target {
             calls: Arc::clone(calls),
             behavior,
+            drops: None,
         })
     }
 
@@ -213,6 +225,7 @@ mod tests {
         Target {
             calls: Arc::clone(calls),
             behavior: Behavior::Echo,
+            drops: None,
         }
     }
     fn implementation(
@@ -262,26 +275,55 @@ mod tests {
         trace: Mutex<Vec<String>>,
         runtimes: Mutex<Vec<Weak<TransportRuntime<()>>>>,
         drops: AtomicUsize,
+        active_drops: Mutex<Vec<bool>>,
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum ProbeFailure {
+        None,
+        Prepare,
+        Start,
     }
     struct ProbeBinding {
         id: u8,
+        failure: ProbeFailure,
         config: Arc<()>,
         probe: Arc<TransportProbe>,
         import: Option<ImportHandle>,
     }
     struct ProbeHandle {
-        _runtime: Arc<TransportRuntime<()>>,
+        id: u8,
+        runtime: Arc<TransportRuntime<()>>,
         probe: Arc<TransportProbe>,
     }
     impl Drop for ProbeHandle {
         fn drop(&mut self) {
             self.probe.drops.fetch_add(1, Ordering::SeqCst);
+            self.probe
+                .active_drops
+                .lock()
+                .unwrap()
+                .push(self.runtime.is_active());
         }
     }
     impl TransportHandle for ProbeHandle {
-        fn stop_intake(&self) {}
-        fn cancel_tasks(&self) {}
-        fn abort_tasks(&self) {}
+        fn stop_intake(&self) {
+            self.record("stop");
+        }
+        fn cancel_tasks(&self) {
+            self.record("cancel");
+        }
+        fn abort_tasks(&self) {
+            self.record("abort");
+        }
+    }
+    impl ProbeHandle {
+        fn record(&self, phase: &str) {
+            self.probe
+                .trace
+                .lock()
+                .unwrap()
+                .push(format!("{phase}{}", self.id));
+        }
     }
     impl TransportBinding for ProbeBinding {
         type Config = ();
@@ -307,7 +349,10 @@ mod tests {
         }
         fn prepare(&self, descriptors: &[&'static CapabilityDescriptor]) -> Result<(), Detail> {
             self.record('p', descriptors.iter().map(|item| item.id()));
-            Ok(())
+            match self.failure {
+                ProbeFailure::Prepare => Err(Detail::new("test_prepare")),
+                _ => Ok(()),
+            }
         }
         fn start(&self, runtime: TransportRuntime<()>) -> Result<ProbeHandle, Detail> {
             let exposures = runtime.exposures();
@@ -325,19 +370,32 @@ mod tests {
                     Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
                 );
             }
+            if self.failure == ProbeFailure::Start {
+                return Err(Detail::new("test_start"));
+            }
             let runtime = Arc::new(runtime);
             let weak = Arc::downgrade(&runtime);
             self.probe.runtimes.lock().unwrap().push(weak);
             Ok(ProbeHandle {
-                _runtime: runtime,
+                id: self.id,
+                runtime,
                 probe: self.probe.clone(),
             })
         }
     }
     impl ProbeBinding {
         fn new(id: u8, probe: &Arc<TransportProbe>, import: Option<ImportHandle>) -> Arc<Self> {
+            Self::with_failure(id, ProbeFailure::None, probe, import)
+        }
+        fn with_failure(
+            id: u8,
+            failure: ProbeFailure,
+            probe: &Arc<TransportProbe>,
+            import: Option<ImportHandle>,
+        ) -> Arc<Self> {
             Arc::new(Self {
                 id,
+                failure,
                 config: Arc::new(()),
                 probe: probe.clone(),
                 import,
@@ -348,6 +406,80 @@ mod tests {
             let mut trace = self.probe.trace.lock().unwrap();
             trace.push(format!("{phase}{}:{ids}", self.id));
         }
+    }
+    struct FailureSetup {
+        builder: CompositionBuilder,
+        handle: ImportHandle,
+        calls: Arc<AtomicUsize>,
+        target_drops: Arc<AtomicUsize>,
+        bindings: Vec<Weak<ProbeBinding>>,
+        configs: Vec<Weak<()>>,
+    }
+    fn failure_setup(
+        count: u8,
+        failure: ProbeFailure,
+        probe: &Arc<TransportProbe>,
+    ) -> FailureSetup {
+        let provider = box_id("provider");
+        let call = capability("provider", "call");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let target_drops = Arc::new(AtomicUsize::new(0));
+        let mut captured = None;
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(
+            implementation("consumer", &[], &[("provider", &["call"])]),
+            |imports| {
+                captured = Some(imports.handle(&provider).unwrap().clone());
+                adapter(&calls)
+            },
+        );
+        builder.add_box(implementation("provider", &["call"], &[]), |_| Target {
+            calls: calls.clone(),
+            behavior: Behavior::Echo,
+            drops: Some(target_drops.clone()),
+        });
+        builder.resolve_import(
+            box_id("consumer"),
+            provider.clone(),
+            ImportTarget::local(provider.clone()),
+        );
+        let handle = captured.unwrap();
+        let mut bindings = Vec::new();
+        let mut configs = Vec::new();
+        for id in 1..=count {
+            let failure = if id == count {
+                failure
+            } else {
+                ProbeFailure::None
+            };
+            let binding = ProbeBinding::with_failure(id, failure, probe, Some(handle.clone()));
+            bindings.push(Arc::downgrade(&binding));
+            configs.push(Arc::downgrade(&binding.config));
+            builder.expose(
+                provider.clone(),
+                call.clone(),
+                binding,
+                ExposureLevel::CodeOnly,
+            );
+        }
+        FailureSetup {
+            builder,
+            handle,
+            calls,
+            target_drops,
+            bindings,
+            configs,
+        }
+    }
+    fn lifecycle(probe: &TransportProbe) -> Vec<String> {
+        probe
+            .trace
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| !event.starts_with("ccall:"))
+            .cloned()
+            .collect()
     }
     fn poll_once<F: Future + ?Sized>(future: Pin<&mut F>) -> Poll<F::Output> {
         future.poll(&mut Context::from_waker(Waker::noop()))
@@ -565,6 +697,97 @@ mod tests {
         assert!(binding_weaks.iter().all(|weak| weak.upgrade().is_some()));
         assert!(config_weaks.iter().all(|weak| weak.upgrade().is_some()));
         assert_eq!(probe.drops.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn prepare_failure_returns_without_starting_or_retaining_ownership() {
+        let probe = Arc::new(TransportProbe::default());
+        let FailureSetup {
+            builder,
+            handle,
+            calls,
+            target_drops,
+            bindings,
+            configs,
+        } = failure_setup(2, ProbeFailure::Prepare, &probe);
+        let error = builder.start().err().expect("prepare failure started");
+        assert_eq!(
+            lifecycle(&probe).join("|"),
+            "p1:provider.call|p2:provider.call"
+        );
+        assert_eq!(
+            error.errors(),
+            &[AssemblyError::TransportPrepareFailed {
+                detail: Detail::new("test_prepare"),
+            }]
+        );
+        assert_eq!(error.to_string(), "transport prepare failed: test_prepare");
+        assert_eq!(
+            invoke(
+                &handle,
+                &capability("provider", "call"),
+                context(None),
+                SlotValue::Null
+            ),
+            Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(probe.runtimes.lock().unwrap().is_empty());
+        assert_eq!(probe.drops.load(Ordering::SeqCst), 0);
+        assert!(probe.active_drops.lock().unwrap().is_empty());
+        assert!(bindings.iter().all(|weak| weak.upgrade().is_none()));
+        assert!(configs.iter().all(|weak| weak.upgrade().is_none()));
+        assert_eq!(target_drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn start_failure_rolls_back_three_handles_in_global_reverse_phases() {
+        let probe = Arc::new(TransportProbe::default());
+        let FailureSetup {
+            builder,
+            handle,
+            calls,
+            target_drops,
+            bindings,
+            configs,
+        } = failure_setup(4, ProbeFailure::Start, &probe);
+        let error = builder.start().err().expect("start failure committed");
+        let events = lifecycle(&probe);
+        assert_eq!(
+            events.join("|"),
+            "p1:provider.call|p2:provider.call|p3:provider.call|p4:provider.call|s1:provider.call|s2:provider.call|s3:provider.call|s4:provider.call|stop3|stop2|stop1|cancel3|cancel2|cancel1|abort3|abort2|abort1"
+        );
+        assert!(events[..4].iter().all(|event| event.starts_with('p')));
+        assert!(events[4..8].iter().all(|event| event.starts_with('s')));
+        assert_eq!(
+            error.errors(),
+            &[AssemblyError::TransportStartFailed {
+                detail: Detail::new("test_start"),
+            }]
+        );
+        assert_eq!(error.to_string(), "transport start failed: test_start");
+        assert_eq!(
+            invoke(
+                &handle,
+                &capability("provider", "call"),
+                context(None),
+                SlotValue::Null
+            ),
+            Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let runtimes = probe.runtimes.lock().unwrap();
+        assert_eq!(runtimes.len(), 3);
+        assert!(runtimes.iter().all(|weak| weak.upgrade().is_none()));
+        drop(runtimes);
+        assert_eq!(probe.drops.load(Ordering::SeqCst), 3);
+        let active_drops = probe.active_drops.lock().unwrap();
+        assert_eq!(active_drops.len(), 3);
+        assert!(active_drops.iter().all(|active| !active));
+        drop(active_drops);
+        assert!(bindings.iter().all(|weak| weak.upgrade().is_none()));
+        assert!(configs.iter().all(|weak| weak.upgrade().is_none()));
+        assert_eq!(target_drops.load(Ordering::SeqCst), 1);
     }
 
     #[test]
