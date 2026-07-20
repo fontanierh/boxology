@@ -19,7 +19,12 @@ mod links;
 mod records;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
-const OWNED_FMT_PACKAGES: &[&str] = &["boxology-contract", "boxology-generator-model", "xtask"];
+const OWNED_FMT_PACKAGES: &[&str] = &[
+    "boxology-contract",
+    "boxology-generator-model",
+    "boxology-runtime",
+    "xtask",
+];
 const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt"];
 
 fn main() -> ExitCode {
