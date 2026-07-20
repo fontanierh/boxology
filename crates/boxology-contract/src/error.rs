@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::SlotValue;
+use crate::{ContractError, ContractValue, DecodeRole, SlotValue, TypeDescriptor, ValueRef};
 
 /// Producer-owned string diagnostics for an invocation failure.
 ///
@@ -95,7 +95,8 @@ impl<E: fmt::Debug> Error for CallError<E> {}
 pub enum ErasedCallError {
     /// A decomposed domain-error variant and its variant payload slot.
     ///
-    /// [`SlotValue::Missing`] represents a unit variant.
+    /// Known unit variants use [`SlotValue::Null`]. Unknown variants are
+    /// descriptor-guided and may capture any received slot opaquely.
     Domain {
         /// The stable domain-error variant tag.
         error_tag: String,
@@ -114,6 +115,65 @@ pub enum ErasedCallError {
     InvalidResponse(Detail),
     /// The invocation failed internally.
     Internal(Detail),
+}
+
+impl ErasedCallError {
+    /// Converts a generated domain error into its erased tag and payload slot.
+    #[doc(hidden)]
+    pub fn from_domain<E: ContractError>(error: &E) -> ErasedCallError {
+        let encoded = match error.encode() {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                return Self::InvalidResponse(conversion_detail("domain_error_encode", error));
+            }
+        };
+        let SlotValue::Value(value) = encoded else {
+            return Self::InvalidResponse(Detail::new("domain_error_shape"));
+        };
+        let ValueRef::Enum { tag, payload } = value.view() else {
+            return Self::InvalidResponse(Detail::new("domain_error_shape"));
+        };
+        Self::Domain {
+            error_tag: tag.into(),
+            payload: payload.clone(),
+        }
+    }
+
+    /// Converts an erased failure back to a generated typed call error.
+    #[doc(hidden)]
+    pub fn into_typed<E: ContractError>(self, error_descriptor: &TypeDescriptor) -> CallError<E> {
+        match self {
+            Self::Domain { error_tag, payload } => {
+                let encoded = SlotValue::Value(ContractValue::enum_value(error_tag, payload));
+                let conformed = match error_descriptor.conform(DecodeRole::ConsumerOutput, encoded)
+                {
+                    Ok(conformed) => conformed,
+                    Err(error) => {
+                        return CallError::InvalidResponse(conversion_detail(
+                            "domain_error_decode",
+                            error,
+                        ));
+                    }
+                };
+                match E::decode(&conformed) {
+                    Ok(error) => CallError::Domain(error),
+                    Err(error) => {
+                        CallError::InvalidResponse(conversion_detail("domain_error_decode", error))
+                    }
+                }
+            }
+            Self::Deadline => CallError::Deadline,
+            Self::Cancelled => CallError::Cancelled,
+            Self::Unavailable(detail) => CallError::Unavailable(detail),
+            Self::ContractViolation(detail) => CallError::ContractViolation(detail),
+            Self::InvalidResponse(detail) => CallError::InvalidResponse(detail),
+            Self::Internal(detail) => CallError::Internal(detail),
+        }
+    }
+}
+
+fn conversion_detail(code: &'static str, error: impl fmt::Display) -> Detail {
+    Detail::new(code).with_message(error.to_string())
 }
 
 impl fmt::Display for ErasedCallError {
