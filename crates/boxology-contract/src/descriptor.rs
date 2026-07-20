@@ -614,4 +614,356 @@ mod tests {
         error_bounds::<ConformanceError>();
         bounds::<ConformanceErrorKind>();
     }
+
+    fn object(entries: impl IntoIterator<Item = (&'static str, ContractValue)>) -> ContractValue {
+        ContractValue::object(
+            entries
+                .into_iter()
+                .map(|(name, value)| (name.into(), value)),
+        )
+        .unwrap()
+    }
+
+    fn agrees_accepts(descriptor: TypeDescriptor, input: SlotValue) {
+        for role in [DecodeRole::ProviderInput, DecodeRole::ConsumerOutput] {
+            let private = conform_slot(&descriptor.to_shape(), role, input.clone());
+            let public = descriptor.conform(role, input.clone());
+            assert_eq!(public, private);
+            assert_eq!(public, Ok(input.clone()));
+        }
+    }
+
+    fn agrees_rejects(
+        descriptor: TypeDescriptor,
+        input: SlotValue,
+        kind: ConformanceErrorKind,
+        path: &[PathSegment],
+    ) {
+        for role in [DecodeRole::ProviderInput, DecodeRole::ConsumerOutput] {
+            let private = conform_slot(&descriptor.to_shape(), role, input.clone());
+            let public = descriptor.conform(role, input.clone());
+            assert_eq!(public, private);
+            let error = public.unwrap_err();
+            assert_eq!(error.kind(), &kind);
+            assert_eq!(error.path(), path);
+        }
+    }
+
+    fn structure_field(descriptor: TypeDescriptor) -> TypeDescriptor {
+        TypeDescriptor::structure([field("x", descriptor)]).unwrap()
+    }
+
+    #[test]
+    fn public_and_private_presence_grids_agree_in_both_roles() {
+        let integer = || ContractValue::i64(7);
+        let value = || slot(integer());
+        let optional = || TypeDescriptor::optional(TypeDescriptor::i64()).unwrap();
+        let tri_state = || TypeDescriptor::tri_state(TypeDescriptor::i64()).unwrap();
+
+        agrees_rejects(
+            TypeDescriptor::i64(),
+            SlotValue::Missing,
+            ConformanceErrorKind::MissingRequired,
+            &[],
+        );
+        agrees_rejects(
+            TypeDescriptor::i64(),
+            SlotValue::Null,
+            ConformanceErrorKind::UnexpectedNull,
+            &[],
+        );
+        agrees_accepts(TypeDescriptor::i64(), value());
+        agrees_rejects(
+            optional(),
+            SlotValue::Missing,
+            ConformanceErrorKind::UnexpectedMissing,
+            &[],
+        );
+        agrees_accepts(optional(), SlotValue::Null);
+        agrees_accepts(optional(), value());
+        agrees_accepts(tri_state(), SlotValue::Missing);
+        agrees_accepts(tri_state(), SlotValue::Null);
+        agrees_accepts(tri_state(), value());
+
+        let field_path = [PathSegment::Field("x".into())];
+        agrees_rejects(
+            structure_field(TypeDescriptor::i64()),
+            slot(object([])),
+            ConformanceErrorKind::MissingRequired,
+            &field_path,
+        );
+        agrees_rejects(
+            structure_field(TypeDescriptor::i64()),
+            slot(object([("x", ContractValue::null())])),
+            ConformanceErrorKind::UnexpectedNull,
+            &field_path,
+        );
+        agrees_accepts(
+            structure_field(TypeDescriptor::i64()),
+            slot(object([("x", integer())])),
+        );
+        agrees_accepts(structure_field(optional()), slot(object([])));
+        agrees_rejects(
+            structure_field(optional()),
+            slot(object([("x", ContractValue::null())])),
+            ConformanceErrorKind::UnexpectedNull,
+            &field_path,
+        );
+        agrees_accepts(
+            structure_field(optional()),
+            slot(object([("x", integer())])),
+        );
+        agrees_accepts(structure_field(tri_state()), slot(object([])));
+        agrees_accepts(
+            structure_field(tri_state()),
+            slot(object([("x", ContractValue::null())])),
+        );
+        agrees_accepts(
+            structure_field(tri_state()),
+            slot(object([("x", integer())])),
+        );
+
+        let index_path = [PathSegment::Index(0)];
+        agrees_accepts(
+            TypeDescriptor::list(TypeDescriptor::i64()).unwrap(),
+            slot(ContractValue::list([integer()])),
+        );
+        agrees_rejects(
+            TypeDescriptor::list(TypeDescriptor::i64()).unwrap(),
+            slot(ContractValue::list([ContractValue::null()])),
+            ConformanceErrorKind::UnexpectedNull,
+            &index_path,
+        );
+        agrees_accepts(
+            TypeDescriptor::list(optional()).unwrap(),
+            slot(ContractValue::list([ContractValue::null(), integer()])),
+        );
+        let key_path = [PathSegment::MapKey("x".into())];
+        agrees_rejects(
+            TypeDescriptor::map(TypeDescriptor::i64()).unwrap(),
+            slot(object([("x", ContractValue::null())])),
+            ConformanceErrorKind::UnexpectedNull,
+            &key_path,
+        );
+        agrees_accepts(
+            TypeDescriptor::map(optional()).unwrap(),
+            slot(object([("x", ContractValue::null())])),
+        );
+        agrees_accepts(
+            structure_field(TypeDescriptor::list(optional()).unwrap()),
+            slot(object([(
+                "x",
+                ContractValue::list([ContractValue::null(), integer()]),
+            )])),
+        );
+
+        let enum_slot = |payload| slot(ContractValue::enum_value("event", payload));
+        let variant_path = [PathSegment::Variant("event".into())];
+        let unit =
+            || TypeDescriptor::enumeration([variant("event", VariantPayload::Unit)]).unwrap();
+        agrees_accepts(unit(), enum_slot(SlotValue::Null));
+        agrees_rejects(
+            unit(),
+            enum_slot(SlotValue::Missing),
+            ConformanceErrorKind::UnexpectedMissing,
+            &variant_path,
+        );
+        agrees_rejects(
+            unit(),
+            enum_slot(value()),
+            ConformanceErrorKind::UnexpectedPayload,
+            &variant_path,
+        );
+        let required = || {
+            TypeDescriptor::enumeration([variant(
+                "event",
+                VariantPayload::Value(TypeDescriptor::i64()),
+            )])
+            .unwrap()
+        };
+        agrees_rejects(
+            required(),
+            enum_slot(SlotValue::Missing),
+            ConformanceErrorKind::MissingRequired,
+            &variant_path,
+        );
+        agrees_rejects(
+            required(),
+            enum_slot(SlotValue::Null),
+            ConformanceErrorKind::UnexpectedNull,
+            &variant_path,
+        );
+        agrees_accepts(required(), enum_slot(value()));
+        let optional_variant = || {
+            TypeDescriptor::enumeration([variant("event", VariantPayload::Value(optional()))])
+                .unwrap()
+        };
+        agrees_rejects(
+            optional_variant(),
+            enum_slot(SlotValue::Missing),
+            ConformanceErrorKind::UnexpectedMissing,
+            &variant_path,
+        );
+        agrees_accepts(optional_variant(), enum_slot(SlotValue::Null));
+        agrees_accepts(optional_variant(), enum_slot(value()));
+    }
+
+    #[test]
+    fn public_struct_conformance_is_strict_or_ordered_and_tolerant() {
+        const SENTINEL: &str = "public-unknown-field-sentinel";
+        let descriptor = TypeDescriptor::structure([
+            field("a", TypeDescriptor::i64()),
+            field("b", TypeDescriptor::i64()),
+        ])
+        .unwrap();
+        let input = slot(object([
+            ("b", ContractValue::i64(2)),
+            ("extra", ContractValue::string(SENTINEL)),
+            ("a", ContractValue::i64(1)),
+        ]));
+        let error = descriptor
+            .conform(DecodeRole::ProviderInput, input.clone())
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            &ConformanceErrorKind::UnknownField("extra".into())
+        );
+        assert_eq!(error.path(), &[PathSegment::Field("extra".into())]);
+        assert!(!format!("{error:?} {error}").contains(SENTINEL));
+        let output = descriptor
+            .conform(DecodeRole::ConsumerOutput, input)
+            .unwrap();
+        assert_eq!(
+            output,
+            slot(object([
+                ("b", ContractValue::i64(2)),
+                ("a", ContractValue::i64(1)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn aggregate_views_expose_ordered_children_and_every_wrapper() {
+        let deprecated = Deprecation::new(Some("legacy".into()));
+        let enumeration = TypeDescriptor::enumeration([
+            VariantDescriptor::new("unit", VariantPayload::Unit, None),
+            VariantDescriptor::new(
+                "value",
+                VariantPayload::Value(TypeDescriptor::list(TypeDescriptor::i64()).unwrap()),
+                Some(deprecated.clone()),
+            ),
+        ])
+        .unwrap();
+        let descriptor = TypeDescriptor::structure([
+            FieldDescriptor::new(
+                "state",
+                TypeDescriptor::tri_state(TypeDescriptor::bool()).unwrap(),
+                Some(deprecated),
+            ),
+            field("event", enumeration),
+        ])
+        .unwrap();
+        let DescriptorRef::Struct(fields) = descriptor.view() else {
+            panic!()
+        };
+        assert_eq!(
+            fields.iter().map(FieldDescriptor::name).collect::<Vec<_>>(),
+            ["state", "event"]
+        );
+        assert!(matches!(
+            fields[0].descriptor().view(),
+            DescriptorRef::TriState(_)
+        ));
+        assert_eq!(fields[0].deprecation().unwrap().note(), Some("legacy"));
+        let DescriptorRef::Enum(variants) = fields[1].descriptor().view() else {
+            panic!()
+        };
+        assert_eq!(
+            variants
+                .iter()
+                .map(VariantDescriptor::tag)
+                .collect::<Vec<_>>(),
+            ["unit", "value"]
+        );
+        assert!(matches!(variants[0].payload(), VariantPayload::Unit));
+        let VariantPayload::Value(value) = variants[1].payload() else {
+            panic!()
+        };
+        assert!(matches!(value.view(), DescriptorRef::List(_)));
+        assert_eq!(variants[1].deprecation().unwrap().note(), Some("legacy"));
+    }
+
+    #[test]
+    fn descriptor_structural_equality_covers_every_semantic_dimension() {
+        let a = || field("a", TypeDescriptor::i64());
+        let b = || field("b", TypeDescriptor::string());
+        let c = || field("c", TypeDescriptor::string());
+        let ordered = || TypeDescriptor::structure([a(), b()]).unwrap();
+        assert_ne!(TypeDescriptor::bool(), TypeDescriptor::string());
+        assert_ne!(TypeDescriptor::i8(), TypeDescriptor::i16());
+        assert_ne!(
+            TypeDescriptor::list(TypeDescriptor::i8()).unwrap(),
+            TypeDescriptor::list(TypeDescriptor::i16()).unwrap()
+        );
+        assert_ne!(ordered(), TypeDescriptor::structure([b(), a()]).unwrap());
+        assert_ne!(
+            TypeDescriptor::structure([field("a", TypeDescriptor::i64())]).unwrap(),
+            TypeDescriptor::structure([field("renamed", TypeDescriptor::i64())]).unwrap()
+        );
+        let deprecated = |note: &str| Some(Deprecation::new(Some(note.into())));
+        assert_ne!(
+            TypeDescriptor::structure([FieldDescriptor::new(
+                "a",
+                TypeDescriptor::i64(),
+                deprecated("one"),
+            )])
+            .unwrap(),
+            TypeDescriptor::structure([FieldDescriptor::new(
+                "a",
+                TypeDescriptor::i64(),
+                deprecated("two"),
+            )])
+            .unwrap()
+        );
+        let enumeration = |tag: &str, payload, deprecation| {
+            TypeDescriptor::enumeration([VariantDescriptor::new(tag, payload, deprecation)])
+                .unwrap()
+        };
+        assert_ne!(
+            enumeration("a", VariantPayload::Unit, None),
+            enumeration("b", VariantPayload::Unit, None)
+        );
+        assert_ne!(
+            enumeration("a", VariantPayload::Unit, None),
+            enumeration("a", VariantPayload::Value(TypeDescriptor::bool()), None)
+        );
+        assert_ne!(
+            enumeration("a", VariantPayload::Unit, deprecated("one")),
+            enumeration("a", VariantPayload::Unit, deprecated("two"))
+        );
+        let enum_pair = |first, second| {
+            TypeDescriptor::enumeration([
+                variant(first, VariantPayload::Unit),
+                variant(second, VariantPayload::Unit),
+            ])
+            .unwrap()
+        };
+        assert_ne!(enum_pair("a", "b"), enum_pair("b", "a"));
+        let nested = TypeDescriptor::optional(
+            TypeDescriptor::secret(TypeDescriptor::optional(ordered()).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(nested, nested.clone());
+        assert_ne!(
+            nested,
+            TypeDescriptor::optional(
+                TypeDescriptor::secret(
+                    TypeDescriptor::optional(TypeDescriptor::structure([a(), c()]).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+            )
+            .unwrap()
+        );
+    }
 }
