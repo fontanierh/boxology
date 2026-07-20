@@ -3,6 +3,8 @@
 //! Values have a private representation so construction always preserves the
 //! semantic invariants that bindings and generated code rely on.
 
+#[cfg(test)]
+mod ac9_demo;
 #[cfg_attr(not(test), allow(dead_code))]
 mod conform;
 mod opaque;
