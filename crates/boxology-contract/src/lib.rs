@@ -9,6 +9,7 @@ mod conform;
 mod contract;
 mod descriptor;
 mod identity;
+mod implementation;
 mod opaque;
 mod presence;
 mod typed;
@@ -24,6 +25,10 @@ pub use descriptor::{
     VariantDescriptor, VariantPayload,
 };
 pub use identity::{BoxId, CapabilityId, CapabilityName, ContractRevision, IdentityError};
+pub use implementation::{
+    ImplementationDescriptor, ImplementationDescriptorError, ImportDescriptor,
+    ImportDescriptorError,
+};
 pub use opaque::{OpaqueNumber, OpaqueNumberError, OpaquePayload, OpaqueTree};
 pub use presence::{DecodeRole, Field};
 pub use typed::{
