@@ -131,6 +131,7 @@ impl ImportHandle {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, Weak};
     use std::task::{Context, Poll, Waker};
     use std::time::{Duration, Instant};
 
@@ -219,15 +220,26 @@ mod tests {
         provided: &[&str],
         imports: &[(&str, &[&str])],
     ) -> ImplementationDescriptor {
+        let provided: Vec<_> = provided
+            .iter()
+            .map(|name| (*name, ExposureLevel::CodeOnly))
+            .collect();
+        implementation_at(package, &provided, imports)
+    }
+    fn implementation_at(
+        package: &str,
+        provided: &[(&str, ExposureLevel)],
+        imports: &[(&str, &[&str])],
+    ) -> ImplementationDescriptor {
         let revision = ContractRevision::new("r1").unwrap();
-        let capabilities = provided.iter().map(|name| {
+        let capabilities = provided.iter().map(|(name, maximum)| {
             CapabilityDescriptor::new(
                 capability(package, name),
                 TypeDescriptor::bool(),
                 TypeDescriptor::bool(),
                 TypeDescriptor::bool(),
                 CapabilityShape::Unary,
-                ExposureLevel::CodeOnly,
+                *maximum,
                 Idempotency::None,
                 None,
             )
@@ -244,6 +256,101 @@ mod tests {
             .unwrap()
         });
         ImplementationDescriptor::new(contract, imports).unwrap()
+    }
+    #[derive(Default)]
+    struct TransportProbe {
+        trace: Mutex<Vec<String>>,
+        runtimes: Mutex<Vec<Weak<TransportRuntime<()>>>>,
+        drops: AtomicUsize,
+    }
+    struct ProbeBinding {
+        id: u8,
+        config: Arc<()>,
+        probe: Arc<TransportProbe>,
+        import: Option<ImportHandle>,
+    }
+    struct ProbeHandle {
+        _runtime: Arc<TransportRuntime<()>>,
+        probe: Arc<TransportProbe>,
+    }
+    impl Drop for ProbeHandle {
+        fn drop(&mut self) {
+            self.probe.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    impl TransportHandle for ProbeHandle {
+        fn stop_intake(&self) {}
+        fn cancel_tasks(&self) {}
+        fn abort_tasks(&self) {}
+    }
+    impl TransportBinding for ProbeBinding {
+        type Config = ();
+        type Handle = ProbeHandle;
+        fn config(&self) -> Arc<()> {
+            self.config.clone()
+        }
+        fn conform(
+            &self,
+            descriptor: &CapabilityDescriptor,
+            level: ExposureLevel,
+        ) -> Result<(), Detail> {
+            let name = descriptor.name().to_string();
+            let mut trace = self.probe.trace.lock().unwrap();
+            trace.push(format!("c{name}:{level:?}"));
+            drop(trace);
+            let rejected = self.id == 0
+                && ((name == "limited" && level == ExposureLevel::External)
+                    || (name == "rejected" && level == ExposureLevel::Internal));
+            (!rejected)
+                .then_some(())
+                .ok_or_else(|| Detail::new("test_conformance"))
+        }
+        fn prepare(&self, descriptors: &[&'static CapabilityDescriptor]) -> Result<(), Detail> {
+            self.record('p', descriptors.iter().map(|item| item.id()));
+            Ok(())
+        }
+        fn start(&self, runtime: TransportRuntime<()>) -> Result<ProbeHandle, Detail> {
+            let exposures = runtime.exposures();
+            let ids = exposures.iter().map(|item| item.descriptor().id());
+            self.record('s', ids);
+            assert!(std::ptr::eq(runtime.config(), self.config.as_ref()));
+            let mut active = Box::pin(runtime.wait_until_active());
+            assert!(!runtime.is_active() && matches!(poll_once(active.as_mut()), Poll::Pending));
+            drop(active);
+            if let Some(handle) = &self.import {
+                let capability = &handle.capabilities()[0];
+                let result = invoke(handle, capability, context(None), SlotValue::Null);
+                assert_eq!(
+                    result,
+                    Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
+                );
+            }
+            let runtime = Arc::new(runtime);
+            let weak = Arc::downgrade(&runtime);
+            self.probe.runtimes.lock().unwrap().push(weak);
+            Ok(ProbeHandle {
+                _runtime: runtime,
+                probe: self.probe.clone(),
+            })
+        }
+    }
+    impl ProbeBinding {
+        fn new(id: u8, probe: &Arc<TransportProbe>, import: Option<ImportHandle>) -> Arc<Self> {
+            Arc::new(Self {
+                id,
+                config: Arc::new(()),
+                probe: probe.clone(),
+                import,
+            })
+        }
+        fn record<'a>(&self, phase: char, ids: impl Iterator<Item = &'a CapabilityId>) {
+            let ids = ids.map(ToString::to_string).collect::<Vec<_>>().join(",");
+            let mut trace = self.probe.trace.lock().unwrap();
+            trace.push(format!("{phase}{}:{ids}", self.id));
+        }
+    }
+    fn poll_once<F: Future + ?Sized>(future: Pin<&mut F>) -> Poll<F::Output> {
+        future.poll(&mut Context::from_waker(Waker::noop()))
     }
     fn invoke(
         handle: &ImportHandle,
@@ -376,9 +483,10 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
     #[test]
-    fn composition_validates_without_authorizing_then_seals_all_clones() {
+    fn composition_starts_grouped_transports_then_commits_all_traffic() {
         let provider = box_id("provider");
         let imported = capability("provider", "call");
+        let [b, c] = ["b", "c"].map(|name| capability("provider", name));
         let selected = ImportTarget::local(provider.clone());
         assert_eq!(selected, selected.clone());
         let mut captured = None;
@@ -395,20 +503,58 @@ mod tests {
             },
         );
         assert_eq!(factories, 1);
-        builder.add_box(implementation("provider", &["call"], &[]), |_| {
+        builder.add_box(implementation("provider", &["call", "b", "c"], &[]), |_| {
             factories += 1;
             adapter(&provider_calls)
         });
-        builder.resolve_import(box_id("consumer"), provider, selected);
-        assert_eq!(builder.validate(), Ok(()));
-        assert_eq!(builder.validate(), Ok(()));
+        builder.resolve_import(box_id("consumer"), provider.clone(), selected);
         let handle = captured.unwrap();
+        let probe = Arc::new(TransportProbe::default());
+        let first = ProbeBinding::new(1, &probe, Some(handle.clone()));
+        let second = ProbeBinding::new(2, &probe, Some(handle.clone()));
+        let binding_weaks = [Arc::downgrade(&first), Arc::downgrade(&second)];
+        let config_weaks = [
+            Arc::downgrade(&first.config),
+            Arc::downgrade(&second.config),
+        ];
+        assert!(!Arc::ptr_eq(&first, &second) && !Arc::ptr_eq(&first.config, &second.config));
+        let level = ExposureLevel::CodeOnly;
+        for (capability, binding) in [
+            (imported.clone(), first.clone()),
+            (b, second.clone()),
+            (c.clone(), first.clone()),
+            (c, first.clone()),
+        ] {
+            builder.expose(provider.clone(), capability, binding, level);
+        }
+        assert_eq!(builder.validate(), Ok(()));
+        assert_eq!(builder.validate(), Ok(()));
         assert_eq!(
             invoke(&handle, &imported, context(None), SlotValue::Null),
             Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
         );
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+        drop((first, second));
         let _composition = builder.start().unwrap();
+        let trace = probe.trace.lock().unwrap();
+        assert_eq!(
+            trace[trace.len() - 4..].join("|"),
+            "p1:provider.call,provider.c,provider.c|p2:provider.b|s1:provider.call,provider.c,provider.c|s2:provider.b"
+        );
+        drop(trace);
+        let runtimes: Vec<_> = probe
+            .runtimes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(Weak::upgrade)
+            .collect();
+        let runtimes: Vec<_> = runtimes.into_iter().map(Option::unwrap).collect();
+        assert!(TransportTaskTracker::ptr_eq(
+            runtimes[0].tracker(),
+            runtimes[1].tracker()
+        ));
+        assert!(runtimes.iter().all(|runtime| runtime.is_active()));
         assert_eq!(
             invoke(&handle, &imported, context(None), SlotValue::Null),
             Ok(SlotValue::Null)
@@ -416,19 +562,26 @@ mod tests {
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
         assert_eq!(consumer_calls.load(Ordering::SeqCst), 0);
         assert_eq!(factories, 2);
+        assert!(binding_weaks.iter().all(|weak| weak.upgrade().is_some()));
+        assert!(config_weaks.iter().all(|weak| weak.upgrade().is_some()));
+        assert_eq!(probe.drops.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn composition_aggregates_every_failure_with_exact_precedence_and_no_seals() {
+        use ExposureLevel::{CodeOnly as C, External as E, Internal as I};
         let c = box_id("consumer");
+        let valid = capability("consumer", "valid");
+        let limited = capability("consumer", "limited");
+        let rejected = capability("consumer", "rejected");
         let calls = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
         let mut factories = 0;
         let mut builder = CompositionBuilder::new();
         builder.add_box(
-            implementation(
+            implementation_at(
                 "consumer",
-                &[],
+                &[("valid", E), ("limited", I), ("rejected", E)],
                 &[
                     ("missing", &["call"]),
                     ("partial", &["first", "second"]),
@@ -442,12 +595,14 @@ mod tests {
                 adapter(&calls)
             },
         );
-        for _ in 0..2 {
-            builder.add_box(implementation("consumer", &[], &[]), |_| {
-                factories += 1;
-                adapter(&calls)
-            });
-        }
+        builder.add_box(implementation("consumer", &["only_second"], &[]), |_| {
+            factories += 1;
+            adapter(&calls)
+        });
+        builder.add_box(implementation("consumer", &[], &[]), |_| {
+            factories += 1;
+            adapter(&calls)
+        });
         assert_eq!(factories, 3);
         builder.add_box(implementation("partial", &[], &[]), |_| {
             factories += 1;
@@ -465,6 +620,21 @@ mod tests {
         resolve("consumer", "duplicate", "absent");
         resolve("consumer", "unknown", "absent");
         resolve("consumer", "partial", "partial");
+        let probe = Arc::new(TransportProbe::default());
+        let binding = ProbeBinding::new(0, &probe, None);
+        for (owner, capability, level) in [
+            (box_id("ghost"), rejected.clone(), E),
+            (c.clone(), capability("other", "rejected"), E),
+            (c.clone(), limited.clone(), E),
+            (c.clone(), rejected, I),
+            (c.clone(), capability("consumer", "only_second"), E),
+            (c.clone(), valid.clone(), E),
+            (c.clone(), limited, C),
+            (c.clone(), valid.clone(), I),
+            (c.clone(), valid, I),
+        ] {
+            builder.expose(owner, capability, binding.clone(), level);
+        }
         use AssemblyError::*;
         let unknown_consumer = |name| UnknownImportConsumer {
             consumer: box_id(name),
@@ -502,8 +672,19 @@ mod tests {
             missing_capability("second"),
         ];
         let validated = builder.validate().unwrap_err();
-        assert_eq!(validated.errors(), expected);
+        assert_eq!(&validated.errors()[..expected.len()], expected);
         let display = validated.to_string();
+        assert_eq!(
+            display
+                .lines()
+                .skip(expected.len())
+                .collect::<Vec<_>>()
+                .join("|"),
+            "unknown exposure provider: ghost|unknown exposed capability other.rejected for provider consumer|exposure external exceeds maximum internal for capability consumer.limited|transport conformance failed for capability consumer.rejected: test_conformance|unknown exposed capability consumer.only_second for provider consumer"
+        );
+        let conformed =
+            "crejected:Internal|cvalid:External|climited:CodeOnly|cvalid:Internal|cvalid:Internal";
+        assert_eq!(probe.trace.lock().unwrap().join("|"), conformed);
         assert_eq!(builder.validate().unwrap_err(), validated);
         assert_eq!(builder.validate().unwrap_err().to_string(), display);
         let started = builder.start().err().expect("invalid composition started");
@@ -517,6 +698,10 @@ mod tests {
             );
         }
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            probe.trace.lock().unwrap().join("|"),
+            [conformed; 4].join("|")
+        );
     }
 
     #[test]
