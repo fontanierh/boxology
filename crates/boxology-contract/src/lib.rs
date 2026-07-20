@@ -6,6 +6,7 @@
 #[cfg(test)]
 mod ac9_demo;
 mod conform;
+mod context;
 mod contract;
 mod descriptor;
 mod identity;
@@ -16,6 +17,9 @@ mod typed;
 mod value;
 
 pub use conform::{ConformanceError, ConformanceErrorKind};
+pub use context::{
+    Caller, CancelToken, Deadline, IdempotencyKey, IdempotencyKeyError, TraceContext,
+};
 pub use contract::{
     CapabilityDescriptor, CapabilityShape, ContractDescriptor, ContractDescriptorError,
     ExposureLevel, Idempotency,
