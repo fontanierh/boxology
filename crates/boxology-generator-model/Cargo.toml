@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
+toml_edit = "=0.25.13+spec-1.1.0"
