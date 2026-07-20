@@ -13,6 +13,8 @@ use boxology_contract::{
     ErasedCallError, ErasedTarget, ExposureLevel, Idempotency, ImplementationDescriptor,
     ImportDescriptor, SlotValue, TraceContext, TypeDescriptor, VariantDescriptor, VariantPayload,
 };
+#[cfg(feature = "test-support")]
+use boxology_runtime::{AssemblyError, test_support::StubTransport};
 use boxology_runtime::{Composition, CompositionBuilder, ImportHandle, ImportTarget, Imports};
 
 type ErasedFuture<'a> =
@@ -195,6 +197,10 @@ struct Assembled {
 }
 
 fn build() -> Unstarted {
+    build_with_provider(implementation("provider", true, false))
+}
+
+fn build_with_provider(provider_descriptor: ImplementationDescriptor) -> Unstarted {
     let state = Arc::new(State::new());
     let provider = box_id("provider");
     let capability = capability();
@@ -209,13 +215,11 @@ fn build() -> Unstarted {
         InertConsumer
     });
     assert!(captured.is_some(), "consumer factory did not run inline");
-    builder.add_box(implementation("provider", true, false), |_| {
-        GeneratedAdapter {
-            capability: capability.clone(),
-            service: Service {
-                state: Arc::clone(&state),
-            },
-        }
+    builder.add_box(provider_descriptor, |_| GeneratedAdapter {
+        capability: capability.clone(),
+        service: Service {
+            state: Arc::clone(&state),
+        },
     });
     builder.resolve_import(
         box_id("consumer"),
@@ -235,6 +239,15 @@ fn assemble() -> Assembled {
 }
 
 fn implementation(box_name: &str, provides: bool, imports: bool) -> ImplementationDescriptor {
+    implementation_with_shape(box_name, provides, imports, CapabilityShape::Unary)
+}
+
+fn implementation_with_shape(
+    box_name: &str,
+    provides: bool,
+    imports: bool,
+    shape: CapabilityShape,
+) -> ImplementationDescriptor {
     let revision = ContractRevision::new("r1").unwrap();
     let capabilities = provides.then(|| {
         CapabilityDescriptor::new(
@@ -242,7 +255,7 @@ fn implementation(box_name: &str, provides: bool, imports: bool) -> Implementati
             TypeDescriptor::f32(),
             TypeDescriptor::f32(),
             error_descriptor().clone(),
-            CapabilityShape::Unary,
+            shape,
             ExposureLevel::CodeOnly,
             Idempotency::None,
             None,
@@ -326,6 +339,75 @@ fn start_is_the_only_authorization_and_typed_success_selects_the_provider() {
     };
     assert_eq!(invoke(&assembled.handle, None, 7.25), Ok(7.25));
     assert_eq!(assembled.state.counts(), (1, 1));
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn local_and_stub_paths_reach_the_same_provider_after_start() {
+    let (mut builder, handle, state) = build();
+    let stub = Arc::new(StubTransport::new());
+    builder.expose(
+        box_id("provider"),
+        capability(),
+        stub.clone(),
+        ExposureLevel::CodeOnly,
+    );
+    assert!(stub.runtime().is_none());
+    assert_eq!(
+        invoke(&handle, None, 7.25),
+        Err(CallError::Unavailable(Detail::new("unsealed_import")))
+    );
+    assert_eq!(state.counts(), (0, 0));
+
+    let composition = builder.start().unwrap();
+    let runtime = stub.runtime().expect("stub runtime was not retained");
+    assert!(runtime.is_active());
+    assert_eq!(runtime.exposures().len(), 1);
+    let exposure = &runtime.exposures()[0];
+    assert_eq!(exposure.descriptor().id(), &capability());
+    assert_eq!(exposure.level(), ExposureLevel::CodeOnly);
+    assert_eq!(invoke(&handle, None, 7.25), Ok(7.25));
+    let output = block_on(exposure.dispatch(
+        context(None, CancelToken::new()),
+        7.25_f32.encode().unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(f32::decode(&output).unwrap(), 7.25);
+    assert_eq!(state.counts(), (2, 2));
+    drop(composition);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn reserved_shape_is_constructible_but_rejected_before_stub_start() {
+    let provider =
+        implementation_with_shape("provider", true, false, CapabilityShape::ServerStreaming);
+    let descriptor = &provider.contract().capabilities()[0];
+    assert_eq!(descriptor.id(), &capability());
+    assert_eq!(descriptor.shape(), CapabilityShape::ServerStreaming);
+    let (mut builder, _handle, _state) = build_with_provider(provider);
+    let stub = Arc::new(StubTransport::new());
+    builder.expose(
+        box_id("provider"),
+        capability(),
+        stub.clone(),
+        ExposureLevel::CodeOnly,
+    );
+    let expected = AssemblyError::TransportConformanceFailed {
+        capability: capability(),
+        detail: Detail::new("unsupported_interaction_shape")
+            .with_message("stub transport supports unary capabilities only"),
+    };
+    let validated = builder.validate().unwrap_err();
+    assert_eq!(validated.errors(), &[expected]);
+    assert_eq!(builder.validate().unwrap_err(), validated);
+    assert_eq!(
+        validated.to_string(),
+        "transport conformance failed for capability provider.compute: unsupported_interaction_shape: stub transport supports unary capabilities only"
+    );
+    let started = builder.start().err().expect("reserved shape started");
+    assert_eq!(started, validated);
+    assert!(stub.runtime().is_none());
 }
 
 #[test]
