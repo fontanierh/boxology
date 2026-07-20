@@ -30,7 +30,7 @@ pub use descriptor::{
     Deprecation, DescriptorError, DescriptorRef, FieldDescriptor, TypeDescriptor,
     VariantDescriptor, VariantPayload,
 };
-pub use dispatch::ErasedTarget;
+pub use dispatch::{ErasedTarget, call_guarded};
 pub use error::{CallError, Detail, ErasedCallError};
 pub use identity::{BoxId, CapabilityId, CapabilityName, ContractRevision, IdentityError};
 pub use implementation::{
