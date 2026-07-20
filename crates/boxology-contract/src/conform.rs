@@ -15,6 +15,7 @@ enum Repr {
     String,
     Bytes,
     List(Box<Shape>),
+    Map(Box<Shape>),
     Struct(Vec<(String, Shape)>),
     Optional(Box<Shape>),
     TriState(Box<Shape>),
@@ -37,6 +38,14 @@ impl Shape {
             Err(ShapeError::TriStateListElement)
         } else {
             Ok(Self(Repr::List(Box::new(element))))
+        }
+    }
+
+    pub(crate) fn map(value: Shape) -> Result<Self, ShapeError> {
+        if matches!(value.0, Repr::TriState(_)) {
+            Err(ShapeError::TriStateMapValue)
+        } else {
+            Ok(Self(Repr::Map(Box::new(value))))
         }
     }
 
@@ -80,6 +89,7 @@ impl Shape {
 pub(crate) enum ShapeError {
     NestedPresence,
     TriStateListElement,
+    TriStateMapValue,
     DuplicateField(String),
 }
 
@@ -87,6 +97,7 @@ pub(crate) enum ShapeError {
 pub(crate) enum PathSegment {
     Field(String),
     Index(usize),
+    MapKey(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,11 +190,28 @@ fn conform_value(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(ContractValue::list(values))
         }
+        (Repr::Map(element), ValueRef::Object(object)) => conform_map(element, role, object, path),
         (Repr::Struct(fields), ValueRef::Object(object)) => {
             conform_struct(fields, role, object, path)
         }
         _ => fail(path, ConformanceErrorKind::KindMismatch),
     }
+}
+
+fn conform_map(
+    element: &Shape,
+    role: DecodeRole,
+    object: ObjectRef<'_>,
+    path: &mut Vec<PathSegment>,
+) -> Result<ContractValue, ConformanceError> {
+    let mut output = Vec::new();
+    for (key, value) in object.entries() {
+        output.push(descend(path, PathSegment::MapKey(key.into()), |path| {
+            conform_value(element, role, value, path, Position::Element)
+                .map(|value| (key.into(), value))
+        })?);
+    }
+    ContractValue::object(output).map_err(|_| unreachable!())
 }
 
 fn conform_struct(
@@ -349,6 +377,22 @@ mod tests {
         assert!(matches!(
             duplicate,
             Err(ShapeError::DuplicateField(name)) if name == "same"
+        ));
+    }
+
+    #[test]
+    fn map_construction_accepts_optional_and_rejects_tri_state_values() {
+        let optional = Shape::optional(Shape::i64()).unwrap();
+        let map = Shape::map(optional).unwrap();
+        assert!(matches!(
+            map.0,
+            Repr::Map(value) if matches!(value.0, Repr::Optional(_))
+        ));
+
+        let tri_state = Shape::tri_state(Shape::i64()).unwrap();
+        assert!(matches!(
+            Shape::map(tri_state),
+            Err(ShapeError::TriStateMapValue)
         ));
     }
 
@@ -536,6 +580,121 @@ mod tests {
                 let error = conform_slot(&shape, role, input.clone()).unwrap_err();
                 assert_eq!(error.kind, ConformanceErrorKind::KindMismatch);
                 assert_eq!(error.path, path);
+                assert!(!format!("{error:?} {error}").contains(SENTINEL));
+            }
+        }
+    }
+
+    #[test]
+    fn map_values_preserve_arbitrary_keys_order_and_presence_in_both_roles() {
+        let input = slot(object(vec![
+            ("second/key", ContractValue::i64(2)),
+            ("", ContractValue::i64(1)),
+            ("not-a-schema-field", ContractValue::i64(3)),
+        ]));
+        assert_accepts(Shape::map(Shape::i64()).unwrap(), input);
+
+        assert_rejects(
+            Shape::map(Shape::i64()).unwrap(),
+            slot(object(vec![("null-key", ContractValue::null())])),
+            ConformanceErrorKind::UnexpectedNull,
+            vec![PathSegment::MapKey("null-key".into())],
+        );
+        assert_accepts(
+            Shape::map(Shape::optional(Shape::i64()).unwrap()).unwrap(),
+            slot(object(vec![
+                ("null", ContractValue::null()),
+                ("value", ContractValue::i64(4)),
+            ])),
+        );
+        assert_rejects(
+            Shape::map(Shape::i64()).unwrap(),
+            slot(ContractValue::list([])),
+            ConformanceErrorKind::KindMismatch,
+            vec![],
+        );
+    }
+
+    #[test]
+    fn struct_values_inside_maps_remain_strict_or_tolerant_by_role() {
+        const SENTINEL: &str = "nested-map-runtime-value";
+        let entry =
+            Shape::structure([("a".into(), Shape::i64()), ("b".into(), Shape::i64())]).unwrap();
+        let shape = Shape::map(entry).unwrap();
+        let input = slot(object(vec![
+            (
+                "customer/α",
+                object(vec![
+                    ("b", ContractValue::i64(2)),
+                    ("extra", ContractValue::string(SENTINEL)),
+                    ("a", ContractValue::i64(1)),
+                ]),
+            ),
+            (
+                "second",
+                object(vec![
+                    ("a", ContractValue::i64(3)),
+                    ("b", ContractValue::i64(4)),
+                ]),
+            ),
+        ]));
+
+        let error = conform_slot(&shape, DecodeRole::ProviderInput, input.clone()).unwrap_err();
+        assert_eq!(
+            error,
+            ConformanceError {
+                path: vec![
+                    PathSegment::MapKey("customer/α".into()),
+                    PathSegment::Field("extra".into()),
+                ],
+                kind: ConformanceErrorKind::UnknownField("extra".into()),
+            }
+        );
+        assert!(!format!("{error:?} {error}").contains(SENTINEL));
+
+        let expected = slot(object(vec![
+            (
+                "customer/α",
+                object(vec![
+                    ("b", ContractValue::i64(2)),
+                    ("a", ContractValue::i64(1)),
+                ]),
+            ),
+            (
+                "second",
+                object(vec![
+                    ("a", ContractValue::i64(3)),
+                    ("b", ContractValue::i64(4)),
+                ]),
+            ),
+        ]));
+        let output = conform_slot(&shape, DecodeRole::ConsumerOutput, input.clone()).unwrap();
+        assert_eq!(output, expected);
+        assert_eq!(
+            conform_slot(&shape, DecodeRole::ConsumerOutput, input).unwrap(),
+            output
+        );
+        assert_eq!(
+            conform_slot(&shape, DecodeRole::ConsumerOutput, output.clone()).unwrap(),
+            output
+        );
+    }
+
+    #[test]
+    fn rejected_map_values_do_not_leak_through_diagnostics() {
+        const SENTINEL: &str = "rejected-map-runtime-value";
+        let values = [
+            ContractValue::string(SENTINEL),
+            ContractValue::sensitive(ContractValue::string(SENTINEL)),
+            ContractValue::opaque(OpaquePayload::new(OpaqueTree::String(SENTINEL.into()))),
+        ];
+        for value in values {
+            let input = slot(object(vec![("safe-key", value)]));
+            for role in ROLES {
+                let error = conform_slot(&Shape::map(Shape::bool()).unwrap(), role, input.clone())
+                    .unwrap_err();
+                assert_eq!(error.kind, ConformanceErrorKind::KindMismatch);
+                assert_eq!(error.path, vec![PathSegment::MapKey("safe-key".into())]);
                 assert!(!format!("{error:?} {error}").contains(SENTINEL));
             }
         }
