@@ -12,6 +12,7 @@ ignore = true
 multiple-versions = "deny"
 wildcards = "deny"
 deny = []
+skip = [{ crate = "syn@2.0.119", reason = "tokio-util 0.7.18 rt/TaskTracker enables futures-macro's syn 2 alongside generator-model's syn 3" }]
 
 [sources]
 unknown-registry = "deny"
