@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::{ContractValue, DecodeRole, ObjectRef, OpaquePayload, SlotValue, ValueRef};
+use crate::{
+    ContractValue, DecodeRole, ObjectRef, OpaquePayload, PathSegment, SlotValue, ValueRef,
+};
 
 #[derive(Clone)]
 pub(crate) struct Shape(Repr);
@@ -119,14 +121,6 @@ pub(crate) enum ShapeError {
     TriStateEnumPayload,
     DuplicateField(String),
     DuplicateVariant(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PathSegment {
-    Field(String),
-    Index(usize),
-    MapKey(String),
-    Variant(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
