@@ -80,7 +80,6 @@ impl OpaquePayload {
     ///
     /// `Missing` and `Null` both become `OpaqueTree::Null`: their distinction
     /// is intentionally lost when the payload shape is unknown.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn capture(slot: &SlotValue) -> Self {
         Self(capture_slot(slot))
     }
@@ -92,7 +91,6 @@ impl fmt::Debug for OpaquePayload {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn capture_slot(slot: &SlotValue) -> OpaqueTree {
     match slot {
         SlotValue::Missing | SlotValue::Null => OpaqueTree::Null,
@@ -100,7 +98,6 @@ fn capture_slot(slot: &SlotValue) -> OpaqueTree {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn capture_value(value: &ContractValue) -> OpaqueTree {
     match value.view() {
         ValueRef::Null => OpaqueTree::Null,
@@ -130,14 +127,12 @@ fn capture_value(value: &ContractValue) -> OpaqueTree {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn number(text: String) -> OpaqueTree {
     OpaqueTree::Number(
         OpaqueNumber::new(text).expect("finite contract numbers format as RFC 8259 tokens"),
     )
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn standard_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);

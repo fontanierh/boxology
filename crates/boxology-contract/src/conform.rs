@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{ContractValue, DecodeRole, ObjectRef, SlotValue, ValueRef};
+use crate::{ContractValue, DecodeRole, ObjectRef, OpaquePayload, SlotValue, ValueRef};
 
 #[derive(Clone)]
 pub(crate) struct Shape(Repr);
@@ -17,8 +17,15 @@ enum Repr {
     List(Box<Shape>),
     Map(Box<Shape>),
     Struct(Vec<(String, Shape)>),
+    Enum(Vec<(String, VariantShape)>),
     Optional(Box<Shape>),
     TriState(Box<Shape>),
+}
+
+#[derive(Clone)]
+pub(crate) enum VariantShape {
+    Unit,
+    Value(Shape),
 }
 
 macro_rules! primitives {
@@ -65,6 +72,25 @@ impl Shape {
         Ok(Self(Repr::Struct(result)))
     }
 
+    pub(crate) fn enumeration(
+        variants: impl IntoIterator<Item = (String, VariantShape)>,
+    ) -> Result<Self, ShapeError> {
+        let mut result = Vec::new();
+        for (tag, variant) in variants {
+            if result
+                .iter()
+                .any(|(known, _): &(String, VariantShape)| known == &tag)
+            {
+                return Err(ShapeError::DuplicateVariant(tag));
+            }
+            if matches!(&variant, VariantShape::Value(Shape(Repr::TriState(_)))) {
+                return Err(ShapeError::TriStateEnumPayload);
+            }
+            result.push((tag, variant));
+        }
+        Ok(Self(Repr::Enum(result)))
+    }
+
     pub(crate) fn optional(inner: Shape) -> Result<Self, ShapeError> {
         Self::wrapper(inner, false)
     }
@@ -90,7 +116,9 @@ pub(crate) enum ShapeError {
     NestedPresence,
     TriStateListElement,
     TriStateMapValue,
+    TriStateEnumPayload,
     DuplicateField(String),
+    DuplicateVariant(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +126,7 @@ pub(crate) enum PathSegment {
     Field(String),
     Index(usize),
     MapKey(String),
+    Variant(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,8 +134,10 @@ pub(crate) enum ConformanceErrorKind {
     MissingRequired,
     UnexpectedNull,
     UnexpectedMissing,
+    UnexpectedPayload,
     KindMismatch,
     UnknownField(String),
+    UnknownVariant(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +157,15 @@ pub(crate) fn conform_slot(
     role: DecodeRole,
     slot: SlotValue,
 ) -> Result<SlotValue, ConformanceError> {
-    let path = &mut Vec::new();
+    conform_payload(shape, role, &slot, &mut Vec::new())
+}
+
+fn conform_payload(
+    shape: &Shape,
+    role: DecodeRole,
+    slot: &SlotValue,
+    path: &mut Vec<PathSegment>,
+) -> Result<SlotValue, ConformanceError> {
     match slot {
         SlotValue::Missing => match shape.0 {
             Repr::TriState(_) => Ok(SlotValue::Missing),
@@ -142,7 +181,7 @@ pub(crate) fn conform_slot(
                 Repr::Optional(inner) | Repr::TriState(inner) => inner.as_ref(),
                 _ => shape,
             };
-            conform_value(inner, role, &value, path, Position::Element).map(SlotValue::Value)
+            conform_value(inner, role, value, path, Position::Element).map(SlotValue::Value)
         }
     }
 }
@@ -194,8 +233,43 @@ fn conform_value(
         (Repr::Struct(fields), ValueRef::Object(object)) => {
             conform_struct(fields, role, object, path)
         }
+        (Repr::Enum(variants), ValueRef::Enum { tag, payload }) => {
+            conform_enum(variants, role, tag, payload, path)
+        }
         _ => fail(path, ConformanceErrorKind::KindMismatch),
     }
+}
+
+fn conform_enum(
+    variants: &[(String, VariantShape)],
+    role: DecodeRole,
+    tag: &str,
+    payload: &SlotValue,
+    path: &mut Vec<PathSegment>,
+) -> Result<ContractValue, ConformanceError> {
+    descend(path, PathSegment::Variant(tag.into()), |path| {
+        let Some((_, variant)) = variants.iter().find(|(known, _)| known == tag) else {
+            return match role {
+                DecodeRole::ProviderInput => {
+                    fail(path, ConformanceErrorKind::UnknownVariant(tag.into()))
+                }
+                DecodeRole::ConsumerOutput => Ok(ContractValue::enum_value(
+                    tag,
+                    SlotValue::Value(ContractValue::opaque(OpaquePayload::capture(payload))),
+                )),
+            };
+        };
+
+        let payload = match variant {
+            VariantShape::Unit => match payload {
+                SlotValue::Null => Ok(SlotValue::Null),
+                SlotValue::Missing => fail(path, ConformanceErrorKind::UnexpectedMissing),
+                SlotValue::Value(_) => fail(path, ConformanceErrorKind::UnexpectedPayload),
+            },
+            VariantShape::Value(shape) => conform_payload(shape, role, payload, path),
+        }?;
+        Ok(ContractValue::enum_value(tag, payload))
+    })
 }
 
 fn conform_map(
@@ -280,6 +354,30 @@ mod tests {
 
     fn field(shape: Shape) -> Shape {
         Shape::structure([("x".into(), shape)]).unwrap()
+    }
+
+    fn enumeration(tag: &str, variant: VariantShape) -> Shape {
+        Shape::enumeration([(tag.into(), variant)]).unwrap()
+    }
+
+    fn enum_slot(tag: &str, payload: SlotValue) -> SlotValue {
+        slot(ContractValue::enum_value(tag, payload))
+    }
+
+    fn unknown_capture(output: &SlotValue) -> (&str, &OpaqueTree) {
+        let SlotValue::Value(value) = output else {
+            panic!()
+        };
+        let ValueRef::Enum { tag, payload } = value.view() else {
+            panic!()
+        };
+        let SlotValue::Value(value) = payload else {
+            panic!()
+        };
+        let ValueRef::Opaque(payload) = value.view() else {
+            panic!()
+        };
+        (tag, payload.reveal())
     }
 
     fn assert_accepts(shape: Shape, input: SlotValue) {
@@ -394,6 +492,103 @@ mod tests {
             Shape::map(tri_state),
             Err(ShapeError::TriStateMapValue)
         ));
+    }
+
+    #[test]
+    fn enum_construction_distinguishes_variants_and_rejects_invalid_shapes() {
+        let optional = Shape::optional(Shape::string()).unwrap();
+        let shape = Shape::enumeration([
+            ("unit".into(), VariantShape::Unit),
+            ("value".into(), VariantShape::Value(optional)),
+        ])
+        .unwrap();
+        let Repr::Enum(variants) = shape.0 else {
+            panic!()
+        };
+        assert!(matches!(variants[0].1, VariantShape::Unit));
+        assert!(matches!(
+            variants[1].1,
+            VariantShape::Value(Shape(Repr::Optional(_)))
+        ));
+
+        let duplicate = Shape::enumeration([
+            ("same".into(), VariantShape::Unit),
+            ("same".into(), VariantShape::Value(Shape::i64())),
+        ]);
+        assert!(matches!(
+            duplicate,
+            Err(ShapeError::DuplicateVariant(tag)) if tag == "same"
+        ));
+
+        let tri_state = Shape::tri_state(Shape::i64()).unwrap();
+        assert!(matches!(
+            Shape::enumeration([("invalid".into(), VariantShape::Value(tri_state))]),
+            Err(ShapeError::TriStateEnumPayload)
+        ));
+    }
+
+    #[test]
+    fn known_unit_variants_require_the_canonical_null_payload() {
+        let shape = enumeration("ready", VariantShape::Unit);
+        assert_accepts(shape.clone(), enum_slot("ready", SlotValue::Null));
+        assert_rejects(
+            shape.clone(),
+            enum_slot("ready", SlotValue::Missing),
+            ConformanceErrorKind::UnexpectedMissing,
+            vec![PathSegment::Variant("ready".into())],
+        );
+        assert_rejects(
+            shape,
+            enum_slot("ready", slot(ContractValue::string("payload"))),
+            ConformanceErrorKind::UnexpectedPayload,
+            vec![PathSegment::Variant("ready".into())],
+        );
+    }
+
+    #[test]
+    fn known_value_variants_follow_top_slot_presence_and_kind_rules() {
+        let path = || vec![PathSegment::Variant("count".into())];
+        let scalar = || enumeration("count", VariantShape::Value(Shape::i64()));
+        assert_rejects(
+            scalar(),
+            enum_slot("count", SlotValue::Missing),
+            ConformanceErrorKind::MissingRequired,
+            path(),
+        );
+        assert_rejects(
+            scalar(),
+            enum_slot("count", SlotValue::Null),
+            ConformanceErrorKind::UnexpectedNull,
+            path(),
+        );
+        assert_accepts(scalar(), enum_slot("count", slot(ContractValue::i64(7))));
+        assert_rejects(
+            scalar(),
+            enum_slot("count", slot(ContractValue::string("seven"))),
+            ConformanceErrorKind::KindMismatch,
+            path(),
+        );
+
+        let optional = || {
+            enumeration(
+                "count",
+                VariantShape::Value(Shape::optional(Shape::i64()).unwrap()),
+            )
+        };
+        assert_rejects(
+            optional(),
+            enum_slot("count", SlotValue::Missing),
+            ConformanceErrorKind::UnexpectedMissing,
+            path(),
+        );
+        assert_accepts(optional(), enum_slot("count", SlotValue::Null));
+        assert_accepts(optional(), enum_slot("count", slot(ContractValue::i64(7))));
+        assert_rejects(
+            optional(),
+            enum_slot("count", slot(ContractValue::bool(true))),
+            ConformanceErrorKind::KindMismatch,
+            path(),
+        );
     }
 
     #[test]
@@ -678,6 +873,134 @@ mod tests {
             conform_slot(&shape, DecodeRole::ConsumerOutput, output.clone()).unwrap(),
             output
         );
+    }
+
+    #[test]
+    fn known_enum_payloads_recurse_through_structs_lists_and_maps() {
+        const SENTINEL: &str = "nested-enum-runtime-value";
+        let entry = Shape::structure([("required".into(), Shape::i64())]).unwrap();
+        let payload = Shape::structure([(
+            "items".into(),
+            Shape::list(Shape::map(entry).unwrap()).unwrap(),
+        )])
+        .unwrap();
+        let shape = enumeration("batch", VariantShape::Value(payload));
+        let input = enum_slot(
+            "batch",
+            slot(object(vec![(
+                "items",
+                ContractValue::list([object(vec![(
+                    "entry",
+                    object(vec![
+                        ("extra", ContractValue::string(SENTINEL)),
+                        ("required", ContractValue::i64(1)),
+                    ]),
+                )])]),
+            )])),
+        );
+
+        let error = conform_slot(&shape, DecodeRole::ProviderInput, input.clone()).unwrap_err();
+        assert_eq!(
+            error,
+            ConformanceError {
+                path: vec![
+                    PathSegment::Variant("batch".into()),
+                    PathSegment::Field("items".into()),
+                    PathSegment::Index(0),
+                    PathSegment::MapKey("entry".into()),
+                    PathSegment::Field("extra".into()),
+                ],
+                kind: ConformanceErrorKind::UnknownField("extra".into()),
+            }
+        );
+        assert!(!format!("{error:?} {error}").contains(SENTINEL));
+
+        let expected = enum_slot(
+            "batch",
+            slot(object(vec![(
+                "items",
+                ContractValue::list([object(vec![(
+                    "entry",
+                    object(vec![("required", ContractValue::i64(1))]),
+                )])]),
+            )])),
+        );
+        let output = conform_slot(&shape, DecodeRole::ConsumerOutput, input.clone()).unwrap();
+        assert_eq!(output, expected);
+        assert_eq!(
+            conform_slot(&shape, DecodeRole::ConsumerOutput, input).unwrap(),
+            output
+        );
+        assert_eq!(
+            conform_slot(&shape, DecodeRole::ConsumerOutput, output.clone()).unwrap(),
+            output
+        );
+        assert_accepts(shape, expected);
+    }
+
+    #[test]
+    fn unknown_variants_are_strict_or_captured_opaquely_by_role() {
+        const SENTINEL: &str = "unknown-enum-runtime-value";
+        let duplicate_tree = OpaqueTree::Object(vec![
+            ("same".into(), OpaqueTree::String(SENTINEL.into())),
+            ("same".into(), OpaqueTree::Bool(true)),
+        ]);
+        let cases = vec![
+            (SlotValue::Missing, OpaqueTree::Null),
+            (SlotValue::Null, OpaqueTree::Null),
+            (
+                slot(ContractValue::bytes([0xfb])),
+                OpaqueTree::Object(vec![("base64".into(), OpaqueTree::String("+w==".into()))]),
+            ),
+            (
+                slot(ContractValue::list([object(vec![(
+                    "secret",
+                    ContractValue::string(SENTINEL),
+                )])])),
+                OpaqueTree::List(vec![OpaqueTree::Object(vec![(
+                    "secret".into(),
+                    OpaqueTree::String(SENTINEL.into()),
+                )])]),
+            ),
+            (
+                slot(ContractValue::sensitive(ContractValue::string(SENTINEL))),
+                OpaqueTree::String(SENTINEL.into()),
+            ),
+            (
+                slot(ContractValue::opaque(OpaquePayload::new(
+                    duplicate_tree.clone(),
+                ))),
+                duplicate_tree,
+            ),
+        ];
+        let shape = enumeration("known", VariantShape::Unit);
+
+        for (payload, expected_capture) in cases {
+            let input = enum_slot("future", payload);
+            let error = conform_slot(&shape, DecodeRole::ProviderInput, input.clone()).unwrap_err();
+            assert_eq!(
+                error,
+                ConformanceError {
+                    path: vec![PathSegment::Variant("future".into())],
+                    kind: ConformanceErrorKind::UnknownVariant("future".into()),
+                }
+            );
+            assert!(!format!("{error:?} {error}").contains(SENTINEL));
+
+            let output = conform_slot(&shape, DecodeRole::ConsumerOutput, input.clone()).unwrap();
+            let (tag, captured) = unknown_capture(&output);
+            assert_eq!(tag, "future");
+            assert_eq!(captured, &expected_capture);
+            assert!(!format!("{output:?}").contains(SENTINEL));
+            assert_eq!(
+                conform_slot(&shape, DecodeRole::ConsumerOutput, input).unwrap(),
+                output
+            );
+            assert_eq!(
+                conform_slot(&shape, DecodeRole::ConsumerOutput, output.clone()).unwrap(),
+                output
+            );
+        }
     }
 
     #[test]
