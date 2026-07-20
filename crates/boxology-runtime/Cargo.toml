@@ -1,0 +1,8 @@
+[package]
+name = "boxology-runtime"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }

@@ -27,6 +27,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-runtime"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
+
+[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
