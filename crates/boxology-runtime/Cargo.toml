@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
+tokio-util = { version = "0.7.18", default-features = false, features = ["rt"] }

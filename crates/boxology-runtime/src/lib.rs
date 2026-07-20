@@ -7,9 +7,13 @@
 
 mod assembly;
 mod composition;
+mod transport;
 
 pub use assembly::{AssemblyError, AssemblyErrors};
 pub use composition::{Composition, CompositionBuilder, ImportTarget};
+pub use transport::{
+    TransportBinding, TransportExposure, TransportHandle, TransportRuntime, TransportTaskTracker,
+};
 
 use std::collections::BTreeMap;
 use std::future::{Future, ready};

@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
-use boxology_contract::{BoxId, CapabilityId};
+use boxology_contract::{BoxId, CapabilityId, Detail, ExposureLevel};
 
 /// One deterministic composition-assembly validation failure.
 #[non_exhaustive]
@@ -58,6 +58,44 @@ pub enum AssemblyError {
         /// The capability absent from the resolved target contract.
         capability: CapabilityId,
     },
+    /// An exposure named an unregistered provider.
+    UnknownExposureProvider {
+        /// The unregistered provider identity.
+        provider: BoxId,
+    },
+    /// An exposure named a capability absent from its provider contract.
+    UnknownExposedCapability {
+        /// The registered provider identity.
+        provider: BoxId,
+        /// The absent capability identity.
+        capability: CapabilityId,
+    },
+    /// An exposure requested a boundary wider than the capability permits.
+    ExposureExceedsMaximum {
+        /// The capability being exposed.
+        capability: CapabilityId,
+        /// The requested exposure boundary.
+        requested: ExposureLevel,
+        /// The greatest permitted exposure boundary.
+        maximum: ExposureLevel,
+    },
+    /// A transport rejected one otherwise valid exposure.
+    TransportConformanceFailed {
+        /// The rejected capability.
+        capability: CapabilityId,
+        /// Producer-owned payload-safe diagnostic detail.
+        detail: Detail,
+    },
+    /// A transport failed transactional descriptor preflight.
+    TransportPrepareFailed {
+        /// Producer-owned payload-safe diagnostic detail.
+        detail: Detail,
+    },
+    /// A transport failed transactional startup.
+    TransportStartFailed {
+        /// Producer-owned payload-safe diagnostic detail.
+        detail: Detail,
+    },
 }
 
 impl fmt::Display for AssemblyError {
@@ -99,7 +137,45 @@ impl fmt::Display for AssemblyError {
                 formatter,
                 "import target for consumer {consumer}, slot {slot} is missing capability {capability}"
             ),
+            Self::UnknownExposureProvider { provider } => {
+                write!(formatter, "unknown exposure provider: {provider}")
+            }
+            Self::UnknownExposedCapability {
+                provider,
+                capability,
+            } => write!(
+                formatter,
+                "unknown exposed capability {capability} for provider {provider}"
+            ),
+            Self::ExposureExceedsMaximum {
+                capability,
+                requested,
+                maximum,
+            } => write!(
+                formatter,
+                "exposure {} exceeds maximum {} for capability {capability}",
+                level_name(*requested),
+                level_name(*maximum)
+            ),
+            Self::TransportConformanceFailed { capability, detail } => write!(
+                formatter,
+                "transport conformance failed for capability {capability}: {detail}"
+            ),
+            Self::TransportPrepareFailed { detail } => {
+                write!(formatter, "transport prepare failed: {detail}")
+            }
+            Self::TransportStartFailed { detail } => {
+                write!(formatter, "transport start failed: {detail}")
+            }
         }
+    }
+}
+
+fn level_name(level: ExposureLevel) -> &'static str {
+    match level {
+        ExposureLevel::CodeOnly => "code-only",
+        ExposureLevel::Internal => "internal",
+        ExposureLevel::External => "external",
     }
 }
 
@@ -147,9 +223,8 @@ mod tests {
         CapabilityId::new(box_id(package), CapabilityName::new(name).unwrap())
     }
 
-    #[test]
-    fn every_failure_is_cloneable_equal_and_has_exact_display() {
-        let cases = [
+    fn failure_cases() -> [(AssemblyError, &'static str); 13] {
+        [
             (
                 AssemblyError::DuplicateBox {
                     box_id: box_id("duplicate"),
@@ -199,12 +274,56 @@ mod tests {
                 },
                 "import target for consumer consumer, slot slot is missing capability target.needed",
             ),
-        ];
+            (
+                AssemblyError::UnknownExposureProvider {
+                    provider: box_id("unknown-provider"),
+                },
+                "unknown exposure provider: unknown-provider",
+            ),
+            (
+                AssemblyError::UnknownExposedCapability {
+                    provider: box_id("provider"),
+                    capability: capability("provider", "unknown"),
+                },
+                "unknown exposed capability provider.unknown for provider provider",
+            ),
+            (
+                AssemblyError::ExposureExceedsMaximum {
+                    capability: capability("provider", "limited"),
+                    requested: ExposureLevel::External,
+                    maximum: ExposureLevel::Internal,
+                },
+                "exposure external exceeds maximum internal for capability provider.limited",
+            ),
+            (
+                AssemblyError::TransportConformanceFailed {
+                    capability: capability("provider", "rejected"),
+                    detail: Detail::new("test_conformance"),
+                },
+                "transport conformance failed for capability provider.rejected: test_conformance",
+            ),
+            (
+                AssemblyError::TransportPrepareFailed {
+                    detail: Detail::new("test_prepare"),
+                },
+                "transport prepare failed: test_prepare",
+            ),
+            (
+                AssemblyError::TransportStartFailed {
+                    detail: Detail::new("test_start"),
+                },
+                "transport start failed: test_start",
+            ),
+        ]
+    }
 
-        for (error, expected) in cases {
+    #[test]
+    fn every_failure_is_cloneable_equal_and_has_exact_display() {
+        for (error, expected) in failure_cases() {
             assert_eq!(error, error.clone());
             assert_eq!(error.to_string(), expected);
         }
+        assert_eq!(level_name(ExposureLevel::CodeOnly), "code-only");
     }
 
     #[test]
@@ -225,50 +344,14 @@ mod tests {
 
     #[test]
     fn aggregate_preserves_deliberately_shuffled_order_exactly() {
-        let ordered = vec![
-            AssemblyError::MissingImportedCapability {
-                consumer: box_id("consumer-seven"),
-                slot: box_id("slot-seven"),
-                capability: capability("target-seven", "needed_seven"),
-            },
-            AssemblyError::DuplicateBox {
-                box_id: box_id("duplicate-one"),
-            },
-            AssemblyError::UnknownImportTarget {
-                consumer: box_id("consumer-five"),
-                slot: box_id("slot-five"),
-                target: box_id("target-five"),
-            },
-            AssemblyError::MissingImportResolution {
-                consumer: box_id("consumer-six"),
-                slot: box_id("slot-six"),
-            },
-            AssemblyError::DuplicateImportResolution {
-                consumer: box_id("consumer-four"),
-                slot: box_id("slot-four"),
-            },
-            AssemblyError::UnknownImportConsumer {
-                consumer: box_id("consumer-two"),
-            },
-            AssemblyError::UnknownImportSlot {
-                consumer: box_id("consumer-three"),
-                slot: box_id("slot-three"),
-            },
-        ];
+        let cases = failure_cases();
+        let shuffled = [12, 6, 0, 4, 5, 3, 1, 2, 9, 7, 11, 8, 10];
+        let ordered = shuffled.map(|index| cases[index].0.clone()).to_vec();
         let aggregate = AssemblyErrors::from_errors(ordered.clone()).unwrap();
 
         assert_eq!(aggregate.errors(), ordered);
         assert_eq!(aggregate, aggregate.clone());
-        let expected = [
-            "import target for consumer consumer-seven, slot slot-seven is missing capability target-seven.needed_seven",
-            "duplicate box registration: duplicate-one",
-            "unknown import target target-five for consumer consumer-five, slot slot-five",
-            "missing import resolution for consumer consumer-six, slot slot-six",
-            "duplicate import resolution for consumer consumer-four, slot slot-four",
-            "unknown import consumer: consumer-two",
-            "unknown import slot slot-three for consumer consumer-three",
-        ]
-        .join("\n");
+        let expected = shuffled.map(|index| cases[index].1).join("\n");
         let rendered = aggregate.to_string();
         assert_eq!(rendered, expected);
         assert!(!rendered.ends_with('\n'));
