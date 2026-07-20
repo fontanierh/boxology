@@ -19,6 +19,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-generator-model"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
+
+[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -235,6 +242,8 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "xtask"
 version = "0.0.0"
 dependencies = [
+ "boxology-contract",
+ "boxology-generator-model",
  "serde_json",
  "sha2",
 ]
