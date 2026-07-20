@@ -7,12 +7,17 @@
 mod ac9_demo;
 #[cfg_attr(not(test), allow(dead_code))]
 mod conform;
+mod descriptor;
 mod identity;
 mod opaque;
 mod presence;
 mod typed;
 mod value;
 
+pub use descriptor::{
+    Deprecation, DescriptorError, DescriptorRef, FieldDescriptor, TypeDescriptor,
+    VariantDescriptor, VariantPayload,
+};
 pub use identity::{BoxId, CapabilityId, CapabilityName, ContractRevision, IdentityError};
 pub use opaque::{OpaqueNumber, OpaqueNumberError, OpaquePayload, OpaqueTree};
 pub use presence::{DecodeRole, Field};
