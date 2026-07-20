@@ -6,8 +6,10 @@
 //! ordered, payload-free diagnostics.
 
 mod assembly;
+mod composition;
 
 pub use assembly::{AssemblyError, AssemblyErrors};
+pub use composition::{Composition, CompositionBuilder, ImportTarget};
 
 use std::collections::BTreeMap;
 use std::future::{Future, ready};
@@ -36,7 +38,10 @@ impl Imports {
         self.handles.get(slot)
     }
 
-    #[allow(dead_code)] // Exercised by the builder in the next task slice.
+    pub(crate) fn cloned_handles(&self) -> BTreeMap<BoxId, ImportHandle> {
+        self.handles.clone()
+    }
+
     pub(crate) fn new(imports: impl IntoIterator<Item = (BoxId, Vec<CapabilityId>)>) -> Self {
         let handles = imports
             .into_iter()
@@ -114,7 +119,6 @@ impl ImportHandle {
         call_guarded(target.as_ref(), capability, context, input)
     }
 
-    #[allow(dead_code)] // Exercised by the builder in the next task slice.
     pub(crate) fn seal(&self, target: Arc<dyn ErasedTarget>) -> Result<(), Arc<dyn ErasedTarget>> {
         self.target.set(target)
     }
@@ -127,7 +131,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use boxology_contract::{
-        Caller, CancelToken, CapabilityName, ContractValue, Deadline, TraceContext,
+        Caller, CancelToken, CapabilityDescriptor, CapabilityName, CapabilityShape,
+        ContractDescriptor, ContractRevision, ContractValue, Deadline, ExposureLevel, Idempotency,
+        ImplementationDescriptor, ImportDescriptor, TraceContext, TypeDescriptor,
     };
 
     use super::*;
@@ -198,6 +204,43 @@ mod tests {
         })
     }
 
+    fn adapter(calls: &Arc<AtomicUsize>) -> Target {
+        Target {
+            calls: Arc::clone(calls),
+            behavior: Behavior::Echo,
+        }
+    }
+    fn implementation(
+        package: &str,
+        provided: &[&str],
+        imports: &[(&str, &[&str])],
+    ) -> ImplementationDescriptor {
+        let revision = ContractRevision::new("r1").unwrap();
+        let capabilities = provided.iter().map(|name| {
+            CapabilityDescriptor::new(
+                capability(package, name),
+                TypeDescriptor::bool(),
+                TypeDescriptor::bool(),
+                TypeDescriptor::bool(),
+                CapabilityShape::Unary,
+                ExposureLevel::CodeOnly,
+                Idempotency::None,
+                None,
+            )
+        });
+        let contract = Box::leak(Box::new(
+            ContractDescriptor::new(box_id(package), capabilities, revision.clone()).unwrap(),
+        ));
+        let imports = imports.iter().map(|(slot, names)| {
+            ImportDescriptor::new(
+                box_id(slot),
+                revision.clone(),
+                names.iter().map(|name| capability(slot, name)),
+            )
+            .unwrap()
+        });
+        ImplementationDescriptor::new(contract, imports).unwrap()
+    }
     fn invoke(
         handle: &ImportHandle,
         capability: &CapabilityId,
@@ -328,6 +371,149 @@ mod tests {
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
+    #[test]
+    fn composition_validates_without_authorizing_then_seals_all_clones() {
+        let provider = box_id("provider");
+        let imported = capability("provider", "call");
+        let selected = ImportTarget::local(provider.clone());
+        assert_eq!(selected, selected.clone());
+        let mut captured = None;
+        let mut factories = 0;
+        let consumer_calls = Arc::new(AtomicUsize::new(0));
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(
+            implementation("consumer", &[], &[("provider", &["call"])]),
+            |imports| {
+                factories += 1;
+                captured = Some(imports.handle(&provider).unwrap().clone());
+                adapter(&consumer_calls)
+            },
+        );
+        assert_eq!(factories, 1);
+        builder.add_box(implementation("provider", &["call"], &[]), |_| {
+            factories += 1;
+            adapter(&provider_calls)
+        });
+        builder.resolve_import(box_id("consumer"), provider, selected);
+        assert_eq!(builder.validate(), Ok(()));
+        assert_eq!(builder.validate(), Ok(()));
+        let handle = captured.unwrap();
+        assert_eq!(
+            invoke(&handle, &imported, context(None), SlotValue::Null),
+            Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
+        );
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+        let _composition = builder.start().unwrap();
+        assert_eq!(
+            invoke(&handle, &imported, context(None), SlotValue::Null),
+            Ok(SlotValue::Null)
+        );
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(consumer_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(factories, 2);
+    }
+
+    #[test]
+    fn composition_aggregates_every_failure_with_exact_precedence_and_no_seals() {
+        let c = box_id("consumer");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        let mut factories = 0;
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(
+            implementation(
+                "consumer",
+                &[],
+                &[
+                    ("missing", &["call"]),
+                    ("partial", &["first", "second"]),
+                    ("duplicate", &["call"]),
+                    ("unknown", &["call"]),
+                ],
+            ),
+            |imports| {
+                factories += 1;
+                handles = imports.cloned_handles().into_values().collect();
+                adapter(&calls)
+            },
+        );
+        for _ in 0..2 {
+            builder.add_box(implementation("consumer", &[], &[]), |_| {
+                factories += 1;
+                adapter(&calls)
+            });
+        }
+        assert_eq!(factories, 3);
+        builder.add_box(implementation("partial", &[], &[]), |_| {
+            factories += 1;
+            adapter(&calls)
+        });
+        assert_eq!(factories, 4);
+        let mut resolve = |c, s, t| {
+            builder.resolve_import(box_id(c), box_id(s), ImportTarget::local(box_id(t)));
+        };
+        resolve("ghost", "slot", "partial");
+        resolve("ghost", "slot", "partial");
+        resolve("consumer", "undeclared", "partial");
+        resolve("consumer", "undeclared", "partial");
+        resolve("consumer", "duplicate", "partial");
+        resolve("consumer", "duplicate", "absent");
+        resolve("consumer", "unknown", "absent");
+        resolve("consumer", "partial", "partial");
+        use AssemblyError::*;
+        let unknown_consumer = |name| UnknownImportConsumer {
+            consumer: box_id(name),
+        };
+        let unknown_slot = || UnknownImportSlot {
+            consumer: c.clone(),
+            slot: box_id("undeclared"),
+        };
+        let missing_capability = |name| MissingImportedCapability {
+            consumer: c.clone(),
+            slot: box_id("partial"),
+            capability: capability("partial", name),
+        };
+        let expected = vec![
+            DuplicateBox { box_id: c.clone() },
+            DuplicateBox { box_id: c.clone() },
+            unknown_consumer("ghost"),
+            unknown_consumer("ghost"),
+            unknown_slot(),
+            unknown_slot(),
+            DuplicateImportResolution {
+                consumer: c.clone(),
+                slot: box_id("duplicate"),
+            },
+            UnknownImportTarget {
+                consumer: c.clone(),
+                slot: box_id("unknown"),
+                target: box_id("absent"),
+            },
+            MissingImportResolution {
+                consumer: c.clone(),
+                slot: box_id("missing"),
+            },
+            missing_capability("first"),
+            missing_capability("second"),
+        ];
+        let validated = builder.validate().unwrap_err();
+        assert_eq!(validated.errors(), expected);
+        let display = validated.to_string();
+        assert_eq!(builder.validate().unwrap_err(), validated);
+        assert_eq!(builder.validate().unwrap_err().to_string(), display);
+        let started = builder.start().err().expect("invalid composition started");
+        assert_eq!(started, validated);
+        assert_eq!(started.to_string(), display);
+        for handle in handles {
+            let capability = handle.capabilities()[0].clone();
+            assert_eq!(
+                invoke(&handle, &capability, context(None), SlotValue::Null),
+                Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn public_carriers_and_returned_future_are_thread_safe() {
@@ -338,6 +524,9 @@ mod tests {
 
         assert_bounds::<Imports>();
         assert_bounds::<ImportHandle>();
+        assert_bounds::<CompositionBuilder>();
+        assert_bounds::<ImportTarget>();
+        assert_bounds::<Composition>();
         let service = box_id("service");
         let capabilities = vec![
             capability("service", "second"),
