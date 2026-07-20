@@ -2,7 +2,12 @@
 //!
 //! Import handles are created before composition assembly finishes, then sealed
 //! to their resolved targets by the runtime. Generated adapters receive only
-//! the public lookup and call surface.
+//! the public lookup and call surface. Assembly failures are reported through
+//! ordered, payload-free diagnostics.
+
+mod assembly;
+
+pub use assembly::{AssemblyError, AssemblyErrors};
 
 use std::collections::BTreeMap;
 use std::future::{Future, ready};
