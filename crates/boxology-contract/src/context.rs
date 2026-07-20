@@ -161,6 +161,81 @@ impl fmt::Display for IdempotencyKeyError {
 
 impl Error for IdempotencyKeyError {}
 
+/// Explicit transport-neutral metadata and control state for one call.
+///
+/// Construction supplies every field directly; no ambient or task-local state
+/// is consulted. Idempotency keys are transported but never honored in v0.
+#[derive(Debug, Clone)]
+pub struct CallContext {
+    caller: Caller,
+    deadline: Option<Deadline>,
+    cancellation: CancelToken,
+    trace: TraceContext,
+    idempotency_key: Option<IdempotencyKey>,
+}
+
+impl CallContext {
+    /// Constructs a call context from entirely explicit state.
+    pub fn new(
+        caller: Caller,
+        deadline: Option<Deadline>,
+        cancellation: CancelToken,
+        trace: TraceContext,
+        idempotency_key: Option<IdempotencyKey>,
+    ) -> Self {
+        Self {
+            caller,
+            deadline,
+            cancellation,
+            trace,
+            idempotency_key,
+        }
+    }
+
+    /// Returns the caller identity.
+    pub fn caller(&self) -> Caller {
+        self.caller
+    }
+
+    /// Returns the absolute deadline, when one was supplied.
+    pub fn deadline(&self) -> Option<Deadline> {
+        self.deadline
+    }
+
+    /// Returns this call's advisory cancellation token.
+    pub fn cancellation(&self) -> &CancelToken {
+        &self.cancellation
+    }
+
+    /// Returns the opaque tracing context.
+    pub fn trace(&self) -> &TraceContext {
+        &self.trace
+    }
+
+    /// Returns the transported v0 idempotency key, when one was supplied.
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        self.idempotency_key.as_ref()
+    }
+
+    /// Derives explicit context for a nested call.
+    ///
+    /// The child inherits caller, absolute deadline, and tracing context. Its
+    /// cancellation token follows parent-to-child cancellation, while child
+    /// cancellation does not affect the parent. The operation-scoped
+    /// idempotency key is transported but never honored in v0 and is always
+    /// dropped here rather than blindly inherited. A different deadline
+    /// requires constructing a fresh context.
+    pub fn child(&self) -> CallContext {
+        Self {
+            caller: self.caller,
+            deadline: self.deadline,
+            cancellation: self.cancellation.child_token(),
+            trace: self.trace.clone(),
+            idempotency_key: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -258,6 +333,103 @@ mod tests {
 
         let content = "  arbitrary key \0 ";
         assert_eq!(IdempotencyKey::new(content).unwrap().as_str(), content);
+    }
+
+    #[test]
+    fn fully_populated_call_context_round_trips_through_accessors() {
+        let caller = Caller::System("test-runtime");
+        let deadline = Deadline::at(Instant::now() + Duration::from_secs(30));
+        let cancellation = CancelToken::new();
+        let cancellation_probe = cancellation.clone();
+        let trace = TraceContext::new(Some("opaque-parent".into()), Some("opaque-state".into()));
+        let key = IdempotencyKey::new("operation-17").unwrap();
+
+        let context = CallContext::new(
+            caller,
+            Some(deadline),
+            cancellation,
+            trace.clone(),
+            Some(key),
+        );
+
+        assert_eq!(context.caller(), caller);
+        assert_eq!(context.deadline(), Some(deadline));
+        assert!(!context.cancellation().is_cancelled());
+        cancellation_probe.cancel();
+        assert!(context.cancellation().is_cancelled());
+        assert_eq!(context.trace(), &trace);
+        assert_eq!(
+            context.idempotency_key().map(IdempotencyKey::as_str),
+            Some("operation-17")
+        );
+        assert!(format!("{context:?}").starts_with("CallContext"));
+    }
+
+    #[test]
+    fn child_inherits_call_state_and_drops_operation_key() {
+        let deadline = Deadline::at(Instant::now() + Duration::from_secs(30));
+        let trace = TraceContext::new(Some("trace".into()), Some("state".into()));
+        let parent = CallContext::new(
+            Caller::System("parent"),
+            Some(deadline),
+            CancelToken::new(),
+            trace.clone(),
+            Some(IdempotencyKey::new("parent-operation").unwrap()),
+        );
+
+        let child = parent.child();
+
+        assert_eq!(child.caller(), parent.caller());
+        assert_eq!(child.deadline(), parent.deadline());
+        assert_eq!(child.deadline().unwrap().instant(), deadline.instant());
+        assert_eq!(child.trace(), &trace);
+        assert_eq!(child.idempotency_key(), None);
+    }
+
+    #[test]
+    fn child_cancellation_is_directional() {
+        let parent = CallContext::new(
+            Caller::Anonymous,
+            None,
+            CancelToken::new(),
+            TraceContext::empty(),
+            None,
+        );
+        let child = parent.child();
+        child.cancellation().cancel();
+        assert!(!parent.cancellation().is_cancelled());
+        assert!(child.cancellation().is_cancelled());
+
+        let parent = CallContext::new(
+            Caller::Anonymous,
+            None,
+            CancelToken::new(),
+            TraceContext::empty(),
+            None,
+        );
+        let child = parent.child();
+        parent.cancellation().cancel();
+        assert!(child.cancellation().is_cancelled());
+    }
+
+    #[test]
+    fn child_preserves_an_absent_deadline() {
+        let parent = CallContext::new(
+            Caller::Anonymous,
+            None,
+            CancelToken::new(),
+            TraceContext::empty(),
+            None,
+        );
+
+        assert_eq!(parent.child().deadline(), None);
+    }
+
+    #[test]
+    fn call_context_has_thread_safe_static_bounds() {
+        fn assert_bounds<T: Send + Sync + 'static>() {}
+
+        assert_bounds::<CallContext>();
     }
 
     #[test]
