@@ -2,11 +2,15 @@
 //!
 //! Every value of each supported scalar and `String` round-trips. The only
 //! exception is a non-finite float, which fails during encoding.
+//! Presence wrappers may nest as Rust types; descriptor construction remains
+//! responsible for rejecting wrappers in illegal positions.
+//! Maps accept any source object order and re-encode keys in sorted order.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::{ContractValue, SlotValue, ValueRef};
+use crate::{ContractValue, Field, SlotValue, ValueRef};
 
 /// One segment in a contract-value diagnostic path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,9 +200,156 @@ impl ContractType for String {
     }
 }
 
+impl<T: ContractType> ContractType for Option<T> {
+    fn encode_value(&self) -> Result<ContractValue, EncodeError> {
+        match self {
+            None => Ok(ContractValue::null()),
+            Some(value) => value.encode_value(),
+        }
+    }
+
+    fn decode_value(value: &ContractValue) -> Result<Self, DecodeError> {
+        match value.view() {
+            ValueRef::Null => Ok(None),
+            _ => T::decode_value(value).map(Some),
+        }
+    }
+
+    fn encode(&self) -> Result<SlotValue, EncodeError> {
+        match self {
+            None => Ok(SlotValue::Null),
+            Some(value) => Ok(SlotValue::Value(value.encode_value()?)),
+        }
+    }
+
+    fn decode(slot: &SlotValue) -> Result<Self, DecodeError> {
+        match slot {
+            SlotValue::Missing => Err(DecodeError::new(DecodeErrorKind::UnexpectedMissing)),
+            SlotValue::Null => Ok(None),
+            SlotValue::Value(value) => T::decode_value(value).map(Some),
+        }
+    }
+
+    fn encode_field(&self) -> Result<Option<ContractValue>, EncodeError> {
+        match self {
+            None => Ok(None),
+            Some(value) => value.encode_value().map(Some),
+        }
+    }
+
+    fn decode_field(field: Option<&ContractValue>) -> Result<Self, DecodeError> {
+        match field {
+            None => Ok(None),
+            Some(value) => T::decode_value(value).map(Some),
+        }
+    }
+}
+
+impl<T: ContractType> ContractType for Field<T> {
+    fn encode_value(&self) -> Result<ContractValue, EncodeError> {
+        Err(EncodeError::new(EncodeErrorKind::UnsupportedPosition))
+    }
+
+    fn decode_value(_value: &ContractValue) -> Result<Self, DecodeError> {
+        Err(DecodeError::new(DecodeErrorKind::UnsupportedPosition))
+    }
+
+    fn encode(&self) -> Result<SlotValue, EncodeError> {
+        match self {
+            Field::Missing => Ok(SlotValue::Missing),
+            Field::Null => Ok(SlotValue::Null),
+            Field::Value(value) => Ok(SlotValue::Value(value.encode_value()?)),
+        }
+    }
+
+    fn decode(slot: &SlotValue) -> Result<Self, DecodeError> {
+        match slot {
+            SlotValue::Missing => Ok(Field::Missing),
+            SlotValue::Null => Ok(Field::Null),
+            SlotValue::Value(value) => T::decode_value(value).map(Field::Value),
+        }
+    }
+
+    fn encode_field(&self) -> Result<Option<ContractValue>, EncodeError> {
+        match self {
+            Field::Missing => Ok(None),
+            Field::Null => Ok(Some(ContractValue::null())),
+            Field::Value(value) => value.encode_value().map(Some),
+        }
+    }
+
+    fn decode_field(field: Option<&ContractValue>) -> Result<Self, DecodeError> {
+        match field {
+            None => Ok(Field::Missing),
+            Some(value) if matches!(value.view(), ValueRef::Null) => Ok(Field::Null),
+            Some(value) => T::decode_value(value).map(Field::Value),
+        }
+    }
+}
+
+impl<T: ContractType> ContractType for Vec<T> {
+    fn encode_value(&self) -> Result<ContractValue, EncodeError> {
+        let values = self
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .encode_value()
+                    .map_err(|error| error.under(PathSegment::Index(index)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ContractValue::list(values))
+    }
+
+    fn decode_value(value: &ContractValue) -> Result<Self, DecodeError> {
+        match value.view() {
+            ValueRef::Null => Err(DecodeError::new(DecodeErrorKind::UnexpectedNull)),
+            ValueRef::List(values) => values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    T::decode_value(value).map_err(|error| error.under(PathSegment::Index(index)))
+                })
+                .collect(),
+            _ => mismatch(),
+        }
+    }
+}
+
+impl<T: ContractType> ContractType for BTreeMap<String, T> {
+    fn encode_value(&self) -> Result<ContractValue, EncodeError> {
+        let entries = self
+            .iter()
+            .map(|(key, value)| {
+                value
+                    .encode_value()
+                    .map(|value| (key.clone(), value))
+                    .map_err(|error| error.under(PathSegment::MapKey(key.clone())))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        ContractValue::object(entries).map_err(|_| unreachable!())
+    }
+
+    fn decode_value(value: &ContractValue) -> Result<Self, DecodeError> {
+        match value.view() {
+            ValueRef::Null => Err(DecodeError::new(DecodeErrorKind::UnexpectedNull)),
+            ValueRef::Object(object) => object
+                .entries()
+                .map(|(key, value)| {
+                    T::decode_value(value)
+                        .map(|value| (key.into(), value))
+                        .map_err(|error| error.under(PathSegment::MapKey(key.into())))
+                })
+                .collect(),
+            _ => mismatch(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conform::{Shape, conform_slot};
     use crate::{OpaquePayload, OpaqueTree};
 
     fn round_trip<T: ContractType + fmt::Debug + PartialEq>(value: T) {
@@ -370,5 +521,169 @@ mod tests {
         assert_bounds::<EncodeError>();
         assert_bounds::<DecodeErrorKind>();
         assert_bounds::<DecodeError>();
+    }
+
+    fn decode_error<T: fmt::Debug>(result: Result<T, DecodeError>, kind: DecodeErrorKind) {
+        assert_eq!(result.unwrap_err().kind(), &kind);
+    }
+
+    #[test]
+    fn presence_grid_is_exact_at_slots_fields_and_value_positions() {
+        let null = ContractValue::null();
+        assert_eq!(Option::<u8>::decode(&SlotValue::Null), Ok(None));
+        assert_eq!(None::<u8>.encode().unwrap(), SlotValue::Null);
+        decode_error(
+            Option::<u8>::decode(&SlotValue::Missing),
+            DecodeErrorKind::UnexpectedMissing,
+        );
+        decode_error(
+            Option::<u8>::decode(&SlotValue::Value(null.clone())),
+            DecodeErrorKind::KindMismatch,
+        );
+        assert_eq!(Option::<u8>::decode_value(&null), Ok(None));
+        assert_eq!(None::<u8>.encode_value().unwrap(), null);
+        assert_eq!(Option::<u8>::decode_field(None), Ok(None));
+        assert_eq!(None::<u8>.encode_field().unwrap(), None);
+        let some = Some(7_u8);
+        assert_eq!(
+            some.encode().unwrap(),
+            SlotValue::Value(ContractValue::u64(7))
+        );
+        assert_eq!(Option::<u8>::decode(&some.encode().unwrap()), Ok(some));
+        let some_field = some.encode_field().unwrap();
+        assert_eq!(some_field, Some(ContractValue::u64(7)));
+        assert_eq!(Option::<u8>::decode_field(some_field.as_ref()), Ok(some));
+        decode_error(
+            Option::<u8>::decode_field(Some(&ContractValue::null())),
+            DecodeErrorKind::KindMismatch,
+        );
+
+        for (field, slot) in [
+            (Field::Missing, SlotValue::Missing),
+            (Field::Null, SlotValue::Null),
+            (Field::Value(7_u8), SlotValue::Value(ContractValue::u64(7))),
+        ] {
+            assert_eq!(field.encode().unwrap(), slot);
+            assert_eq!(Field::<u8>::decode(&slot), Ok(field));
+        }
+        assert_eq!(Field::<u8>::decode_field(None), Ok(Field::Missing));
+        assert_eq!(Field::<u8>::decode_field(Some(&null)), Ok(Field::Null));
+        assert_eq!(
+            Field::<u8>::Null.encode_field().unwrap(),
+            Some(null.clone())
+        );
+        assert_eq!(Field::<u8>::Missing.encode_field().unwrap(), None);
+        let value_field = Field::Value(7_u8).encode_field().unwrap();
+        assert_eq!(value_field, Some(ContractValue::u64(7)));
+        assert_eq!(
+            Field::<u8>::decode_field(value_field.as_ref()),
+            Ok(Field::Value(7))
+        );
+        decode_error(
+            Field::<u8>::decode(&SlotValue::Value(null.clone())),
+            DecodeErrorKind::KindMismatch,
+        );
+        decode_error(
+            Field::<u8>::decode_field(Some(&ContractValue::bool(true))),
+            DecodeErrorKind::KindMismatch,
+        );
+        for field in [Field::Missing, Field::Null, Field::Value(1_u8)] {
+            assert_eq!(
+                field.encode_value().unwrap_err().kind(),
+                &EncodeErrorKind::UnsupportedPosition
+            );
+        }
+        for value in [null, ContractValue::u64(1)] {
+            decode_error(
+                Field::<u8>::decode_value(&value),
+                DecodeErrorKind::UnsupportedPosition,
+            );
+        }
+    }
+
+    #[test]
+    fn nested_optional_lists_round_trip_and_paths_include_indices() {
+        let values = vec![Some(1_u8), None, Some(3)];
+        round_trip(values.clone());
+        let encoded = values.encode_value().unwrap();
+        let ValueRef::List(items) = encoded.view() else {
+            panic!()
+        };
+        assert!(matches!(items[1].view(), ValueRef::Null));
+
+        let encode = vec![0.0_f32, f32::NAN].encode_value().unwrap_err();
+        assert_eq!(encode.kind(), &EncodeErrorKind::NonFiniteF32);
+        assert_eq!(encode.path(), &[PathSegment::Index(1)]);
+        let bad = ContractValue::list([ContractValue::u64(1), ContractValue::u64(256)]);
+        let decode = Vec::<u8>::decode_value(&bad).unwrap_err();
+        assert_eq!(decode.kind(), &DecodeErrorKind::OutOfRange);
+        assert_eq!(decode.path(), &[PathSegment::Index(1)]);
+        decode_error(
+            Vec::<u8>::decode_value(&ContractValue::null()),
+            DecodeErrorKind::UnexpectedNull,
+        );
+        decode_error(
+            Vec::<u8>::decode_value(&ContractValue::bool(false)),
+            DecodeErrorKind::KindMismatch,
+        );
+    }
+
+    #[test]
+    fn maps_round_trip_sort_input_and_report_key_paths() {
+        let map = BTreeMap::from([("z".into(), 2_u8), ("a".into(), 1)]);
+        round_trip(map);
+        let input = ContractValue::object([
+            ("z".into(), ContractValue::u64(2)),
+            ("a".into(), ContractValue::u64(1)),
+        ])
+        .unwrap();
+        let decoded = BTreeMap::<String, u8>::decode_value(&input).unwrap();
+        let encoded = decoded.encode_value().unwrap();
+        let ValueRef::Object(object) = encoded.view() else {
+            panic!()
+        };
+        assert_eq!(
+            object.entries().map(|(key, _)| key).collect::<Vec<_>>(),
+            ["a", "z"]
+        );
+
+        let encode = BTreeMap::from([("secret".into(), f64::NAN)])
+            .encode_value()
+            .unwrap_err();
+        assert_eq!(encode.kind(), &EncodeErrorKind::NonFiniteF64);
+        assert_eq!(encode.path(), &[PathSegment::MapKey("secret".into())]);
+        let bad = ContractValue::object([("bad".into(), ContractValue::u64(256))]).unwrap();
+        let decode = BTreeMap::<String, u8>::decode_value(&bad).unwrap_err();
+        assert_eq!(decode.kind(), &DecodeErrorKind::OutOfRange);
+        assert_eq!(decode.path(), &[PathSegment::MapKey("bad".into())]);
+        decode_error(
+            BTreeMap::<String, u8>::decode_value(&ContractValue::null()),
+            DecodeErrorKind::UnexpectedNull,
+        );
+        decode_error(
+            BTreeMap::<String, u8>::decode_value(&ContractValue::bool(false)),
+            DecodeErrorKind::KindMismatch,
+        );
+    }
+
+    fn walker_agrees<T: ContractType + fmt::Debug>(shape: &Shape, slot: SlotValue) {
+        let typed = T::decode(&slot).unwrap().encode().unwrap();
+        for role in [
+            crate::DecodeRole::ProviderInput,
+            crate::DecodeRole::ConsumerOutput,
+        ] {
+            assert_eq!(conform_slot(shape, role, slot.clone()).unwrap(), typed);
+        }
+    }
+
+    #[test]
+    fn typed_presence_acceptance_agrees_with_the_walker() {
+        let optional = Shape::optional(Shape::i64()).unwrap();
+        walker_agrees::<Option<i64>>(&optional, SlotValue::Null);
+        walker_agrees::<Option<i64>>(&optional, SlotValue::Value(ContractValue::i64(4)));
+        let tri_state = Shape::tri_state(Shape::i64()).unwrap();
+        walker_agrees::<Field<i64>>(&tri_state, SlotValue::Missing);
+        walker_agrees::<Field<i64>>(&tri_state, SlotValue::Null);
+        walker_agrees::<Field<i64>>(&tri_state, SlotValue::Value(ContractValue::i64(4)));
     }
 }
