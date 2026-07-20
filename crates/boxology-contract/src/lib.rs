@@ -5,7 +5,6 @@
 
 #[cfg(test)]
 mod ac9_demo;
-#[cfg_attr(not(test), allow(dead_code))]
 mod conform;
 mod descriptor;
 mod identity;
@@ -14,6 +13,7 @@ mod presence;
 mod typed;
 mod value;
 
+pub use conform::{ConformanceError, ConformanceErrorKind};
 pub use descriptor::{
     Deprecation, DescriptorError, DescriptorRef, FieldDescriptor, TypeDescriptor,
     VariantDescriptor, VariantPayload,
