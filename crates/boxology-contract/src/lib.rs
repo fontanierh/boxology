@@ -13,6 +13,7 @@ mod value;
 pub use opaque::{OpaqueNumber, OpaqueNumberError, OpaquePayload, OpaqueTree};
 pub use presence::{DecodeRole, Field};
 pub use typed::{
-    ContractType, DecodeError, DecodeErrorKind, EncodeError, EncodeErrorKind, PathSegment,
+    Blob, ContractError, ContractType, DecodeError, DecodeErrorKind, EncodeError, EncodeErrorKind,
+    PathSegment, Secret,
 };
 pub use value::{ContractValue, ObjectRef, SlotValue, ValueError, ValueRef};

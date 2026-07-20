@@ -346,6 +346,92 @@ impl<T: ContractType> ContractType for BTreeMap<String, T> {
     }
 }
 
+/// A value whose diagnostic representations must remain redacted.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret<T>(T);
+
+impl<T> Secret<T> {
+    pub fn new(value: T) -> Self {
+        Self(value)
+    }
+
+    /// Explicitly reveals the wrapped value.
+    ///
+    /// Callers must treat the returned content as sensitive data.
+    pub fn reveal(&self) -> &T {
+        &self.0
+    }
+
+    /// Consumes the wrapper and explicitly reveals the wrapped value.
+    ///
+    /// Callers must treat the returned content as sensitive data.
+    pub fn into_revealed(self) -> T {
+        self.0
+    }
+}
+
+impl<T> fmt::Debug for Secret<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Secret(<redacted>)")
+    }
+}
+
+impl<T> fmt::Display for Secret<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Secret(<redacted>)")
+    }
+}
+
+impl<T: ContractType> ContractType for Secret<T> {
+    fn encode_value(&self) -> Result<ContractValue, EncodeError> {
+        self.0.encode_value().map(ContractValue::sensitive)
+    }
+
+    fn decode_value(value: &ContractValue) -> Result<Self, DecodeError> {
+        match value.view() {
+            ValueRef::Null => Err(DecodeError::new(DecodeErrorKind::UnexpectedNull)),
+            ValueRef::Sensitive(inner) => T::decode_value(inner).map(Self),
+            _ => mismatch(),
+        }
+    }
+}
+
+/// An ordinary, non-sensitive byte string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Blob(Vec<u8>);
+
+impl Blob {
+    pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+        Self(bytes.into())
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl ContractType for Blob {
+    fn encode_value(&self) -> Result<ContractValue, EncodeError> {
+        Ok(ContractValue::bytes(self.0.clone()))
+    }
+
+    fn decode_value(value: &ContractValue) -> Result<Self, DecodeError> {
+        match value.view() {
+            ValueRef::Bytes(bytes) => Ok(Self(bytes.to_vec())),
+            _ => mismatch(),
+        }
+    }
+}
+
+/// A domain error with a stable variant tag crossing `ErasedCallError::Domain`.
+pub trait ContractError: ContractType {
+    fn error_tag(&self) -> &str;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,5 +771,140 @@ mod tests {
         walker_agrees::<Field<i64>>(&tri_state, SlotValue::Missing);
         walker_agrees::<Field<i64>>(&tri_state, SlotValue::Null);
         walker_agrees::<Field<i64>>(&tri_state, SlotValue::Value(ContractValue::i64(4)));
+    }
+
+    #[test]
+    fn secrets_round_trip_in_every_supported_position() {
+        let secret = Secret::new(String::from("classified"));
+        let encoded = secret.encode_value().unwrap();
+        assert_eq!(Secret::<String>::decode_value(&encoded), Ok(secret.clone()));
+        round_trip(secret.clone());
+        round_trip(Some(secret.clone()));
+        round_trip(Field::Value(secret.clone()));
+        round_trip(vec![secret.clone(), Secret::new("second".into())]);
+        round_trip(BTreeMap::from([("key".into(), secret)]));
+    }
+
+    #[test]
+    fn secret_decode_is_strict_and_unwraps_exactly_one_layer() {
+        const SENTINEL: &str = "secret-visitor-sentinel";
+        let encoded = Secret::new(String::from(SENTINEL)).encode_value().unwrap();
+        let ValueRef::Sensitive(inner) = encoded.view() else {
+            panic!()
+        };
+        assert!(matches!(inner.view(), ValueRef::String(SENTINEL)));
+
+        decode_error(
+            Secret::<String>::decode_value(&ContractValue::null()),
+            DecodeErrorKind::UnexpectedNull,
+        );
+        for value in [
+            ContractValue::string(SENTINEL),
+            ContractValue::opaque(OpaquePayload::new(OpaqueTree::String(SENTINEL.into()))),
+        ] {
+            decode_error(
+                Secret::<String>::decode_value(&value),
+                DecodeErrorKind::KindMismatch,
+            );
+        }
+
+        let nested = Secret::new(Secret::new(String::from(SENTINEL)));
+        let nested_value = nested.encode_value().unwrap();
+        assert_eq!(
+            Secret::<Secret<String>>::decode_value(&nested_value),
+            Ok(nested)
+        );
+        decode_error(
+            Secret::<Secret<String>>::decode_value(&encoded),
+            DecodeErrorKind::KindMismatch,
+        );
+    }
+
+    #[test]
+    fn secret_diagnostics_never_reveal_payloads() {
+        const SENTINEL: &str = "never-print-secret-payload";
+        let secret = Secret::new(String::from(SENTINEL));
+        assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
+        assert_eq!(secret.to_string(), "Secret(<redacted>)");
+
+        let sensitive = secret.encode_value().unwrap();
+        let values = [
+            sensitive.clone(),
+            ContractValue::list([sensitive.clone()]),
+            ContractValue::object([("secret".into(), sensitive.clone())]).unwrap(),
+            ContractValue::enum_value("secret", SlotValue::Value(sensitive)),
+        ];
+        for value in values {
+            for diagnostic in [
+                format!("{value:?}"),
+                format!("{:?}", SlotValue::Value(value)),
+            ] {
+                assert!(!diagnostic.contains(SENTINEL));
+                assert!(diagnostic.contains("<redacted>"));
+            }
+        }
+
+        let sensitive = ContractValue::sensitive(ContractValue::string(SENTINEL));
+        let decode = Secret::<u8>::decode_value(&sensitive).unwrap_err();
+        for diagnostic in [format!("{decode:?}"), decode.to_string()] {
+            assert!(!diagnostic.contains(SENTINEL));
+        }
+        let encode = Secret::new(f32::NAN).encode_value().unwrap_err();
+        assert_eq!(encode.kind(), &EncodeErrorKind::NonFiniteF32);
+        for diagnostic in [format!("{encode:?}"), encode.to_string()] {
+            assert!(!diagnostic.contains("NaN"));
+        }
+    }
+
+    #[test]
+    fn blob_is_an_exact_owned_byte_value() {
+        let blob = Blob::new([0, 1, 255]);
+        assert_eq!(blob.as_bytes(), &[0, 1, 255]);
+        assert_eq!(blob.clone().into_bytes(), vec![0, 1, 255]);
+        round_trip(blob.clone());
+        let encoded = blob.encode_value().unwrap();
+        assert!(matches!(encoded.view(), ValueRef::Bytes([0, 1, 255])));
+        decode_error(
+            Blob::decode_value(&ContractValue::null()),
+            DecodeErrorKind::KindMismatch,
+        );
+        decode_error(
+            Blob::decode_value(&ContractValue::string("bytes")),
+            DecodeErrorKind::KindMismatch,
+        );
+        decode_error(
+            Blob::decode(&SlotValue::Null),
+            DecodeErrorKind::UnexpectedNull,
+        );
+    }
+
+    #[derive(Debug)]
+    struct TestDomainError;
+
+    impl ContractType for TestDomainError {
+        fn encode_value(&self) -> Result<ContractValue, EncodeError> {
+            Ok(ContractValue::string("test-domain"))
+        }
+
+        fn decode_value(value: &ContractValue) -> Result<Self, DecodeError> {
+            String::decode_value(value).map(|_| Self)
+        }
+    }
+
+    impl ContractError for TestDomainError {
+        fn error_tag(&self) -> &str {
+            "test-domain"
+        }
+    }
+
+    #[test]
+    fn new_public_types_have_expected_bounds_and_error_tag() {
+        fn assert_bounds<T: Send + Sync + 'static>() {}
+        fn assert_error<T: ContractError + Send + Sync + 'static>(error: &T) -> &str {
+            error.error_tag()
+        }
+        assert_bounds::<Blob>();
+        assert_bounds::<Secret<String>>();
+        assert_eq!(assert_error(&TestDomainError), "test-domain");
     }
 }
