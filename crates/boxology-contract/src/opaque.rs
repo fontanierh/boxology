@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::{ContractValue, SlotValue, ValueRef};
+
 /// A transport-neutral raw-value tree.
 ///
 /// Objects preserve entry order and duplicate keys. Numbers preserve their
@@ -73,12 +75,90 @@ impl OpaquePayload {
     pub fn forward(&self) -> OpaquePayload {
         self.clone()
     }
+
+    /// Captures a slot without assuming its descriptor or transport syntax.
+    ///
+    /// `Missing` and `Null` both become `OpaqueTree::Null`: their distinction
+    /// is intentionally lost when the payload shape is unknown.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn capture(slot: &SlotValue) -> Self {
+        Self(capture_slot(slot))
+    }
 }
 
 impl fmt::Debug for OpaquePayload {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("OpaquePayload(<redacted>)")
     }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn capture_slot(slot: &SlotValue) -> OpaqueTree {
+    match slot {
+        SlotValue::Missing | SlotValue::Null => OpaqueTree::Null,
+        SlotValue::Value(value) => capture_value(value),
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn capture_value(value: &ContractValue) -> OpaqueTree {
+    match value.view() {
+        ValueRef::Null => OpaqueTree::Null,
+        ValueRef::Bool(value) => OpaqueTree::Bool(value),
+        ValueRef::I64(value) => number(value.to_string()),
+        ValueRef::U64(value) => number(value.to_string()),
+        ValueRef::F32(value) => number(value.to_string()),
+        ValueRef::F64(value) => number(value.to_string()),
+        ValueRef::String(value) => OpaqueTree::String(value.into()),
+        ValueRef::Bytes(value) => OpaqueTree::Object(vec![(
+            "base64".into(),
+            OpaqueTree::String(standard_base64(value)),
+        )]),
+        ValueRef::List(values) => OpaqueTree::List(values.iter().map(capture_value).collect()),
+        ValueRef::Object(object) => OpaqueTree::Object(
+            object
+                .entries()
+                .map(|(key, value)| (key.into(), capture_value(value)))
+                .collect(),
+        ),
+        ValueRef::Enum { tag, payload } => OpaqueTree::Object(vec![
+            ("tag".into(), OpaqueTree::String(tag.into())),
+            ("payload".into(), capture_slot(payload)),
+        ]),
+        ValueRef::Opaque(payload) => payload.reveal().clone(),
+        ValueRef::Sensitive(inner) => capture_value(inner),
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn number(text: String) -> OpaqueTree {
+    OpaqueTree::Number(
+        OpaqueNumber::new(text).expect("finite contract numbers format as RFC 8259 tokens"),
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn standard_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(ALPHABET[(first >> 2) as usize] as char);
+        output.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(third & 0x3f) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
 }
 
 fn valid_number(text: &str) -> bool {
@@ -123,6 +203,15 @@ fn valid_number(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ContractValue, SlotValue};
+
+    fn value(value: ContractValue) -> SlotValue {
+        SlotValue::Value(value)
+    }
+
+    fn captured(slot: &SlotValue) -> OpaqueTree {
+        OpaquePayload::capture(slot).reveal().clone()
+    }
 
     #[test]
     fn numbers_accept_exact_rfc_grammar_and_preserve_tokens() {
@@ -195,5 +284,143 @@ mod tests {
         assert_bounds::<OpaqueNumber>();
         assert_bounds::<OpaqueNumberError>();
         assert_bounds::<OpaquePayload>();
+    }
+
+    #[test]
+    fn capture_covers_slot_states_and_every_scalar_kind() {
+        assert_eq!(captured(&SlotValue::Missing), OpaqueTree::Null);
+        assert_eq!(captured(&SlotValue::Null), OpaqueTree::Null);
+        assert_eq!(captured(&value(ContractValue::null())), OpaqueTree::Null);
+        assert_eq!(
+            captured(&value(ContractValue::bool(true))),
+            OpaqueTree::Bool(true)
+        );
+        assert_eq!(
+            captured(&value(ContractValue::string("text"))),
+            OpaqueTree::String("text".into())
+        );
+
+        let cases = [
+            (ContractValue::i64(i64::MIN), i64::MIN.to_string()),
+            (ContractValue::u64(u64::MAX), u64::MAX.to_string()),
+            (ContractValue::f32(-0.0).unwrap(), "-0".into()),
+            (ContractValue::f64(1.5).unwrap(), "1.5".into()),
+        ];
+        for (input, token) in cases {
+            let OpaqueTree::Number(number) = captured(&value(input)) else {
+                panic!()
+            };
+            assert_eq!(number.as_str(), token);
+            assert!(OpaqueNumber::new(token).is_ok());
+        }
+    }
+
+    #[test]
+    fn capture_uses_standard_padded_base64_for_bytes() {
+        let cases: &[(&[u8], &str)] = &[
+            (b"", ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"foobar", "Zm9vYmFy"),
+            (&[0xfb, 0xff], "+/8="),
+        ];
+        for (bytes, encoded) in cases {
+            assert_eq!(
+                captured(&value(ContractValue::bytes(bytes.to_vec()))),
+                OpaqueTree::Object(vec![(
+                    "base64".into(),
+                    OpaqueTree::String((*encoded).into()),
+                )])
+            );
+        }
+    }
+
+    #[test]
+    fn capture_recurses_through_lists_objects_and_enum_payloads_in_order() {
+        let input = ContractValue::object([
+            (
+                "list".into(),
+                ContractValue::list([ContractValue::bool(false), ContractValue::string("item")]),
+            ),
+            (
+                "enum".into(),
+                ContractValue::enum_value(
+                    "known",
+                    value(
+                        ContractValue::object([("inner".into(), ContractValue::i64(3))]).unwrap(),
+                    ),
+                ),
+            ),
+            (
+                "unit".into(),
+                ContractValue::enum_value("unit", SlotValue::Missing),
+            ),
+        ])
+        .unwrap();
+        let expected = OpaqueTree::Object(vec![
+            (
+                "list".into(),
+                OpaqueTree::List(vec![
+                    OpaqueTree::Bool(false),
+                    OpaqueTree::String("item".into()),
+                ]),
+            ),
+            (
+                "enum".into(),
+                OpaqueTree::Object(vec![
+                    ("tag".into(), OpaqueTree::String("known".into())),
+                    (
+                        "payload".into(),
+                        OpaqueTree::Object(vec![(
+                            "inner".into(),
+                            OpaqueTree::Number(OpaqueNumber::new("3").unwrap()),
+                        )]),
+                    ),
+                ]),
+            ),
+            (
+                "unit".into(),
+                OpaqueTree::Object(vec![
+                    ("tag".into(), OpaqueTree::String("unit".into())),
+                    ("payload".into(), OpaqueTree::Null),
+                ]),
+            ),
+        ]);
+        assert_eq!(captured(&value(input)), expected);
+    }
+
+    #[test]
+    fn capture_splices_opaque_and_redacts_sensitive_values() {
+        const SENTINEL: &str = "captured-sensitive-runtime-value";
+        let raw = OpaqueTree::Object(vec![
+            ("duplicate".into(), OpaqueTree::String(SENTINEL.into())),
+            ("duplicate".into(), OpaqueTree::Bool(true)),
+        ]);
+        let captured_opaque = OpaquePayload::capture(&value(ContractValue::opaque(
+            OpaquePayload::new(raw.clone()),
+        )));
+        assert_eq!(captured_opaque.reveal(), &raw);
+
+        let captured_sensitive = OpaquePayload::capture(&value(ContractValue::sensitive(
+            ContractValue::string(SENTINEL),
+        )));
+        assert_eq!(
+            captured_sensitive.reveal(),
+            &OpaqueTree::String(SENTINEL.into())
+        );
+        let diagnostics = [
+            format!("{captured_opaque:?}"),
+            format!("{captured_sensitive:?}"),
+            format!(
+                "{:?}",
+                SlotValue::Value(ContractValue::opaque(captured_sensitive.forward()))
+            ),
+        ];
+        for diagnostic in diagnostics {
+            assert!(!diagnostic.contains(SENTINEL));
+            assert!(diagnostic.contains("<redacted>"));
+        }
     }
 }
