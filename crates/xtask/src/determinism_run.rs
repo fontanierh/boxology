@@ -122,16 +122,20 @@ pub(crate) fn manifest_with(workspace: &Path, out: &Path, subjects: &[Subject]) 
     }
 }
 pub fn child(name: &str, out: &Path) -> u8 {
-    if name != "trivial-tree" {
-        return report(
-            Failure::Infra(format!("unknown determinism subject: {name}")),
-            None,
-        );
-    }
+    let run = match name {
+        "generator-model" => crate::generator_model_subject::run,
+        "trivial-tree" => run_trivial,
+        _ => {
+            return report(
+                Failure::Infra(format!("unknown determinism subject: {name}")),
+                None,
+            );
+        }
+    };
     if let Err(error) = ensure_empty_directory(out) {
         return report(Failure::Infra(error), None);
     }
-    match run_trivial(out) {
+    match run(out) {
         Ok(()) => 0,
         Err(error) => report(Failure::Finding(error), None),
     }
@@ -151,11 +155,18 @@ pub(crate) fn child_from_args(args: &[String]) -> Option<u8> {
     }
 }
 pub(crate) fn registry() -> std::result::Result<Vec<Subject>, String> {
-    let subjects = vec![Subject {
-        name: "trivial-tree",
-        prepare: None,
-        argv: trivial_argv,
-    }];
+    let subjects = vec![
+        Subject {
+            name: "generator-model",
+            prepare: None,
+            argv: generator_model_argv,
+        },
+        Subject {
+            name: "trivial-tree",
+            prepare: None,
+            argv: trivial_argv,
+        },
+    ];
     validate_registry(&subjects)?;
     Ok(subjects)
 }
@@ -174,6 +185,11 @@ pub(crate) fn validate_registry(subjects: &[Subject]) -> std::result::Result<(),
         previous = Some(subject.name);
     }
     Ok(())
+}
+fn generator_model_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+    let mut command = trivial_argv(out);
+    command.1[1] = "generator-model".into();
+    command
 }
 fn trivial_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
     (

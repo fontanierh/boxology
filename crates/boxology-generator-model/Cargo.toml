@@ -1,11 +1,8 @@
 [package]
-name = "xtask"
+name = "boxology-generator-model"
 version = "0.0.0"
 edition.workspace = true
 publish = false
 
 [dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
-boxology-generator-model = { version = "=0.0.0", path = "../boxology-generator-model" }
-sha2 = "=0.10.9"
-serde_json = "=1.0.150"

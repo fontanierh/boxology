@@ -14,11 +14,12 @@ mod determinism_meta;
 mod determinism_publish;
 mod determinism_run;
 mod determinism_verify;
+mod generator_model_subject;
 mod links;
 mod records;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
-const OWNED_FMT_PACKAGES: &[&str] = &["boxology-contract", "xtask"];
+const OWNED_FMT_PACKAGES: &[&str] = &["boxology-contract", "boxology-generator-model", "xtask"];
 const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt"];
 
 fn main() -> ExitCode {
