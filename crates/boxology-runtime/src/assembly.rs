@@ -115,7 +115,6 @@ impl AssemblyErrors {
         &self.0
     }
 
-    #[allow(dead_code)]
     pub(crate) fn from_errors(errors: Vec<AssemblyError>) -> Option<Self> {
         (!errors.is_empty()).then(|| Self(errors.into_boxed_slice()))
     }
