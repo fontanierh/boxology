@@ -7,6 +7,9 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::conform::{ConformanceError, Shape, VariantShape, conform_slot};
+use crate::{DecodeRole, SlotValue};
+
 /// An owned contract type descriptor with an invariant-preserving private representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDescriptor(Repr);
@@ -124,6 +127,53 @@ impl TypeDescriptor {
             Err(DescriptorError::TriStateEnumPayload)
         } else {
             Ok(Self(Repr::Enum(variants)))
+        }
+    }
+
+    /// Conforms a call slot to this descriptor for the selected decoding role.
+    pub fn conform(
+        &self,
+        role: DecodeRole,
+        slot: SlotValue,
+    ) -> Result<SlotValue, ConformanceError> {
+        conform_slot(&self.to_shape(), role, slot)
+    }
+
+    fn to_shape(&self) -> Shape {
+        // Public descriptor construction enforces the same or stricter
+        // recursive invariants than each fallible private shape constructor.
+        match &self.0 {
+            Repr::Bool => Shape::bool(),
+            Repr::I8 | Repr::I16 | Repr::I32 | Repr::I64 => Shape::i64(),
+            Repr::U8 | Repr::U16 | Repr::U32 | Repr::U64 => Shape::u64(),
+            Repr::F32 => Shape::f32(),
+            Repr::F64 => Shape::f64(),
+            Repr::String => Shape::string(),
+            Repr::Blob => Shape::bytes(),
+            Repr::Secret(inner) => Shape::sensitive(inner.to_shape())
+                .expect("validated secret descriptor lowers to a sensitive shape"),
+            Repr::Optional(inner) => Shape::optional(inner.to_shape())
+                .expect("validated optional descriptor lowers to an optional shape"),
+            Repr::TriState(inner) => Shape::tri_state(inner.to_shape())
+                .expect("validated tri-state descriptor lowers to a tri-state shape"),
+            Repr::List(inner) => Shape::list(inner.to_shape())
+                .expect("validated list descriptor lowers to a list shape"),
+            Repr::Map(inner) => Shape::map(inner.to_shape())
+                .expect("validated map descriptor lowers to a map shape"),
+            Repr::Struct(fields) => Shape::structure(
+                fields
+                    .iter()
+                    .map(|field| (field.name().into(), field.descriptor().to_shape())),
+            )
+            .expect("validated struct descriptor lowers to a struct shape"),
+            Repr::Enum(variants) => Shape::enumeration(variants.iter().map(|variant| {
+                let payload = match variant.payload() {
+                    VariantPayload::Unit => VariantShape::Unit,
+                    VariantPayload::Value(inner) => VariantShape::Value(inner.to_shape()),
+                };
+                (variant.tag().into(), payload)
+            }))
+            .expect("validated enum descriptor lowers to an enum shape"),
         }
     }
 }
@@ -262,6 +312,10 @@ fn unique<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        Blob, ConformanceErrorKind, ContractType, ContractValue, DecodeErrorKind, PathSegment,
+        ValueRef,
+    };
 
     fn field(name: &str, descriptor: TypeDescriptor) -> FieldDescriptor {
         FieldDescriptor::new(name, descriptor, None)
@@ -388,5 +442,176 @@ mod tests {
             DescriptorError::NestedPresence.to_string(),
             "presence wrappers cannot be nested"
         );
+    }
+
+    fn slot(value: ContractValue) -> SlotValue {
+        SlotValue::Value(value)
+    }
+
+    #[test]
+    fn lowering_preserves_carriers_narrow_widths_and_blob_bytes() {
+        let role = DecodeRole::ProviderInput;
+        let signed = slot(ContractValue::i64(128));
+        for descriptor in [
+            TypeDescriptor::i8(),
+            TypeDescriptor::i16(),
+            TypeDescriptor::i32(),
+            TypeDescriptor::i64(),
+        ] {
+            assert_eq!(descriptor.conform(role, signed.clone()), Ok(signed.clone()));
+        }
+        assert_eq!(
+            i8::decode(&signed).unwrap_err().kind(),
+            &DecodeErrorKind::OutOfRange
+        );
+        let unsigned = slot(ContractValue::u64(u64::MAX));
+        for descriptor in [
+            TypeDescriptor::u8(),
+            TypeDescriptor::u16(),
+            TypeDescriptor::u32(),
+            TypeDescriptor::u64(),
+        ] {
+            assert_eq!(
+                descriptor.conform(role, unsigned.clone()),
+                Ok(unsigned.clone())
+            );
+        }
+        for (descriptor, input) in [
+            (TypeDescriptor::bool(), slot(ContractValue::bool(true))),
+            (
+                TypeDescriptor::f32(),
+                slot(ContractValue::f32(1.5).unwrap()),
+            ),
+            (
+                TypeDescriptor::f64(),
+                slot(ContractValue::f64(2.5).unwrap()),
+            ),
+            (
+                TypeDescriptor::string(),
+                slot(ContractValue::string("text")),
+            ),
+        ] {
+            assert_eq!(descriptor.conform(role, input.clone()), Ok(input));
+        }
+        assert_eq!(
+            TypeDescriptor::f32()
+                .conform(role, slot(ContractValue::f64(1.5).unwrap()))
+                .unwrap_err()
+                .kind(),
+            &ConformanceErrorKind::KindMismatch
+        );
+        let bytes = slot(ContractValue::bytes([0, 1, 255]));
+        assert_eq!(
+            TypeDescriptor::blob().conform(role, bytes.clone()),
+            Ok(bytes.clone())
+        );
+        assert_eq!(Blob::decode(&bytes).unwrap().as_bytes(), &[0, 1, 255]);
+    }
+
+    #[test]
+    fn secret_lowering_is_exact_nullable_nested_and_redacted() {
+        const SENTINEL: &str = "descriptor-secret-sentinel";
+        let role = DecodeRole::ProviderInput;
+        let secret = TypeDescriptor::secret(TypeDescriptor::string()).unwrap();
+        let input = slot(ContractValue::sensitive(ContractValue::string(SENTINEL)));
+        let output = secret.conform(role, input.clone()).unwrap();
+        assert_eq!(output, input);
+        let SlotValue::Value(output) = output else {
+            panic!()
+        };
+        let ValueRef::Sensitive(inner) = output.view() else {
+            panic!()
+        };
+        assert!(matches!(inner.view(), ValueRef::String(SENTINEL)));
+
+        let bare = slot(ContractValue::string(SENTINEL));
+        assert_eq!(
+            secret.conform(role, bare).unwrap_err().kind(),
+            &ConformanceErrorKind::KindMismatch
+        );
+        assert_eq!(
+            TypeDescriptor::string()
+                .conform(role, input.clone())
+                .unwrap_err()
+                .kind(),
+            &ConformanceErrorKind::KindMismatch
+        );
+
+        let nullable = TypeDescriptor::optional(TypeDescriptor::string()).unwrap();
+        let transitive =
+            TypeDescriptor::optional(TypeDescriptor::secret(nullable).unwrap()).unwrap();
+        let sensitive_null = slot(ContractValue::sensitive(ContractValue::null()));
+        assert_eq!(
+            transitive.conform(role, sensitive_null.clone()),
+            Ok(sensitive_null)
+        );
+        let nested = TypeDescriptor::secret(secret).unwrap();
+        let nested_input = slot(ContractValue::sensitive(ContractValue::sensitive(
+            ContractValue::string(SENTINEL),
+        )));
+        assert_eq!(nested.conform(role, nested_input.clone()), Ok(nested_input));
+
+        let error = TypeDescriptor::secret(TypeDescriptor::bool())
+            .unwrap()
+            .conform(role, input)
+            .unwrap_err();
+        assert_eq!(error.kind(), &ConformanceErrorKind::KindMismatch);
+        assert!(!format!("{error:?} {error}").contains(SENTINEL));
+    }
+
+    #[test]
+    fn aggregate_lowering_and_public_errors_are_structural() {
+        let payload = TypeDescriptor::map(
+            TypeDescriptor::list(TypeDescriptor::secret(TypeDescriptor::blob()).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let event = TypeDescriptor::enumeration([
+            variant("idle", VariantPayload::Unit),
+            variant("data", VariantPayload::Value(payload)),
+        ])
+        .unwrap();
+        let descriptor = TypeDescriptor::structure([
+            FieldDescriptor::new(
+                "event",
+                event,
+                Some(Deprecation::new(Some("legacy".into()))),
+            ),
+            field(
+                "state",
+                TypeDescriptor::tri_state(TypeDescriptor::bool()).unwrap(),
+            ),
+        ])
+        .unwrap();
+        let map = ContractValue::object([(
+            "key".into(),
+            ContractValue::list([ContractValue::sensitive(ContractValue::bytes([7]))]),
+        )])
+        .unwrap();
+        let input = slot(
+            ContractValue::object([(
+                "event".into(),
+                ContractValue::enum_value("data", SlotValue::Value(map)),
+            )])
+            .unwrap(),
+        );
+        assert_eq!(
+            descriptor.conform(DecodeRole::ProviderInput, input.clone()),
+            Ok(input)
+        );
+
+        let error = TypeDescriptor::list(TypeDescriptor::bool())
+            .unwrap()
+            .conform(
+                DecodeRole::ProviderInput,
+                slot(ContractValue::list([ContractValue::string("wrong")])),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), &ConformanceErrorKind::KindMismatch);
+        assert_eq!(error.path(), &[PathSegment::Index(0)]);
+
+        fn error_bounds<T: std::error::Error + Send + Sync + 'static>() {}
+        fn bounds<T: Send + Sync + 'static>() {}
+        error_bounds::<ConformanceError>();
+        bounds::<ConformanceErrorKind>();
     }
 }

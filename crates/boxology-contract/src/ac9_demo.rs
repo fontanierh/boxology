@@ -190,10 +190,10 @@ fn struct_tolerance_drops_unknowns_before_strict_typed_decode() {
     let provider =
         conform_slot(&struct_shape(), DecodeRole::ProviderInput, input.clone()).unwrap_err();
     assert_eq!(
-        provider.kind,
-        ConformanceErrorKind::UnknownField("extra".into())
+        provider.kind(),
+        &ConformanceErrorKind::UnknownField("extra".into())
     );
-    assert_eq!(provider.path, vec![PathSegment::Field("extra".into())]);
+    assert_eq!(provider.path(), &[PathSegment::Field("extra".into())]);
     assert!(!format!("{provider:?} {provider}").contains(SENTINEL));
     let normalized = conform_slot(&struct_shape(), DecodeRole::ConsumerOutput, input).unwrap();
     let typed = DemoStruct::decode(&normalized).unwrap();
@@ -263,10 +263,10 @@ fn enum_tolerance_preserves_unknowns_for_strict_typed_decode() {
     let provider =
         conform_slot(&enum_shape(), DecodeRole::ProviderInput, input.clone()).unwrap_err();
     assert_eq!(
-        provider.kind,
-        ConformanceErrorKind::UnknownVariant("future".into())
+        provider.kind(),
+        &ConformanceErrorKind::UnknownVariant("future".into())
     );
-    assert_eq!(provider.path, vec![PathSegment::Variant("future".into())]);
+    assert_eq!(provider.path(), &[PathSegment::Variant("future".into())]);
     assert!(!format!("{provider:?} {provider}").contains(SENTINEL));
     let normalized = conform_slot(&enum_shape(), DecodeRole::ConsumerOutput, input).unwrap();
     let unknown = DemoEnum::decode(&normalized).unwrap();

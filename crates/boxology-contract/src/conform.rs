@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fmt;
 
 use crate::{
@@ -16,6 +17,7 @@ enum Repr {
     F64,
     String,
     Bytes,
+    Sensitive(Box<Shape>),
     List(Box<Shape>),
     Map(Box<Shape>),
     Struct(Vec<(String, Shape)>),
@@ -55,6 +57,14 @@ impl Shape {
             Err(ShapeError::TriStateMapValue)
         } else {
             Ok(Self(Repr::Map(Box::new(value))))
+        }
+    }
+
+    pub(crate) fn sensitive(inner: Shape) -> Result<Self, ShapeError> {
+        if matches!(inner.0, Repr::TriState(_)) {
+            Err(ShapeError::TriStateSecretInner)
+        } else {
+            Ok(Self(Repr::Sensitive(Box::new(inner))))
         }
     }
 
@@ -119,25 +129,48 @@ pub(crate) enum ShapeError {
     TriStateListElement,
     TriStateMapValue,
     TriStateEnumPayload,
+    TriStateSecretInner,
     DuplicateField(String),
     DuplicateVariant(String),
 }
 
+/// The payload-free category of a conformance failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ConformanceErrorKind {
+#[non_exhaustive]
+pub enum ConformanceErrorKind {
+    /// A required value was absent.
     MissingRequired,
+    /// Null was not accepted at this position.
     UnexpectedNull,
+    /// Missing was not accepted at this position.
     UnexpectedMissing,
+    /// A unit variant carried a payload.
     UnexpectedPayload,
+    /// The value kind did not match its descriptor.
     KindMismatch,
+    /// A strict struct contained an unknown field.
     UnknownField(String),
+    /// A strict enum contained an unknown variant.
     UnknownVariant(String),
 }
 
+/// A conformance failure with its descriptor path and payload-free category.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ConformanceError {
-    pub(crate) path: Vec<PathSegment>,
-    pub(crate) kind: ConformanceErrorKind,
+pub struct ConformanceError {
+    path: Vec<PathSegment>,
+    kind: ConformanceErrorKind,
+}
+
+impl ConformanceError {
+    /// Returns the failure category.
+    pub fn kind(&self) -> &ConformanceErrorKind {
+        &self.kind
+    }
+
+    /// Returns the path from the call slot to the failure.
+    pub fn path(&self) -> &[PathSegment] {
+        &self.path
+    }
 }
 
 impl fmt::Display for ConformanceError {
@@ -145,6 +178,8 @@ impl fmt::Display for ConformanceError {
         write!(formatter, "{:?} at {:?}", self.kind, self.path)
     }
 }
+
+impl Error for ConformanceError {}
 
 pub(crate) fn conform_slot(
     shape: &Shape,
@@ -211,6 +246,9 @@ fn conform_value(
         (Repr::F64, ValueRef::F64(value)) => Ok(ContractValue::f64(value).unwrap()),
         (Repr::String, ValueRef::String(value)) => Ok(ContractValue::string(value)),
         (Repr::Bytes, ValueRef::Bytes(value)) => Ok(ContractValue::bytes(value)),
+        (Repr::Sensitive(inner), ValueRef::Sensitive(value)) => {
+            conform_value(inner, role, value, path, Position::Element).map(ContractValue::sensitive)
+        }
         (Repr::List(element), ValueRef::List(values)) => {
             let values = values
                 .iter()
@@ -1015,5 +1053,14 @@ mod tests {
                 assert!(!format!("{error:?} {error}").contains(SENTINEL));
             }
         }
+    }
+
+    #[test]
+    fn sensitive_shape_rejects_a_direct_tri_state_inner() {
+        let tri_state = Shape::tri_state(Shape::string()).unwrap();
+        assert_eq!(
+            Shape::sensitive(tri_state).err(),
+            Some(ShapeError::TriStateSecretInner)
+        );
     }
 }
