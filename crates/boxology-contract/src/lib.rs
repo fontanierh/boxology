@@ -18,7 +18,7 @@ mod value;
 
 pub use conform::{ConformanceError, ConformanceErrorKind};
 pub use context::{
-    Caller, CancelToken, Deadline, IdempotencyKey, IdempotencyKeyError, TraceContext,
+    CallContext, Caller, CancelToken, Deadline, IdempotencyKey, IdempotencyKeyError, TraceContext,
 };
 pub use contract::{
     CapabilityDescriptor, CapabilityShape, ContractDescriptor, ContractDescriptorError,
