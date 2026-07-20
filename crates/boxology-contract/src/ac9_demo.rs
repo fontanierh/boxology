@@ -6,7 +6,8 @@
 use crate::conform::{ConformanceErrorKind, Shape, VariantShape, conform_slot};
 use crate::{
     ContractError, ContractType, ContractValue, DecodeError, DecodeErrorKind, DecodeRole,
-    EncodeError, Field, ObjectRef, OpaquePayload, OpaqueTree, PathSegment, SlotValue, ValueRef,
+    EncodeError, Field, ObjectRef, OpaquePayload, OpaqueTree, PathSegment, SlotValue,
+    TypeDescriptor, ValueRef, VariantDescriptor, VariantPayload,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,4 +304,43 @@ fn enum_tolerance_preserves_unknowns_for_strict_typed_decode() {
     assert_eq!(format!("{payload:?}"), "OpaquePayload(<redacted>)");
     assert!(!format!("{payload:?} {error:?}").contains(SENTINEL));
     assert_eq!(error.encode().unwrap(), reencoded);
+}
+
+#[test]
+fn public_descriptor_preserves_an_unknown_generated_error_variant() {
+    const SENTINEL: &str = "public-error-enum-sentinel";
+    let descriptor = TypeDescriptor::enumeration([VariantDescriptor::new(
+        "known",
+        VariantPayload::Value(TypeDescriptor::string()),
+        None,
+    )])
+    .unwrap();
+    let raw = SlotValue::Value(object([("marker", ContractValue::string(SENTINEL))]));
+    let input = SlotValue::Value(ContractValue::enum_value("future", raw));
+    let strict = descriptor
+        .conform(DecodeRole::ProviderInput, input.clone())
+        .unwrap_err();
+    assert_eq!(
+        strict.kind(),
+        &ConformanceErrorKind::UnknownVariant("future".into())
+    );
+    assert_eq!(strict.path(), &[PathSegment::Variant("future".into())]);
+    assert!(!format!("{strict:?} {strict}").contains(SENTINEL));
+
+    let normalized = descriptor
+        .conform(DecodeRole::ConsumerOutput, input)
+        .unwrap();
+    let error = DemoError::decode(&normalized).unwrap();
+    assert_eq!(error.error_tag(), "future");
+    let DemoError::Unknown { payload, .. } = &error else {
+        panic!()
+    };
+    assert_eq!(
+        payload.reveal(),
+        &OpaqueTree::Object(vec![
+            ("marker".into(), OpaqueTree::String(SENTINEL.into()),)
+        ])
+    );
+    assert!(!format!("{payload:?} {error:?}").contains(SENTINEL));
+    assert_eq!(error.encode().unwrap(), normalized);
 }
