@@ -7,8 +7,10 @@
 #![forbid(unsafe_code)]
 
 mod manifest;
+mod rust;
 
 pub use manifest::Manifest;
+pub use rust::{ParsedRustInput, ParsedRustInputs};
 
 use boxology_contract::BoxId;
 use std::{collections::BTreeMap, fmt};

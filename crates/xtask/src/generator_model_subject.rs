@@ -1,21 +1,27 @@
 use boxology_contract::BoxId;
-use boxology_generator_model::{GenerationRequest, Manifest};
+use boxology_generator_model::{GenerationRequest, Manifest, ParsedRustInputs};
 use std::{fs, path::Path};
 
 pub(crate) fn run(out: &Path) -> Result<(), String> {
     let id = || BoxId::new("subject-box").expect("fixed id is valid");
     let request = GenerationRequest::new(
         id(),
-        vec![(
-            "boxology.toml".into(),
-            b"schema = 1\nid = \"subject-box\"\nkind = \"box\"\n".to_vec(),
-        )],
+        vec![
+            (
+                "boxology.toml".into(),
+                b"schema = 1\nid = \"subject-box\"\nkind = \"box\"\n".to_vec(),
+            ),
+            ("src/z.rs".into(), b"fn z() {}\n".to_vec()),
+            ("src/a.rs".into(), b"struct A;\nfn a() {}\n".to_vec()),
+        ],
         vec![],
         vec!["generated/schema.json".into()],
     )
     .map_err(|error| format!("fixed valid request failed: {error}"))?;
     let manifest = Manifest::parse(&request)
         .map_err(|error| format!("fixed valid manifest failed: {error}"))?;
+    let rust_inputs = ParsedRustInputs::parse(&request)
+        .map_err(|error| format!("fixed valid Rust inputs failed: {error}"))?;
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         vec![(
@@ -28,6 +34,21 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     .map_err(|error| format!("fixed invalid-manifest request failed: {error}"))?;
     let manifest_diagnostics =
         Manifest::parse(&invalid_manifest_request).expect_err("fixed invalid manifest must fail");
+    let invalid_rust_request = GenerationRequest::new(
+        id(),
+        vec![
+            ("boxology.toml".into(), b"manifest\n".to_vec()),
+            ("b.rs".into(), "fn café() { @ }\n".as_bytes().to_vec()),
+            ("a.rs".into(), b"fn good() {}\nfn bad() { @ }\n".to_vec()),
+        ],
+        vec![],
+        vec![],
+    )
+    .map_err(|error| format!("fixed invalid-Rust request failed: {error}"))?;
+    let rust_diagnostics = match ParsedRustInputs::parse(&invalid_rust_request) {
+        Ok(_) => return Err("fixed invalid Rust inputs unexpectedly parsed".into()),
+        Err(diagnostics) => diagnostics,
+    };
     let diagnostics =
         GenerationRequest::new(id(), vec![("/absolute.rs".into(), vec![])], vec![], vec![])
             .expect_err("fixed invalid request must fail");
@@ -52,5 +73,24 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         out.join("manifest-diagnostics.txt"),
         format!("{manifest_diagnostics}\n"),
     )
-    .map_err(|error| format!("write manifest-diagnostics.txt: {error}"))
+    .map_err(|error| format!("write manifest-diagnostics.txt: {error}"))?;
+    let rust_summary = rust_inputs
+        .as_slice()
+        .iter()
+        .map(|input| {
+            format!(
+                "{} items={}",
+                input.path().as_str(),
+                input.syntax().items.len()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(out.join("rust-inputs.txt"), format!("{rust_summary}\n"))
+        .map_err(|error| format!("write rust-inputs.txt: {error}"))?;
+    fs::write(
+        out.join("rust-diagnostics.txt"),
+        format!("{rust_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write rust-diagnostics.txt: {error}"))
 }
