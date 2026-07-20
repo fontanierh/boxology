@@ -7,8 +7,12 @@
 mod conform;
 mod opaque;
 mod presence;
+mod typed;
 mod value;
 
 pub use opaque::{OpaqueNumber, OpaqueNumberError, OpaquePayload, OpaqueTree};
 pub use presence::{DecodeRole, Field};
+pub use typed::{
+    ContractType, DecodeError, DecodeErrorKind, EncodeError, EncodeErrorKind, PathSegment,
+};
 pub use value::{ContractValue, ObjectRef, SlotValue, ValueError, ValueRef};
