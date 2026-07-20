@@ -9,6 +9,7 @@ mod conform;
 mod context;
 mod contract;
 mod descriptor;
+mod error;
 mod identity;
 mod implementation;
 mod opaque;
@@ -28,6 +29,7 @@ pub use descriptor::{
     Deprecation, DescriptorError, DescriptorRef, FieldDescriptor, TypeDescriptor,
     VariantDescriptor, VariantPayload,
 };
+pub use error::{CallError, Detail, ErasedCallError};
 pub use identity::{BoxId, CapabilityId, CapabilityName, ContractRevision, IdentityError};
 pub use implementation::{
     ImplementationDescriptor, ImplementationDescriptorError, ImportDescriptor,
