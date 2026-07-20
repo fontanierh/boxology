@@ -6,6 +6,10 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod manifest;
+
+pub use manifest::Manifest;
+
 use boxology_contract::BoxId;
 use std::{collections::BTreeMap, fmt};
 
@@ -191,7 +195,7 @@ impl GenerationRequest {
         #[doc = "Returns declared outputs in caller-provided order."] outputs: &[RelativePath] = outputs;
     }
 }
-/// A one-based source coordinate.
+/// A source coordinate with one-based line and character-column units.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct LineColumn {
     line: usize,
@@ -536,6 +540,7 @@ mod tests {
     fn public_request_seam_is_send_sync_static() {
         fn bounds<T: Send + Sync + 'static>() {}
         bounds::<(RelativePath, InputFile, DeclaredImport, GenerationRequest)>();
+        bounds::<Manifest>();
         bounds::<(LineColumn, Span, Diagnostic, Diagnostics)>();
     }
 }
