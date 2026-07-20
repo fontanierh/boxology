@@ -23,6 +23,8 @@ name = "boxology-generator-model"
 version = "0.0.0"
 dependencies = [
  "boxology-contract",
+ "proc-macro2",
+ "syn",
  "toml_edit",
 ]
 

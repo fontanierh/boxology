@@ -102,7 +102,7 @@ Inputs: each fixture's `authoring/` tree (parse-only data in S1; compiles only o
 
 | Task | Content | Est. PRs |
 | --- | --- | --- |
-| T1 | Parse/model crate: syn ingestion, grammar table, identity namespaces, invariants, spans; minimal determinism subject registered | 2–3 |
+| T1 | Parse/model crate: syn ingestion, grammar table, identity namespaces, invariants, spans; minimal determinism subject registered | active stack; see #102 |
 | T2 | Schema emission + frozen fingerprint projection + mutation corpus | 2 |
 | T3 | Contract-crate emission: types, `ContractType` impls, descriptors | 2 |
 | T4 | Dispatch trait, typed handle, test-support emission | 2 |
@@ -115,7 +115,7 @@ T1 first; T2–T5 fan out; T6 alongside; T8 last. S1's fixture shape must be mer
 
 ## Matters left open
 
-*(None load-bearing.)*
+Load-bearing implementation decisions remain tracked in [#102](https://github.com/fontanierh/boxology/issues/102): identification of the crate root for D2 module resolution; self-import policy coordinated with #99; and transitive presence through `Secret` coordinated with #112. Decision-free parsing of each declared `.rs` input may proceed, but no root or layout, module traversal or reachability, ancestor-`cfg`, self-import, or transitive-presence authoring behavior may be inferred until its owning decision is accepted. Constructor, request-carrier, and descriptor-conformance behavior is not support policy.
 
 - The derive allowlist may grow with fixture-level justification.
 - Adapter include-stub ergonomics (module name, path constant) — T5 detail.
