@@ -45,7 +45,12 @@ pub(crate) fn encode_result(
     let mut output = br#"{"result":{"value":"#.to_vec();
     match slot {
         SlotValue::Missing => return failure(EncodeErrorCategory::MissingValue),
-        SlotValue::Null if matches!(descriptor.view(), DescriptorRef::Optional(_)) => {
+        SlotValue::Null
+            if matches!(
+                descriptor.view(),
+                DescriptorRef::Optional(_) | DescriptorRef::TriState(_)
+            ) =>
+        {
             output.extend_from_slice(b"null")
         }
         SlotValue::Null => return failure(EncodeErrorCategory::NullConformance),
@@ -70,7 +75,13 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
         | DescriptorRef::F32
         | DescriptorRef::F64
         | DescriptorRef::Blob => true,
-        DescriptorRef::Optional(inner) => is_supported(inner),
+        DescriptorRef::Optional(inner)
+        | DescriptorRef::TriState(inner)
+        | DescriptorRef::List(inner)
+        | DescriptorRef::Map(inner) => is_supported(inner),
+        DescriptorRef::Struct(fields) => {
+            fields.iter().all(|field| is_supported(field.descriptor()))
+        }
         _ => false,
     }
 }
@@ -80,8 +91,22 @@ fn encode_value(
     value: ValueRef<'_>,
     descriptor: &TypeDescriptor,
 ) -> Result<(), EncodeError> {
+    if matches!(value, ValueRef::Null) {
+        return if matches!(
+            descriptor.view(),
+            DescriptorRef::Optional(_) | DescriptorRef::TriState(_)
+        ) {
+            output.extend_from_slice(b"null");
+            Ok(())
+        } else {
+            failure(EncodeErrorCategory::NullConformance)
+        };
+    }
     let descriptor = match descriptor.view() {
-        DescriptorRef::Optional(inner) => inner,
+        DescriptorRef::Optional(inner) | DescriptorRef::TriState(inner) => inner,
+        DescriptorRef::List(inner) => return list(output, value, inner),
+        DescriptorRef::Map(inner) => return map(output, value, inner),
+        DescriptorRef::Struct(fields) => return structure(output, value, fields),
         DescriptorRef::Bool => {
             let ValueRef::Bool(value) = value else {
                 return mismatch();
@@ -108,6 +133,92 @@ fn encode_value(
         _ => return failure(EncodeErrorCategory::UnsupportedDescriptor),
     };
     encode_value(output, value, descriptor)
+}
+
+fn list(
+    output: &mut Vec<u8>,
+    value: ValueRef<'_>,
+    element: &TypeDescriptor,
+) -> Result<(), EncodeError> {
+    let ValueRef::List(items) = value else {
+        return mismatch();
+    };
+    output.push(b'[');
+    for (index, item) in items.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        encode_value(output, item.view(), element)?;
+    }
+    output.push(b']');
+    Ok(())
+}
+
+fn map(
+    output: &mut Vec<u8>,
+    value: ValueRef<'_>,
+    element: &TypeDescriptor,
+) -> Result<(), EncodeError> {
+    let ValueRef::Object(object) = value else {
+        return mismatch();
+    };
+    let mut entries: Vec<_> = object.entries().collect();
+    entries.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    output.push(b'{');
+    for (index, (key, value)) in entries.into_iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        string(output, ValueRef::String(key))?;
+        output.push(b':');
+        encode_value(output, value.view(), element)?;
+    }
+    output.push(b'}');
+    Ok(())
+}
+
+fn structure(
+    output: &mut Vec<u8>,
+    value: ValueRef<'_>,
+    fields: &[boxology_contract::FieldDescriptor],
+) -> Result<(), EncodeError> {
+    let ValueRef::Object(object) = value else {
+        return mismatch();
+    };
+    if object
+        .entries()
+        .any(|(name, _)| !fields.iter().any(|field| field.name() == name))
+    {
+        return mismatch();
+    }
+    output.push(b'{');
+    let mut emitted = false;
+    for field in fields {
+        let descriptor = field.descriptor();
+        let Some(value) = object.get(field.name()) else {
+            if matches!(
+                descriptor.view(),
+                DescriptorRef::Optional(_) | DescriptorRef::TriState(_)
+            ) {
+                continue;
+            }
+            return failure(EncodeErrorCategory::MissingValue);
+        };
+        if matches!(value.view(), ValueRef::Null)
+            && matches!(descriptor.view(), DescriptorRef::Optional(_))
+        {
+            return failure(EncodeErrorCategory::NullConformance);
+        }
+        if emitted {
+            output.push(b',');
+        }
+        emitted = true;
+        string(output, ValueRef::String(field.name()))?;
+        output.push(b':');
+        encode_value(output, value.view(), descriptor)?;
+    }
+    output.push(b'}');
+    Ok(())
 }
 
 fn string(output: &mut Vec<u8>, value: ValueRef<'_>) -> Result<(), EncodeError> {
@@ -236,7 +347,11 @@ mod tests {
     }
 
     fn scalar(descriptor: D, value: Value, token: &str) {
-        let first = encoded(SlotValue::Value(value), &descriptor);
+        canonical(SlotValue::Value(value), &descriptor, token);
+    }
+
+    fn canonical(slot: SlotValue, descriptor: &D, token: &str) {
+        let first = encoded(slot, descriptor);
         assert_eq!(first, [PREFIX, token.as_bytes(), b"}}"].concat());
         let tree = crate::syntax::parse(
             &first[PREFIX.len()..first.len() - 2],
@@ -244,8 +359,16 @@ mod tests {
         )
         .unwrap();
         let decoded =
-            crate::semantic::decode_tree(tree, &descriptor, DecodeRole::ConsumerOutput).unwrap();
-        assert_eq!(encoded(decoded, &descriptor), first);
+            crate::semantic::decode_tree(tree, descriptor, DecodeRole::ConsumerOutput).unwrap();
+        assert_eq!(encoded(decoded, descriptor), first);
+    }
+
+    fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+        Value::object(entries.into_iter().map(|(key, value)| (key.into(), value))).unwrap()
+    }
+
+    fn field(name: &str, descriptor: D) -> FieldDescriptor {
+        FieldDescriptor::new(name, descriptor, None)
     }
 
     #[test]
@@ -374,22 +497,189 @@ mod tests {
         ] {
             category(slot, descriptor, C::IntegerRange);
         }
-        let field = FieldDescriptor::new("x", D::bool(), None);
         let variant = VariantDescriptor::new("x", VariantPayload::Unit, None);
         let unsupported = |slot, descriptor| category(slot, descriptor, C::UnsupportedDescriptor);
         for descriptor in [
-            D::list(D::bool()).unwrap(),
-            D::map(D::bool()).unwrap(),
-            D::structure([field]).unwrap(),
             D::enumeration([variant]).unwrap(),
             D::secret(D::bool()).unwrap(),
         ] {
             unsupported(value(Value::bool(true)), descriptor);
         }
-        let tri = D::tri_state(D::bool()).unwrap();
-        unsupported(SlotValue::Null, tri);
-        unsupported(SlotValue::Missing, D::list(D::bool()).unwrap());
-        let optional_list = D::optional(D::list(D::bool()).unwrap()).unwrap();
-        unsupported(SlotValue::Null, optional_list);
+    }
+
+    #[test]
+    fn aggregates_have_exact_canonical_bytes_and_replay() {
+        canonical(value(Value::list([])), &D::list(D::bool()).unwrap(), "[]");
+        canonical(value(object([])), &D::map(D::bool()).unwrap(), "{}");
+        canonical(value(object([])), &D::structure([]).unwrap(), "{}");
+
+        let optional = D::optional(D::string()).unwrap();
+        canonical(
+            value(Value::list([Value::null(), Value::string("x")])),
+            &D::list(optional).unwrap(),
+            r#"[null,"x"]"#,
+        );
+        canonical(
+            value(object([("x", Value::null())])),
+            &D::map(D::optional(D::bool()).unwrap()).unwrap(),
+            r#"{"x":null}"#,
+        );
+        canonical(
+            value(object([
+                ("é", Value::bool(true)),
+                ("aa", Value::bool(true)),
+                ("a", Value::bool(true)),
+                ("\"", Value::bool(true)),
+                ("\n", Value::bool(true)),
+                ("", Value::bool(true)),
+            ])),
+            &D::map(D::bool()).unwrap(),
+            r#"{"":true,"\n":true,"\"":true,"a":true,"aa":true,"é":true}"#,
+        );
+
+        let ordered = D::structure([field("z", D::bool()), field("a", D::string())]).unwrap();
+        canonical(
+            value(object([
+                ("a", Value::string("x")),
+                ("z", Value::bool(true)),
+            ])),
+            &ordered,
+            r#"{"z":true,"a":"x"}"#,
+        );
+
+        let nested = D::structure([field(
+            "root",
+            D::list(D::map(D::optional(D::string()).unwrap()).unwrap()).unwrap(),
+        )])
+        .unwrap();
+        canonical(
+            value(object([(
+                "root",
+                Value::list([object([("y", Value::string("yes")), ("x", Value::null())])]),
+            )])),
+            &nested,
+            r#"{"root":[{"x":null,"y":"yes"}]}"#,
+        );
+    }
+
+    #[test]
+    fn top_level_and_struct_presence_are_exact() {
+        let optional = D::optional(D::string()).unwrap();
+        let tri = D::tri_state(D::string()).unwrap();
+        for descriptor in [&optional, &tri] {
+            canonical(SlotValue::Null, descriptor, "null");
+            canonical(value(Value::string("x")), descriptor, r#""x""#);
+            category(SlotValue::Missing, descriptor.clone(), C::MissingValue);
+        }
+
+        let structure = D::structure([
+            field("required", D::bool()),
+            field("optional", optional),
+            field("tri", tri),
+        ])
+        .unwrap();
+        canonical(
+            value(object([("required", Value::bool(true))])),
+            &structure,
+            r#"{"required":true}"#,
+        );
+        canonical(
+            value(object([
+                ("required", Value::bool(true)),
+                ("optional", Value::string("o")),
+            ])),
+            &structure,
+            r#"{"required":true,"optional":"o"}"#,
+        );
+        canonical(
+            value(object([
+                ("tri", Value::null()),
+                ("optional", Value::string("o")),
+                ("required", Value::bool(true)),
+            ])),
+            &structure,
+            r#"{"required":true,"optional":"o","tri":null}"#,
+        );
+        canonical(
+            value(object([
+                ("required", Value::bool(true)),
+                ("tri", Value::string("t")),
+            ])),
+            &structure,
+            r#"{"required":true,"tri":"t"}"#,
+        );
+        category(
+            value(object([
+                ("required", Value::bool(true)),
+                ("optional", Value::null()),
+            ])),
+            structure.clone(),
+            C::NullConformance,
+        );
+        category(value(object([])), structure.clone(), C::MissingValue);
+        category(
+            value(object([("required", Value::null())])),
+            structure,
+            C::NullConformance,
+        );
+    }
+
+    #[test]
+    fn aggregate_failures_follow_declared_precedence() {
+        let list = D::list(D::i8()).unwrap();
+        let map = D::map(D::i8()).unwrap();
+        let structure = D::structure([field("a", D::i8()), field("b", D::i8())]).unwrap();
+        for descriptor in [list.clone(), map.clone(), structure.clone()] {
+            category(SlotValue::Missing, descriptor.clone(), C::MissingValue);
+            category(SlotValue::Null, descriptor.clone(), C::NullConformance);
+            category(
+                value(Value::string("DO_NOT_LEAK")),
+                descriptor,
+                C::RepresentationMismatch,
+            );
+        }
+        category(
+            value(object([
+                ("a", Value::i64(1)),
+                ("unknown", Value::bool(true)),
+            ])),
+            structure.clone(),
+            C::RepresentationMismatch,
+        );
+        category(
+            value(Value::list([Value::i64(128), Value::bool(true)])),
+            list,
+            C::IntegerRange,
+        );
+        category(
+            value(object([("b", Value::bool(true)), ("a", Value::i64(128))])),
+            map,
+            C::IntegerRange,
+        );
+        category(
+            value(object([("b", Value::bool(true)), ("a", Value::i64(128))])),
+            structure,
+            C::IntegerRange,
+        );
+
+        let enumeration =
+            D::enumeration([VariantDescriptor::new("x", VariantPayload::Unit, None)]).unwrap();
+        let secret = D::secret(D::bool()).unwrap();
+        for descriptor in [
+            D::list(enumeration.clone()).unwrap(),
+            D::map(enumeration.clone()).unwrap(),
+            D::structure([field("x", enumeration)]).unwrap(),
+            D::list(secret.clone()).unwrap(),
+            D::map(secret.clone()).unwrap(),
+            D::structure([field("x", secret)]).unwrap(),
+        ] {
+            for slot in [
+                SlotValue::Missing,
+                SlotValue::Null,
+                value(Value::bool(true)),
+            ] {
+                category(slot, descriptor.clone(), C::UnsupportedDescriptor);
+            }
+        }
     }
 }
