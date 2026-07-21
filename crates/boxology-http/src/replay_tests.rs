@@ -402,6 +402,103 @@ fn aggregate_bytes_preserve_order_roles_and_unknown_enum_opacity() {
 }
 
 #[test]
+fn blob_bytes_replay_canonical_vectors_in_both_roles() {
+    for (raw, bytes) in [
+        (br#"{"base64":""}"#.as_slice(), b"".as_slice()),
+        (br#"{"base64":"AA=="}"#, b"\0"),
+        (br#"{"base64":"AAE="}"#, b"\0\x01"),
+        (br#"{"base64":"AAEC"}"#, b"\0\x01\x02"),
+        (br#"{"base64":"AP+A/w=="}"#, b"\0\xff\x80\xff"),
+    ] {
+        value_both(raw, &TypeDescriptor::blob(), Value::bytes(bytes));
+    }
+}
+
+#[test]
+fn blob_bytes_replay_through_presence_and_every_aggregate_shape() {
+    let event = enumeration([variant(
+        "File",
+        VariantPayload::Value(TypeDescriptor::blob()),
+    )]);
+    let descriptor = TypeDescriptor::optional(structure([
+        field(
+            "files",
+            TypeDescriptor::list(TypeDescriptor::map(TypeDescriptor::blob()).unwrap()).unwrap(),
+        ),
+        field("event", event),
+    ]))
+    .unwrap();
+    slot_both(b"null", &descriptor, SlotValue::Null);
+    value_both(
+        br#"{"files":[{"first":{"base64":"AA=="},"second":{"base64":"/4A="}}],"event":{"tag":"File","payload":{"base64":"AQI="}}}"#,
+        &descriptor,
+        object([
+            (
+                "files",
+                Value::list([object([
+                    ("first", Value::bytes([0])),
+                    ("second", Value::bytes([0xff, 0x80])),
+                ])]),
+            ),
+            (
+                "event",
+                Value::enum_value(
+                    "File",
+                    SlotValue::Value(Value::bytes([1, 2])),
+                ),
+            ),
+        ]),
+    );
+}
+
+#[test]
+fn blob_bytes_reject_noncanonical_representations_without_leakage() {
+    let blob = TypeDescriptor::blob();
+    hostile_error_both(
+        br#""DO_NOT_LEAK""#,
+        &blob,
+        C::RepresentationMismatch,
+        SENTINEL,
+    );
+    error_both(b"{}", &blob, C::RepresentationMismatch);
+    for (raw, hostile) in [
+        (
+            br#"{"base64":"AA==","extra":"DO_NOT_LEAK"}"#.as_slice(),
+            SENTINEL,
+        ),
+        (br#"{"DO_NOT_LEAK":"AA=="}"#, SENTINEL),
+        (br#"{"base64":{"DO_NOT_LEAK":true}}"#, SENTINEL),
+        (br#"{"base64":"-w=="}"#, "-w=="),
+        (br#"{"base64":"AA"}"#, "AA"),
+        (br#"{"base64":"AA="}"#, "AA="),
+        (br#"{"base64":"A=AA"}"#, "A=AA"),
+        (br#"{"base64":"AA==="}"#, "AA==="),
+        (br#"{"base64":"AB=="}"#, "AB=="),
+        (br#"{"base64":"A"}"#, "A"),
+        (br#"{"base64":"A!=="}"#, "A!=="),
+    ] {
+        hostile_error_both(raw, &blob, C::RepresentationMismatch, hostile);
+    }
+}
+
+#[test]
+fn blob_duplicate_keys_precede_payload_decoding() {
+    let blob = TypeDescriptor::blob();
+    hostile_error_both(
+        br#"{"base64":"AA==","\u0062ase64":"AA=="}"#,
+        &blob,
+        C::DuplicateObjectKey,
+        "AA==",
+    );
+    hostile_error_both(
+        br#"{"base64":"DO_NOT_LEAK","base\u0036\u0034":"DO_NOT_LEAK"}"#,
+        &blob,
+        C::DuplicateObjectKey,
+        SENTINEL,
+    );
+}
+
+#[test]
 fn strict_scalar_bytes_report_every_semantic_category_without_input_leakage() {
     for (raw, descriptor, hostile) in [
         (
