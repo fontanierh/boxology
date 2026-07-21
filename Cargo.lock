@@ -37,6 +37,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-http"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "serde_json",
+]
+
+[[package]]
 name = "boxology-runtime"
 version = "0.0.0"
 dependencies = [
