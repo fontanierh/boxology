@@ -8,6 +8,9 @@ const MISSING_RULE: &str =
     "outline module lookup must find x.rs or x/mod.rs among declared Rust inputs";
 const AMBIGUOUS_RULE: &str =
     "outline module lookup must not find both x.rs and x/mod.rs among declared Rust inputs";
+const UNREACHABLE_RULE: &str =
+    "Boxology-annotated items must be reachable from the declared crate root";
+const CONDITIONAL_RULE: &str = "cfg and cfg_attr are forbidden on exported items, their fields or variants, surrounding impls, and ancestor module declarations";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -87,17 +90,34 @@ impl ParsedRustInputs {
             &mut reachable,
             &mut diagnostics,
         );
-        if diagnostics.is_empty() {
-            Ok(self
-                .inputs
-                .iter()
-                .zip(reachable)
-                .filter_map(|(input, reachable)| reachable.then_some(input))
-                .collect())
-        } else {
+        if !diagnostics.is_empty() {
             diagnostics.sort();
-            Err(Diagnostics(diagnostics))
+            return Err(Diagnostics(diagnostics));
         }
+
+        for (source, input) in self.inputs.iter().enumerate() {
+            if !reachable[source] {
+                self.inspect_unreachable(source, &input.syntax.items, &mut diagnostics);
+            }
+        }
+        self.validate_items(
+            self.crate_root,
+            &root.syntax.items,
+            module_dir,
+            &mut Vec::new(),
+            &mut diagnostics,
+        );
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        Ok(self
+            .inputs
+            .iter()
+            .zip(reachable)
+            .filter_map(|(input, reachable)| reachable.then_some(input))
+            .collect())
     }
 
     fn visit_items(
@@ -186,6 +206,129 @@ impl ParsedRustInputs {
             .binary_search_by(|input| input.path.as_str().as_bytes().cmp(path.as_bytes()))
             .ok()
     }
+
+    fn inspect_unreachable(
+        &self,
+        source: usize,
+        items: &[syn::Item],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        for item in items {
+            add_dead(&self.inputs[source].path, item_attrs(item), diagnostics);
+            if let syn::Item::Mod(module) = item
+                && let Some((_, items)) = &module.content
+            {
+                self.inspect_unreachable(source, items, diagnostics);
+            }
+            if let syn::Item::Impl(implementation) = item {
+                for item in &implementation.items {
+                    add_dead(&self.inputs[source].path, impl_attrs(item), diagnostics);
+                }
+            }
+        }
+    }
+
+    fn validate_items<'a>(
+        &'a self,
+        source: usize,
+        items: &'a [syn::Item],
+        module_dir: &str,
+        ancestors: &mut Vec<(usize, &'a syn::ItemMod)>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        for item in items {
+            let attributes = item_attrs(item);
+            if is_export(attributes) {
+                self.validate_context(source, attributes, ancestors, diagnostics);
+                if has_boxology(attributes, "contract") {
+                    match item {
+                        syn::Item::Struct(item) => {
+                            for field in &item.fields {
+                                self.add_conditionals(source, &field.attrs, diagnostics);
+                            }
+                        }
+                        syn::Item::Enum(item) => {
+                            for variant in &item.variants {
+                                self.add_conditionals(source, &variant.attrs, diagnostics);
+                                for field in &variant.fields {
+                                    self.add_conditionals(source, &field.attrs, diagnostics);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if let syn::Item::Impl(implementation) = item {
+                for item in &implementation.items {
+                    let attributes = impl_attrs(item);
+                    if is_export(attributes) {
+                        self.validate_context(source, attributes, ancestors, diagnostics);
+                        self.add_conditionals(source, &implementation.attrs, diagnostics);
+                    }
+                }
+            }
+            let syn::Item::Mod(module) = item else {
+                continue;
+            };
+            let name = module.ident.unraw().to_string();
+            let child_dir = if module_dir.is_empty() {
+                name
+            } else {
+                format!("{module_dir}/{name}")
+            };
+            ancestors.push((source, module));
+            if let Some((_, items)) = &module.content {
+                self.validate_items(source, items, &child_dir, ancestors, diagnostics);
+            } else {
+                let target = self
+                    .find(&format!("{child_dir}.rs"))
+                    .or_else(|| self.find(&format!("{child_dir}/mod.rs")))
+                    .expect("structural validation guarantees one outline target");
+                self.validate_items(
+                    target,
+                    &self.inputs[target].syntax.items,
+                    &child_dir,
+                    ancestors,
+                    diagnostics,
+                );
+            }
+            ancestors.pop();
+        }
+    }
+
+    fn validate_context(
+        &self,
+        source: usize,
+        attributes: &[syn::Attribute],
+        ancestors: &[(usize, &syn::ItemMod)],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        self.add_conditionals(source, attributes, diagnostics);
+        for &(source, module) in ancestors {
+            self.add_conditionals(source, &module.attrs, diagnostics);
+        }
+    }
+
+    fn add_conditionals(
+        &self,
+        source: usize,
+        attributes: &[syn::Attribute],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        attributes
+            .iter()
+            .filter_map(|attribute| conditional(attribute).map(|name| (attribute, name)))
+            .for_each(|(attribute, offending)| {
+                diagnostics.push(module_diagnostic(
+                    &self.inputs[source].path,
+                    attribute_span(attribute, false),
+                    "BXG0020",
+                    offending,
+                    CONDITIONAL_RULE,
+                ));
+            });
+    }
 }
 
 impl ParsedRustInput {
@@ -198,6 +341,102 @@ impl ParsedRustInput {
     pub fn syntax(&self) -> &syn::File {
         &self.syntax
     }
+}
+
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    match item {
+        syn::Item::Const(syn::ItemConst { attrs, .. })
+        | syn::Item::Enum(syn::ItemEnum { attrs, .. })
+        | syn::Item::ExternCrate(syn::ItemExternCrate { attrs, .. })
+        | syn::Item::Fn(syn::ItemFn { attrs, .. })
+        | syn::Item::ForeignMod(syn::ItemForeignMod { attrs, .. })
+        | syn::Item::Impl(syn::ItemImpl { attrs, .. })
+        | syn::Item::Macro(syn::ItemMacro { attrs, .. })
+        | syn::Item::Mod(syn::ItemMod { attrs, .. })
+        | syn::Item::Static(syn::ItemStatic { attrs, .. })
+        | syn::Item::Struct(syn::ItemStruct { attrs, .. })
+        | syn::Item::Trait(syn::ItemTrait { attrs, .. })
+        | syn::Item::TraitAlias(syn::ItemTraitAlias { attrs, .. })
+        | syn::Item::Type(syn::ItemType { attrs, .. })
+        | syn::Item::Union(syn::ItemUnion { attrs, .. })
+        | syn::Item::Use(syn::ItemUse { attrs, .. }) => attrs,
+        _ => &[],
+    }
+}
+
+fn impl_attrs(item: &syn::ImplItem) -> &[syn::Attribute] {
+    match item {
+        syn::ImplItem::Const(syn::ImplItemConst { attrs, .. })
+        | syn::ImplItem::Fn(syn::ImplItemFn { attrs, .. })
+        | syn::ImplItem::Type(syn::ImplItemType { attrs, .. })
+        | syn::ImplItem::Macro(syn::ImplItemMacro { attrs, .. }) => attrs,
+        _ => &[],
+    }
+}
+
+fn boxology_leaf(attribute: &syn::Attribute) -> Option<&syn::Ident> {
+    let path = attribute.path();
+    if !matches!(&attribute.style, syn::AttrStyle::Outer)
+        || path.segments.len() != 2
+        || path
+            .segments
+            .iter()
+            .any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+        || path.segments[0].ident.unraw() != "boxology"
+    {
+        return None;
+    }
+    Some(&path.segments[1].ident)
+}
+
+fn add_dead(path: &RelativePath, attributes: &[syn::Attribute], diagnostics: &mut Vec<Diagnostic>) {
+    if let Some(attribute) = attributes
+        .iter()
+        .find(|attribute| boxology_leaf(attribute).is_some())
+    {
+        diagnostics.push(module_diagnostic(
+            path,
+            attribute_span(attribute, true),
+            "BXG0019",
+            "Boxology-annotated item",
+            UNREACHABLE_RULE,
+        ));
+    }
+}
+
+fn has_boxology(attributes: &[syn::Attribute], leaf: &str) -> bool {
+    attributes.iter().any(|attribute| {
+        boxology_leaf(attribute).is_some_and(|identifier| identifier.unraw() == leaf)
+    })
+}
+
+fn is_export(attributes: &[syn::Attribute]) -> bool {
+    has_boxology(attributes, "contract") || has_boxology(attributes, "capability")
+}
+
+fn conditional(attribute: &syn::Attribute) -> Option<&'static str> {
+    let path = attribute.path();
+    if path.segments.len() != 1 || !matches!(path.segments[0].arguments, syn::PathArguments::None) {
+        return None;
+    }
+    let identifier = path.segments[0].ident.unraw();
+    (identifier == "cfg")
+        .then_some("cfg attribute")
+        .or_else(|| (identifier == "cfg_attr").then_some("cfg_attr attribute"))
+}
+
+fn attribute_span(attribute: &syn::Attribute, close_path: bool) -> proc_macro2::Span {
+    let path = attribute.path();
+    let start = path
+        .leading_colon
+        .as_ref()
+        .map_or_else(|| path.segments[0].ident.span(), |colon| colon.spans[0]);
+    let end = if close_path && matches!(&attribute.meta, syn::Meta::Path(_)) {
+        attribute.bracket_token.span.close()
+    } else {
+        path.segments.last().unwrap().ident.span()
+    };
+    start.join(end).expect("attribute path spans one source")
 }
 
 fn append_errors(path: &RelativePath, error: syn::Error, diagnostics: &mut Vec<Diagnostic>) {
@@ -369,6 +608,108 @@ mod tests {
     }
 
     #[test]
+    fn direct_boxology_paths_are_exact_and_owned_by_the_first_attribute() {
+        let expected = |line, end| {
+            format!(
+                "BXG0019 dead.rs:{line}:3-{line}:{end} offending={:?} rule={UNREACHABLE_RULE:?} source={RULE_SOURCE:?}",
+                "Boxology-annotated item"
+            )
+        };
+        let one = resolution_errors(&request(
+            "root.rs",
+            &[
+                ("root.rs", ""),
+                ("dead.rs", "#[boxology::contract] struct Dead;"),
+            ],
+        ));
+        assert_eq!(one.to_string(), expected(1, 22));
+        let source = "#[r#boxology::r#contract] struct Raw;\n#[::r#boxology::r#capability] fn leading() {}\n#[boxology::contract]\n#[::boxology::capability]\nfn twice() {}\n#[alias::contract] fn alias() {}\n#[crate::boxology::contract] fn prefixed() {}\n#[boxology] fn short() {}\n#[boxology::contract::nested] fn long() {}\n";
+        let errors =
+            resolution_errors(&request("root.rs", &[("root.rs", ""), ("dead.rs", source)]));
+        let rendered = [(1, 26), (2, 30), (3, 22)]
+            .map(|(line, end)| expected(line, end))
+            .join("\n");
+        assert_eq!(errors.to_string(), rendered);
+    }
+
+    #[test]
+    fn conditional_export_item_spellings_have_exact_path_spans() {
+        for (attribute, end, offending) in [
+            ("#[cfg(payload)]", 6, "cfg attribute"),
+            ("#[cfg_attr(payload, ignored)]", 11, "cfg_attr attribute"),
+            ("#[r#cfg(payload)]", 8, "cfg attribute"),
+            ("#[::r#cfg_attr(x, y)]", 15, "cfg_attr attribute"),
+        ] {
+            let source = format!("{attribute}\n#[boxology::contract]\nstruct Export;");
+            let errors = resolution_errors(&request("root.rs", &[("root.rs", &source)]));
+            assert_eq!(
+                errors.to_string(),
+                format!(
+                    "BXG0020 root.rs:1:3-1:{end} offending={offending:?} rule={CONDITIONAL_RULE:?} source={RULE_SOURCE:?}"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn declaration_errors_are_complete_sorted_deduplicated_and_safe() {
+        let request = request(
+            "root.rs",
+            &[
+                ("a-dead.rs", "#[boxology::contract(payload)] struct Secret;"),
+                (
+                    "inline/child.rs",
+                    "#[cfg(deep_payload)]\nmod deep {\n#[boxology::contract]\nstruct One;\n#[boxology::capability]\nfn two() {}\n}",
+                ),
+                (
+                    "root.rs",
+                    "#[boxology::contract]\nmod inline {\n#![cfg(root_payload)]\n#[cfg_attr(child_payload, ignored)]\nmod child;\n}\n#[boxology::contract]\nstruct S {\n#[cfg(field_payload)]\nfield: u8,\n}\n#[boxology::contract]\nenum E {\n#[cfg(variant_payload)]\nA,\nB {\n#[cfg_attr(field_payload, ignored)]\nfield: u8,\n}\n}\nstruct Plain;\nimpl Plain {\n#![cfg(impl_payload)]\n#[cfg_attr(method_payload, ignored)]\n#[boxology::capability]\nfn cap(&self) {}\n#[cfg(unrelated_payload)]\nfn helper(&self) {}\n}",
+                ),
+                (
+                    "z-dead.rs",
+                    "struct Z;\nimpl Z {\n#[boxology::contract]\n#[::boxology::capability]\nfn twice() {}\n}",
+                ),
+            ],
+        );
+        let (first, second) = (resolution_errors(&request), resolution_errors(&request));
+        assert_eq!(first, second);
+        let sites = [
+            ("a-dead.rs", 1, 21),
+            ("inline/child.rs", 1, 6),
+            ("root.rs", 3, 7),
+            ("root.rs", 4, 11),
+            ("root.rs", 9, 6),
+            ("root.rs", 14, 6),
+            ("root.rs", 17, 11),
+            ("root.rs", 23, 7),
+            ("root.rs", 24, 11),
+            ("z-dead.rs", 3, 22),
+        ];
+        let expected = sites.map(|(path, line, end)| {
+            let start = if end == 7 { 4 } else { 3 };
+            let (code, offending, rule) = match end {
+                6 | 7 => ("BXG0020", "cfg attribute", CONDITIONAL_RULE),
+                11 => ("BXG0020", "cfg_attr attribute", CONDITIONAL_RULE),
+                _ => ("BXG0019", "Boxology-annotated item", UNREACHABLE_RULE),
+            };
+            format!("{code} {path}:{line}:{start}-{line}:{end} offending={offending:?} rule={rule:?} source={RULE_SOURCE:?}")
+        }).join("\n");
+        assert_eq!(first.to_string(), expected);
+        let rendered = first.to_string();
+        for payload in ["payload", "Secret", "One", "cap", "ignored"] {
+            assert!(!rendered.contains(payload));
+        }
+    }
+
+    #[test]
+    fn conditionals_outside_export_shape_are_allowed() {
+        let source = "#![cfg(file_payload)]\n#[cfg(internal_payload)] fn internal() {}\nstruct Plain { #[cfg(field_payload)] field: u8 }\nenum PlainEnum { #[cfg(variant_payload)] A, B { #[cfg_attr(field_payload, ignored)] field: u8 } }\n#[cfg(sibling_payload)] mod sibling {}\nimpl Plain { #[cfg(helper_payload)] fn helper(&self) {} #[boxology::capability] fn exported(&self) {} }";
+        let valid = request("root.rs", &[("root.rs", source)]);
+        let parsed = ParsedRustInputs::parse(&valid).unwrap();
+        assert!(parsed.resolve_reachable_inputs().is_ok());
+    }
+
+    #[test]
     fn module_resolution_diagnostics_are_exact_and_safe() {
         let cases = [
             (
@@ -436,6 +777,7 @@ mod tests {
         let request = request(
             "root.rs",
             &[
+                ("dead.rs", "#[boxology::contract] struct Dead;\n"),
                 ("redirected_payload/mod.rs", "mod hidden_payload;\n"),
                 ("ambiguous_payload.rs", "mod hidden_payload;\n"),
                 ("a_continuing.rs", "mod descendant_payload;\n"),
@@ -516,10 +858,11 @@ mod tests {
     #[test]
     fn multifile_failures_are_complete_sorted_exact_safe_and_repeatable() {
         let request = request(
-            "a.rs",
+            "root.rs",
             &[
                 ("b.rs", "fn café() { @ }\n"),
                 ("a.rs", "fn good() {}\nfn bad() { @ }\n"),
+                ("root.rs", "fn root() {}\n"),
             ],
         );
         let (first, second) = (parse_errors(&request), parse_errors(&request));
