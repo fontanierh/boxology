@@ -10,7 +10,10 @@ mod manifest;
 mod rust;
 
 pub use manifest::Manifest;
-pub use rust::{ContractDeclaration, ContractDeclarationSyntax, ParsedRustInput, ParsedRustInputs};
+pub use rust::{
+    ContractDeclaration, ContractDeclarationRole, ContractDeclarationSyntax, ParsedRustInput,
+    ParsedRustInputs,
+};
 
 use boxology_contract::BoxId;
 use std::{collections::BTreeMap, fmt};

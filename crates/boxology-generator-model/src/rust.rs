@@ -17,6 +17,9 @@ const COLLISION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2-D4";
 const ATTRIBUTE_RULE: &str = "contract declarations, their fields, and variants may use only doc, direct boxology attributes, deprecated, and derive";
 const DERIVE_RULE: &str =
     "contract declarations, their fields, and variants may derive only Debug, Clone, and PartialEq";
+const CONTRACT_ROLE_RULE: &str =
+    "contract declarations use #[boxology::contract]; only enums may use the single error marker";
+const CONTRACT_ROLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1-D4";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -37,6 +40,16 @@ pub struct ContractDeclaration<'a> {
     module_path: Vec<String>,
     lifted_name: String,
     syntax: ContractDeclarationSyntax<'a>,
+    role: ContractDeclarationRole,
+}
+
+/// The semantic role of a discovered contract declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContractDeclarationRole {
+    /// A value contract declared by a struct or ordinary enum.
+    Value,
+    /// A structured-error contract declared by an enum.
+    Error,
 }
 
 /// The parsed syntax belonging to a discovered contract declaration.
@@ -72,6 +85,11 @@ impl ContractDeclaration<'_> {
     /// Returns the declaration's parsed struct-or-enum syntax.
     pub fn syntax(&self) -> ContractDeclarationSyntax<'_> {
         self.syntax
+    }
+
+    /// Returns the declaration's validated semantic role.
+    pub fn role(&self) -> ContractDeclarationRole {
+        self.role
     }
 }
 
@@ -181,6 +199,14 @@ impl ParsedRustInputs {
         }
         for declaration in &declarations {
             validate_contract_attributes(declaration, &mut diagnostics);
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        for declaration in &mut declarations {
+            validate_contract_role(declaration, &mut diagnostics);
         }
         diagnostics.sort();
         diagnostics.dedup();
@@ -351,6 +377,7 @@ impl ParsedRustInputs {
                     module_path: module_path.clone(),
                     lifted_name: identifier.unraw().to_string(),
                     syntax,
+                    role: ContractDeclarationRole::Value,
                 });
             }
 
@@ -650,6 +677,67 @@ fn validate_contract_attributes(
     }
 }
 
+fn validate_contract_role(
+    declaration: &mut ContractDeclaration<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let attributes = match declaration.syntax {
+        ContractDeclarationSyntax::Struct(item) => &item.attrs,
+        ContractDeclarationSyntax::Enum(item) => &item.attrs,
+    };
+    let mut contracts = attributes.iter().filter(|attribute| {
+        boxology_leaf(attribute).is_some_and(|identifier| identifier.unraw() == "contract")
+    });
+    let owner = contracts
+        .next()
+        .expect("declaration discovery requires a direct contract attribute");
+    let role = match &owner.meta {
+        syn::Meta::Path(_) => Some(ContractDeclarationRole::Value),
+        syn::Meta::List(list)
+            if matches!(declaration.syntax, ContractDeclarationSyntax::Enum(_))
+                && is_error_marker(list) =>
+        {
+            Some(ContractDeclarationRole::Error)
+        }
+        _ => None,
+    };
+    if let Some(role) = role {
+        declaration.role = role;
+    } else {
+        diagnostics.push(contract_role_diagnostic(declaration.source, owner));
+    }
+    diagnostics
+        .extend(contracts.map(|attribute| contract_role_diagnostic(declaration.source, attribute)));
+}
+
+fn is_error_marker(list: &syn::MetaList) -> bool {
+    list.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
+        .ok()
+        .filter(|markers| markers.len() == 1)
+        .is_some_and(|markers| {
+            let marker = &markers[0];
+            marker.leading_colon.is_none()
+                && marker.segments.len() == 1
+                && matches!(marker.segments[0].arguments, syn::PathArguments::None)
+                && marker.segments[0].ident.unraw() == "error"
+        })
+}
+
+fn contract_role_diagnostic(path: &RelativePath, attribute: &syn::Attribute) -> Diagnostic {
+    Diagnostic {
+        path: path.clone(),
+        span: source_span(
+            boxology_leaf(attribute)
+                .expect("contract attributes are direct Boxology paths")
+                .span(),
+        ),
+        code: "BXG0024",
+        offending: "invalid contract declaration annotation".into(),
+        rule: CONTRACT_ROLE_RULE,
+        rule_source: CONTRACT_ROLE_RULE_SOURCE,
+    }
+}
+
 fn validate_attributes(
     path: &RelativePath,
     attributes: &[syn::Attribute],
@@ -796,6 +884,10 @@ mod tests {
     use boxology_contract::BoxId;
 
     fn request(root: &str, files: &[(&str, &str)]) -> GenerationRequest {
+        request_in_order(root, files, false)
+    }
+
+    fn request_in_order(root: &str, files: &[(&str, &str)], reversed: bool) -> GenerationRequest {
         let mut inputs = vec![(
             "boxology.toml".into(),
             b"schema = 1\nid = \"demo\"\nkind = \"box\"\n".to_vec(),
@@ -805,6 +897,9 @@ mod tests {
                 .iter()
                 .map(|(path, source)| ((*path).into(), source.as_bytes().to_vec())),
         );
+        if reversed {
+            inputs.reverse();
+        }
         GenerationRequest::new(
             BoxId::new("demo").unwrap(),
             root.into(),
@@ -1137,7 +1232,7 @@ mod tests {
         let source = concat!(
             "/// declaration docs\n#[doc = \"more docs\"]\n#[deprecated]\n",
             "#[deprecated(note = \"later\")]\n#[derive(Debug, r#Clone)]\n",
-            "#[derive(PartialEq)]\n#[boxology::contract(payload)]\n",
+            "#[derive(PartialEq)]\n#[boxology::contract]\n",
             "struct Named { #[doc = \"field\"] #[derive(Clone)] named: u8 }\n",
             "#[::boxology::contract]\n",
             "struct Tuple(#[::boxology::field(anything)] #[deprecated(note = \"later\")] u8);\n",
@@ -1154,6 +1249,208 @@ mod tests {
                 .map(ContractDeclaration::lifted_name)
                 .collect::<Vec<_>>(),
             ["Named", "Tuple", "Event"]
+        );
+    }
+
+    #[test]
+    fn contract_roles_accept_exact_forms_and_are_input_order_invariant() {
+        let files = [
+            (
+                "root.rs",
+                "mod a; mod z;\n#[r#boxology::r#contract]\nstruct Root;\n",
+            ),
+            ("a.rs", "#[::boxology::contract]\nenum Ordinary { A }\n"),
+            (
+                "z.rs",
+                "#[::r#boxology::r#contract(r#error,)]\nenum Failure { A }\n",
+            ),
+        ];
+        let project = |reversed| {
+            ParsedRustInputs::parse(&request_in_order("root.rs", &files, reversed))
+                .unwrap()
+                .discover_contract_declarations()
+                .unwrap()
+                .into_iter()
+                .map(|declaration| {
+                    (
+                        declaration.lifted_name().to_owned(),
+                        declaration.role(),
+                        matches!(declaration.syntax(), ContractDeclarationSyntax::Struct(_)),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let canonical = project(false);
+        assert_eq!(canonical, project(true));
+        assert_eq!(
+            canonical,
+            [
+                ("Root".into(), ContractDeclarationRole::Value, true),
+                ("Ordinary".into(), ContractDeclarationRole::Value, false),
+                ("Failure".into(), ContractDeclarationRole::Error, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_contract_roles_are_exact_complete_repeatable_and_payload_safe() {
+        let files = [
+            ("root.rs", "mod z; mod a;\n"),
+            (
+                "a.rs",
+                concat!(
+                    "#[boxology::contract(error)] struct BadStruct;\n",
+                    "#[boxology::contract()] enum Empty { A }\n",
+                    "#[boxology::contract(error, PrivateMany)] enum Many { A }\n",
+                    "#[boxology::contract(PrivatePath::error)] enum Qualified { A }\n",
+                ),
+            ),
+            (
+                "z.rs",
+                concat!(
+                    "#[boxology::contract(error(PrivateNested))] enum Nested { A }\n",
+                    "#[boxology::contract(error::<PrivateType>)] enum Parameterized { A }\n",
+                    "#[boxology::contract = \"PrivateLiteral\"] enum Assigned { A }\n",
+                    "#[boxology::contract(PrivateMarker)]\n",
+                    "#[boxology::contract]\n",
+                    "enum Duplicate { PrivateVariant }\n",
+                ),
+            ),
+        ];
+        let first = discovery_errors(&request_in_order("root.rs", &files, false));
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, false))
+        );
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, true))
+        );
+        let expected = [
+            ("a.rs", 1),
+            ("a.rs", 2),
+            ("a.rs", 3),
+            ("a.rs", 4),
+            ("z.rs", 1),
+            ("z.rs", 2),
+            ("z.rs", 3),
+            ("z.rs", 4),
+            ("z.rs", 5),
+        ];
+        assert_eq!(first.as_slice().len(), expected.len());
+        for (diagnostic, (path, line)) in first.as_slice().iter().zip(expected) {
+            assert_eq!(
+                (diagnostic.code(), diagnostic.path().as_str()),
+                ("BXG0024", path)
+            );
+            assert_eq!(diagnostic.span(), span((line, 13), (line, 21)));
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "invalid contract declaration annotation"
+            );
+            assert_eq!(diagnostic.rule(), CONTRACT_ROLE_RULE);
+            assert_eq!(diagnostic.rule_source(), CONTRACT_ROLE_RULE_SOURCE);
+        }
+        let rendered = format!("{first}\n{first:?}");
+        for private in [
+            "BadStruct",
+            "PrivateMany",
+            "PrivatePath",
+            "PrivateNested",
+            "PrivateType",
+            "PrivateLiteral",
+            "PrivateMarker",
+            "PrivateVariant",
+        ] {
+            assert!(!rendered.contains(private));
+        }
+    }
+
+    #[test]
+    fn every_earlier_phase_suppresses_contract_role_validation() {
+        let syntax = parse_errors(&request(
+            "root.rs",
+            &[
+                ("root.rs", "#[boxology::contract(private)] struct Secret;"),
+                ("broken.rs", "fn broken() { @ }"),
+            ],
+        ));
+        assert!(
+            syntax
+                .as_slice()
+                .iter()
+                .all(|diagnostic| diagnostic.code() == "BXG0014")
+        );
+
+        let suppressed = |code, files: &[(&str, &str)]| {
+            let diagnostics = discovery_errors(&request("root.rs", files));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|diagnostic| diagnostic.code() == code)
+            );
+            assert!(!diagnostics.to_string().contains("BXG0024"));
+        };
+        suppressed(
+            "BXG0016",
+            &[(
+                "root.rs",
+                "#[path = \"x.rs\"] mod x; #[boxology::contract(private)] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0017",
+            &[(
+                "root.rs",
+                "mod missing; #[boxology::contract(private)] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0018",
+            &[
+                (
+                    "root.rs",
+                    "mod both; #[boxology::contract(private)] struct S;",
+                ),
+                ("both.rs", ""),
+                ("both/mod.rs", ""),
+            ],
+        );
+        suppressed(
+            "BXG0019",
+            &[
+                ("root.rs", ""),
+                ("dead.rs", "#[boxology::contract(private)] struct S;"),
+            ],
+        );
+        suppressed(
+            "BXG0020",
+            &[(
+                "root.rs",
+                "#[cfg(private)] #[boxology::contract(private)] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0021",
+            &[(
+                "root.rs",
+                "#[boxology::contract(private)] struct S; #[boxology::contract(private)] enum S { A }",
+            )],
+        );
+        suppressed(
+            "BXG0022",
+            &[(
+                "root.rs",
+                "#[Private] #[boxology::contract(private)] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0023",
+            &[(
+                "root.rs",
+                "#[derive(Copy)] #[boxology::contract(private)] struct S;",
+            )],
         );
     }
 
