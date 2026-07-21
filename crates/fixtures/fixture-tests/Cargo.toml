@@ -6,4 +6,4 @@ publish = false
 
 [dev-dependencies]
 boxology-contract = { version = "=0.0.0", path = "../../boxology-contract" }
-hello-contract = { version = "=0.0.0", path = "../hello/generated/contract" }
+hello-contract = { version = "=0.0.0", path = "../hello/generated/contract", features = ["test-support"] }
