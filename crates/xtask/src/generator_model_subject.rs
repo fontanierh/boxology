@@ -1,8 +1,54 @@
 use boxology_contract::BoxId;
 use boxology_generator_model::{
-    ContractDeclarationSyntax, GenerationRequest, Manifest, ParsedRustInputs,
+    ContractDeclaration, ContractDeclarationShape, ContractDeclarationSyntax, ContractFields,
+    GenerationRequest, Manifest, ParsedRustInputs,
 };
 use std::{fs, path::Path};
+
+fn field_projection(fields: &ContractFields<'_>) -> String {
+    let fields = match fields {
+        ContractFields::Named(fields) | ContractFields::Unnamed(fields) => fields,
+        ContractFields::Unit => return "unit".into(),
+    };
+    format!(
+        "{:?}",
+        fields
+            .iter()
+            .map(|field| (
+                field.ordinal(),
+                field.identity().map(|identity| identity.name()),
+                field.metadata().deprecation().map(|value| value.note()),
+            ))
+            .collect::<Vec<_>>()
+    )
+}
+
+fn shape_projection(declaration: &ContractDeclaration<'_>) -> String {
+    let deprecated = declaration
+        .metadata()
+        .deprecation()
+        .map(|value| value.note());
+    match declaration.shape() {
+        ContractDeclarationShape::Struct(fields) => format!(
+            "{} struct deprecated={deprecated:?} fields={}",
+            declaration.lifted_name(),
+            field_projection(fields)
+        ),
+        ContractDeclarationShape::Enum(variants) => format!(
+            "{} enum deprecated={deprecated:?} variants={:?}",
+            declaration.lifted_name(),
+            variants
+                .iter()
+                .map(|variant| (
+                    variant.ordinal(),
+                    variant.identity().name(),
+                    variant.metadata().deprecation().map(|value| value.note()),
+                    field_projection(variant.fields()),
+                ))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
 
 pub(crate) fn run(out: &Path) -> Result<(), String> {
     let id = || BoxId::new("subject-box").expect("fixed id is valid");
@@ -77,7 +123,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         Ok(_) => return Err("fixed collision unexpectedly succeeded".into()),
         Err(diagnostics) => diagnostics,
     };
-    let contracts = |source: &[u8], include_roles| -> Result<_, String> {
+    let contracts = |source: &[u8], projection| -> Result<_, String> {
         let evaluate = |reversed| -> Result<_, String> {
             let mut files = vec![
                 input("boxology.toml", request.inputs()[0].bytes()),
@@ -94,7 +140,9 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
                 declarations
                     .iter()
                     .map(|declaration| {
-                        if include_roles {
+                        if projection == 2 {
+                            shape_projection(declaration)
+                        } else if projection == 1 {
                             format!("{}={:?}", declaration.lifted_name(), declaration.role())
                         } else {
                             declaration.lifted_name().to_owned()
@@ -106,8 +154,8 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         };
         Ok([evaluate(false)?, evaluate(true)?])
     };
-    let valid_attributes = contracts(b"#[doc = \"allowed\"]\n#[deprecated(note = \"later\")]\n#[derive(Debug, Clone, PartialEq)]\n#[boxology::contract]\nstruct Allowed { #[boxology::field] value: u8 }\n", false)?;
-    let invalid_attributes = contracts(b"#[boxology::contract]\n#[PrivateAttribute(secret)]\nstruct Invalid { #[derive(PrivateDerive)] field: u8 }\n", false)?;
+    let valid_attributes = contracts(b"#[doc = \"allowed\"]\n#[deprecated(note = \"later\")]\n#[derive(Debug, Clone, PartialEq)]\n#[boxology::contract]\nstruct Allowed { #[boxology::field] value: u8 }\n", 0)?;
+    let invalid_attributes = contracts(b"#[boxology::contract]\n#[PrivateAttribute(secret)]\nstruct Invalid { #[derive(PrivateDerive)] field: u8 }\n", 0)?;
     if valid_attributes[0] != valid_attributes[1] || invalid_attributes[0] != invalid_attributes[1]
     {
         return Err("contract attribute result changed with input order".into());
@@ -118,8 +166,8 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let attribute_diagnostics = invalid_attributes[0]
         .as_ref()
         .expect_err("fixed invalid attributes must fail");
-    let valid_roles = contracts(b"#[boxology::contract]\nstruct Value;\n#[boxology::contract]\nenum Choice { A }\n#[boxology::contract(error)]\nenum Fault { A }\n", true)?;
-    let invalid_roles = contracts(b"#[boxology::contract(error)]\nstruct PrivateStruct;\n#[boxology::contract(PrivateMarker)]\nenum PrivateEnum { PrivateVariant }\n", true)?;
+    let valid_roles = contracts(b"#[boxology::contract]\nstruct Value;\n#[boxology::contract]\nenum Choice { A }\n#[boxology::contract(error)]\nenum Fault { A }\n", 1)?;
+    let invalid_roles = contracts(b"#[boxology::contract(error)]\nstruct PrivateStruct;\n#[boxology::contract(PrivateMarker)]\nenum PrivateEnum { PrivateVariant }\n", 1)?;
     if valid_roles[0] != valid_roles[1] || invalid_roles[0] != invalid_roles[1] {
         return Err("contract role result changed with input order".into());
     }
@@ -129,8 +177,8 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let role_diagnostics = invalid_roles[0]
         .as_ref()
         .expect_err("fixed invalid roles must fail");
-    let valid_deprecations = contracts(b"#[deprecated]\n#[boxology::contract]\nstruct Value { #[deprecated(note = \"field\")] field: u8 }\n#[deprecated(note = \"type\")]\n#[boxology::contract]\nenum Event { #[deprecated] Unit, Named { #[deprecated(note = \"variant field\")] value: u8 } }\n", false)?;
-    let invalid_deprecations = contracts(b"#[deprecated(PrivateType)]\n#[boxology::contract]\nstruct Invalid { #[deprecated(note = PrivateField)] field: u8 }\n#[boxology::contract]\nenum InvalidEvent { #[deprecated(PrivateVariant)] Bad { #[deprecated(note = PrivateVariantField)] value: u8 } }\n", false)?;
+    let valid_deprecations = contracts(b"#[deprecated]\n#[boxology::contract]\nstruct Value { #[deprecated(note = \"field\")] field: u8 }\n#[deprecated(note = \"type\")]\n#[boxology::contract]\nenum Event { #[deprecated] Unit, Named { #[deprecated(note = \"variant field\")] value: u8 } }\n", 0)?;
+    let invalid_deprecations = contracts(b"#[deprecated(PrivateType)]\n#[boxology::contract]\nstruct Invalid { #[deprecated(note = PrivateField)] field: u8 }\n#[boxology::contract]\nenum InvalidEvent { #[deprecated(PrivateVariant)] Bad { #[deprecated(note = PrivateVariantField)] value: u8 } }\n", 0)?;
     if valid_deprecations[0] != valid_deprecations[1]
         || invalid_deprecations[0] != invalid_deprecations[1]
     {
@@ -142,6 +190,13 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let deprecation_diagnostics = invalid_deprecations[0]
         .as_ref()
         .expect_err("fixed invalid deprecations must fail");
+    let shapes = contracts(b"#[deprecated]\n#[boxology::contract]\nstruct Named { #[deprecated(note = \"named\\nfield\")] r#field: &'static [u8; 7] }\n#[deprecated(note = \"tuple\")] #[boxology::contract] struct Tuple(#[deprecated] u8);\n#[boxology::contract] struct Unit;\n#[deprecated(note = \"error\")] #[boxology::contract(error)] enum Event { #[deprecated] r#Unit, #[deprecated(note = \"variant\")] Tuple(#[deprecated] u8), Named { #[deprecated(note = \"value\")] r#value: u8 } }\n", 2)?;
+    if shapes[0] != shapes[1] {
+        return Err("contract shape result changed with input order".into());
+    }
+    let shape_projection = shapes[0]
+        .as_ref()
+        .map_err(|error| format!("fixed valid shapes failed: {error}"))?;
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -302,6 +357,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{deprecation_projection}\ninvalid\n{deprecation_diagnostics}\n"),
     )
     .map_err(|error| format!("write contract-deprecations.txt: {error}"))?;
+    fs::write(
+        out.join("contract-shapes.txt"),
+        format!("success\n{shape_projection}\n"),
+    )
+    .map_err(|error| format!("write contract-shapes.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),

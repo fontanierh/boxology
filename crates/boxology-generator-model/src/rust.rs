@@ -43,6 +43,121 @@ pub struct ContractDeclaration<'a> {
     lifted_name: String,
     syntax: ContractDeclarationSyntax<'a>,
     role: ContractDeclarationRole,
+    projection: Option<(ContractDeclarationShape<'a>, ContractSiteMetadata)>,
+}
+
+/// Deprecation metadata attached to one contract site.
+pub struct ContractSiteMetadata {
+    deprecation: Option<ContractDeprecation>,
+}
+
+macro_rules! model_getters {
+    ($this:ident; $(#[$meta:meta] $name:ident: $return:ty = $body:expr;)*) => {$(
+        #[$meta] pub fn $name(&$this) -> $return { $body }
+    )*};
+}
+
+impl ContractSiteMetadata {
+    model_getters! { self;
+        #[doc = "Returns the site's optional deprecation metadata."]
+        deprecation: Option<&ContractDeprecation> = self.deprecation.as_ref();
+    }
+}
+
+/// Validated deprecation metadata attached to one contract site.
+pub struct ContractDeprecation {
+    note: Option<String>,
+}
+
+impl ContractDeprecation {
+    /// Returns the decoded optional deprecation note.
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+}
+
+/// One source-owned field or variant identity.
+pub struct ContractMemberIdentity<'ast> {
+    name: String,
+    ident: &'ast syn::Ident,
+}
+
+impl<'ast> ContractMemberIdentity<'ast> {
+    model_getters! { self;
+        #[doc = "Returns the identifier in its unraw spelling."]
+        name: &str = &self.name;
+        #[doc = "Returns the original parsed identifier."]
+        ident: &'ast syn::Ident = self.ident;
+    }
+}
+
+/// One borrowed contract field.
+pub struct ContractField<'ast> {
+    ordinal: usize,
+    identity: Option<ContractMemberIdentity<'ast>>,
+    syntax: &'ast syn::Field,
+    metadata: ContractSiteMetadata,
+}
+
+impl<'ast> ContractField<'ast> {
+    model_getters! { self;
+        #[doc = "Returns the zero-based ordinal within the immediate field container."]
+        ordinal: usize = self.ordinal;
+        #[doc = "Returns the named-field identity, or `None` for tuple fields."]
+        identity: Option<&ContractMemberIdentity<'ast>> = self.identity.as_ref();
+        #[doc = "Returns the original parsed field."]
+        syntax: &'ast syn::Field = self.syntax;
+    }
+    /// Returns the original, unvalidated field type syntax.
+    pub fn ty(&self) -> &'ast syn::Type {
+        &self.syntax.ty
+    }
+    model_getters! { self;
+        #[doc = "Returns field deprecation metadata."]
+        metadata: &ContractSiteMetadata = &self.metadata;
+    }
+}
+
+/// The borrowed field shape of a contract struct or enum variant.
+pub enum ContractFields<'ast> {
+    /// Named fields in source order.
+    Named(Vec<ContractField<'ast>>),
+    /// Tuple fields in source order.
+    Unnamed(Vec<ContractField<'ast>>),
+    /// No fields.
+    Unit,
+}
+
+/// One borrowed enum variant.
+pub struct ContractVariant<'ast> {
+    ordinal: usize,
+    identity: ContractMemberIdentity<'ast>,
+    syntax: &'ast syn::Variant,
+    fields: ContractFields<'ast>,
+    metadata: ContractSiteMetadata,
+}
+
+impl<'ast> ContractVariant<'ast> {
+    model_getters! { self;
+        #[doc = "Returns the zero-based ordinal within the enum."]
+        ordinal: usize = self.ordinal;
+        #[doc = "Returns the variant identity."]
+        identity: &ContractMemberIdentity<'ast> = &self.identity;
+        #[doc = "Returns the original parsed variant."]
+        syntax: &'ast syn::Variant = self.syntax;
+        #[doc = "Returns the variant field shape."]
+        fields: &ContractFields<'ast> = &self.fields;
+        #[doc = "Returns variant deprecation metadata."]
+        metadata: &ContractSiteMetadata = &self.metadata;
+    }
+}
+
+/// The complete borrowed structural shape of a contract declaration.
+pub enum ContractDeclarationShape<'ast> {
+    /// A struct and its field shape.
+    Struct(ContractFields<'ast>),
+    /// An enum and its variants in source order.
+    Enum(Vec<ContractVariant<'ast>>),
 }
 
 /// The semantic role of a discovered contract declaration.
@@ -63,7 +178,7 @@ pub enum ContractDeclarationSyntax<'a> {
     Enum(&'a syn::ItemEnum),
 }
 
-impl ContractDeclaration<'_> {
+impl<'ast> ContractDeclaration<'ast> {
     /// Returns the declaration's exact logical source path.
     pub fn source(&self) -> &RelativePath {
         self.source
@@ -92,6 +207,16 @@ impl ContractDeclaration<'_> {
     /// Returns the declaration's validated semantic role.
     pub fn role(&self) -> ContractDeclarationRole {
         self.role
+    }
+
+    /// Returns the declaration's borrowed structural shape.
+    pub fn shape(&self) -> &ContractDeclarationShape<'ast> {
+        &self.projection.as_ref().expect("validated declaration").0
+    }
+
+    /// Returns declaration deprecation metadata.
+    pub fn metadata(&self) -> &ContractSiteMetadata {
+        &self.projection.as_ref().expect("validated declaration").1
     }
 }
 
@@ -222,7 +347,12 @@ impl ParsedRustInputs {
         diagnostics.dedup();
         diagnostics
             .is_empty()
-            .then_some(declarations)
+            .then(|| {
+                for declaration in &mut declarations {
+                    declaration.projection = Some(project_declaration(declaration.syntax));
+                }
+                declarations
+            })
             .ok_or(Diagnostics(diagnostics))
     }
 
@@ -388,6 +518,7 @@ impl ParsedRustInputs {
                     lifted_name: identifier.unraw().to_string(),
                     syntax,
                     role: ContractDeclarationRole::Value,
+                    projection: None,
                 });
             }
 
@@ -770,6 +901,95 @@ fn validate_contract_deprecations(
             }
         }
     }
+}
+
+fn project_declaration<'ast>(
+    syntax: ContractDeclarationSyntax<'ast>,
+) -> (ContractDeclarationShape<'ast>, ContractSiteMetadata) {
+    let (shape, metadata) = match syntax {
+        ContractDeclarationSyntax::Struct(item) => (
+            ContractDeclarationShape::Struct(project_fields(&item.fields)),
+            project_metadata(&item.attrs),
+        ),
+        ContractDeclarationSyntax::Enum(item) => (
+            ContractDeclarationShape::Enum(
+                item.variants
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, variant)| ContractVariant {
+                        ordinal,
+                        identity: member_identity(&variant.ident),
+                        syntax: variant,
+                        fields: project_fields(&variant.fields),
+                        metadata: project_metadata(&variant.attrs),
+                    })
+                    .collect(),
+            ),
+            project_metadata(&item.attrs),
+        ),
+    };
+    (shape, metadata)
+}
+
+fn project_fields<'ast>(fields: &'ast syn::Fields) -> ContractFields<'ast> {
+    let mut project = |(ordinal, field): (usize, &'ast syn::Field)| -> ContractField<'ast> {
+        ContractField {
+            ordinal,
+            identity: field.ident.as_ref().map(member_identity),
+            syntax: field,
+            metadata: project_metadata(&field.attrs),
+        }
+    };
+    match fields {
+        syn::Fields::Named(fields) => {
+            ContractFields::Named(fields.named.iter().enumerate().map(&mut project).collect())
+        }
+        syn::Fields::Unnamed(fields) => {
+            ContractFields::Unnamed(fields.unnamed.iter().enumerate().map(project).collect())
+        }
+        syn::Fields::Unit => ContractFields::Unit,
+    }
+}
+
+fn member_identity(identifier: &syn::Ident) -> ContractMemberIdentity<'_> {
+    ContractMemberIdentity {
+        name: identifier.unraw().to_string(),
+        ident: identifier,
+    }
+}
+
+fn project_metadata(attributes: &[syn::Attribute]) -> ContractSiteMetadata {
+    let deprecation = attributes
+        .iter()
+        .find(|attribute| {
+            matches!(attribute.style, syn::AttrStyle::Outer)
+                && attribute
+                    .path()
+                    .get_ident()
+                    .is_some_and(|identifier| identifier.unraw() == "deprecated")
+        })
+        .filter(|attribute| valid_deprecation(attribute))
+        .map(|attribute| ContractDeprecation {
+            note: if let syn::Meta::List(list) = &attribute.meta {
+                list.parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .ok()
+                .and_then(|entries| match &entries[0] {
+                    syn::Meta::NameValue(value) => match &value.value {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(note),
+                            ..
+                        }) => Some(note.value()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+            } else {
+                None
+            },
+        });
+    ContractSiteMetadata { deprecation }
 }
 
 fn validate_deprecations(
@@ -1554,23 +1774,117 @@ mod tests {
     fn deprecations_accept_exact_forms_at_every_owned_site() {
         let source = concat!(
             "#[deprecated]\n#[boxology::contract]\n",
-            "struct Bare { #[deprecated(note = r#\"PrivateNamed\"#,)] named: u8 }\n",
+            "struct Bare { #[deprecated(note = r#\"PrivateNamed\"#,)] r#named: &'static [u8; 7], plain: u16 }\n",
             "#[r#deprecated(r#note = r##\"PrivateRaw\"##,)]\n#[boxology::contract]\n",
-            "struct Tuple(#[deprecated] u8);\n",
+            "struct Tuple(#[deprecated] u8, u16);\n",
+            "#[deprecated]\n#[boxology::contract]\nstruct Unit;\n",
             "#[deprecated(note = \"PrivateEnum\")]\n#[boxology::contract(error)]\nenum Event {\n",
-            "#[deprecated] Unit,\n",
+            "#[deprecated] r#Unit,\n",
             "#[deprecated(note = \"PrivateTupleVariant\")] Tuple(#[deprecated] u8),\n",
-            "Named { #[deprecated(note = \"PrivateNamedVariantField\")] value: u8 },\n}\n",
+            "Named { #[deprecated(note = \"PrivateNamedVariantField\")] r#value: u8 },\n}\n",
             "#[deprecated(PrivateInternal)] struct Internal;\n",
         );
         let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)])).unwrap();
         let declarations = parsed.discover_contract_declarations().unwrap();
+        let [bare, tuple, unit, event] = declarations.as_slice() else {
+            panic!()
+        };
+        assert_eq!(bare.metadata().deprecation().unwrap().note(), None);
+        let ContractDeclarationShape::Struct(ContractFields::Named(fields)) = bare.shape() else {
+            panic!()
+        };
         assert_eq!(
-            declarations
+            fields
                 .iter()
-                .map(ContractDeclaration::lifted_name)
+                .map(ContractField::ordinal)
                 .collect::<Vec<_>>(),
-            ["Bare", "Tuple", "Event"]
+            [0, 1]
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.identity().unwrap().name())
+                .collect::<Vec<_>>(),
+            ["named", "plain"]
+        );
+        let identity = fields[0].identity().unwrap();
+        assert!(std::ptr::eq(
+            identity.ident(),
+            fields[0].syntax().ident.as_ref().unwrap()
+        ));
+        let syn::Type::Reference(reference) = fields[0].ty() else {
+            panic!()
+        };
+        assert!(matches!(reference.elem.as_ref(), syn::Type::Array(_)));
+        assert_eq!(
+            fields[0].metadata().deprecation().unwrap().note(),
+            Some("PrivateNamed")
+        );
+        assert!(fields[1].metadata().deprecation().is_none());
+        let ContractDeclarationShape::Struct(ContractFields::Unnamed(fields)) = tuple.shape()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            fields
+                .iter()
+                .map(ContractField::ordinal)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert!(fields.iter().all(|field| field.identity().is_none()));
+        assert_eq!(fields[0].metadata().deprecation().unwrap().note(), None);
+        assert!(fields[1].metadata().deprecation().is_none());
+        assert_eq!(
+            tuple.metadata().deprecation().unwrap().note(),
+            Some("PrivateRaw")
+        );
+        assert!(matches!(
+            unit.shape(),
+            ContractDeclarationShape::Struct(ContractFields::Unit)
+        ));
+        assert_eq!(unit.metadata().deprecation().unwrap().note(), None);
+        let ContractDeclarationShape::Enum(variants) = event.shape() else {
+            panic!()
+        };
+        assert_eq!(
+            event.metadata().deprecation().unwrap().note(),
+            Some("PrivateEnum")
+        );
+        assert_eq!(
+            variants.iter().map(|v| v.ordinal()).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(
+            variants
+                .iter()
+                .map(|v| v.identity().name())
+                .collect::<Vec<_>>(),
+            ["Unit", "Tuple", "Named"]
+        );
+        assert!(matches!(variants[0].fields(), ContractFields::Unit));
+        assert_eq!(variants[0].metadata().deprecation().unwrap().note(), None);
+        assert_eq!(
+            variants[1].metadata().deprecation().unwrap().note(),
+            Some("PrivateTupleVariant")
+        );
+        let ContractDeclarationSyntax::Enum(item) = event.syntax() else {
+            panic!()
+        };
+        assert!(std::ptr::eq(variants[0].syntax(), &item.variants[0]));
+        let ContractFields::Unnamed(fields) = variants[1].fields() else {
+            panic!()
+        };
+        assert!(fields[0].identity().is_none());
+        assert_eq!(fields[0].metadata().deprecation().unwrap().note(), None);
+        let ContractFields::Named(fields) = variants[2].fields() else {
+            panic!()
+        };
+        assert!(variants[2].metadata().deprecation().is_none());
+        assert_eq!(fields[0].identity().unwrap().name(), "value");
+        assert_eq!(
+            fields[0].metadata().deprecation().unwrap().note(),
+            Some("PrivateNamedVariantField")
         );
     }
 
