@@ -95,6 +95,29 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         Ok(_) => return Err("fixed invalid module topology unexpectedly resolved".into()),
         Err(diagnostics) => diagnostics,
     };
+    let input = |path: &str, bytes: &[u8]| (path.into(), bytes.to_vec());
+    let declaration_request = GenerationRequest::new(
+        id(),
+        "d/r.rs".into(),
+        vec![
+            input(
+                "boxology.toml",
+                b"schema = 1\nid = \"subject-box\"\nkind = \"box\"\n",
+            ),
+            input("d/r.rs", b"#[cfg(private)]\nmod exported;\n"),
+            input("d/exported.rs", b"#[boxology::contract]\nstruct Export;\n"),
+            input("d/dead.rs", b"#[boxology::capability]\nfn hidden() {}\n"),
+        ],
+        vec![],
+        vec![],
+    )
+    .map_err(|error| format!("fixed declaration-error request failed: {error}"))?;
+    let declaration_inputs = ParsedRustInputs::parse(&declaration_request)
+        .map_err(|error| format!("fixed declaration-error inputs failed: {error}"))?;
+    let declaration_diagnostics = match declaration_inputs.resolve_reachable_inputs() {
+        Ok(_) => return Err("fixed declaration errors unexpectedly resolved".into()),
+        Err(diagnostics) => diagnostics,
+    };
     let diagnostics = GenerationRequest::new(
         id(),
         "root.rs".into(),
@@ -147,6 +170,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("{module_diagnostics}\n"),
     )
     .map_err(|error| format!("write module-diagnostics.txt: {error}"))?;
+    fs::write(
+        out.join("declaration-diagnostics.txt"),
+        format!("{declaration_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write declaration-diagnostics.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
