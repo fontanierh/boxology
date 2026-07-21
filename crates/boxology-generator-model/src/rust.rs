@@ -1,4 +1,5 @@
 use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, RelativePath, Span};
+use boxology_contract::{ExposureLevel, Idempotency};
 use std::collections::BTreeSet;
 use syn::ext::IdentExt;
 use syn::visit::Visit;
@@ -36,6 +37,8 @@ const CAPABILITY_PLACEMENT_RULE: &str =
 const CAPABILITY_PLACEMENT_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D8";
 const CAPABILITY_CALL_SHAPE_RULE: &str = "v0 capabilities must be async methods with a shared &self receiver, exactly two typed parameters after the receiver, no variadic parameter, and an explicit return type";
 const CAPABILITY_CALL_SHAPE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D8";
+const CAPABILITY_METADATA_RULE: &str = "capability metadata supports name, exposure, and idempotency with the v0 values declared by S2";
+const CAPABILITY_METADATA_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D3";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -56,6 +59,15 @@ pub struct CapabilityDeclaration<'ast> {
     identifier_span: Span,
     implementation: &'ast syn::ItemImpl,
     method: &'ast syn::ImplItemFn,
+    marker_metadata: Option<CapabilityMarkerMetadata>,
+}
+
+/// Validated owned metadata projected from one capability marker.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CapabilityMarkerMetadata {
+    name_override: Option<String>,
+    max_exposure: ExposureLevel,
+    idempotency: Idempotency,
 }
 
 /// A reachable module-scope contract struct or enum found by provisional declaration discovery.
@@ -93,6 +105,24 @@ impl<'ast> CapabilityDeclaration<'ast> {
         implementation: &'ast syn::ItemImpl = self.implementation;
         #[doc = "Returns the borrowed annotated method."]
         method: &'ast syn::ImplItemFn = self.method;
+    }
+
+    /// Returns metadata after capability-marker validation.
+    pub fn marker_metadata(&self) -> &CapabilityMarkerMetadata {
+        self.marker_metadata
+            .as_ref()
+            .expect("validated capability marker metadata")
+    }
+}
+
+impl CapabilityMarkerMetadata {
+    model_getters! { self;
+        #[doc = "Returns the exact optional name override without validating or defaulting it."]
+        name_override: Option<&str> = self.name_override.as_deref();
+        #[doc = "Returns the greatest permitted exposure."]
+        max_exposure: ExposureLevel = self.max_exposure;
+        #[doc = "Returns the declared idempotency property."]
+        idempotency: Idempotency = self.idempotency;
     }
 }
 
@@ -495,6 +525,27 @@ impl ParsedRustInputs {
         }
     }
 
+    /// Validates and projects the supported v0 metadata of every capability declaration.
+    pub fn validate_capability_marker_metadata(
+        &self,
+    ) -> Result<Vec<CapabilityDeclaration<'_>>, Diagnostics> {
+        let mut declarations = self.validate_capability_call_shapes()?;
+        let mut diagnostics = Vec::new();
+        let metadata = declarations
+            .iter()
+            .map(|declaration| parse_capability_metadata(declaration, &mut diagnostics))
+            .collect::<Vec<_>>();
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        for (declaration, metadata) in declarations.iter_mut().zip(metadata) {
+            declaration.marker_metadata = Some(metadata);
+        }
+        Ok(declarations)
+    }
+
     /// Validates default module lookup and returns unique reachable files in logical-path byte order.
     pub fn resolve_reachable_inputs(&self) -> Result<Vec<&ParsedRustInput>, Diagnostics> {
         let root = &self.inputs[self.crate_root];
@@ -852,6 +903,138 @@ fn valid_capability_call_shape(method: &syn::ImplItemFn) -> bool {
         && matches!(signature.output, syn::ReturnType::Type(_, _))
 }
 
+fn parse_capability_metadata(
+    declaration: &CapabilityDeclaration<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> CapabilityMarkerMetadata {
+    let markers = declaration
+        .method
+        .attrs
+        .iter()
+        .filter(|attribute| {
+            boxology_leaf(attribute).is_some_and(|leaf| leaf.unraw() == "capability")
+        })
+        .collect::<Vec<_>>();
+    for marker in &markers[1..] {
+        add_metadata_error(
+            diagnostics,
+            declaration,
+            boxology_leaf(marker).unwrap().span(),
+            "BXG0032",
+        );
+    }
+    let marker = markers[0];
+    let mut draft = CapabilityMarkerMetadata {
+        name_override: None,
+        max_exposure: ExposureLevel::CodeOnly,
+        idempotency: Idempotency::None,
+    };
+    let syn::Meta::List(list) = &marker.meta else {
+        if !matches!(marker.meta, syn::Meta::Path(_)) {
+            invalid_capability_marker(declaration, marker, diagnostics);
+        }
+        return draft;
+    };
+    let Ok(entries) = list.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+    ) else {
+        invalid_capability_marker(declaration, marker, diagnostics);
+        return draft;
+    };
+    if entries.is_empty() {
+        invalid_capability_marker(declaration, marker, diagnostics);
+        return draft;
+    }
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let syn::Meta::NameValue(value) = entry else {
+            invalid_capability_marker(declaration, marker, diagnostics);
+            continue;
+        };
+        let Some(key) = value.path.get_ident() else {
+            invalid_capability_marker(declaration, marker, diagnostics);
+            continue;
+        };
+        let key_name = key.to_string();
+        if !seen.insert(key_name.clone()) {
+            add_metadata_error(diagnostics, declaration, key.span(), "BXG0032");
+            continue;
+        }
+        if matches!(
+            key_name.as_str(),
+            "auth" | "default" | "min" | "max" | "validation"
+        ) {
+            add_metadata_error(diagnostics, declaration, key.span(), "BXG0033");
+            continue;
+        }
+        if !matches!(key_name.as_str(), "name" | "exposure" | "idempotency") {
+            add_metadata_error(diagnostics, declaration, key.span(), "BXG0032");
+            continue;
+        }
+        let literal = match &value.value {
+            syn::Expr::Lit(syn::ExprLit {
+                attrs,
+                lit: syn::Lit::Str(literal),
+            }) if attrs.is_empty() => literal,
+            _ => {
+                invalid_capability_marker(declaration, marker, diagnostics);
+                continue;
+            }
+        };
+        match (key_name.as_str(), literal.value().as_str()) {
+            ("name", _) => {
+                draft.name_override = Some(literal.value());
+            }
+            ("exposure", "code-only") => draft.max_exposure = ExposureLevel::CodeOnly,
+            ("exposure", "internal") => draft.max_exposure = ExposureLevel::Internal,
+            ("exposure", "external") => draft.max_exposure = ExposureLevel::External,
+            ("idempotency", "none") => draft.idempotency = Idempotency::None,
+            ("idempotency", "inherent") => draft.idempotency = Idempotency::Inherent,
+            ("idempotency", "keyed") => {
+                add_metadata_error(diagnostics, declaration, literal.span(), "BXG0033");
+            }
+            ("exposure" | "idempotency", _) => {
+                add_metadata_error(diagnostics, declaration, literal.span(), "BXG0032");
+            }
+            _ => unreachable!("supported keys are exhaustively matched"),
+        }
+    }
+    draft
+}
+
+fn invalid_capability_marker(
+    declaration: &CapabilityDeclaration<'_>,
+    marker: &syn::Attribute,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    add_metadata_error(
+        diagnostics,
+        declaration,
+        boxology_leaf(marker).unwrap().span(),
+        "BXG0032",
+    );
+}
+
+fn add_metadata_error(
+    diagnostics: &mut Vec<Diagnostic>,
+    declaration: &CapabilityDeclaration<'_>,
+    span: proc_macro2::Span,
+    code: &'static str,
+) {
+    let offending = match code {
+        "BXG0032" => "invalid capability metadata",
+        _ => "unsupported capability metadata",
+    };
+    diagnostics.push(Diagnostic {
+        path: declaration.source.clone(),
+        span: source_span(span),
+        code,
+        offending: offending.into(),
+        rule: CAPABILITY_METADATA_RULE,
+        rule_source: CAPABILITY_METADATA_RULE_SOURCE,
+    });
+}
+
 struct CapabilityCollector<'a, 'ast> {
     source: &'ast RelativePath,
     module_path: Vec<String>,
@@ -887,6 +1070,7 @@ impl<'ast> Visit<'ast> for CapabilityCollector<'_, 'ast> {
                 identifier_span: source_span(method.sig.ident.span()),
                 implementation,
                 method,
+                marker_metadata: None,
             });
         }
         syn::visit::visit_impl_item_fn(self, method);
@@ -1745,6 +1929,31 @@ mod tests {
             .expect("expected capability call-shape diagnostics")
     }
 
+    fn capability_metadata_errors(request: &GenerationRequest) -> Diagnostics {
+        ParsedRustInputs::parse(request)
+            .unwrap()
+            .validate_capability_marker_metadata()
+            .err()
+            .expect("expected capability metadata diagnostics")
+    }
+
+    fn assert_metadata_error(attributes: &str, code: &str, expected_span: &str) {
+        let source = format!(
+            "struct H; impl H {{ {attributes} async fn good(&self, a: A, b: B) -> R {{ loop {{}} }} }}"
+        );
+        let diagnostics = capability_metadata_errors(&request("root.rs", &[("root.rs", &source)]));
+        assert_eq!(diagnostics.as_slice().len(), 1);
+        let diagnostic = &diagnostics.as_slice()[0];
+        assert_eq!(diagnostic.code(), code);
+        let range = diagnostic.span();
+        assert_eq!(
+            &source[range.start().column() - 1..range.end().column() - 1],
+            expected_span
+        );
+        assert_eq!(diagnostic.rule_source(), CAPABILITY_METADATA_RULE_SOURCE);
+        assert!(!format!("{diagnostics}\n{diagnostics:?}").contains("DO_NOT_LEAK"));
+    }
+
     fn span(start: (usize, usize), end: (usize, usize)) -> Span {
         Span {
             start: LineColumn {
@@ -2516,6 +2725,121 @@ mod tests {
                     .all(|diagnostic| diagnostic.code() == *code)
             );
             assert!(!diagnostics.to_string().contains("BXG0031"));
+        }
+    }
+
+    #[test]
+    fn capability_metadata_projects_defaults_overrides_and_deterministic_order() {
+        let files = [
+            (
+                "root.rs",
+                "mod child; struct H; impl H { #[boxology::capability] async fn r#match(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"Bad-Override\", exposure = \"code-only\", idempotency = \"none\",)] async fn ordered(&self, a: A, b: B) -> R { loop {} } } mod inline { struct I; impl I { #[boxology::capability(idempotency = \"inherent\", exposure = \"internal\", name = \"inside\")] async fn inner(&self, a: A, b: B) -> R { loop {} } } }",
+            ),
+            (
+                "child.rs",
+                "struct C; impl C { #[boxology::capability(name = \"greet\", exposure = \"external\")] async fn hello(&self, a: A, b: B) -> R { loop {} } }",
+            ),
+        ];
+        let evaluate = |reversed| {
+            let request = request_in_order("root.rs", &files, reversed);
+            let parsed = ParsedRustInputs::parse(&request).unwrap();
+            parsed
+                .validate_capability_marker_metadata()
+                .unwrap()
+                .iter()
+                .map(|item| {
+                    format!(
+                        "{:?}|{:?}|{:?}|{:?}",
+                        item.module_path(),
+                        item.marker_metadata().name_override(),
+                        item.marker_metadata().max_exposure(),
+                        item.marker_metadata().idempotency(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let expected = "[]|None|CodeOnly|None\n[]|Some(\"Bad-Override\")|CodeOnly|None\n[\"child\"]|Some(\"greet\")|External|None\n[\"inline\"]|Some(\"inside\")|Internal|Inherent";
+        assert_eq!(evaluate(false), expected);
+        assert_eq!(evaluate(true), expected);
+    }
+
+    #[test]
+    fn capability_metadata_syntax_diagnostics_are_exact_and_payload_safe() {
+        let cases = [
+            ("#[boxology::capability()]", "capability"),
+            ("#[boxology::capability = \"x\"]", "capability"),
+            ("#[boxology::capability(\"x\")]", "capability"),
+            (
+                "#[boxology::capability(name = \"x\" name = \"y\")]",
+                "capability",
+            ),
+            ("#[boxology::capability(name = 7)]", "capability"),
+            (
+                "#[boxology::capability(DO_NOT_LEAK = \"x\")]",
+                "DO_NOT_LEAK",
+            ),
+            (
+                "#[boxology::capability(name = \"a\", name = \"b\")]",
+                "name",
+            ),
+            (
+                "#[boxology::capability] #[boxology::capability]",
+                "capability",
+            ),
+            (
+                "#[boxology::capability(exposure = \"private\")]",
+                "\"private\"",
+            ),
+            (
+                "#[boxology::capability(idempotency = \"sometimes\")]",
+                "\"sometimes\"",
+            ),
+        ];
+        for (attributes, expected_span) in cases {
+            assert_metadata_error(attributes, "BXG0032", expected_span);
+        }
+    }
+
+    #[test]
+    fn unsupported_metadata_is_staged_exactly() {
+        for (entry, expected_span) in [
+            ("idempotency = \"keyed\"", "\"keyed\""),
+            ("auth = \"DO_NOT_LEAK\"", "auth"),
+            ("default = \"DO_NOT_LEAK\"", "default"),
+            ("min = \"DO_NOT_LEAK\"", "min"),
+            ("max = \"DO_NOT_LEAK\"", "max"),
+            ("validation = \"DO_NOT_LEAK\"", "validation"),
+        ] {
+            assert_metadata_error(
+                &format!("#[boxology::capability({entry})]"),
+                "BXG0033",
+                expected_span,
+            );
+        }
+    }
+
+    #[test]
+    fn capability_metadata_is_suppressed_by_predecessor_and_shape_failures() {
+        for (source, code) in [
+            (
+                "#[boxology::capability(exposure = \"bad\")] fn free() {}",
+                "BXG0030",
+            ),
+            (
+                "struct H; impl H { #[boxology::capability(exposure = \"bad\")] fn sync(&self) {} }",
+                "BXG0031",
+            ),
+        ] {
+            let diagnostics =
+                capability_metadata_errors(&request("root.rs", &[("root.rs", source)]));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|item| item.code() == code)
+            );
+            assert!(!diagnostics.to_string().contains("BXG0032"));
         }
     }
 
