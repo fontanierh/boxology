@@ -257,6 +257,45 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let member_diagnostics = invalid_members[0]
         .as_ref()
         .expect_err("fixed invalid members must fail");
+    let placement = |root: &[u8], child: &[u8]| -> Result<_, String> {
+        let evaluate = |reversed| -> Result<_, String> {
+            let mut files = vec![
+                input("boxology.toml", request.inputs()[0].bytes()),
+                input("placement/root.rs", root),
+                input("placement/child.rs", child),
+            ];
+            if reversed {
+                files.reverse();
+            }
+            let case =
+                GenerationRequest::new(id(), "placement/root.rs".into(), files, vec![], vec![])
+                    .map_err(|error| format!("fixed placement request failed: {error}"))?;
+            let parsed = ParsedRustInputs::parse(&case)
+                .map_err(|error| format!("fixed placement inputs failed: {error}"))?;
+            Ok(parsed.discover_contract_declarations().map(|declarations| {
+                declarations
+                    .iter()
+                    .map(|declaration| declaration.lifted_name())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }))
+        };
+        let results = [evaluate(false)?, evaluate(true)?];
+        if results[0] != results[1] {
+            return Err("contract placement result changed with input order".into());
+        }
+        Ok(results.into_iter().next().unwrap())
+    };
+    let placement_projection = placement(
+        b"mod child;\n#[boxology::contract] struct Root;\n",
+        b"#[::boxology::contract(error)] enum Fault { A }\n",
+    )?
+    .map_err(|error| format!("fixed valid placement failed: {error}"))?;
+    let placement_diagnostics = placement(
+        b"mod child;\n#[boxology::contract(PrivateList)] fn PrivateRoot() {}\n",
+        b"struct Hidden { #[::boxology::contract = \"PrivateValue\"] value: u8 }\n",
+    )?
+    .expect_err("fixed invalid placement must fail");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -432,6 +471,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{member_projection}\ninvalid\n{member_diagnostics}\n"),
     )
     .map_err(|error| format!("write contract-members.txt: {error}"))?;
+    fs::write(
+        out.join("contract-placement.txt"),
+        format!("success\n{placement_projection}\ninvalid\n{placement_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write contract-placement.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),

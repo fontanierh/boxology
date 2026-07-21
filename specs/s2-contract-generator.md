@@ -115,7 +115,7 @@ T1 first; T2–T5 fan out; T6 alongside; T8 last. S1's fixture shape must be mer
 
 ## Matters left open
 
-Remaining load-bearing implementation decisions tracked in [#102](https://github.com/fontanierh/boxology/issues/102) are self-import policy—which #102 retains after #99 closed without selecting an assembly rule—and transitive presence through `Secret` coordinated with #112. The crate-root request boundary is settled by D1–D2. Module traversal, reachability, and ancestor-`cfg` implementation remain deferred from the request-carrier slice; no self-import or transitive-presence authoring behavior may be inferred until its owning decision is accepted. Constructor, request-carrier, and descriptor-conformance behavior is not support policy.
+Remaining load-bearing implementation decisions tracked in [#102](https://github.com/fontanierh/boxology/issues/102) are the normative D3 path/type/aggregate/wrapper grammar; the general type/member-name productions; self-import policy—which #102 retains after #99 closed without selecting an assembly rule—and transitive presence through `Secret` coordinated with #112. The crate-root request boundary, deterministic module traversal and reachability, ancestor-`cfg` validation, and direct `boxology::contract` marker-placement validation are settled and implemented. No D3 or name grammar, self-import, or transitive-presence authoring behavior may be inferred until its owning decision is accepted. Constructor, request-carrier, and descriptor-conformance behavior is not support policy.
 
 - The derive allowlist may grow with fixture-level justification.
 - Adapter include-stub ergonomics (module name, path constant) — T5 detail.
