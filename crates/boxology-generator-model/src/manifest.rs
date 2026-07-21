@@ -177,7 +177,11 @@ mod tests {
     fn request(id: &str, manifest: &str) -> GenerationRequest {
         GenerationRequest::new(
             BoxId::new(id).unwrap(),
-            vec![(MANIFEST_PATH.into(), manifest.as_bytes().to_vec())],
+            "root.rs".into(),
+            vec![
+                (MANIFEST_PATH.into(), manifest.as_bytes().to_vec()),
+                ("root.rs".into(), vec![]),
+            ],
             vec![],
             vec![],
         )

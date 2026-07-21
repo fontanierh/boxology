@@ -6,10 +6,15 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let id = || BoxId::new("subject-box").expect("fixed id is valid");
     let request = GenerationRequest::new(
         id(),
+        "source/custom-entry.rs".into(),
         vec![
             (
                 "boxology.toml".into(),
                 b"schema = 1\nid = \"subject-box\"\nkind = \"box\"\n".to_vec(),
+            ),
+            (
+                "source/custom-entry.rs".into(),
+                b"fn custom_entry() {}\n".to_vec(),
             ),
             ("src/z.rs".into(), b"fn z() {}\n".to_vec()),
             ("src/a.rs".into(), b"struct A;\nfn a() {}\n".to_vec()),
@@ -24,10 +29,14 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         .map_err(|error| format!("fixed valid Rust inputs failed: {error}"))?;
     let invalid_manifest_request = GenerationRequest::new(
         id(),
-        vec![(
-            "boxology.toml".into(),
-            b"schema = 1\nid = \"subject-box\"\nkind = \"composition\"\n".to_vec(),
-        )],
+        "source/custom-entry.rs".into(),
+        vec![
+            (
+                "boxology.toml".into(),
+                b"schema = 1\nid = \"subject-box\"\nkind = \"composition\"\n".to_vec(),
+            ),
+            ("source/custom-entry.rs".into(), vec![]),
+        ],
         vec![],
         vec![],
     )
@@ -36,6 +45,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         Manifest::parse(&invalid_manifest_request).expect_err("fixed invalid manifest must fail");
     let invalid_rust_request = GenerationRequest::new(
         id(),
+        "a.rs".into(),
         vec![
             ("boxology.toml".into(), b"manifest\n".to_vec()),
             ("b.rs".into(), "fn café() { @ }\n".as_bytes().to_vec()),
@@ -49,13 +59,19 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         Ok(_) => return Err("fixed invalid Rust inputs unexpectedly parsed".into()),
         Err(diagnostics) => diagnostics,
     };
-    let diagnostics =
-        GenerationRequest::new(id(), vec![("/absolute.rs".into(), vec![])], vec![], vec![])
-            .expect_err("fixed invalid request must fail");
+    let diagnostics = GenerationRequest::new(
+        id(),
+        "root.rs".into(),
+        vec![("root.rs".into(), vec![]), ("/absolute.rs".into(), vec![])],
+        vec![],
+        vec![],
+    )
+    .expect_err("fixed invalid request must fail");
 
     let summary = format!(
-        "box_id={}\ninputs={}\nimports={}\noutputs={}\n",
+        "box_id={}\ncrate_root={}\ninputs={}\nimports={}\noutputs={}\n",
         request.box_id(),
+        request.crate_root().as_str(),
         request.inputs().len(),
         request.imports().len(),
         request.outputs().len()
