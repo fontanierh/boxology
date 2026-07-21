@@ -16,6 +16,7 @@ use boxology_contract::BoxId;
 use std::{collections::BTreeMap, fmt};
 
 const RULE_SOURCE: &str = "specs/s2-contract-generator.md D1";
+const CRATE_ROOT_SOURCE: &str = "specs/s2-contract-generator.md D1-D2";
 const POINT: LineColumn = LineColumn { line: 1, column: 1 };
 const REQUEST_SPAN: Span = Span {
     start: POINT,
@@ -89,6 +90,7 @@ impl DeclaredImport {
 #[derive(Debug, Eq, PartialEq)]
 pub struct GenerationRequest {
     box_id: BoxId,
+    crate_root: RelativePath,
     inputs: Vec<InputFile>,
     imports: Vec<DeclaredImport>,
     outputs: Vec<RelativePath>,
@@ -97,11 +99,24 @@ impl GenerationRequest {
     /// Validates request paths and relationships, preserving valid member order and bytes.
     pub fn new(
         box_id: BoxId,
+        raw_crate_root: String,
         raw_inputs: Vec<(String, Vec<u8>)>,
         raw_imports: Vec<(BoxId, String)>,
         raw_outputs: Vec<String>,
     ) -> Result<Self, Diagnostics> {
         let mut errors = Vec::new();
+        let crate_root = match RelativePath::parse(raw_crate_root) {
+            Ok(path) => Some(path),
+            Err(()) => {
+                errors.push(request_diagnostic(
+                    request_path(),
+                    "BXG0001",
+                    "crate_root logical path".into(),
+                    "logical paths must be forward-slash relative",
+                ));
+                None
+            }
+        };
         let mut inputs = Vec::new();
         let mut input_paths = BTreeMap::new();
         for (index, (raw_path, bytes)) in raw_inputs.into_iter().enumerate() {
@@ -126,6 +141,18 @@ impl GenerationRequest {
                 }
                 inputs.push(InputFile { path, bytes });
             }
+        }
+        if let Some(crate_root) = &crate_root
+            && (!input_paths.contains_key(crate_root) || !crate_root.as_str().ends_with(".rs"))
+        {
+            errors.push(Diagnostic {
+                path: crate_root.clone(),
+                span: REQUEST_SPAN,
+                code: "BXG0015",
+                offending: "crate_root input".into(),
+                rule: "crate_root must name one declared .rs input",
+                rule_source: CRATE_ROOT_SOURCE,
+            });
         }
         if !input_paths
             .keys()
@@ -184,6 +211,7 @@ impl GenerationRequest {
         }
         Ok(Self {
             box_id,
+            crate_root: crate_root.expect("validated crate root exists when diagnostics are empty"),
             inputs,
             imports,
             outputs,
@@ -192,6 +220,7 @@ impl GenerationRequest {
 
     ref_getters! {
         #[doc = "Returns the manifest-provided box identity."] box_id: &BoxId = box_id;
+        #[doc = "Returns the exact validated declared Rust-input root."] crate_root: &RelativePath = crate_root;
         #[doc = "Returns inputs in caller-provided order."] inputs: &[InputFile] = inputs;
         #[doc = "Returns declared imports in caller-provided order."] imports: &[DeclaredImport] = imports;
         #[doc = "Returns declared outputs in caller-provided order."] outputs: &[RelativePath] = outputs;
@@ -338,14 +367,18 @@ fn requires_utf8(path: &RelativePath) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const ROOT: &str = "root.rs";
+
     fn id(value: &str) -> BoxId {
         BoxId::new(value).unwrap()
     }
     fn invalid_request() -> Diagnostics {
         GenerationRequest::new(
             id("demo"),
+            ROOT.into(),
             vec![
                 ("boxology.toml".into(), b"ok\n".to_vec()),
+                (ROOT.into(), vec![]),
                 ("/secret/input".into(), vec![]),
             ],
             vec![(id("foreign"), "schema/..".into())],
@@ -368,6 +401,7 @@ mod tests {
     fn mixed_relational_errors() -> Diagnostics {
         GenerationRequest::new(
             id("demo"),
+            "missing.rs".into(),
             vec![
                 ("z.rs".into(), vec![0xff]),
                 ("a.json".into(), vec![0xff]),
@@ -386,8 +420,10 @@ mod tests {
     fn request_preserves_exact_values_and_path_grammar() {
         let request = GenerationRequest::new(
             id("demo"),
+            "source/custom-entry.rs".into(),
             vec![
                 ("boxology.toml".into(), b"manifest\n".to_vec()),
+                ("source/custom-entry.rs".into(), b"fn entry() {}\n".to_vec()),
                 ("../foreign/schema.json".into(), b"{}\n".to_vec()),
                 ("assets/pixel.bin".into(), vec![0xff]),
             ],
@@ -396,9 +432,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(request.box_id().as_str(), "demo");
+        assert_eq!(request.crate_root().as_str(), "source/custom-entry.rs");
         assert_eq!(request.inputs()[0].path().as_str(), "boxology.toml");
         assert_eq!(request.inputs()[0].bytes(), b"manifest\n");
-        assert_eq!(request.inputs()[2].bytes(), [0xff]);
+        assert_eq!(request.inputs()[3].bytes(), [0xff]);
         assert_eq!(request.imports()[0].package().as_str(), "foreign");
         assert_eq!(
             request.imports()[0].schema_path().as_str(),
@@ -412,6 +449,74 @@ mod tests {
             "", "/a", "C:/a", "a//b", "a/.", "a/..", "a\\b", "a\tb", "a\nb", "a\rb", "a\0b",
         ] {
             assert!(RelativePath::parse(invalid.into()).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_crate_root_is_one_exact_payload_safe_path_diagnostic() {
+        let diagnostics = GenerationRequest::new(
+            id("demo"),
+            "/secret/root.rs".into(),
+            vec![("boxology.toml".into(), b"manifest".to_vec())],
+            vec![],
+            vec![],
+        )
+        .unwrap_err();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(diagnostic.code(), "BXG0001");
+        assert_eq!(diagnostic.path().as_str(), "<request>");
+        assert_eq!(diagnostic.span(), REQUEST_SPAN);
+        assert_eq!(diagnostic.offending_construct(), "crate_root logical path");
+        assert_eq!(
+            diagnostic.rule(),
+            "logical paths must be forward-slash relative"
+        );
+        assert_eq!(diagnostic.rule_source(), RULE_SOURCE);
+        assert_eq!(
+            diagnostic.to_string(),
+            "BXG0001 <request>:1:1-1:1 offending=\"crate_root logical path\" rule=\"logical paths must be forward-slash relative\" source=\"specs/s2-contract-generator.md D1\""
+        );
+        assert!(!diagnostics.to_string().contains("/secret"));
+    }
+
+    #[test]
+    fn crate_root_must_be_a_declared_exact_rs_input() {
+        for (root, inputs) in [
+            (
+                "missing.rs",
+                vec![("boxology.toml".into(), b"manifest".to_vec())],
+            ),
+            (
+                "source/custom-entry.RS",
+                vec![
+                    ("boxology.toml".into(), b"manifest".to_vec()),
+                    ("source/custom-entry.RS".into(), vec![]),
+                ],
+            ),
+        ] {
+            let diagnostics =
+                GenerationRequest::new(id("demo"), root.into(), inputs, vec![], vec![])
+                    .unwrap_err();
+            let [diagnostic] = diagnostics.as_slice() else {
+                panic!("expected one diagnostic, got {diagnostics:?}");
+            };
+            assert_eq!(diagnostic.code(), "BXG0015");
+            assert_eq!(diagnostic.path().as_str(), root);
+            assert_eq!(diagnostic.span(), REQUEST_SPAN);
+            assert_eq!(diagnostic.offending_construct(), "crate_root input");
+            assert_eq!(
+                diagnostic.rule(),
+                "crate_root must name one declared .rs input"
+            );
+            assert_eq!(diagnostic.rule_source(), CRATE_ROOT_SOURCE);
+            assert_eq!(
+                diagnostic.to_string(),
+                format!(
+                    "BXG0015 {root}:1:1-1:1 offending=\"crate_root input\" rule=\"crate_root must name one declared .rs input\" source=\"specs/s2-contract-generator.md D1-D2\""
+                )
+            );
         }
     }
 
@@ -437,6 +542,7 @@ mod tests {
     fn duplicate_input_path_is_coded_at_the_duplicate_path() {
         let diagnostics = GenerationRequest::new(
             id("demo"),
+            "src/lib.rs".into(),
             vec![
                 ("boxology.toml".into(), b"manifest".to_vec()),
                 ("src/lib.rs".into(), b"first".to_vec()),
@@ -452,16 +558,19 @@ mod tests {
     #[test]
     fn text_input_extensions_require_utf8_without_leaking_bytes() {
         for path in ["src/lib.rs", "box.toml", "schema.json"] {
-            let diagnostics = GenerationRequest::new(
-                id("demo"),
-                vec![
-                    ("boxology.toml".into(), b"manifest".to_vec()),
-                    (path.into(), vec![0xff]),
-                ],
-                vec![],
-                vec![],
-            )
-            .unwrap_err();
+            let mut inputs = vec![
+                ("boxology.toml".into(), b"manifest".to_vec()),
+                (path.into(), vec![0xff]),
+            ];
+            let root = if path.ends_with(".rs") {
+                path
+            } else {
+                inputs.push((ROOT.into(), vec![]));
+                ROOT
+            };
+            let diagnostics =
+                GenerationRequest::new(id("demo"), root.into(), inputs, vec![], vec![])
+                    .unwrap_err();
             assert!(!diagnostics.to_string().contains('�'));
             assert_single(diagnostics, "BXG0003", path);
         }
@@ -471,6 +580,7 @@ mod tests {
     fn missing_manifest_is_coded_at_the_request() {
         let diagnostics = GenerationRequest::new(
             id("demo"),
+            "src/lib.rs".into(),
             vec![("src/lib.rs".into(), b"source".to_vec())],
             vec![],
             vec![],
@@ -483,7 +593,11 @@ mod tests {
     fn missing_declared_schema_is_coded_at_its_logical_path() {
         let diagnostics = GenerationRequest::new(
             id("demo"),
-            vec![("boxology.toml".into(), b"manifest".to_vec())],
+            ROOT.into(),
+            vec![
+                ("boxology.toml".into(), b"manifest".to_vec()),
+                (ROOT.into(), vec![]),
+            ],
             vec![(id("foreign"), "foreign/schema.json".into())],
             vec![],
         )
@@ -495,8 +609,10 @@ mod tests {
     fn duplicate_import_package_is_coded_at_the_second_schema_path() {
         let diagnostics = GenerationRequest::new(
             id("demo"),
+            ROOT.into(),
             vec![
                 ("boxology.toml".into(), b"manifest".to_vec()),
+                (ROOT.into(), vec![]),
                 ("one.json".into(), b"{}".to_vec()),
                 ("two.json".into(), b"{}".to_vec()),
             ],
@@ -526,6 +642,7 @@ mod tests {
                 ("a.json", "BXG0002"),
                 ("a.json", "BXG0003"),
                 ("m.json", "BXG0005"),
+                ("missing.rs", "BXG0015"),
                 ("n.json", "BXG0005"),
                 ("n.json", "BXG0006"),
                 ("z.rs", "BXG0003"),

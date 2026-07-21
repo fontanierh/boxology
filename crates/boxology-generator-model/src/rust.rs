@@ -95,7 +95,7 @@ mod tests {
     use super::*;
     use boxology_contract::BoxId;
 
-    fn request(files: &[(&str, &str)]) -> GenerationRequest {
+    fn request(root: &str, files: &[(&str, &str)]) -> GenerationRequest {
         let mut inputs = vec![(
             "boxology.toml".into(),
             b"schema = 1\nid = \"demo\"\nkind = \"box\"\n".to_vec(),
@@ -105,7 +105,14 @@ mod tests {
                 .iter()
                 .map(|(path, source)| ((*path).into(), source.as_bytes().to_vec())),
         );
-        GenerationRequest::new(BoxId::new("demo").unwrap(), inputs, vec![], vec![]).unwrap()
+        GenerationRequest::new(
+            BoxId::new("demo").unwrap(),
+            root.into(),
+            inputs,
+            vec![],
+            vec![],
+        )
+        .unwrap()
     }
 
     fn parse_errors(request: &GenerationRequest) -> Diagnostics {
@@ -130,7 +137,10 @@ mod tests {
 
     #[test]
     fn valid_inputs_are_byte_sorted_and_retain_inspectable_files() {
-        let request = request(&[("z.rs", "fn z() {}\n"), ("a.rs", "struct A;\nfn a() {}\n")]);
+        let request = request(
+            "a.rs",
+            &[("z.rs", "fn z() {}\n"), ("a.rs", "struct A;\nfn a() {}\n")],
+        );
         let parsed = ParsedRustInputs::parse(&request).unwrap();
         assert_eq!(
             parsed
@@ -148,10 +158,13 @@ mod tests {
 
     #[test]
     fn unicode_identifier_bom_and_shebang_parse_as_a_complete_file() {
-        let request = request(&[(
+        let request = request(
             "unicode.rs",
-            "\u{feff}#!/usr/bin/env rust-script\nfn café() {}\n",
-        )]);
+            &[(
+                "unicode.rs",
+                "\u{feff}#!/usr/bin/env rust-script\nfn café() {}\n",
+            )],
+        );
         let parsed = ParsedRustInputs::parse(&request).unwrap();
         let syntax = parsed.as_slice()[0].syntax();
         assert_eq!(
@@ -162,17 +175,28 @@ mod tests {
     }
 
     #[test]
-    fn non_rust_suffix_is_ignored_and_no_rust_input_requires_no_root() {
-        let parsed = ParsedRustInputs::parse(&request(&[("notes.rs.bak", "@\n")])).unwrap();
-        assert!(parsed.as_slice().is_empty());
+    fn non_rust_suffix_is_ignored_while_a_valid_root_exists() {
+        let request = request("root.rs", &[("notes.rs.bak", "@\n"), ("root.rs", "")]);
+        let parsed = ParsedRustInputs::parse(&request).unwrap();
+        assert_eq!(
+            parsed
+                .as_slice()
+                .iter()
+                .map(|input| input.path().as_str())
+                .collect::<Vec<_>>(),
+            ["root.rs"]
+        );
     }
 
     #[test]
     fn multifile_failures_are_complete_sorted_exact_safe_and_repeatable() {
-        let request = request(&[
-            ("b.rs", "fn café() { @ }\n"),
-            ("a.rs", "fn good() {}\nfn bad() { @ }\n"),
-        ]);
+        let request = request(
+            "a.rs",
+            &[
+                ("b.rs", "fn café() { @ }\n"),
+                ("a.rs", "fn good() {}\nfn bad() { @ }\n"),
+            ],
+        );
         let (first, second) = (parse_errors(&request), parse_errors(&request));
         assert_eq!(first, second);
         let diagnostics = first.as_slice();
