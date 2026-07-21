@@ -1,5 +1,9 @@
 use std::{error::Error, fmt};
 
+use base64::{
+    Engine as _, alphabet,
+    engine::{DecodePaddingMode, general_purpose::GeneralPurposeConfig},
+};
 use boxology_contract::{
     ConformanceErrorKind, ContractValue, DecodeRole, DescriptorRef, FieldDescriptor, OpaquePayload,
     OpaqueTree, SlotValue, TypeDescriptor, VariantDescriptor, VariantPayload,
@@ -85,7 +89,8 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
         | DescriptorRef::U32
         | DescriptorRef::U64
         | DescriptorRef::F32
-        | DescriptorRef::F64 => true,
+        | DescriptorRef::F64
+        | DescriptorRef::Blob => true,
         DescriptorRef::Optional(inner)
         | DescriptorRef::TriState(inner)
         | DescriptorRef::List(inner)
@@ -247,8 +252,30 @@ fn decode_scalar(
         DescriptorRef::U64 => wide_unsigned(tree),
         DescriptorRef::F32 => float32(tree),
         DescriptorRef::F64 => float64(tree),
+        DescriptorRef::Blob => blob(tree),
         _ => failure(SemanticErrorCategory::UnsupportedDescriptor),
     }
+}
+
+fn blob(tree: OpaqueTree) -> Result<ContractValue, SemanticError> {
+    let entries = object_entries(tree)?;
+    let [(key, value)] = entries.as_slice() else {
+        return failure(SemanticErrorCategory::RepresentationMismatch);
+    };
+    if key != "base64" {
+        return failure(SemanticErrorCategory::RepresentationMismatch);
+    }
+    let OpaqueTree::String(encoded) = value else {
+        return failure(SemanticErrorCategory::RepresentationMismatch);
+    };
+    let config = GeneralPurposeConfig::new()
+        .with_decode_padding_mode(DecodePaddingMode::RequireCanonical)
+        .with_decode_allow_trailing_bits(false);
+    let engine = base64::engine::general_purpose::GeneralPurpose::new(&alphabet::STANDARD, config);
+    engine
+        .decode(encoded)
+        .map(ContractValue::bytes)
+        .map_err(|_| SemanticError(SemanticErrorCategory::RepresentationMismatch))
 }
 
 fn integer_token(tree: OpaqueTree) -> Result<String, SemanticError> {
@@ -1327,6 +1354,7 @@ mod tests {
             variant("value", VariantPayload::Value(structure.clone())),
         ]);
         let supported = [
+            TypeDescriptor::blob(),
             TypeDescriptor::optional(TypeDescriptor::i8()).unwrap(),
             TypeDescriptor::tri_state(TypeDescriptor::string()).unwrap(),
             TypeDescriptor::list(TypeDescriptor::optional(TypeDescriptor::f32()).unwrap()).unwrap(),
@@ -1339,6 +1367,12 @@ mod tests {
             TypeDescriptor::map(TypeDescriptor::list(structure).unwrap()).unwrap(),
             enumeration.clone(),
             TypeDescriptor::list(TypeDescriptor::map(enumeration).unwrap()).unwrap(),
+            TypeDescriptor::list(TypeDescriptor::blob()).unwrap(),
+            TypeDescriptor::enumeration([variant(
+                "blob",
+                VariantPayload::Value(TypeDescriptor::blob()),
+            )])
+            .unwrap(),
             TypeDescriptor::enumeration([]).unwrap(),
         ];
         assert!(supported.iter().all(is_supported));
@@ -1364,10 +1398,6 @@ mod tests {
             "secret",
             VariantPayload::Value(optional_secret.clone()),
         )]);
-        let blob_enum = enumeration([variant(
-            "blob",
-            VariantPayload::Value(TypeDescriptor::list(TypeDescriptor::blob()).unwrap()),
-        )]);
         let hostile = tree([
             ("tag", OpaqueTree::String("secret".into())),
             (
@@ -1378,7 +1408,7 @@ mod tests {
         unsupported(hostile.clone(), &secret_enum, Some(SENTINEL));
         unsupported(
             OpaqueTree::List(vec![hostile]),
-            &TypeDescriptor::list(blob_enum.clone()).unwrap(),
+            &list_secret,
             Some(SENTINEL),
         );
         unsupported(OpaqueTree::Null, &structure, None);
@@ -1411,22 +1441,19 @@ mod tests {
             Some(SENTINEL),
         );
         let descriptors = [
-            TypeDescriptor::blob(),
             secret.clone(),
+            TypeDescriptor::secret(TypeDescriptor::blob()).unwrap(),
             optional_secret.clone(),
             secret_optional,
             list_secret,
             map_secret,
             TypeDescriptor::map(optional_secret.clone()).unwrap(),
             deep_secret,
-            TypeDescriptor::list(TypeDescriptor::blob()).unwrap(),
             structure.clone(),
             TypeDescriptor::map(structure).unwrap(),
             TypeDescriptor::structure([field("event", secret_enum.clone())]).unwrap(),
-            TypeDescriptor::map(blob_enum.clone()).unwrap(),
-            TypeDescriptor::structure([field("blob", TypeDescriptor::blob())]).unwrap(),
             secret_enum.clone(),
-            TypeDescriptor::list(blob_enum).unwrap(),
+            TypeDescriptor::list(secret_enum).unwrap(),
         ];
         for descriptor in descriptors {
             unsupported(
