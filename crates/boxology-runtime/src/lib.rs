@@ -24,8 +24,8 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
 use boxology_contract::{
-    BoxId, CallContext, CapabilityId, Detail, ErasedCallError, ErasedTarget, SlotValue,
-    call_guarded,
+    BoxId, CallContext, CapabilityId, Detail, ErasedCallError, ErasedCallTarget, ErasedTarget,
+    SlotValue, call_guarded,
 };
 
 type ErasedCallFuture<'a> =
@@ -128,6 +128,17 @@ impl ImportHandle {
 
     pub(crate) fn seal(&self, target: Arc<dyn ErasedTarget>) -> Result<(), Arc<dyn ErasedTarget>> {
         self.target.set(target)
+    }
+}
+
+impl ErasedCallTarget for ImportHandle {
+    fn call<'a>(
+        &'a self,
+        capability: &'a CapabilityId,
+        context: CallContext,
+        input: SlotValue,
+    ) -> ErasedCallFuture<'a> {
+        ImportHandle::call(self, capability, context, input)
     }
 }
 
@@ -957,10 +968,9 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         assert!(handle.seal(target(&calls, Behavior::Echo)).is_ok());
         let capability = capability("service", "first");
-        drop(assert_send(handle.call(
-            &capability,
-            context(None),
-            SlotValue::Null,
-        )));
+        let carrier: &dyn ErasedCallTarget = handle;
+        let mut future = assert_send(carrier.call(&capability, context(None), SlotValue::Null));
+        assert_eq!(poll_once(future.as_mut()), Poll::Ready(Ok(SlotValue::Null)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

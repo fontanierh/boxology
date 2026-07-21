@@ -23,6 +23,16 @@ pub trait ErasedTarget: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>;
 }
 
+#[doc(hidden)]
+pub trait ErasedCallTarget: Send + Sync {
+    fn call<'a>(
+        &'a self,
+        capability: &'a CapabilityId,
+        context: CallContext,
+        input: SlotValue,
+    ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>;
+}
+
 /// Invokes erased dispatch without allowing a handler panic to cross the boundary.
 #[doc(hidden)]
 pub fn call_guarded<'a>(
