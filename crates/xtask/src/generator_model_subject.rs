@@ -14,8 +14,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
             ),
             (
                 "source/custom-entry.rs".into(),
-                b"fn custom_entry() {}\n".to_vec(),
+                b"mod flat;\nmod inline { mod r#type; }\nfn custom_entry() {}\n".to_vec(),
             ),
+            ("source/flat.rs".into(), b"fn flat() {}\n".to_vec()),
+            ("source/inline/type.rs".into(), b"struct Raw;\n".to_vec()),
+            ("source/unreachable.rs".into(), b"fn hidden() {}\n".to_vec()),
             ("src/z.rs".into(), b"fn z() {}\n".to_vec()),
             ("src/a.rs".into(), b"struct A;\nfn a() {}\n".to_vec()),
         ],
@@ -27,6 +30,13 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         .map_err(|error| format!("fixed valid manifest failed: {error}"))?;
     let rust_inputs = ParsedRustInputs::parse(&request)
         .map_err(|error| format!("fixed valid Rust inputs failed: {error}"))?;
+    let rust_modules = rust_inputs
+        .resolve_reachable_inputs()
+        .map_err(|error| format!("fixed valid module topology failed: {error}"))?
+        .iter()
+        .map(|input| input.path().as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -57,6 +67,32 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     .map_err(|error| format!("fixed invalid-Rust request failed: {error}"))?;
     let rust_diagnostics = match ParsedRustInputs::parse(&invalid_rust_request) {
         Ok(_) => return Err("fixed invalid Rust inputs unexpectedly parsed".into()),
+        Err(diagnostics) => diagnostics,
+    };
+    let invalid_module_request = GenerationRequest::new(
+        id(),
+        "modules/root.rs".into(),
+        vec![
+            (
+                "boxology.toml".into(),
+                b"schema = 1\nid = \"subject-box\"\nkind = \"box\"\n".to_vec(),
+            ),
+            (
+                "modules/root.rs".into(),
+                b"#[path = \"private.rs\"] mod redirected;\nmod missing;\nmod duplicate;\n"
+                    .to_vec(),
+            ),
+            ("modules/duplicate.rs".into(), vec![]),
+            ("modules/duplicate/mod.rs".into(), vec![]),
+        ],
+        vec![],
+        vec![],
+    )
+    .map_err(|error| format!("fixed invalid-topology request failed: {error}"))?;
+    let invalid_modules = ParsedRustInputs::parse(&invalid_module_request)
+        .map_err(|error| format!("fixed invalid-topology Rust inputs failed: {error}"))?;
+    let module_diagnostics = match invalid_modules.resolve_reachable_inputs() {
+        Ok(_) => return Err("fixed invalid module topology unexpectedly resolved".into()),
         Err(diagnostics) => diagnostics,
     };
     let diagnostics = GenerationRequest::new(
@@ -104,6 +140,13 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         .join("\n");
     fs::write(out.join("rust-inputs.txt"), format!("{rust_summary}\n"))
         .map_err(|error| format!("write rust-inputs.txt: {error}"))?;
+    fs::write(out.join("rust-modules.txt"), format!("{rust_modules}\n"))
+        .map_err(|error| format!("write rust-modules.txt: {error}"))?;
+    fs::write(
+        out.join("module-diagnostics.txt"),
+        format!("{module_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write module-diagnostics.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
