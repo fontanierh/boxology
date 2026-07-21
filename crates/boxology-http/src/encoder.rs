@@ -2,9 +2,99 @@ use std::{error::Error, fmt};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use boxology_contract::{
-    DescriptorRef, OpaqueTree, SlotValue, TypeDescriptor, ValueRef, VariantDescriptor,
-    VariantPayload,
+    DescriptorRef, ErasedCallError, OpaqueTree, SlotValue, TypeDescriptor, ValueRef,
+    VariantDescriptor, VariantPayload,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WireCallError {
+    UnknownBox,
+    UnknownCapability,
+    InvalidRequest,
+    MethodNotAllowed,
+    PayloadTooLarge,
+    UnsupportedMediaType,
+    DeadlineExceeded,
+    Unavailable,
+    InvalidUpstreamResponse,
+    Internal,
+}
+
+impl WireCallError {
+    const ALL: [Self; 10] = [
+        Self::UnknownBox,
+        Self::UnknownCapability,
+        Self::InvalidRequest,
+        Self::MethodNotAllowed,
+        Self::PayloadTooLarge,
+        Self::UnsupportedMediaType,
+        Self::DeadlineExceeded,
+        Self::Unavailable,
+        Self::InvalidUpstreamResponse,
+        Self::Internal,
+    ];
+
+    fn spec(self) -> (u16, &'static str, &'static str) {
+        match self {
+            Self::UnknownBox => (404, "unknown_box", "unknown box"),
+            Self::UnknownCapability => (404, "unknown_capability", "unknown capability"),
+            Self::InvalidRequest => (400, "invalid_request", "invalid request"),
+            Self::MethodNotAllowed => (405, "method_not_allowed", "method not allowed"),
+            Self::PayloadTooLarge => (413, "payload_too_large", "payload too large"),
+            Self::UnsupportedMediaType => (415, "unsupported_media_type", "unsupported media type"),
+            Self::DeadlineExceeded => (504, "deadline_exceeded", "deadline exceeded"),
+            Self::Unavailable => (503, "unavailable", "service unavailable"),
+            Self::InvalidUpstreamResponse => (
+                502,
+                "invalid_upstream_response",
+                "invalid upstream response",
+            ),
+            Self::Internal => (500, "internal", "internal error"),
+        }
+    }
+
+    pub(crate) fn from_erased(error: &ErasedCallError) -> Result<Self, DomainIsNotCallError> {
+        match error {
+            ErasedCallError::Domain { .. } => Err(DomainIsNotCallError),
+            ErasedCallError::Deadline => Ok(Self::DeadlineExceeded),
+            ErasedCallError::Cancelled => Ok(Self::Internal),
+            ErasedCallError::Unavailable(_) => Ok(Self::Unavailable),
+            ErasedCallError::ContractViolation(_) => Ok(Self::InvalidRequest),
+            ErasedCallError::InvalidResponse(_) => Ok(Self::InvalidUpstreamResponse),
+            ErasedCallError::Internal(_) => Ok(Self::Internal),
+            _ => Ok(Self::Internal),
+        }
+    }
+
+    pub(crate) fn encode(self) -> EncodedCallError {
+        let (status, code, message) = self.spec();
+        let mut body = br#"{"error":{"kind":"call","code":"#.to_vec();
+        text(&mut body, code);
+        body.extend_from_slice(b",\"message\":");
+        text(&mut body, message);
+        body.extend_from_slice(b"}}");
+        EncodedCallError { status, body }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DomainIsNotCallError;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EncodedCallError {
+    status: u16,
+    body: Vec<u8>,
+}
+
+impl EncodedCallError {
+    pub(crate) fn status(&self) -> u16 {
+        self.status
+    }
+
+    pub(crate) fn body(&self) -> &[u8] {
+        &self.body
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EncodeErrorCategory {
@@ -447,7 +537,7 @@ mod tests {
     use super::EncodeErrorCategory as C;
     use super::*;
     use boxology_contract::{
-        ContractValue as Value, DecodeRole, FieldDescriptor, OpaqueNumber, OpaquePayload,
+        ContractValue as Value, DecodeRole, Detail, FieldDescriptor, OpaqueNumber, OpaquePayload,
         OpaqueTree, TypeDescriptor as D, VariantDescriptor, VariantPayload,
     };
 
@@ -476,6 +566,127 @@ mod tests {
         let decoded =
             crate::semantic::decode_tree(tree, descriptor, DecodeRole::ConsumerOutput).unwrap();
         assert_eq!(encoded(decoded, descriptor), first);
+    }
+
+    #[test]
+    fn every_call_error_has_one_exact_status_code_message_and_body() {
+        let cases = [
+            (WireCallError::UnknownBox, 404, "unknown_box", "unknown box"),
+            (
+                WireCallError::UnknownCapability,
+                404,
+                "unknown_capability",
+                "unknown capability",
+            ),
+            (
+                WireCallError::InvalidRequest,
+                400,
+                "invalid_request",
+                "invalid request",
+            ),
+            (
+                WireCallError::MethodNotAllowed,
+                405,
+                "method_not_allowed",
+                "method not allowed",
+            ),
+            (
+                WireCallError::PayloadTooLarge,
+                413,
+                "payload_too_large",
+                "payload too large",
+            ),
+            (
+                WireCallError::UnsupportedMediaType,
+                415,
+                "unsupported_media_type",
+                "unsupported media type",
+            ),
+            (
+                WireCallError::DeadlineExceeded,
+                504,
+                "deadline_exceeded",
+                "deadline exceeded",
+            ),
+            (
+                WireCallError::Unavailable,
+                503,
+                "unavailable",
+                "service unavailable",
+            ),
+            (
+                WireCallError::InvalidUpstreamResponse,
+                502,
+                "invalid_upstream_response",
+                "invalid upstream response",
+            ),
+            (WireCallError::Internal, 500, "internal", "internal error"),
+        ];
+
+        assert_eq!(cases.map(|case| case.0), WireCallError::ALL);
+        let mut codes = std::collections::BTreeSet::new();
+        for (error, status, code, message) in cases {
+            assert_eq!(error.spec(), (status, code, message));
+            assert!(codes.insert(code));
+            let encoded = error.encode();
+            assert_eq!(encoded.status(), status);
+            assert_eq!(
+                encoded.body(),
+                format!(r#"{{"error":{{"kind":"call","code":"{code}","message":"{message}"}}}}"#)
+                    .as_bytes()
+            );
+        }
+        assert_eq!(codes.len(), WireCallError::ALL.len());
+    }
+
+    #[test]
+    fn erased_call_errors_map_closed_and_never_expose_detail() {
+        fn detail() -> Detail {
+            Detail::new("CODE_\"\\\n_SECRET_SENTINEL")
+                .with_message("MESSAGE_\"\\\r_SECRET_SENTINEL")
+        }
+
+        for (error, expected) in [
+            (ErasedCallError::Deadline, WireCallError::DeadlineExceeded),
+            (ErasedCallError::Cancelled, WireCallError::Internal),
+            (
+                ErasedCallError::Unavailable(detail()),
+                WireCallError::Unavailable,
+            ),
+            (
+                ErasedCallError::ContractViolation(detail()),
+                WireCallError::InvalidRequest,
+            ),
+            (
+                ErasedCallError::InvalidResponse(detail()),
+                WireCallError::InvalidUpstreamResponse,
+            ),
+            (ErasedCallError::Internal(detail()), WireCallError::Internal),
+        ] {
+            let mapped = WireCallError::from_erased(&error).unwrap();
+            assert_eq!(mapped, expected);
+            let encoded = mapped.encode();
+            for sentinel in ["CODE_", "MESSAGE_", "SECRET_SENTINEL", "\\n", "\\r"] {
+                assert!(!String::from_utf8_lossy(encoded.body()).contains(sentinel));
+                assert!(!format!("{mapped:?}").contains(sentinel));
+            }
+        }
+
+        assert_eq!(
+            WireCallError::from_erased(&ErasedCallError::Cancelled)
+                .unwrap()
+                .encode(),
+            WireCallError::from_erased(&ErasedCallError::Internal(detail()))
+                .unwrap()
+                .encode()
+        );
+        assert_eq!(
+            WireCallError::from_erased(&ErasedCallError::Domain {
+                error_tag: "SECRET_SENTINEL".into(),
+                payload: SlotValue::Missing,
+            }),
+            Err(DomainIsNotCallError)
+        );
     }
 
     fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
