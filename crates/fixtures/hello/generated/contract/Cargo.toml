@@ -1,0 +1,12 @@
+[package]
+name = "hello-contract"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+boxology-contract = { version = "=0.0.0", path = "../../../../boxology-contract" }
