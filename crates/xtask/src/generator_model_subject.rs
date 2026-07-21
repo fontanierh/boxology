@@ -50,6 +50,36 @@ fn shape_projection(declaration: &ContractDeclaration<'_>) -> String {
     }
 }
 
+fn docs_projection(declaration: &ContractDeclaration<'_>) -> String {
+    let fields = |fields: &ContractFields<'_>| match fields {
+        ContractFields::Named(fields) | ContractFields::Unnamed(fields) => format!(
+            "{:?}",
+            fields
+                .iter()
+                .map(|field| field.metadata().docs())
+                .collect::<Vec<_>>()
+        ),
+        ContractFields::Unit => "unit".into(),
+    };
+    match declaration.shape() {
+        ContractDeclarationShape::Struct(shape) => format!(
+            "{} struct docs={:?} fields={}",
+            declaration.lifted_name(),
+            declaration.metadata().docs(),
+            fields(shape)
+        ),
+        ContractDeclarationShape::Enum(variants) => format!(
+            "{} enum docs={:?} variants={:?}",
+            declaration.lifted_name(),
+            declaration.metadata().docs(),
+            variants
+                .iter()
+                .map(|variant| (variant.metadata().docs(), fields(variant.fields())))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
 pub(crate) fn run(out: &Path) -> Result<(), String> {
     let id = || BoxId::new("subject-box").expect("fixed id is valid");
     let input = |path: &str, bytes: &[u8]| (path.into(), bytes.to_vec());
@@ -140,7 +170,9 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
                 declarations
                     .iter()
                     .map(|declaration| {
-                        if projection == 2 {
+                        if projection == 3 {
+                            docs_projection(declaration)
+                        } else if projection == 2 {
                             shape_projection(declaration)
                         } else if projection == 1 {
                             format!("{}={:?}", declaration.lifted_name(), declaration.role())
@@ -197,6 +229,17 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let shape_projection = shapes[0]
         .as_ref()
         .map_err(|error| format!("fixed valid shapes failed: {error}"))?;
+    let valid_docs = contracts(b"#[doc = \" first \" ] #[r#doc = r#\"second\"#] #[boxology::contract] struct Named { #[doc = \"\"] value: u8 }\n#[doc = \"tuple\"] #[boxology::contract] struct Tuple(#[doc = \" tuple field \" ] u8);\n#[boxology::contract] struct Unit;\n#[doc = \"enum\"] #[boxology::contract(error)] enum Event { #[doc = \"unit variant\"] Unit, #[doc = \"tuple variant\"] Tuple(#[doc = \"tuple field\"] u8), #[doc = \"named variant\"] Named { #[doc = \"\"] value: u8 } }\n", 3)?;
+    let invalid_docs = contracts(b"#[doc] #[boxology::contract] struct Invalid { #[doc = 7] field: u8 }\n#[boxology::contract] enum InvalidEvent { #[doc(private)] Bad { #[r#doc = concat!(\"private\")] field: u8 } }\n", 3)?;
+    if valid_docs[0] != valid_docs[1] || invalid_docs[0] != invalid_docs[1] {
+        return Err("contract documentation result changed with input order".into());
+    }
+    let docs = valid_docs[0]
+        .as_ref()
+        .map_err(|error| format!("fixed valid documentation failed: {error}"))?;
+    let doc_diagnostics = invalid_docs[0]
+        .as_ref()
+        .expect_err("fixed invalid documentation must fail");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -362,6 +405,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{shape_projection}\n"),
     )
     .map_err(|error| format!("write contract-shapes.txt: {error}"))?;
+    fs::write(
+        out.join("contract-docs.txt"),
+        format!("success\n{docs}\ninvalid\n{doc_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write contract-docs.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),

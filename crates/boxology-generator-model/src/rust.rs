@@ -22,6 +22,8 @@ const CONTRACT_ROLE_RULE: &str =
 const CONTRACT_ROLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1-D4";
 const DEPRECATION_RULE: &str = "deprecation may appear at most once per exported type, field, or variant as #[deprecated] or #[deprecated(note = \"...\")]";
 const DEPRECATION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2,D5a";
+const DOCUMENTATION_RULE: &str = "documentation attributes must use #[doc = \"...\"] with a direct string literal and no expression attributes";
+const DOCUMENTATION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -46,9 +48,10 @@ pub struct ContractDeclaration<'a> {
     projection: Option<(ContractDeclarationShape<'a>, ContractSiteMetadata)>,
 }
 
-/// Deprecation metadata attached to one contract site.
+/// Metadata attached to one contract site.
 pub struct ContractSiteMetadata {
     deprecation: Option<ContractDeprecation>,
+    docs: Vec<String>,
 }
 
 macro_rules! model_getters {
@@ -61,6 +64,11 @@ impl ContractSiteMetadata {
     model_getters! { self;
         #[doc = "Returns the site's optional deprecation metadata."]
         deprecation: Option<&ContractDeprecation> = self.deprecation.as_ref();
+    }
+
+    /// Returns the site's decoded documentation attributes in source order.
+    pub fn docs(&self) -> &[String] {
+        &self.docs
     }
 }
 
@@ -113,7 +121,7 @@ impl<'ast> ContractField<'ast> {
         &self.syntax.ty
     }
     model_getters! { self;
-        #[doc = "Returns field deprecation metadata."]
+        #[doc = "Returns field metadata."]
         metadata: &ContractSiteMetadata = &self.metadata;
     }
 }
@@ -147,7 +155,7 @@ impl<'ast> ContractVariant<'ast> {
         syntax: &'ast syn::Variant = self.syntax;
         #[doc = "Returns the variant field shape."]
         fields: &ContractFields<'ast> = &self.fields;
-        #[doc = "Returns variant deprecation metadata."]
+        #[doc = "Returns variant metadata."]
         metadata: &ContractSiteMetadata = &self.metadata;
     }
 }
@@ -214,7 +222,7 @@ impl<'ast> ContractDeclaration<'ast> {
         &self.projection.as_ref().expect("validated declaration").0
     }
 
-    /// Returns declaration deprecation metadata.
+    /// Returns declaration metadata.
     pub fn metadata(&self) -> &ContractSiteMetadata {
         &self.projection.as_ref().expect("validated declaration").1
     }
@@ -345,15 +353,21 @@ impl ParsedRustInputs {
         }
         diagnostics.sort();
         diagnostics.dedup();
-        diagnostics
-            .is_empty()
-            .then(|| {
-                for declaration in &mut declarations {
-                    declaration.projection = Some(project_declaration(declaration.syntax));
-                }
-                declarations
-            })
-            .ok_or(Diagnostics(diagnostics))
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        for declaration in &declarations {
+            validate_contract_documentation(declaration, &mut diagnostics);
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        for declaration in &mut declarations {
+            declaration.projection = Some(project_declaration(declaration.syntax));
+        }
+        Ok(declarations)
     }
 
     /// Validates default module lookup and returns unique reachable files in logical-path byte order.
@@ -903,6 +917,30 @@ fn validate_contract_deprecations(
     }
 }
 
+fn validate_contract_documentation(
+    declaration: &ContractDeclaration<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let path = declaration.source;
+    match declaration.syntax {
+        ContractDeclarationSyntax::Struct(item) => {
+            validate_documentation(path, &item.attrs, diagnostics);
+            for field in &item.fields {
+                validate_documentation(path, &field.attrs, diagnostics);
+            }
+        }
+        ContractDeclarationSyntax::Enum(item) => {
+            validate_documentation(path, &item.attrs, diagnostics);
+            for variant in &item.variants {
+                validate_documentation(path, &variant.attrs, diagnostics);
+                for field in &variant.fields {
+                    validate_documentation(path, &field.attrs, diagnostics);
+                }
+            }
+        }
+    }
+}
+
 fn project_declaration<'ast>(
     syntax: ContractDeclarationSyntax<'ast>,
 ) -> (ContractDeclarationShape<'ast>, ContractSiteMetadata) {
@@ -989,7 +1027,57 @@ fn project_metadata(attributes: &[syn::Attribute]) -> ContractSiteMetadata {
                 None
             },
         });
-    ContractSiteMetadata { deprecation }
+    let docs = attributes.iter().filter_map(documentation).collect();
+    ContractSiteMetadata { deprecation, docs }
+}
+
+fn documentation_identifier(attribute: &syn::Attribute) -> Option<&syn::Ident> {
+    let path = attribute.path();
+    if !matches!(attribute.style, syn::AttrStyle::Outer)
+        || path.leading_colon.is_some()
+        || path.segments.len() != 1
+        || !matches!(path.segments[0].arguments, syn::PathArguments::None)
+    {
+        return None;
+    }
+    let identifier = &path.segments[0].ident;
+    (identifier.unraw() == "doc").then_some(identifier)
+}
+
+fn documentation(attribute: &syn::Attribute) -> Option<String> {
+    documentation_identifier(attribute)?;
+    let syn::Meta::NameValue(value) = &attribute.meta else {
+        return None;
+    };
+    match &value.value {
+        syn::Expr::Lit(syn::ExprLit {
+            attrs,
+            lit: syn::Lit::Str(value),
+            ..
+        }) if attrs.is_empty() => Some(value.value()),
+        _ => None,
+    }
+}
+
+fn validate_documentation(
+    path: &RelativePath,
+    attributes: &[syn::Attribute],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for attribute in attributes {
+        if let Some(identifier) = documentation_identifier(attribute)
+            && documentation(attribute).is_none()
+        {
+            diagnostics.push(Diagnostic {
+                path: path.clone(),
+                span: source_span(identifier.span()),
+                code: "BXG0026",
+                offending: "invalid documentation attribute".into(),
+                rule: DOCUMENTATION_RULE,
+                rule_source: DOCUMENTATION_RULE_SOURCE,
+            });
+        }
+    }
 }
 
 fn validate_deprecations(
@@ -1199,6 +1287,7 @@ fn source_span(upstream: proc_macro2::Span) -> Span {
 mod tests {
     use super::*;
     use boxology_contract::BoxId;
+    use syn::parse::Parser as _;
 
     fn request(root: &str, files: &[(&str, &str)]) -> GenerationRequest {
         request_in_order(root, files, false)
@@ -1889,6 +1978,80 @@ mod tests {
     }
 
     #[test]
+    fn documentation_is_decoded_ordered_exact_and_uniform_with_deprecation() {
+        let source = concat!(
+            "/// declaration comment\n#[doc = \"escaped\\nline\"]\n#[r#doc = r#\" raw\\ntext \"#]\n",
+            "#[deprecated]\n#[boxology::contract]\nstruct Named {\n",
+            "#[doc = \" named \" ] #[deprecated(note = \"named note\")] named: u8,\n",
+            "#[doc = \"\"] plain: u16,\n}\n",
+            "#[doc = \"tuple\"] #[deprecated(note = \"tuple note\")] #[boxology::contract]\n",
+            "struct Tuple(#[doc = \"tuple\nfield\"] #[deprecated] u8, u16);\n",
+            "#[boxology::contract] struct Unit;\n",
+            "#[doc = \"enum\"] #[deprecated(note = \"enum note\")] #[boxology::contract(error)]\n",
+            "enum Event {\n#[doc = \"unit variant\"] #[deprecated] Unit,\n",
+            "#[doc = \"tuple variant\"] Tuple(#[r#doc = r##\" raw variant field \"##] #[deprecated(note = \"field note\")] u8),\n",
+            "#[doc = \"named variant\"] Named { #[doc = \"named variant\\nfield\"] value: u8 },\n}\n",
+        );
+        let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)])).unwrap();
+        let declarations = parsed.discover_contract_declarations().unwrap();
+        let [named, tuple, unit, event] = declarations.as_slice() else {
+            panic!()
+        };
+        assert_eq!(
+            named.metadata().docs(),
+            [" declaration comment", "escaped\nline", " raw\\ntext "]
+        );
+        assert_eq!(named.metadata().deprecation().unwrap().note(), None);
+        let ContractDeclarationShape::Struct(ContractFields::Named(fields)) = named.shape() else {
+            panic!()
+        };
+        assert_eq!(fields[0].metadata().docs(), [" named "]);
+        assert_eq!(
+            fields[0].metadata().deprecation().unwrap().note(),
+            Some("named note")
+        );
+        assert_eq!(fields[1].metadata().docs(), [""]);
+        let ContractDeclarationShape::Struct(ContractFields::Unnamed(fields)) = tuple.shape()
+        else {
+            panic!()
+        };
+        assert_eq!(tuple.metadata().docs(), ["tuple"]);
+        assert_eq!(
+            tuple.metadata().deprecation().unwrap().note(),
+            Some("tuple note")
+        );
+        assert_eq!(fields[0].metadata().docs(), ["tuple\nfield"]);
+        assert_eq!(fields[0].metadata().deprecation().unwrap().note(), None);
+        assert!(fields[1].metadata().docs().is_empty());
+        assert!(unit.metadata().docs().is_empty());
+        assert!(unit.metadata().deprecation().is_none());
+        let ContractDeclarationShape::Enum(variants) = event.shape() else {
+            panic!()
+        };
+        assert_eq!(event.metadata().docs(), ["enum"]);
+        assert_eq!(
+            event.metadata().deprecation().unwrap().note(),
+            Some("enum note")
+        );
+        assert_eq!(variants[0].metadata().docs(), ["unit variant"]);
+        assert_eq!(variants[0].metadata().deprecation().unwrap().note(), None);
+        assert_eq!(variants[1].metadata().docs(), ["tuple variant"]);
+        let ContractFields::Unnamed(fields) = variants[1].fields() else {
+            panic!()
+        };
+        assert_eq!(fields[0].metadata().docs(), [" raw variant field "]);
+        assert_eq!(
+            fields[0].metadata().deprecation().unwrap().note(),
+            Some("field note")
+        );
+        assert_eq!(variants[2].metadata().docs(), ["named variant"]);
+        let ContractFields::Named(fields) = variants[2].fields() else {
+            panic!()
+        };
+        assert_eq!(fields[0].metadata().docs(), ["named variant\nfield"]);
+    }
+
+    #[test]
     fn invalid_deprecations_are_exact_complete_repeatable_and_payload_safe() {
         let files = [
             ("root.rs", "mod z; mod a;\n"),
@@ -1989,7 +2152,7 @@ mod tests {
             &[
                 (
                     "root.rs",
-                    "#[deprecated(Private)] #[boxology::contract] struct S;",
+                    "#[doc] #[deprecated(Private)] #[boxology::contract] struct S;",
                 ),
                 ("broken.rs", "fn broken() { @ }"),
             ],
@@ -2010,19 +2173,20 @@ mod tests {
                     .all(|diagnostic| diagnostic.code() == code)
             );
             assert!(!diagnostics.to_string().contains("BXG0025"));
+            assert!(!diagnostics.to_string().contains("BXG0026"));
         };
         suppressed(
             "BXG0016",
             &[(
                 "root.rs",
-                "#[path = \"x.rs\"] mod x; #[deprecated(Private)] #[boxology::contract] struct S;",
+                "#[path = \"x.rs\"] mod x; #[doc] #[deprecated(Private)] #[boxology::contract] struct S;",
             )],
         );
         suppressed(
             "BXG0017",
             &[(
                 "root.rs",
-                "mod missing; #[deprecated(Private)] #[boxology::contract] struct S;",
+                "mod missing; #[doc] #[deprecated(Private)] #[boxology::contract] struct S;",
             )],
         );
         suppressed(
@@ -2030,7 +2194,7 @@ mod tests {
             &[
                 (
                     "root.rs",
-                    "mod both; #[deprecated(Private)] #[boxology::contract] struct S;",
+                    "mod both; #[doc] #[deprecated(Private)] #[boxology::contract] struct S;",
                 ),
                 ("both.rs", ""),
                 ("both/mod.rs", ""),
@@ -2042,7 +2206,7 @@ mod tests {
                 ("root.rs", ""),
                 (
                     "dead.rs",
-                    "#[deprecated(Private)] #[boxology::contract] struct S;",
+                    "#[doc] #[deprecated(Private)] #[boxology::contract] struct S;",
                 ),
             ],
         );
@@ -2050,37 +2214,169 @@ mod tests {
             "BXG0020",
             &[(
                 "root.rs",
-                "#[cfg(Private)] #[deprecated(Private)] #[boxology::contract] struct S;",
+                "#[cfg(Private)] #[doc] #[deprecated(Private)] #[boxology::contract] struct S;",
             )],
         );
         suppressed(
             "BXG0021",
             &[(
                 "root.rs",
-                "#[deprecated(Private)] #[boxology::contract] struct S; #[boxology::contract] enum S { A }",
+                "#[doc] #[deprecated(Private)] #[boxology::contract] struct S; #[boxology::contract] enum S { A }",
             )],
         );
         suppressed(
             "BXG0022",
             &[(
                 "root.rs",
-                "#[::deprecated(Private)] #[boxology::contract] struct S;",
+                "#[::deprecated(Private)] #[doc] #[boxology::contract] struct S;",
             )],
         );
         suppressed(
             "BXG0023",
             &[(
                 "root.rs",
-                "#[derive(Copy)] #[deprecated(Private)] #[boxology::contract] struct S;",
+                "#[derive(Copy)] #[doc] #[deprecated(Private)] #[boxology::contract] struct S;",
             )],
         );
         suppressed(
             "BXG0024",
             &[(
                 "root.rs",
-                "#[deprecated(Private)] #[boxology::contract(Private)] struct S;",
+                "#[doc] #[deprecated(Private)] #[boxology::contract(Private)] struct S;",
             )],
         );
+    }
+
+    #[test]
+    fn invalid_documentation_is_complete_exact_deterministic_and_payload_safe() {
+        let files = [
+            ("root.rs", "mod z; mod a;\n"),
+            (
+                "a.rs",
+                concat!(
+                    "#[doc]\n#[boxology::contract] struct PrivatePath;\n",
+                    "#[r#doc(PrivateRawList)]\n#[boxology::contract] struct PrivateList;\n",
+                    "#[boxology::contract] struct PrivateFields { #[doc = 7] number: u8 }\n",
+                ),
+            ),
+            (
+                "z.rs",
+                concat!(
+                    "#[boxology::contract] enum PrivateEvent {\n",
+                    "#[doc = concat!(\"PrivateMacro\")] Macro,\n",
+                    "#[doc = (\"PrivateParen\")] Tuple(u8),\n",
+                    "#[doc = PrivateComputed] Named { #[doc = { \"PrivateBlock\" }] value: u8 },\n}\n",
+                ),
+            ),
+        ];
+        let first = discovery_errors(&request_in_order("root.rs", &files, false));
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, false))
+        );
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, true))
+        );
+        assert_eq!(first.as_slice().len(), 7);
+        assert!(first.as_slice().windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(first.as_slice()[0].span(), span((1, 3), (1, 6)));
+        assert_eq!(first.as_slice()[1].span(), span((3, 3), (3, 8)));
+        for diagnostic in first.as_slice() {
+            assert_eq!(diagnostic.code(), "BXG0026");
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "invalid documentation attribute"
+            );
+            assert_eq!(diagnostic.rule(), DOCUMENTATION_RULE);
+            assert_eq!(diagnostic.rule_source(), DOCUMENTATION_RULE_SOURCE);
+        }
+        // Model `#[doc = #[PrivateExpr] "PrivateAttributed"]` with a direct attributed literal.
+        let mut direct = syn::Attribute::parse_outer
+            .parse_str("#[doc = \"template\"]")
+            .unwrap();
+        let syn::Meta::NameValue(value) = &mut direct[0].meta else {
+            panic!()
+        };
+        value.value = syn::parse_str("#[PrivateExpr] \"PrivateAttributed\"").unwrap();
+        assert!(matches!(
+            &value.value,
+            syn::Expr::Lit(syn::ExprLit { attrs, .. }) if attrs.len() == 1
+        ));
+        let mut direct_diagnostics = Vec::new();
+        validate_documentation(
+            &RelativePath("direct.rs".into()),
+            &direct,
+            &mut direct_diagnostics,
+        );
+        assert_eq!(direct_diagnostics.len(), 1);
+        assert_eq!(first.as_slice().len() + direct_diagnostics.len(), 8);
+        assert_eq!(direct_diagnostics[0].code(), "BXG0026");
+        assert_eq!(direct_diagnostics[0].span(), span((1, 3), (1, 6)));
+        let rendered = format!("{first}\n{first:?}\n{direct_diagnostics:?}");
+        for private in [
+            "PrivatePath",
+            "PrivateRawList",
+            "PrivateList",
+            "PrivateFields",
+            "PrivateEvent",
+            "PrivateMacro",
+            "PrivateParen",
+            "PrivateExpr",
+            "PrivateAttributed",
+            "PrivateComputed",
+            "PrivateBlock",
+            "concat",
+        ] {
+            assert!(!rendered.contains(private));
+        }
+        let parsed = ParsedRustInputs::parse(&request_in_order("root.rs", &files, false)).unwrap();
+        assert!(parsed.discover_contract_declarations().is_err());
+    }
+
+    #[test]
+    fn allowlist_and_deprecation_phase_suppress_documentation_validation() {
+        let qualified = discovery_errors(&request(
+            "root.rs",
+            &[(
+                "root.rs",
+                concat!(
+                    "#[::doc = \"PrivateQualified\"] #[boxology::contract] struct Qualified;\n",
+                    "#[alias::doc = \"PrivateAliased\"] #[boxology::contract] struct Aliased;\n",
+                ),
+            )],
+        ));
+        assert_eq!(qualified.as_slice().len(), 2);
+        assert!(
+            qualified
+                .as_slice()
+                .iter()
+                .all(|error| error.code() == "BXG0022")
+        );
+        let inner = syn::Attribute::parse_inner
+            .parse_str("#![doc = \"PrivateInner\"]")
+            .unwrap();
+        let mut inner_diagnostics = Vec::new();
+        validate_attributes(
+            &RelativePath("inner.rs".into()),
+            &inner,
+            &mut inner_diagnostics,
+        );
+        assert_eq!(inner_diagnostics[0].code(), "BXG0022");
+        let deprecation = discovery_errors(&request(
+            "root.rs",
+            &[(
+                "root.rs",
+                "#[deprecated(Private)] #[doc] #[boxology::contract] struct S;",
+            )],
+        ));
+        assert!(
+            deprecation
+                .as_slice()
+                .iter()
+                .all(|error| error.code() == "BXG0025")
+        );
+        assert!(!deprecation.to_string().contains("BXG0026"));
     }
 
     #[test]
