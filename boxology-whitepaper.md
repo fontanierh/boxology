@@ -18,7 +18,7 @@ Boxology is the platform: the box model, runtime, contract generator, validation
 
 Development bootstraps progressively. The Boxology foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
 
-The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It extracts one annotated Rust implementation method into a generated contract crate callable both as Rust code and through HTTP. A small, portable skill explains the Boxology principles to the developer's existing coding agent and names it the lead agent. Boxology does not yet supply that agent's harness, gateway, sandbox, persistence, or GitHub workflow. This milestone tests the box model and harness-neutral guidance, not multi-agent parallelism.
+The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It structurally extracts one annotated Rust implementation method, lets stable Rust resolve its boundary types in an isolated probe, and emits one generated contract crate callable both as Rust code and through HTTP. A small, portable skill explains the Boxology principles to the developer's existing coding agent and names it the lead agent. Boxology does not yet supply that agent's harness, gateway, sandbox, persistence, or GitHub workflow. This milestone tests the box model and harness-neutral guidance, not multi-agent parallelism.
 
 ## [Boxes](boxology-details/01-boxes.md)
 
@@ -60,7 +60,7 @@ Provider bindings are logically private to their boxes, even when infrastructure
 
 The runtime provides a standard way to define and invoke typed capabilities.
 
-Rust implementation methods become capabilities when annotated. A deterministic pre-Cargo generator derives the contract crate, typed handles, implementation-neutral dispatch interface, implementation-local adapter, metadata, test bindings, and language-neutral compatibility schema. Developers and agents do not maintain the generated crate manually.
+Rust implementation methods become capabilities when annotated. Before the normal application build, deterministic structural extraction plus an isolated stable-Rust compiler probe derives the contract crate, typed handles, implementation-neutral dispatch interface, implementation-local adapter, metadata, test bindings, and language-neutral compatibility schema. Developers and agents do not maintain the generated crate manually, and consumers still see one final generated boundary type.
 
 Rust source is the authoring authority while the generated schema is the compatibility authority. Exported types implement a constrained contract-type model, generated handles are asynchronous and distinguish domain errors from invocation failures, and every call carries explicit runtime context. The [canonical capability contract](boxology-details/09-capability-contract.md) defines the complete boundary.
 

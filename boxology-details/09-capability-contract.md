@@ -62,13 +62,13 @@ pub struct CreateUser {
 }
 ```
 
-Before Cargo builds, the generator reads the declaration and emits the real compiled type into the box's generated contract crate. In the implementation crate, the annotated source location resolves to a re-export of that generated type. There is therefore one compiled `CreateUser` type, owned by the contract crate, without asking developers to maintain it in a second file.
+Before the normal application build, the generator reads the declaration and emits the real compiled type into the box's generated contract crate. In the implementation crate, the annotated source location resolves to a re-export of that generated type. There is therefore one compiled `CreateUser` type, owned by the contract crate, without asking developers to maintain it in a second file.
 
-Because generation runs before Cargo type-checking, an exported declaration must be syntactically self-contained. Its contract shape cannot depend on a type alias to an unannotated type, macro-generated fields or variants, or `cfg` and target-dependent source. A contract that changes with the build target would create more than one compatibility authority and is rejected.
+Boxology combines structural extraction with a stable-Rust compiler probe. Rust therefore resolves ordinary imports, qualified paths, and type aliases before Boxology accepts the boundary semantics. A resolved type is accepted only when the generated assertions and metadata reporters prove that it belongs to the supported contract model. Target-dependent contract shape remains rejected because it would create more than one compatibility authority.
 
 The generator explicitly propagates only supported attributes and derives to the lifted type. An unknown attribute or derive is a generation error rather than something silently discarded. These restrictions apply to exported declarations, not to internal Rust code.
 
-Every exported type implements the platform's contract-type trait, referred to here as `ContractType`. Standard supported types receive platform implementations; user-defined boundary types receive generated implementations. A handwritten implementation that can misrepresent the wire shape is not part of the supported API.
+Every exported type satisfies the platform's contract metadata model, referred to here as `ContractType`. Standard supported types receive platform implementations; user-defined boundary types receive generated implementations and compiler-checked metadata. Whether manually implemented metadata traits may participate remains undecided.
 
 The supported type subset is intentionally smaller than Rust:
 

@@ -105,7 +105,8 @@ As previously revised (inline execution; advisory cancellation; expired-deadline
 ```text
 crates/fixtures/<name>/
   boxology.toml                       # manifest (inputs incl. itself + imported schemas, per S2)
-  authoring/                          # annotated source — parse-only data until S2's macros exist
+  authoring/                          # annotated source — probe-compilable only after S2's extraction
+                                      #   macros and compiler-probe support land
   implementation/
     src/…                             # un-annotated methods + one-line include stub:
                                       #   mod generated { include!("../../generated/adapter/adapter.rs"); }

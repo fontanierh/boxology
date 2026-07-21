@@ -105,7 +105,7 @@ At the end of project initialization, the developer has a small running applicat
 
 - One implementation method is annotated as a typed Hello World capability.
 - Its boundary types are authored beside the implementation and lifted into the generated contract crate.
-- A deterministic pre-Cargo step generates its language-neutral schema, contract crate, asynchronous typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
+- Before the normal application build, deterministic structural extraction plus an isolated stable-Rust compiler probe generates its language-neutral schema, one final contract type in the contract crate, asynchronous typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
 - The capability can be invoked directly through the Rust box interface.
 - The same capability can be invoked through an HTTP endpoint.
 - Both paths reach the same annotated implementation method through the generated contract rather than two handwritten interfaces or implementations.

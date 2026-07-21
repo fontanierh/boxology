@@ -35,7 +35,7 @@ Every annotated method receives an explicit `CallContext` and generated caller h
 
 ## Generated contract crate
 
-Each native box owns one generated contract crate in addition to its handwritten implementation crate. A deterministic platform generator runs before Cargo, reads annotated implementation methods, and produces the contract-safe Rust types, typed caller handles, implementation-neutral server-side dispatch interface, metadata, language-neutral schema, and programmable test bindings required by configured bindings and box tests.
+Each native box owns one generated contract crate in addition to its handwritten implementation crate. A deterministic platform generator structurally reads annotated implementation methods, uses an isolated stable-Rust compiler probe to resolve their boundary semantics, and produces the contract-safe Rust types, typed caller handles, implementation-neutral server-side dispatch interface, metadata, language-neutral schema, and programmable test bindings required by configured bindings and box tests.
 
 The contract crate never depends on the implementation. The generator emits separate box-local adapter code inside the implementation crate to connect annotated methods to the contract's dispatch interface; the composition performs the final binding. The generated outputs are checked into Git as declared, reproducible artifacts and are never edited manually. CI regenerates submitted outputs byte-for-byte from the box's permitted source inputs using the generator resolved by the workspace toolchain. Other boxes compile only against the generated contract, never against the providing box's implementation. See [Rust Build Topology](08-rust-build-topology.md).
 

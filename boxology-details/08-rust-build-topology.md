@@ -48,20 +48,28 @@ The exact macro spelling remains a tooling choice. No exported service trait, fi
 
 The necessary restriction is at the boundary: inputs, outputs, errors, and other values crossing an annotated method must implement the contract-type model and be representable by the language-neutral schema. The generator rejects a boundary it cannot express faithfully. Internal implementation types and organization remain unconstrained. The complete source model is defined in [Canonical Capability Contract](09-capability-contract.md).
 
-Developers author annotated boundary-type declarations beside the implementation. The pre-Cargo generator lifts each declaration into the generated contract crate, where the one real compiled type implements `ContractType`. The implementation-side annotation resolves to a re-export of that generated type. Consumers, the implementation adapter, and bindings therefore share one contract type without a second handwritten declaration.
+Developers author annotated boundary-type declarations beside the implementation. Boxology lifts each declaration into the generated contract crate, where the one final compiled type implements `ContractType`. The implementation-side annotation resolves to a re-export of that generated type. Consumers, the implementation adapter, and bindings therefore share one public contract type without a second handwritten declaration.
 
-Because this happens before Cargo type-checking, an exported declaration must be syntactically self-contained and target-independent. The generator rejects aliases to unannotated boundary types, macro-generated fields or variants, `cfg`-dependent contract shapes, and attributes or derives it cannot explicitly propagate. Structured errors use this same lifting path rather than a separate implementation-side derive model.
+Ordinary Rust spelling remains valid at the boundary. Qualified paths, imports, and type aliases are accepted when the compiler resolves them to the same supported contract semantics. The resolved type must still satisfy Boxology's contract metadata model; compiler resolution does not make an unsupported type exportable.
 
-## Generation before Cargo
+## Compiler-assisted generation
 
-Cargo determines its package graph before compiling a procedural macro, so annotation expansion alone cannot create a sibling contract crate in the same build. The platform therefore owns a deterministic generation step before Cargo runs:
+Procedural macros alone cannot create a sibling contract crate in the same Cargo build, while a source parser alone cannot reliably resolve Rust names and aliases. Boxology therefore combines a structural source pass with a temporary, stable-Rust compiler probe:
 
 ```text
 annotated implementation methods
--> platform contract generator
+-> structural source model
+-> compiler-resolved typed metadata
+-> deterministic contract emitter
 -> generated contract crate and schema
--> Cargo build
+-> normal Cargo build
 ```
+
+The structural pass owns module reachability, annotations, documentation, declared metadata, source identities and spans, and an explicitly ordered registry. From it, Boxology creates synthetic probe source containing only the required imports, aliases, boundary declarations, capability signatures, and typed reporters/assertions. Capability bodies are replaced or excluded; receiver construction and application/user runtime initialization are excluded. The probe neither links nor runs the author application, and reporter execution operates only on this projection. Rust resolves paths and aliases; the reporters normalize only supported contract semantics. Compile-time constant evaluation remains ordinary Rust and is not user runtime initialization.
+
+The probe runs on stable Rust. Boxology does not depend on `rustc_private`, nightly-only APIs, rustdoc JSON, `.rmeta` parsing, linker or inventory order, or build scripts that write checked-in outputs. Every probe or compiler failure maps through Boxology's source map to a stable coded diagnostic with path and span; no uncoded path exists. Raw compiler prose is excluded from canonical and machine-readable diagnostics unless explicitly normalized and redacted.
+
+Probe-local authoring types are temporary. The normal application build still sees one final generated contract type, re-exported into the implementation and consumed through the generated contract crate. The outer generator orchestration owns temporary files and Cargo execution; deterministic schema and code emission remains a pure transformation of explicit source and compiled-metadata inputs.
 
 The generated outputs include the material required by the selected bindings, including:
 
