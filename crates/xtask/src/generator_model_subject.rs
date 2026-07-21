@@ -327,6 +327,78 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         b"mod child; #[boxology::capability] fn PrivatePath() {} #[boxology::capability(PrivateList)] trait PrivateTrait {}\n",
         b"struct Hidden { #[::boxology::capability = \"PrivateValue\"] value: u8 }\n",
     )?.expect_err("fixed invalid capability placement must fail");
+    let capability_signatures = |reversed| -> Result<String, String> {
+        let mut files = vec![
+            input(
+                "boxology.toml",
+                b"schema = 1\nid = \"subject-box\"\nkind = \"box\"\n",
+            ),
+            input(
+                "calls/root.rs",
+                b"mod child; struct Root; impl Root { #[boxology::capability] pub async fn root(&self, request: PrivateRequest, context: PrivateContext) -> PrivateResponse { loop {} } }\n",
+            ),
+            input(
+                "calls/child.rs",
+                b"struct Child; impl Child { #[boxology::capability(PrivateMetadata)] async fn child(&self, request: [Private; 7], context: fn(Private)) -> impl PrivateOutput { loop {} } }\n",
+            ),
+        ];
+        if reversed {
+            files.reverse();
+        }
+        let case = GenerationRequest::new(id(), "calls/root.rs".into(), files, vec![], vec![])
+            .map_err(|error| format!("fixed capability-signature request failed: {error}"))?;
+        let parsed = ParsedRustInputs::parse(&case)
+            .map_err(|error| format!("fixed capability-signature inputs failed: {error}"))?;
+        let valid = parsed
+            .validate_capability_call_shapes()
+            .map_err(|error| format!("fixed valid capability signatures failed: {error}"))?
+            .into_iter()
+            .map(|item| {
+                format!(
+                    "{}|{:?}|{}|{:?}",
+                    item.method().sig.ident,
+                    item.module_path(),
+                    item.source().as_str(),
+                    item.identifier_span()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut invalid_files = vec![
+            input(
+                "boxology.toml",
+                b"schema = 1\nid = \"subject-box\"\nkind = \"box\"\n",
+            ),
+            input(
+                "calls/root.rs",
+                b"mod child; struct Root; impl Root { #[boxology::capability] fn invalid_root(&mut self) {} }\n",
+            ),
+            input(
+                "calls/child.rs",
+                b"struct Child; impl Child { #[boxology::capability] async fn invalid_child(self: &Self, request: Private, context: Private) {} }\n",
+            ),
+        ];
+        if reversed {
+            invalid_files.reverse();
+        }
+        let invalid_case =
+            GenerationRequest::new(id(), "calls/root.rs".into(), invalid_files, vec![], vec![])
+                .map_err(|error| {
+                    format!("fixed invalid capability-signature request failed: {error}")
+                })?;
+        let invalid_inputs = ParsedRustInputs::parse(&invalid_case).map_err(|error| {
+            format!("fixed invalid capability-signature inputs failed: {error}")
+        })?;
+        let invalid = match invalid_inputs.validate_capability_call_shapes() {
+            Ok(_) => return Err("fixed invalid call shapes unexpectedly passed".into()),
+            Err(diagnostics) => diagnostics,
+        };
+        Ok(format!("success\n{valid}\ninvalid\n{invalid}\n"))
+    };
+    let capability_signatures_forward = capability_signatures(false)?;
+    if capability_signatures_forward != capability_signatures(true)? {
+        return Err("capability signature result changed with input order".into());
+    }
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -512,6 +584,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{capability_projection}\ninvalid\n{capability_diagnostics}\n",),
     )
     .map_err(|error| format!("write capability-placement.txt: {error}"))?;
+    fs::write(
+        out.join("capability-signatures.txt"),
+        capability_signatures_forward,
+    )
+    .map_err(|error| format!("write capability-signatures.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
