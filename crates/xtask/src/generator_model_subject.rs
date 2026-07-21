@@ -77,7 +77,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         Ok(_) => return Err("fixed collision unexpectedly succeeded".into()),
         Err(diagnostics) => diagnostics,
     };
-    let attributes = |source: &[u8]| -> Result<_, String> {
+    let contracts = |source: &[u8], include_roles| -> Result<_, String> {
         let evaluate = |reversed| -> Result<_, String> {
             let mut files = vec![
                 input("boxology.toml", request.inputs()[0].bytes()),
@@ -93,15 +93,21 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
             Ok(parsed.discover_contract_declarations().map(|declarations| {
                 declarations
                     .iter()
-                    .map(|declaration| declaration.lifted_name())
+                    .map(|declaration| {
+                        if include_roles {
+                            format!("{}={:?}", declaration.lifted_name(), declaration.role())
+                        } else {
+                            declaration.lifted_name().to_owned()
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             }))
         };
         Ok([evaluate(false)?, evaluate(true)?])
     };
-    let valid_attributes = attributes(b"#[doc = \"allowed\"]\n#[deprecated(note = \"later\")]\n#[derive(Debug, Clone, PartialEq)]\n#[boxology::contract]\nstruct Allowed { #[boxology::field] value: u8 }\n")?;
-    let invalid_attributes = attributes(b"#[boxology::contract]\n#[PrivateAttribute(secret)]\nstruct Invalid { #[derive(PrivateDerive)] field: u8 }\n")?;
+    let valid_attributes = contracts(b"#[doc = \"allowed\"]\n#[deprecated(note = \"later\")]\n#[derive(Debug, Clone, PartialEq)]\n#[boxology::contract]\nstruct Allowed { #[boxology::field] value: u8 }\n", false)?;
+    let invalid_attributes = contracts(b"#[boxology::contract]\n#[PrivateAttribute(secret)]\nstruct Invalid { #[derive(PrivateDerive)] field: u8 }\n", false)?;
     if valid_attributes[0] != valid_attributes[1] || invalid_attributes[0] != invalid_attributes[1]
     {
         return Err("contract attribute result changed with input order".into());
@@ -112,6 +118,17 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let attribute_diagnostics = invalid_attributes[0]
         .as_ref()
         .expect_err("fixed invalid attributes must fail");
+    let valid_roles = contracts(b"#[boxology::contract]\nstruct Value;\n#[boxology::contract]\nenum Choice { A }\n#[boxology::contract(error)]\nenum Fault { A }\n", true)?;
+    let invalid_roles = contracts(b"#[boxology::contract(error)]\nstruct PrivateStruct;\n#[boxology::contract(PrivateMarker)]\nenum PrivateEnum { PrivateVariant }\n", true)?;
+    if valid_roles[0] != valid_roles[1] || invalid_roles[0] != invalid_roles[1] {
+        return Err("contract role result changed with input order".into());
+    }
+    let role_projection = valid_roles[0]
+        .as_ref()
+        .map_err(|error| format!("fixed valid roles failed: {error}"))?;
+    let role_diagnostics = invalid_roles[0]
+        .as_ref()
+        .expect_err("fixed invalid roles must fail");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -262,6 +279,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         ),
     )
     .map_err(|error| format!("write contract-attributes.txt: {error}"))?;
+    fs::write(
+        out.join("contract-roles.txt"),
+        format!("success\n{role_projection}\ninvalid\n{role_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write contract-roles.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
