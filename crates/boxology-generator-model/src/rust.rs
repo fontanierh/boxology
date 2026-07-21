@@ -1,5 +1,5 @@
 use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, RelativePath, Span};
-use boxology_contract::{ExposureLevel, Idempotency};
+use boxology_contract::{BoxId, CapabilityId, CapabilityName, ExposureLevel, Idempotency};
 use std::collections::BTreeSet;
 use syn::ext::IdentExt;
 use syn::visit::Visit;
@@ -39,9 +39,14 @@ const CAPABILITY_CALL_SHAPE_RULE: &str = "v0 capabilities must be async methods 
 const CAPABILITY_CALL_SHAPE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D8";
 const CAPABILITY_METADATA_RULE: &str = "capability metadata supports name, exposure, and idempotency with the v0 values declared by S2";
 const CAPABILITY_METADATA_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D3";
+const CAPABILITY_NAME_RULE: &str =
+    "capability local names must match [a-z][a-z0-9_]* after applying an optional name override";
+const CAPABILITY_IDENTITY_RULE: &str = "effective capability names must be unique within a box; the first declaration in deterministic declaration order owns the identity";
+const CAPABILITY_IDENTITY_RULE_SOURCE: &str = "specs/s2-contract-generator.md D4";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
+    box_id: BoxId,
     inputs: Vec<ParsedRustInput>,
     crate_root: usize,
 }
@@ -60,12 +65,13 @@ pub struct CapabilityDeclaration<'ast> {
     implementation: &'ast syn::ItemImpl,
     method: &'ast syn::ImplItemFn,
     marker_metadata: Option<CapabilityMarkerMetadata>,
+    identity: Option<CapabilityId>,
 }
 
 /// Validated owned metadata projected from one capability marker.
-#[derive(Debug, Eq, PartialEq)]
 pub struct CapabilityMarkerMetadata {
     name_override: Option<String>,
+    name_override_span: Option<Span>,
     max_exposure: ExposureLevel,
     idempotency: Idempotency,
 }
@@ -113,6 +119,13 @@ impl<'ast> CapabilityDeclaration<'ast> {
             .as_ref()
             .expect("validated capability marker metadata")
     }
+
+    /// Returns the identity after effective-name validation.
+    pub fn id(&self) -> &CapabilityId {
+        self.identity
+            .as_ref()
+            .expect("validated capability identity")
+    }
 }
 
 impl CapabilityMarkerMetadata {
@@ -125,6 +138,27 @@ impl CapabilityMarkerMetadata {
         idempotency: Idempotency = self.idempotency;
     }
 }
+
+impl std::fmt::Debug for CapabilityMarkerMetadata {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CapabilityMarkerMetadata")
+            .field("name_override", &self.name_override)
+            .field("max_exposure", &self.max_exposure)
+            .field("idempotency", &self.idempotency)
+            .finish()
+    }
+}
+
+impl PartialEq for CapabilityMarkerMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.name_override == other.name_override
+            && self.max_exposure == other.max_exposure
+            && self.idempotency == other.idempotency
+    }
+}
+
+impl Eq for CapabilityMarkerMetadata {}
 
 impl ContractSiteMetadata {
     model_getters! { self;
@@ -328,6 +362,7 @@ impl ParsedRustInputs {
         }
         if diagnostics.is_empty() {
             Ok(Self {
+                box_id: request.box_id().clone(),
                 inputs: parsed,
                 crate_root,
             })
@@ -542,6 +577,57 @@ impl ParsedRustInputs {
         }
         for (declaration, metadata) in declarations.iter_mut().zip(metadata) {
             declaration.marker_metadata = Some(metadata);
+        }
+        Ok(declarations)
+    }
+
+    /// Validates and projects box-qualified capability identities.
+    pub fn validate_capability_identities(
+        &self,
+    ) -> Result<Vec<CapabilityDeclaration<'_>>, Diagnostics> {
+        let mut declarations = self.validate_capability_marker_metadata()?;
+        let mut diagnostics = Vec::new();
+        let names = declarations
+            .iter()
+            .map(|declaration| {
+                let metadata = declaration.marker_metadata();
+                let (name, span) = metadata.name_override.as_ref().map_or_else(
+                    || {
+                        (
+                            declaration.method.sig.ident.unraw().to_string(),
+                            declaration.identifier_span,
+                        )
+                    },
+                    |name| (name.clone(), metadata.name_override_span.unwrap()),
+                );
+                CapabilityName::new(name).map_err(|_| {
+                    diagnostics.push(capability_identity_error(declaration, span, "BXG0034"));
+                })
+            })
+            .collect::<Vec<_>>();
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        let names = names.into_iter().map(Result::unwrap).collect::<Vec<_>>();
+        let mut seen = BTreeSet::new();
+        for (declaration, name) in declarations.iter().zip(&names) {
+            if !seen.insert(name.clone()) {
+                let span = declaration
+                    .marker_metadata()
+                    .name_override_span
+                    .unwrap_or(declaration.identifier_span);
+                diagnostics.push(capability_identity_error(declaration, span, "BXG0035"));
+            }
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        for (declaration, name) in declarations.iter_mut().zip(names) {
+            declaration.identity = Some(CapabilityId::new(self.box_id.clone(), name));
         }
         Ok(declarations)
     }
@@ -926,6 +1012,7 @@ fn parse_capability_metadata(
     let marker = markers[0];
     let mut draft = CapabilityMarkerMetadata {
         name_override: None,
+        name_override_span: None,
         max_exposure: ExposureLevel::CodeOnly,
         idempotency: Idempotency::None,
     };
@@ -984,6 +1071,7 @@ fn parse_capability_metadata(
         match (key_name.as_str(), literal.value().as_str()) {
             ("name", _) => {
                 draft.name_override = Some(literal.value());
+                draft.name_override_span = Some(source_span(literal.span()));
             }
             ("exposure", "code-only") => draft.max_exposure = ExposureLevel::CodeOnly,
             ("exposure", "internal") => draft.max_exposure = ExposureLevel::Internal,
@@ -1000,6 +1088,28 @@ fn parse_capability_metadata(
         }
     }
     draft
+}
+
+fn capability_identity_error(
+    declaration: &CapabilityDeclaration<'_>,
+    span: Span,
+    code: &'static str,
+) -> Diagnostic {
+    let (offending, rule) = match code {
+        "BXG0034" => ("invalid effective capability name", CAPABILITY_NAME_RULE),
+        _ => (
+            "duplicate effective capability identity",
+            CAPABILITY_IDENTITY_RULE,
+        ),
+    };
+    Diagnostic {
+        path: declaration.source.clone(),
+        span,
+        code,
+        offending: offending.into(),
+        rule,
+        rule_source: CAPABILITY_IDENTITY_RULE_SOURCE,
+    }
 }
 
 fn invalid_capability_marker(
@@ -1071,6 +1181,7 @@ impl<'ast> Visit<'ast> for CapabilityCollector<'_, 'ast> {
                 implementation,
                 method,
                 marker_metadata: None,
+                identity: None,
             });
         }
         syn::visit::visit_impl_item_fn(self, method);
@@ -1935,6 +2046,14 @@ mod tests {
             .validate_capability_marker_metadata()
             .err()
             .expect("expected capability metadata diagnostics")
+    }
+
+    fn capability_identity_errors(request: &GenerationRequest) -> Diagnostics {
+        ParsedRustInputs::parse(request)
+            .unwrap()
+            .validate_capability_identities()
+            .err()
+            .expect("expected capability identity diagnostics")
     }
 
     fn assert_metadata_error(attributes: &str, code: &str, expected_span: &str) {
@@ -2802,6 +2921,35 @@ mod tests {
     }
 
     #[test]
+    fn capability_metadata_debug_and_equality_ignore_private_source_spans() {
+        let left_request = request(
+            "root.rs",
+            &[(
+                "root.rs",
+                "struct H; impl H { #[boxology::capability(name = \"same\", exposure = \"internal\")] async fn a(&self, x: A, y: B) -> R { loop {} } }",
+            )],
+        );
+        let right_request = request(
+            "root.rs",
+            &[(
+                "root.rs",
+                "struct H; impl H {              #[boxology::capability(name = \"same\", exposure = \"internal\")] async fn a(&self, x: A, y: B) -> R { loop {} } }",
+            )],
+        );
+        let left_parsed = ParsedRustInputs::parse(&left_request).unwrap();
+        let right_parsed = ParsedRustInputs::parse(&right_request).unwrap();
+        let left_declarations = left_parsed.validate_capability_marker_metadata().unwrap();
+        let right_declarations = right_parsed.validate_capability_marker_metadata().unwrap();
+        let left = left_declarations[0].marker_metadata();
+        let right = right_declarations[0].marker_metadata();
+        assert_ne!(left.name_override_span, right.name_override_span);
+        assert_eq!(left, right);
+        let debug = format!("{left:?}");
+        assert_eq!(debug, format!("{right:?}"));
+        assert!(!debug.contains("span") && !debug.contains("LineColumn"));
+    }
+
+    #[test]
     fn unsupported_metadata_is_staged_exactly() {
         for (entry, expected_span) in [
             ("idempotency = \"keyed\"", "\"keyed\""),
@@ -2841,6 +2989,140 @@ mod tests {
             );
             assert!(!diagnostics.to_string().contains("BXG0032"));
         }
+    }
+
+    #[test]
+    fn capability_identities_project_effective_qualified_names_and_retain_metadata() {
+        let files = [
+            (
+                "root.rs",
+                "mod child; struct A; impl A { #[boxology::capability] async fn greet(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"rescued\", exposure = \"external\", idempotency = \"inherent\")] async fn BadName(&self, a: A, b: B) -> R { loop {} } #[boxology::capability] async fn r#type(&self, a: A, b: B) -> R { loop {} } #[boxology::capability] async fn a0__(&self, a: A, b: B) -> R { loop {} } }",
+            ),
+            (
+                "child.rs",
+                "struct B; impl B { #[boxology::capability(name = \"child_name\")] async fn ignored(&self, a: A, b: B) -> R { loop {} } }",
+            ),
+        ];
+        let evaluate = |reversed| {
+            ParsedRustInputs::parse(&request_in_order("root.rs", &files, reversed))
+                .unwrap()
+                .validate_capability_identities()
+                .unwrap()
+                .iter()
+                .map(|item| {
+                    format!(
+                        "{}|{}|{:?}|{:?}|{:?}",
+                        item.id(),
+                        item.id().name(),
+                        item.marker_metadata().name_override(),
+                        item.marker_metadata().max_exposure(),
+                        item.marker_metadata().idempotency()
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = [
+            "demo.greet|greet|None|CodeOnly|None",
+            "demo.rescued|rescued|Some(\"rescued\")|External|Inherent",
+            "demo.type|type|None|CodeOnly|None",
+            "demo.a0__|a0__|None|CodeOnly|None",
+            "demo.child_name|child_name|Some(\"child_name\")|CodeOnly|None",
+        ];
+        assert_eq!(evaluate(false), expected);
+        assert_eq!(evaluate(true), expected);
+    }
+
+    #[test]
+    fn invalid_effective_names_are_complete_exact_ordered_and_payload_safe() {
+        let source = "struct H; impl H { #[boxology::capability] async fn BadName(&self, a: A, b: B) -> R { loop {} } #[boxology::capability] async fn _hidden(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"\")] async fn a(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"Upper\")] async fn b(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"bad-name\")] async fn c(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"DO_NOT_LEAK_\\u{e9}\")] async fn d(&self, a: A, b: B) -> R { loop {} } }";
+        let diagnostics = capability_identity_errors(&request("root.rs", &[("root.rs", source)]));
+        assert_eq!(diagnostics.as_slice().len(), 6);
+        for (diagnostic, expected) in diagnostics.as_slice().iter().zip([
+            "BadName",
+            "_hidden",
+            "\"\"",
+            "\"Upper\"",
+            "\"bad-name\"",
+            "\"DO_NOT_LEAK_\\u{e9}\"",
+        ]) {
+            assert_eq!(diagnostic.code(), "BXG0034");
+            let span = diagnostic.span();
+            assert_eq!(
+                &source[span.start().column() - 1..span.end().column() - 1],
+                expected
+            );
+            assert_eq!(diagnostic.rule_source(), CAPABILITY_IDENTITY_RULE_SOURCE);
+        }
+        let rendered = format!("{diagnostics}\n{diagnostics:?}");
+        assert!(!rendered.contains("DO_NOT_LEAK") && !rendered.contains("InvalidCapabilityName"));
+    }
+
+    #[test]
+    fn capability_identity_collisions_report_every_later_declaration_deterministically() {
+        let files = [
+            (
+                "root.rs",
+                "mod child; struct A; impl A { #[boxology::capability] async fn do_not_leak(&self, a: A, b: B) -> R { loop {} } } struct B; impl B { #[boxology::capability(name = \"do_not_leak\")] async fn second(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"do_not_leak\")] async fn third(&self, a: A, b: B) -> R { loop {} } }",
+            ),
+            (
+                "child.rs",
+                "struct C; impl C { #[boxology::capability] async fn do_not_leak(&self, a: A, b: B) -> R { loop {} } }",
+            ),
+        ];
+        let evaluate =
+            |reversed| capability_identity_errors(&request_in_order("root.rs", &files, reversed));
+        let diagnostics = evaluate(false);
+        assert_eq!(diagnostics, evaluate(true));
+        assert_eq!(diagnostics.as_slice().len(), 3);
+        for (diagnostic, (path, source, expected)) in diagnostics.as_slice().iter().zip([
+            ("child.rs", files[1].1, "do_not_leak"),
+            ("root.rs", files[0].1, "\"do_not_leak\""),
+            ("root.rs", files[0].1, "\"do_not_leak\""),
+        ]) {
+            assert_eq!(
+                (diagnostic.code(), diagnostic.path().as_str()),
+                ("BXG0035", path)
+            );
+            let span = diagnostic.span();
+            assert_eq!(
+                &source[span.start().column() - 1..span.end().column() - 1],
+                expected
+            );
+        }
+        assert!(!format!("{diagnostics}\n{diagnostics:?}").contains("do_not_leak"));
+    }
+
+    #[test]
+    fn capability_identity_predecessors_and_invalid_names_suppress_later_phases() {
+        for (source, code) in [
+            ("#[boxology::capability] fn free() {}", "BXG0030"),
+            (
+                "struct H; impl H { #[boxology::capability] fn sync(&self) {} }",
+                "BXG0031",
+            ),
+            (
+                "struct H; impl H { #[boxology::capability(exposure = \"bad\")] async fn a(&self, x: A, y: B) -> R { loop {} } }",
+                "BXG0032",
+            ),
+            (
+                "struct H; impl H { #[boxology::capability(idempotency = \"keyed\")] async fn a(&self, x: A, y: B) -> R { loop {} } }",
+                "BXG0033",
+            ),
+        ] {
+            let diagnostics =
+                capability_identity_errors(&request("root.rs", &[("root.rs", source)]));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|item| item.code() == code)
+            );
+        }
+        let source = "struct H; impl H { #[boxology::capability] async fn BadName(&self, x: A, y: B) -> R { loop {} } #[boxology::capability] async fn dup(&self, x: A, y: B) -> R { loop {} } #[boxology::capability(name = \"dup\")] async fn other(&self, x: A, y: B) -> R { loop {} } }";
+        let diagnostics = capability_identity_errors(&request("root.rs", &[("root.rs", source)]));
+        assert_eq!(diagnostics.as_slice().len(), 1);
+        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0034");
+        assert!(!diagnostics.to_string().contains("BXG0035"));
     }
 
     #[test]
