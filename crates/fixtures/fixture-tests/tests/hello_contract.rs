@@ -1,8 +1,216 @@
+use std::future::{Future, ready};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Waker};
+use std::time::{Duration, Instant};
+
 use boxology_contract::{
-    ContractError, ContractType, ContractValue, DecodeErrorKind, OpaquePayload, OpaqueTree,
-    PathSegment, SlotValue, ValueRef,
+    CallContext, CallError, Caller, CancelToken, CapabilityId, ContractError, ContractType,
+    ContractValue, Deadline, DecodeErrorKind, Detail, ErasedCallError, ErasedCallTarget,
+    IdempotencyKey, OpaquePayload, OpaqueTree, PathSegment, SlotValue, TraceContext, ValueRef,
 };
-use hello_contract::GreetError;
+use hello_contract::{GreetError, HelloDispatch, HelloHandle};
+
+struct ScriptedTarget {
+    response: Result<SlotValue, ErasedCallError>,
+    calls: Arc<AtomicUsize>,
+    expected_context: Option<CallContext>,
+}
+
+impl ErasedCallTarget for ScriptedTarget {
+    fn call<'a>(
+        &'a self,
+        capability: &'a CapabilityId,
+        context: CallContext,
+        input: SlotValue,
+    ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+        assert_eq!(capability.to_string(), "hello.greet");
+        assert_eq!(input, SlotValue::Value(ContractValue::string("Ada")));
+        if let Some(expected) = &self.expected_context {
+            assert_eq!(context.caller(), expected.caller());
+            assert_eq!(context.deadline(), expected.deadline());
+            assert_eq!(
+                context.cancellation().is_cancelled(),
+                expected.cancellation().is_cancelled()
+            );
+            assert_eq!(context.trace(), expected.trace());
+            assert_eq!(context.idempotency_key(), expected.idempotency_key());
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(ready(self.response.clone()))
+    }
+}
+
+struct DispatchProbe(&'static str);
+
+impl HelloDispatch for DispatchProbe {
+    fn greet<'a>(
+        &'a self,
+        _context: CallContext,
+        name: String,
+    ) -> Pin<Box<dyn Future<Output = Result<String, GreetError>> + Send + 'a>> {
+        Box::pin(async move { Ok(format!("{}, {name}!", self.0)) })
+    }
+}
+
+fn context() -> CallContext {
+    CallContext::new(
+        Caller::Anonymous,
+        None,
+        CancelToken::new(),
+        TraceContext::empty(),
+        None,
+    )
+}
+
+fn scripted(
+    response: Result<SlotValue, ErasedCallError>,
+    expected_context: Option<CallContext>,
+) -> (HelloHandle, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let target: Arc<dyn ErasedCallTarget> = Arc::new(ScriptedTarget {
+        response,
+        calls: Arc::clone(&calls),
+        expected_context,
+    });
+    (HelloHandle::from_erased(target), calls)
+}
+
+fn invoke(response: Result<SlotValue, ErasedCallError>) -> Result<String, CallError<GreetError>> {
+    let (handle, calls) = scripted(response, None);
+    let output = block_on(handle.greet(context(), "Ada".into()));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    output
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop {
+        if let Poll::Ready(output) = future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            return output;
+        }
+    }
+}
+
+#[test]
+fn generated_dispatch_and_handle_have_exact_thread_safe_shapes() {
+    fn assert_bounds<T: Send + Sync + 'static>() {}
+    fn assert_send<T: Send>(value: T) -> T {
+        value
+    }
+
+    assert_bounds::<HelloHandle>();
+    assert_bounds::<Arc<dyn HelloDispatch>>();
+    let dispatch: Arc<dyn HelloDispatch> = Arc::new(DispatchProbe("Hello"));
+    let future: Pin<Box<dyn Future<Output = Result<String, GreetError>> + Send + '_>> =
+        dispatch.greet(context(), "Ada".into());
+    assert_eq!(block_on(assert_send(future)), Ok("Hello, Ada!".into()));
+
+    let (handle, _) = scripted(Ok(SlotValue::Value(ContractValue::string("unused"))), None);
+    drop(assert_send(handle.greet(context(), "Ada".into())));
+}
+
+#[test]
+fn hello_handle_routes_success_and_preserves_the_complete_context() {
+    let deadline = Deadline::at(Instant::now() + Duration::from_secs(60));
+    let cancellation = CancelToken::new();
+    cancellation.cancel();
+    let context = CallContext::new(
+        Caller::System("fixture-test"),
+        Some(deadline),
+        cancellation.clone(),
+        TraceContext::new(Some("trace-parent".into()), Some("trace-state".into())),
+        Some(IdempotencyKey::new("operation-7").unwrap()),
+    );
+    let (handle, calls) = scripted(
+        Ok(SlotValue::Value(ContractValue::string("Hello, Ada!"))),
+        Some(context.clone()),
+    );
+
+    assert_eq!(
+        block_on(handle.greet(context, "Ada".into())),
+        Ok("Hello, Ada!".into())
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(cancellation.is_cancelled());
+}
+
+#[test]
+fn hello_handle_decodes_known_and_future_domain_errors() {
+    assert_eq!(
+        invoke(Err(ErasedCallError::Domain {
+            error_tag: "EmptyName".into(),
+            payload: SlotValue::Null,
+        })),
+        Err(CallError::Domain(GreetError::EmptyName))
+    );
+
+    const SECRET: &str = "future-error-secret";
+    let raw = ContractValue::object([("detail".into(), ContractValue::string(SECRET))]).unwrap();
+    let error = invoke(Err(ErasedCallError::Domain {
+        error_tag: "FutureError".into(),
+        payload: SlotValue::Value(raw),
+    }))
+    .unwrap_err();
+    let CallError::Domain(GreetError::Unknown { tag, payload }) = &error else {
+        panic!("future domain error did not remain a domain error")
+    };
+    let tree = OpaqueTree::Object(vec![("detail".into(), OpaqueTree::String(SECRET.into()))]);
+    assert_eq!(tag, "FutureError");
+    assert_eq!(payload.reveal(), &tree);
+    assert_eq!(payload.forward().reveal(), &tree);
+    let diagnostics = format!("{error:?} {error} {payload:?}");
+    assert!(diagnostics.contains("<redacted>"));
+    assert!(!diagnostics.contains(SECRET));
+}
+
+#[test]
+fn hello_handle_rejects_malformed_success_and_known_error_payload() {
+    assert!(matches!(
+        invoke(Ok(SlotValue::Null)),
+        Err(CallError::InvalidResponse(_))
+    ));
+
+    let Err(CallError::InvalidResponse(detail)) = invoke(Err(ErasedCallError::Domain {
+        error_tag: "EmptyName".into(),
+        payload: SlotValue::Value(ContractValue::string("unexpected")),
+    })) else {
+        panic!("malformed known domain payload was accepted")
+    };
+    assert_eq!(detail.code(), "domain_error_decode");
+}
+
+#[test]
+fn hello_handle_preserves_every_non_domain_error() {
+    let detail = Detail::new("preserved").with_message("exact");
+    let cases: [(ErasedCallError, CallError<GreetError>); 6] = [
+        (ErasedCallError::Deadline, CallError::Deadline),
+        (ErasedCallError::Cancelled, CallError::Cancelled),
+        (
+            ErasedCallError::Unavailable(detail.clone()),
+            CallError::Unavailable(detail.clone()),
+        ),
+        (
+            ErasedCallError::ContractViolation(detail.clone()),
+            CallError::ContractViolation(detail.clone()),
+        ),
+        (
+            ErasedCallError::InvalidResponse(detail.clone()),
+            CallError::InvalidResponse(detail),
+        ),
+        (
+            ErasedCallError::Internal(Detail::new("panic")),
+            CallError::Internal(Detail::new("panic")),
+        ),
+    ];
+    for (erased, expected) in cases {
+        assert_eq!(invoke(Err(erased)), Err(expected));
+    }
+}
 
 #[test]
 fn empty_name_has_exact_wire_shape_and_round_trips() {
