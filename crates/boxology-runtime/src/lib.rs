@@ -14,7 +14,8 @@ mod transport;
 pub use assembly::{AssemblyError, AssemblyErrors};
 pub use composition::{Composition, CompositionBuilder, ImportTarget};
 pub use transport::{
-    TransportBinding, TransportExposure, TransportHandle, TransportRuntime, TransportTaskTracker,
+    TransportBinding, TransportExposure, TransportHandle, TransportJoinFuture, TransportRuntime,
+    TransportTaskTracker,
 };
 
 use std::collections::BTreeMap;
@@ -314,6 +315,9 @@ mod tests {
         }
         fn abort_tasks(&self) {
             self.record("abort");
+        }
+        fn join_tasks(self: Box<Self>) -> TransportJoinFuture {
+            Box::pin(ready(Ok(())))
         }
     }
     impl ProbeHandle {
