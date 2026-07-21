@@ -6,8 +6,14 @@ owned = ["boxology.toml", "authoring/**", "implementation/**"]
 [quality]
 commands = [
     "cargo check -p hello-contract --all-features",
+    "cargo test -p hello-implementation",
     "cargo test -p boxology-fixture-tests",
 ]
+
+[[crates]]
+cargo_package = "hello-implementation"
+path = "implementation"
+role = "box-implementation"
 
 [[crates]]
 cargo_package = "hello-contract"

@@ -25,6 +25,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-generator-model",
     "boxology-http",
     "boxology-runtime",
+    "hello-implementation",
     "xtask",
 ];
 const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt", "hello-contract"];

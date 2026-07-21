@@ -170,6 +170,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hello-implementation"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "hello-contract",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
