@@ -1,38 +1,22 @@
 schema = 1
 
 [roles.spec]
-fallback_on = ["model_unavailable", "usage_exhausted"]
-
-[[roles.spec.candidates]]
-harness = "claude"
-model = "fable"
-effort = "xhigh"
-
 [[roles.spec.candidates]]
 harness = "codex"
 model = "gpt-5.6-sol"
 effort = "xhigh"
 
 [roles.implement]
-fallback_on = ["model_unavailable", "usage_exhausted"]
-
 [[roles.implement.candidates]]
 harness = "codex"
-model = "gpt-5.6-sol"
-effort = "high"
+model = "gpt-5.6-luna"
+effort = "max"
 
 [roles.review]
-fallback_on = ["model_unavailable", "usage_exhausted"]
-
-[[roles.review.candidates]]
-harness = "claude"
-model = "fable"
-effort = "high"
-
 [[roles.review.candidates]]
 harness = "codex"
 model = "gpt-5.6-sol"
-effort = "xhigh"
+effort = "high"
 
 [roles.repair]
 use = "implement"
