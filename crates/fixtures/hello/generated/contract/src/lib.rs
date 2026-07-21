@@ -127,3 +127,82 @@ impl ContractError for GreetError {
         }
     }
 }
+
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::future::{Future, ready};
+    use std::pin::Pin;
+    use std::sync::Arc;
+
+    use boxology_contract::{
+        CallContext, CapabilityId, ContractType, DecodeRole, Detail, ErasedCallError,
+        ErasedCallTarget, SlotValue, TypeDescriptor,
+    };
+
+    use super::{GreetError, HELLO_GREET, HelloHandle, conversion_detail};
+
+    type GreetFuture = Pin<Box<dyn Future<Output = Result<String, GreetError>> + Send + 'static>>;
+    type GreetResponder = dyn Fn(CallContext, String) -> GreetFuture + Send + Sync + 'static;
+
+    #[derive(Clone, Default)]
+    pub struct HelloFake {
+        greet: Option<Arc<GreetResponder>>,
+    }
+
+    impl HelloFake {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn with_greet<F, Fut>(mut self, responder: F) -> Self
+        where
+            F: Fn(CallContext, String) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<String, GreetError>> + Send + 'static,
+        {
+            self.greet = Some(Arc::new(move |context, name| {
+                Box::pin(responder(context, name))
+            }));
+            self
+        }
+
+        pub fn handle(&self) -> HelloHandle {
+            HelloHandle::from_erased(Arc::new(self.clone()))
+        }
+    }
+
+    impl ErasedCallTarget for HelloFake {
+        fn call<'a>(
+            &'a self,
+            capability: &'a CapabilityId,
+            context: CallContext,
+            input: SlotValue,
+        ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+            if capability != &*HELLO_GREET {
+                return Box::pin(ready(Err(unprogrammed())));
+            }
+            let Some(responder) = self.greet.clone() else {
+                return Box::pin(ready(Err(unprogrammed())));
+            };
+            Box::pin(async move {
+                let input = TypeDescriptor::string()
+                    .conform(DecodeRole::ProviderInput, input)
+                    .map_err(|error| {
+                        ErasedCallError::ContractViolation(conversion_detail("input_decode", error))
+                    })?;
+                let name = String::decode(&input).map_err(|error| {
+                    ErasedCallError::ContractViolation(conversion_detail("input_decode", error))
+                })?;
+                match responder(context, name).await {
+                    Ok(output) => output.encode().map_err(|error| {
+                        ErasedCallError::InvalidResponse(conversion_detail("output_encode", error))
+                    }),
+                    Err(error) => Err(ErasedCallError::from_domain(&error)),
+                }
+            })
+        }
+    }
+
+    fn unprogrammed() -> ErasedCallError {
+        ErasedCallError::Internal(Detail::new("unprogrammed_capability"))
+    }
+}

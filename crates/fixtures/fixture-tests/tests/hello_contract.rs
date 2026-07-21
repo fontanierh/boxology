@@ -10,6 +10,7 @@ use boxology_contract::{
     ContractValue, Deadline, DecodeErrorKind, Detail, ErasedCallError, ErasedCallTarget,
     IdempotencyKey, OpaquePayload, OpaqueTree, PathSegment, SlotValue, TraceContext, ValueRef,
 };
+use hello_contract::test_support::HelloFake;
 use hello_contract::{GreetError, HelloDispatch, HelloHandle};
 
 struct ScriptedTarget {
@@ -97,21 +98,28 @@ fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 #[test]
-fn generated_dispatch_and_handle_have_exact_thread_safe_shapes() {
+fn generated_dispatch_handle_and_fake_have_exact_thread_safe_shapes() {
     fn assert_bounds<T: Send + Sync + 'static>() {}
+    fn assert_clone_default<T: Clone + Default>() {}
     fn assert_send<T: Send>(value: T) -> T {
         value
     }
 
     assert_bounds::<HelloHandle>();
+    assert_bounds::<HelloFake>();
+    assert_clone_default::<HelloFake>();
     assert_bounds::<Arc<dyn HelloDispatch>>();
     let dispatch: Arc<dyn HelloDispatch> = Arc::new(DispatchProbe("Hello"));
     let future: Pin<Box<dyn Future<Output = Result<String, GreetError>> + Send + '_>> =
         dispatch.greet(context(), "Ada".into());
     assert_eq!(block_on(assert_send(future)), Ok("Hello, Ada!".into()));
 
-    let (handle, _) = scripted(Ok(SlotValue::Value(ContractValue::string("unused"))), None);
-    drop(assert_send(handle.greet(context(), "Ada".into())));
+    let fake = HelloFake::new().with_greet(|_, name| async move { Ok(name) });
+    let handle = fake.handle();
+    assert_eq!(
+        block_on(assert_send(handle.greet(context(), "Ada".into()))),
+        Ok("Ada".into())
+    );
 }
 
 #[test]
@@ -126,10 +134,27 @@ fn hello_handle_routes_success_and_preserves_the_complete_context() {
         TraceContext::new(Some("trace-parent".into()), Some("trace-state".into())),
         Some(IdempotencyKey::new("operation-7").unwrap()),
     );
-    let (handle, calls) = scripted(
-        Ok(SlotValue::Value(ContractValue::string("Hello, Ada!"))),
-        Some(context.clone()),
-    );
+    let expected = context.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = Arc::clone(&calls);
+    let fake = HelloFake::new().with_greet(move |actual, name| {
+        let expected = expected.clone();
+        let observed_calls = Arc::clone(&observed_calls);
+        async move {
+            assert_eq!(name, "Ada");
+            assert_eq!(actual.caller(), expected.caller());
+            assert_eq!(actual.deadline(), expected.deadline());
+            assert_eq!(
+                actual.cancellation().is_cancelled(),
+                expected.cancellation().is_cancelled()
+            );
+            assert_eq!(actual.trace(), expected.trace());
+            assert_eq!(actual.idempotency_key(), expected.idempotency_key());
+            observed_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(format!("Hello, {name}!"))
+        }
+    });
+    let handle = fake.handle();
 
     assert_eq!(
         block_on(handle.greet(context, "Ada".into())),
@@ -137,6 +162,30 @@ fn hello_handle_routes_success_and_preserves_the_complete_context() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(cancellation.is_cancelled());
+}
+
+#[test]
+fn hello_fake_round_trips_a_typed_domain_error() {
+    let fake = HelloFake::new().with_greet(|_, name| async move {
+        assert!(name.is_empty());
+        Err(GreetError::EmptyName)
+    });
+    let handle = fake.handle();
+
+    assert_eq!(
+        block_on(handle.greet(context(), String::new())),
+        Err(CallError::Domain(GreetError::EmptyName))
+    );
+}
+
+#[test]
+fn hello_fake_reports_the_exact_unprogrammed_capability_code() {
+    let handle = HelloFake::new().handle();
+    let Err(CallError::Internal(detail)) = block_on(handle.greet(context(), "Ada".into())) else {
+        panic!("unprogrammed fake did not return an internal call error")
+    };
+
+    assert_eq!(detail.code(), "unprogrammed_capability");
 }
 
 #[test]
