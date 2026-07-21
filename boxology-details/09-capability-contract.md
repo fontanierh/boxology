@@ -2,18 +2,18 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
-This document defines the canonical contract authored by a native Rust box. It fixes the relationship between annotated implementation code, the generated language-neutral schema, typed Rust handles, and transport or client bindings.
+This document defines the canonical contract authored by a native Rust box. It fixes the relationship between its controlled contract declaration, ordinary implementation code, generated language-neutral schema, typed Rust handles, and transport or client bindings.
 
 ## Two authorities, one source of human intent
 
-Rust implementation source is the **authoring authority**. Developers and agents annotate ordinary methods and boundary types beside the implementation they maintain. They do not maintain an exported service trait or a separate interface-definition file.
+The declaration-only Rust contract block is the **authoring authority**. Developers and agents keep it beside the ordinary implementation they maintain. They do not maintain an exported service trait or a separate interface-definition file.
 
 The deterministic generated schema is the **compatibility authority**. Contract diffing, binding validation, generated SDKs, and migration analysis consume the schema rather than interpreting the Rust syntax independently.
 
 The two roles are deliberately different:
 
 ```text
-annotated Rust implementation source
+controlled Rust contract block
 -> deterministic contract generator
 -> language-neutral contract schema
 -> generated Rust contract crate and configured bindings
@@ -23,62 +23,70 @@ The generated schema is derived and checked into Git. It is never an independent
 
 ## Authoring surface
 
-A capability is an annotated asynchronous implementation method. Conceptually:
+A box has one direct declaration-only contract block and one direct ordinary inherent implementation:
 
 ```rust
-/// Creates a customer account.
-#[boxology::capability(
-    name = "create_user",
-    auth = "customer",
-    idempotency = "none"
-)]
-async fn create_user(
-    &self,
-    context: CallContext,
-    input: CreateUser,
-) -> Result<User, CreateUserError> {
-    // business logic
+boxology::contract! {
+    #[error]
+    pub enum GreetError {
+        EmptyName,
+    }
+
+    #[capability(exposure = external)]
+    pub async fn greet(name: String) -> Result<String, GreetError>;
+}
+
+pub struct HelloService;
+
+#[boxology::implementation]
+impl HelloService {
+    async fn greet(
+        &self,
+        context: boxology::CallContext,
+        name: String,
+    ) -> Result<String, GreetError> {
+        // ordinary Rust body
+        todo!()
+    }
 }
 ```
 
-The exact macro spelling is a tooling choice, but the source model is fixed:
+The two signatures intentionally repeat. The declaration is the deterministic, language-neutral boundary; the inherent method is executable Rust. Generated assertions make rustc reject any mismatch.
 
-- The method itself is the implementation and export declaration.
+The v0 source model is fixed where listed and fail-closed elsewhere:
+
+- Every declared type, field, variant, and capability uses an ordinary non-raw Rust identifier. A struct is `pub struct Name { pub field: Type, ... }`; all fields are named and public. An enum is `pub enum Name` with unit, one-value, or named-field variants. `#[error]` has no arguments and marks an enum as an error.
+- A capability is `#[capability(...)] pub async fn name(input: Type) -> Result<Output, ErrorType>;`, has exactly one input, and names an in-block `#[error]` enum directly as `ErrorType`. Multiple logical inputs use a struct.
+- Context is implicit in the contract declaration. Its implementation receives `&self`, `boxology::CallContext`, then exactly the declared input.
 - The public capability name defaults to the Rust function name.
-- An explicit public name preserves the contract when the Rust function is renamed internally.
-- Rust documentation and declared authentication, idempotency, validation, deprecation, and interaction metadata flow into the generated schema and bindings.
-- Unannotated methods and types remain internal implementation details.
+- Capability arguments are unique, comma-separated, order-independent, and allow a trailing comma: `name = "[a-z][a-z0-9_]*"`, `exposure = code_only | internal | external`, and `idempotency = none | inherent`. No other key or value is admitted. An explicit name preserves the contract when the Rust function is renamed internally.
+- Exposure defaults to `code_only`; idempotency defaults to `none`.
+- Rust doc comments/direct string `#[doc = "..."]`, `#[deprecated]` or `#[deprecated(note = "...")]`, `#[error]`, and `#[capability(...)]` are the complete attribute set. No derive is admitted.
+- The implementation body and all code behind the boundary remain ordinary Rust and may use imports, aliases, qualified paths, macros, helpers, and private types.
 
-The runtime context is an explicit method parameter. It is recognized by the generator and is not part of the serialized input schema.
+The canonical leaf types are exactly `bool`, `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `String`, and `Blob`. Containers are `Option<T>`, `Vec<T>`, `BTreeMap<String, T>`, `Field<T>`, and `Secret<T>`, plus a supported in-block declared type. The grammar rejects aliases, imports, qualified paths, re-exports, references, lifetimes, arbitrary generics, associated types, `impl Trait`, `cfg`, user macros, and derives. These are authoring restrictions only, not restrictions on the implementation.
+
+V0 also rejects self-imports, `Keyed` idempotency, authentication or validation/default metadata, non-unary capabilities, and handwritten metadata implementations. `Field<T>` is legal only as a top-level capability input/output or a named struct field—not in lists, maps, enum payloads, or `Secret`. Presence may wrap `Secret<T>`; `Secret<T>` may not transitively contain `Option` or `Field`; nested presence wrappers are rejected.
+
+Duplicate type names, effective capability names, struct fields, and enum variants are reported in deterministic declaration order. The required capability-to-error-enum link is resolved over the complete block. Beyond that link, the target model includes local data-type references, but S1 does not decide forward-reference or recursive-type authoring. The architecture proof therefore fails closed on those references until its grammar task specifies and tests resolution order and recursion; no support is inferred here.
+
+The implementation site is one non-generic inherent impl for one concrete receiver. Capability methods are non-generic, have no `where` clause or `impl Trait`, and use exactly `&self`, `boxology::CallContext`, one input, and the declared result. The implementation macro rejects structural deviations before generated calls let rustc prove alias-resolved nominal type equality and required `Send` bounds. A signature that merely accepts `impl Into<Input>` is not equivalent.
 
 ## Boundary types and type lifting
 
-Developers author exported data types beside the implementation:
+Before the normal application build, the generator reads each declaration and emits the real compiled type into the box-specific generated package. The implementation names that package through the fixed Cargo dependency alias `boxology_generated_contract`. During normal compilation, the source macro imports the type rather than defining another one and requires the generated marker keyed by the shared parser's canonical semantic contract digest. There is therefore one compiled public definition, and stale generated output fails compilation. The author-facing `boxology` facade re-exports the macros and public kernel/runtime names such as `CallContext`; it is distinct from the lower-level `boxology-contract` crate.
 
-```rust
-#[boxology::contract]
-pub struct CreateUser {
-    pub email: String,
-}
-```
-
-Before the normal application build, the generator reads the declaration and emits the real compiled type into the box's generated contract crate. In the implementation crate, the annotated source location resolves to a re-export of that generated type. There is therefore one compiled `CreateUser` type, owned by the contract crate, without asking developers to maintain it in a second file.
-
-Boxology combines structural extraction with a stable-Rust compiler probe. Rust therefore resolves ordinary imports, qualified paths, and type aliases before Boxology accepts the boundary semantics. A resolved type is accepted only when the generated assertions and metadata reporters prove that it belongs to the supported contract model. Target-dependent contract shape remains rejected because it would create more than one compatibility authority.
-
-The generator explicitly propagates only supported attributes and derives to the lifted type. An unknown attribute or derive is a generation error rather than something silently discarded. These restrictions apply to exported declarations, not to internal Rust code.
-
-Every exported type satisfies the platform's contract metadata model, referred to here as `ContractType`. Standard supported types receive platform implementations; user-defined boundary types receive generated implementations and compiler-checked metadata. Whether manually implemented metadata traits may participate remains undecided.
+Every exported type satisfies the generated contract-type model, referred to here as `ContractType`. Standard supported types receive platform implementations; user-defined boundary types and their metadata implementations are generated. Handwritten implementations are not admitted in v0.
 
 The supported type subset is intentionally smaller than Rust:
 
-- Explicit-width scalar values and strings.
+- The explicit v0 leaves listed above.
 - Contract structs and enums.
 - `Option<T>`.
 - `Vec<T>`.
 - Maps with string keys and contract-safe values.
 - Structured contract error enums.
-- Dedicated contract types for binary data, streams, sensitive values, and other semantics that ordinary Rust system types cannot carry across bindings.
+- Dedicated `Blob`, `Field<T>`, and `Secret<T>` semantics.
 
 The generator rejects boundary types it cannot represent faithfully. Unsupported examples include borrowed values and lifetimes, platform-sized integers, arbitrary generics, trait objects, arbitrary `impl Trait`, and standard-library file or I/O handles. These restrictions apply only at exported boundaries; internal box code remains ordinary Rust.
 
@@ -113,10 +121,12 @@ Sensitive values use a contract-aware wrapper such as `Secret<String>`. That met
 An exported operation declares a structured domain error type:
 
 ```rust
-#[boxology::contract(error)]
-pub enum CreateUserError {
-    EmailAlreadyExists,
-    InvalidEmail { reason: String },
+boxology::contract! {
+    #[error]
+    pub enum CreateUserError {
+        EmailAlreadyExists,
+        InvalidEmail { reason: String },
+    }
 }
 ```
 

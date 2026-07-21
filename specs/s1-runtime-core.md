@@ -13,17 +13,17 @@ Every later stream consumes S1. It owns the descriptor ABI (S2 generates values,
 - No auth/realms/delegation (`Caller` placeholder pending #8/#9); no telemetry export; no providers; no generic CLI; no remote transports (S3).
 - Streaming shapes: **representable in descriptors, never authorable or executable in v0.** The shape enum carries reserved non-unary variants so S3 can prove conformance rejection against a synthetic descriptor; S2 rejects authoring them; the runtime rejects executing them.
 - No `Keyed` idempotency (descriptors admit `None | Inherent`; S2 rejects `Keyed` at generation).
-- No validation/default enforcement (S2 rejects those annotations fail-closed).
+- No validation/default enforcement (S2 rejects that contract metadata fail-closed).
 - No public-API stability promise: `0.x`, consumed from source.
 
 ## Decisions
 
-### D1 — Two crates; the invocation ABI lives in `boxology-contract`
+### D1 — Two kernel crates; the invocation ABI lives in `boxology-contract`
 
 - **`boxology-contract`**: value model, `ContractType`/`ContractError`, presence and opacity types, descriptor types, `CallContext`, `CallError`, `Deadline`, `CancelToken`, `TraceContext`, the erased dispatch ABI. No I/O, no server; one async-adjacent dependency (`tokio-util` for `CancellationToken`, recorded and replaceable).
 - **`boxology-runtime`**: composition builder, import resolution, exposure, validation, lifecycle, in-process binding, `TransportBinding`.
 
-Generated contract crates depend on `boxology-contract` only.
+S2 later adds an author-facing `boxology` facade that re-exports macros and public kernel/runtime authoring names, including `CallContext`; it owns no competing ABI. Generated contract crates still depend on `boxology-contract` only. Each implementation uses the facade and aliases its box-specific generated package to the fixed dependency name `boxology_generated_contract`.
 
 ### D2 — Value model: `ContractValue`, `SlotValue`, and presence at every position
 
@@ -105,10 +105,9 @@ As previously revised (inline execution; advisory cancellation; expired-deadline
 ```text
 crates/fixtures/<name>/
   boxology.toml                       # manifest (inputs incl. itself + imported schemas, per S2)
-  authoring/                          # annotated source — probe-compilable only after S2's extraction
-                                      #   macros and compiler-probe support land
   implementation/
-    src/…                             # un-annotated methods + one-line include stub:
+    src/…                             # contract macro + ordinary implementation methods
+                                      #   + one-line include stub:
                                       #   mod generated { include!("../../generated/adapter/adapter.rs"); }
   generated/
     contract/                         # hand-written generated-style crate: types, ContractType impls,
@@ -117,6 +116,8 @@ crates/fixtures/<name>/
                                       #   factory, Imports bundle, erased glue) — S2's byte-equal golden
     schema.json                       # hand-written golden schema (provenance placeholder token)
 ```
+
+The architecture-proof task atomically consolidates the current temporary `authoring/` source fixture into this implementation source and removes the duplicate handwritten method copy. Until that task lands, the repository fixture remains a hand-modeled S1 bootstrap rather than evidence that the final authoring topology already works.
 
 Fixtures: `hello`, `kitchen-sink` (full grammar incl. `f32` — settled in S2), and **`greeter`** — a two-box fixture whose `greeter` box imports `hello` and calls it through a resolved import, proving injection end to end. Golden evolution stays atomic per task PR; provenance normalization per S2's protocol.
 

@@ -32,7 +32,7 @@ This is a semantic rule rather than a literal one-directory rule. Boxes are the 
 
 The ownership model discussed was:
 
-- A box's handwritten implementation and annotated capability definitions are owned by that box.
+- A box's handwritten implementation and controlled contract block are owned by that box.
 - Its generated contract crate, schema, handles, and dispatch glue are reproducible artifacts attributable to that box.
 - Shared domain types require an explicit owning contract box rather than ownerless shared code.
 - Runtime, CI, and build tooling belong to platform packages.
@@ -117,5 +117,5 @@ The discussion did not settle:
 
 - The concrete serialization and implementation tooling for the common package manifest contract.
 - The precise granularity at which a large box should be divided.
-- The exact schema-safe contract type system and annotation syntax.
+- Post-v0 extensions to the fail-closed contract grammar.
 - The internal erased-dispatch implementation behind composition-selected typed handles.

@@ -103,12 +103,12 @@ Boxology makes no v0 promise about harness liveness, session persistence, frozen
 
 At the end of project initialization, the developer has a small running application that proves the central box abstraction:
 
-- One implementation method is annotated as a typed Hello World capability.
-- Its boundary types are authored beside the implementation and lifted into the generated contract crate.
-- Before the normal application build, deterministic structural extraction plus an isolated stable-Rust compiler probe generates its language-neutral schema, one final contract type in the contract crate, asynchronous typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
+- One small contract block declares a typed Hello World capability and its boundary error.
+- An ordinary inherent implementation method supplies its behavior.
+- Before the normal application build, deterministic parsing of the controlled contract grammar generates its language-neutral schema, sole compiled public boundary types, asynchronous typed handle, implementation-neutral dispatch interface, and implementation-local adapter without a second hand-maintained API.
 - The capability can be invoked directly through the Rust box interface.
 - The same capability can be invoked through an HTTP endpoint.
-- Both paths reach the same annotated implementation method through the generated contract rather than two handwritten interfaces or implementations.
+- Both paths reach the same implementation method through the generated contract rather than two handwritten interfaces or implementations.
 
 The generated handle uses the invocation envelope in [Canonical Capability Contract](09-capability-contract.md): an explicit call context, a declared domain error, and a distinct invocation-error layer even when the selected binding is in-process.
 
