@@ -1,10 +1,10 @@
 //! Composition registration, validation, and transport-aware start.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, future::Future, sync::Arc, task::Poll, time::Duration};
 
 use boxology_contract::{
-    BoxId, CapabilityDescriptor, CapabilityId, Detail, ErasedTarget, ExposureLevel,
-    ImplementationDescriptor,
+    BoxId, CapabilityDescriptor, CapabilityId, Detail, ErasedCallError, ErasedTarget,
+    ExposureLevel, ImplementationDescriptor,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -380,4 +380,286 @@ pub struct Composition {
     _handles: Vec<Box<dyn TransportHandle>>,
     _tracker: TransportTaskTracker,
     _activation: CancellationToken,
+}
+
+impl Composition {
+    /// Stops transport intake and drains, cancels, or aborts all tracked work.
+    pub async fn shutdown(mut self, drain_timeout: Duration) -> Result<(), ErasedCallError> {
+        for handle in self._handles.iter().rev() {
+            handle.stop_intake();
+        }
+        self._tracker.close();
+        if completes_within(&self._tracker, drain_timeout).await {
+            return Ok(());
+        }
+        for handle in self._handles.iter().rev() {
+            handle.cancel_tasks();
+        }
+        if completes_within(&self._tracker, drain_timeout).await {
+            return Ok(());
+        }
+        for handle in self._handles.iter().rev() {
+            handle.abort_tasks();
+        }
+        let handles = std::mem::take(&mut self._handles);
+        let mut first_failure = None;
+        for handle in handles.into_iter().rev() {
+            if let Err(detail) = handle.join_tasks().await
+                && first_failure.is_none()
+            {
+                first_failure = Some(detail);
+            }
+        }
+        let result = first_failure.map_or(Ok(()), |detail| Err(ErasedCallError::Internal(detail)));
+        drop(self);
+        result
+    }
+}
+
+async fn completes_within(tracker: &TransportTaskTracker, duration: Duration) -> bool {
+    let mut completion = Box::pin(tracker.wait());
+    let mut timeout = Box::pin(tokio::time::sleep(duration));
+    std::future::poll_fn(|context| {
+        if completion.as_mut().poll(context).is_ready() {
+            return Poll::Ready(true);
+        }
+        timeout.as_mut().poll(context).map(|()| false)
+    })
+    .await
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use crate::TransportJoinFuture;
+    use std::{future::pending, sync::Mutex};
+    use tokio::task::JoinHandle;
+    use tokio_util::task::task_tracker::TaskTrackerToken;
+
+    #[derive(Clone, Copy)]
+    enum Exit {
+        CancelAfter(Duration),
+        Never,
+    }
+
+    struct LifecycleHandle {
+        id: u8,
+        trace: Arc<Mutex<Vec<String>>>,
+        cancel: CancellationToken,
+        tokens: Mutex<Vec<TaskTrackerToken>>,
+        tasks: Vec<JoinHandle<Result<(), Detail>>>,
+    }
+
+    impl LifecycleHandle {
+        fn record(&self, phase: &str) {
+            self.trace
+                .lock()
+                .unwrap()
+                .push(format!("{phase}{}", self.id));
+        }
+    }
+
+    impl TransportHandle for LifecycleHandle {
+        fn stop_intake(&self) {
+            self.record("stop");
+        }
+
+        fn cancel_tasks(&self) {
+            self.record("cancel");
+            self.cancel.cancel();
+            self.tokens.lock().unwrap().clear();
+        }
+
+        fn abort_tasks(&self) {
+            self.record("abort");
+            for task in &self.tasks {
+                task.abort();
+            }
+        }
+
+        fn join_tasks(self: Box<Self>) -> TransportJoinFuture {
+            Box::pin(async move {
+                let mut first_failure = None;
+                for (index, task) in self.tasks.into_iter().enumerate() {
+                    let event = format!("join{}.{index}", self.id);
+                    self.trace.lock().unwrap().push(event.clone());
+                    let result = match task.await {
+                        Ok(result) => result,
+                        Err(_) => Err(Detail::new(event)),
+                    };
+                    if let Err(detail) = result
+                        && first_failure.is_none()
+                    {
+                        first_failure = Some(detail);
+                    }
+                }
+                first_failure.map_or(Ok(()), Err)
+            })
+        }
+    }
+
+    fn handle(
+        id: u8,
+        tracker: &TransportTaskTracker,
+        trace: &Arc<Mutex<Vec<String>>>,
+        exit: Option<Exit>,
+        task_count: usize,
+    ) -> LifecycleHandle {
+        let cancel = CancellationToken::new();
+        let tasks = (0..task_count)
+            .map(|_| {
+                let cancel = cancel.clone();
+                tracker.spawn(async move {
+                    match exit.expect("task requires an exit mode") {
+                        Exit::CancelAfter(delay) => {
+                            cancel.cancelled().await;
+                            tokio::time::sleep(delay).await;
+                            Ok(())
+                        }
+                        Exit::Never => pending().await,
+                    }
+                })
+            })
+            .collect();
+        LifecycleHandle {
+            id,
+            trace: trace.clone(),
+            cancel,
+            tokens: Mutex::new(Vec::new()),
+            tasks,
+        }
+    }
+
+    fn token_handle(
+        id: u8,
+        tracker: &TransportTaskTracker,
+        trace: &Arc<Mutex<Vec<String>>>,
+    ) -> LifecycleHandle {
+        let mut handle = handle(id, tracker, trace, None, 0);
+        handle.tokens = Mutex::new(vec![tracker.token()]);
+        handle
+    }
+
+    fn composition(tracker: &TransportTaskTracker, handles: Vec<LifecycleHandle>) -> Composition {
+        Composition {
+            _boxes: Vec::new(),
+            _bindings: Vec::new(),
+            _exposures: Vec::new(),
+            _handles: handles
+                .into_iter()
+                .map(|handle| Box::new(handle) as Box<dyn TransportHandle>)
+                .collect(),
+            _tracker: tracker.clone(),
+            _activation: CancellationToken::new(),
+        }
+    }
+
+    fn events(trace: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        trace.lock().unwrap().clone()
+    }
+
+    fn run_paused(future: impl Future<Output = ()>) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::pause();
+            future.await;
+        });
+    }
+
+    #[test]
+    fn immediate_drain_closes_tracker_stops_in_reverse_and_wins_zero_tie() {
+        run_paused(async {
+            let tracker = TransportTaskTracker::new();
+            let trace = Arc::new(Mutex::new(Vec::new()));
+            let handles = (1..=2)
+                .map(|id| handle(id, &tracker, &trace, None, 0))
+                .collect();
+
+            assert_eq!(
+                composition(&tracker, handles)
+                    .shutdown(Duration::ZERO)
+                    .await,
+                Ok(())
+            );
+            assert!(tracker.is_closed() && tracker.is_empty());
+            assert_eq!(events(&trace), ["stop2", "stop1"]);
+        });
+    }
+
+    #[test]
+    fn drain_timeout_cancels_in_reverse_then_uses_a_fresh_grace_window() {
+        run_paused(async {
+            let tracker = TransportTaskTracker::new();
+            let trace = Arc::new(Mutex::new(Vec::new()));
+            let handles = (1..=2)
+                .map(|id| {
+                    handle(
+                        id,
+                        &tracker,
+                        &trace,
+                        Some(Exit::CancelAfter(Duration::from_secs(4))),
+                        1,
+                    )
+                })
+                .collect();
+
+            assert_eq!(
+                composition(&tracker, handles)
+                    .shutdown(Duration::from_secs(5))
+                    .await,
+                Ok(())
+            );
+            assert!(tracker.is_empty());
+            assert_eq!(events(&trace), ["stop2", "stop1", "cancel2", "cancel1"]);
+        });
+    }
+
+    #[test]
+    fn grace_completion_wins_a_same_poll_zero_timeout_tie() {
+        run_paused(async {
+            let tracker = TransportTaskTracker::new();
+            let trace = Arc::new(Mutex::new(Vec::new()));
+            let handles = (1..=2)
+                .map(|id| token_handle(id, &tracker, &trace))
+                .collect();
+
+            assert_eq!(
+                composition(&tracker, handles)
+                    .shutdown(Duration::ZERO)
+                    .await,
+                Ok(())
+            );
+            assert!(tracker.is_empty());
+            assert_eq!(events(&trace), ["stop2", "stop1", "cancel2", "cancel1"]);
+        });
+    }
+
+    #[test]
+    fn forced_cleanup_aborts_globally_then_joins_every_task_in_reverse() {
+        run_paused(async {
+            let tracker = TransportTaskTracker::new();
+            let trace = Arc::new(Mutex::new(Vec::new()));
+            let handles = [(1, 1), (2, 1), (3, 2)]
+                .into_iter()
+                .map(|(id, count)| handle(id, &tracker, &trace, Some(Exit::Never), count))
+                .collect();
+
+            let error = composition(&tracker, handles)
+                .shutdown(Duration::ZERO)
+                .await
+                .unwrap_err();
+            assert_eq!(error, ErasedCallError::Internal(Detail::new("join3.0")));
+            assert!(tracker.is_closed() && tracker.is_empty());
+            assert_eq!(
+                events(&trace),
+                [
+                    "stop3", "stop2", "stop1", "cancel3", "cancel2", "cancel1", "abort3", "abort2",
+                    "abort1", "join3.0", "join3.1", "join2.0", "join1.0",
+                ]
+            );
+        });
+    }
 }

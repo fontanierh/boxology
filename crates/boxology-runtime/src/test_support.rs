@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::{TransportBinding, TransportHandle, TransportRuntime};
+use crate::{TransportBinding, TransportHandle, TransportJoinFuture, TransportRuntime};
 use boxology_contract::{CapabilityDescriptor, CapabilityShape, Detail, ExposureLevel};
 
 /// A unary-only transport binding that retains no wire or task behavior.
@@ -40,6 +40,9 @@ impl TransportHandle for StubTransportHandle {
     fn stop_intake(&self) {}
     fn cancel_tasks(&self) {}
     fn abort_tasks(&self) {}
+    fn join_tasks(self: Box<Self>) -> TransportJoinFuture {
+        Box::pin(std::future::ready(Ok(())))
+    }
 }
 impl TransportBinding for StubTransport {
     type Config = ();

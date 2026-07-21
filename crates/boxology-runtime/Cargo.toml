@@ -9,4 +9,8 @@ test-support = []
 
 [dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
+tokio = { version = "=1.53.0", default-features = false, features = ["time"] }
 tokio-util = { version = "0.7.18", default-features = false, features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "=1.53.0", default-features = false, features = ["rt", "test-util"] }

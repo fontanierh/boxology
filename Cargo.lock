@@ -33,6 +33,7 @@ name = "boxology-runtime"
 version = "0.0.0"
 dependencies = [
  "boxology-contract",
+ "tokio",
  "tokio-util",
 ]
 

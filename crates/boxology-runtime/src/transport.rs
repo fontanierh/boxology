@@ -7,6 +7,8 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use tokio_util::sync::CancellationToken;
 /// The composition-owned task tracker shared with every transport binding.
 pub type TransportTaskTracker = tokio_util::task::TaskTracker;
+/// A payload-safe completion future for every task owned by one transport.
+pub type TransportJoinFuture = Pin<Box<dyn Future<Output = Result<(), Detail>> + Send + 'static>>;
 /// One capability exposed through a transport binding.
 #[derive(Clone)]
 pub struct TransportExposure {
@@ -133,6 +135,8 @@ pub trait TransportHandle: Send + Sync + 'static {
     fn cancel_tasks(&self);
     /// Aborts transport tasks that remain live.
     fn abort_tasks(&self);
+    /// Consumes the handle and joins every transport-owned task.
+    fn join_tasks(self: Box<Self>) -> TransportJoinFuture;
 }
 #[cfg(test)]
 mod tests {
@@ -196,6 +200,9 @@ mod tests {
         fn stop_intake(&self) {}
         fn cancel_tasks(&self) {}
         fn abort_tasks(&self) {}
+        fn join_tasks(self: Box<Self>) -> TransportJoinFuture {
+            Box::pin(ready(Ok(())))
+        }
     }
     impl TransportBinding for Binding {
         type Config = Config;
