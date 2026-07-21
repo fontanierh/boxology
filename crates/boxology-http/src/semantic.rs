@@ -1,8 +1,8 @@
 use std::{error::Error, fmt};
 
 use boxology_contract::{
-    ConformanceErrorKind, ContractValue, DecodeRole, DescriptorRef, OpaqueTree, SlotValue,
-    TypeDescriptor,
+    ConformanceErrorKind, ContractValue, DecodeRole, DescriptorRef, FieldDescriptor, OpaqueTree,
+    SlotValue, TypeDescriptor,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +57,7 @@ pub(crate) fn decode_tree(
     }
     let slot = match tree {
         OpaqueTree::Null => SlotValue::Null,
-        tree => SlotValue::Value(decode_value(tree, descriptor)?),
+        tree => SlotValue::Value(decode_value(tree, descriptor, role)?),
     };
     descriptor.conform(role, slot).map_err(|error| {
         let category = if matches!(error.kind(), ConformanceErrorKind::UnexpectedNull) {
@@ -87,6 +87,9 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
         | DescriptorRef::TriState(inner)
         | DescriptorRef::List(inner)
         | DescriptorRef::Map(inner) => is_supported(inner),
+        DescriptorRef::Struct(fields) => {
+            fields.iter().all(|field| is_supported(field.descriptor()))
+        }
         _ => false,
     }
 }
@@ -94,32 +97,52 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
 fn decode_value(
     tree: OpaqueTree,
     descriptor: &TypeDescriptor,
+    role: DecodeRole,
 ) -> Result<ContractValue, SemanticError> {
     if matches!(tree, OpaqueTree::Null) {
         return Ok(ContractValue::null());
     }
     match descriptor.view() {
         DescriptorRef::Optional(inner) | DescriptorRef::TriState(inner) => {
-            decode_value(tree, inner)
+            decode_value(tree, inner, role)
         }
-        DescriptorRef::List(inner) => decode_list(tree, inner),
-        DescriptorRef::Map(inner) => decode_map(tree, inner),
+        DescriptorRef::List(inner) => decode_list(tree, inner, role),
+        DescriptorRef::Map(inner) => decode_map(tree, inner, role),
+        DescriptorRef::Struct(fields) => decode_struct(tree, fields, role),
         _ => decode_scalar(tree, descriptor),
     }
 }
 
-fn decode_list(tree: OpaqueTree, element: &TypeDescriptor) -> Result<ContractValue, SemanticError> {
+fn decode_list(
+    tree: OpaqueTree,
+    element: &TypeDescriptor,
+    role: DecodeRole,
+) -> Result<ContractValue, SemanticError> {
     let OpaqueTree::List(items) = tree else {
         return failure(SemanticErrorCategory::RepresentationMismatch);
     };
     items
         .into_iter()
-        .map(|item| decode_value(item, element))
+        .map(|item| decode_value(item, element, role))
         .collect::<Result<Vec<_>, _>>()
         .map(ContractValue::list)
 }
 
-fn decode_map(tree: OpaqueTree, element: &TypeDescriptor) -> Result<ContractValue, SemanticError> {
+fn decode_map(
+    tree: OpaqueTree,
+    element: &TypeDescriptor,
+    role: DecodeRole,
+) -> Result<ContractValue, SemanticError> {
+    let entries = object_entries(tree)?;
+    let entries = entries
+        .into_iter()
+        .map(|(key, value)| decode_value(value, element, role).map(|value| (key, value)))
+        .collect::<Result<Vec<_>, _>>()?;
+    ContractValue::object(entries)
+        .map_err(|_| SemanticError(SemanticErrorCategory::DuplicateObjectKey))
+}
+
+fn object_entries(tree: OpaqueTree) -> Result<Vec<(String, OpaqueTree)>, SemanticError> {
     let OpaqueTree::Object(entries) = tree else {
         return failure(SemanticErrorCategory::RepresentationMismatch);
     };
@@ -128,11 +151,25 @@ fn decode_map(tree: OpaqueTree, element: &TypeDescriptor) -> Result<ContractValu
             return failure(SemanticErrorCategory::DuplicateObjectKey);
         }
     }
-    let entries = entries
-        .into_iter()
-        .map(|(key, value)| decode_value(value, element).map(|value| (key, value)))
-        .collect::<Result<Vec<_>, _>>()?;
-    ContractValue::object(entries)
+    Ok(entries)
+}
+
+fn decode_struct(
+    tree: OpaqueTree,
+    fields: &[FieldDescriptor],
+    role: DecodeRole,
+) -> Result<ContractValue, SemanticError> {
+    let mut output = Vec::new();
+    for (name, tree) in object_entries(tree)? {
+        let Some(field) = fields.iter().find(|field| field.name() == name) else {
+            if role == DecodeRole::ProviderInput {
+                return failure(SemanticErrorCategory::RepresentationMismatch);
+            }
+            continue;
+        };
+        output.push((name, decode_value(tree, field.descriptor(), role)?));
+    }
+    ContractValue::object(output)
         .map_err(|_| SemanticError(SemanticErrorCategory::DuplicateObjectKey))
 }
 
@@ -251,10 +288,7 @@ fn failure<T>(category: SemanticErrorCategory) -> Result<T, SemanticError> {
 mod tests {
     use super::SemanticErrorCategory as C;
     use super::*;
-    use boxology_contract::{
-        ContractValue as Value, FieldDescriptor, OpaqueNumber, ValueRef, VariantDescriptor,
-        VariantPayload,
-    };
+    use boxology_contract::{ContractValue as Value, FieldDescriptor, OpaqueNumber, ValueRef};
 
     const ROLES: [DecodeRole; 2] = [DecodeRole::ProviderInput, DecodeRole::ConsumerOutput];
     const SENTINEL: &str = "DO_NOT_LEAK";
@@ -279,15 +313,25 @@ mod tests {
         forbidden: Option<&str>,
     ) {
         for role in ROLES {
-            let error = decode_tree(tree.clone(), descriptor, role).unwrap_err();
-            assert_eq!(error.category(), category);
-            assert_eq!(error.to_string(), category.message());
-            if let Some(forbidden) = forbidden {
-                assert!(!format!("{error:?}").contains(forbidden));
-                assert!(!error.to_string().contains(forbidden));
-            }
-            assert!(error.source().is_none());
+            error_role(tree.clone(), descriptor, role, category, forbidden);
         }
+    }
+
+    fn error_role(
+        tree: OpaqueTree,
+        descriptor: &TypeDescriptor,
+        role: DecodeRole,
+        category: C,
+        forbidden: Option<&str>,
+    ) {
+        let error = decode_tree(tree, descriptor, role).unwrap_err();
+        assert_eq!(error.category(), category);
+        assert_eq!(error.to_string(), category.message());
+        if let Some(forbidden) = forbidden {
+            assert!(!format!("{error:?}").contains(forbidden));
+            assert!(!error.to_string().contains(forbidden));
+        }
+        assert!(error.source().is_none());
     }
 
     macro_rules! error_helper {
@@ -334,6 +378,23 @@ mod tests {
 
     fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
         Value::object(entries.into_iter().map(|(key, value)| (key.into(), value))).unwrap()
+    }
+
+    fn field(name: &str, descriptor: TypeDescriptor) -> FieldDescriptor {
+        FieldDescriptor::new(name, descriptor, None)
+    }
+
+    fn structure(fields: impl IntoIterator<Item = FieldDescriptor>) -> TypeDescriptor {
+        TypeDescriptor::structure(fields).unwrap()
+    }
+
+    fn tree(entries: impl IntoIterator<Item = (&'static str, OpaqueTree)>) -> OpaqueTree {
+        OpaqueTree::Object(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key.into(), value))
+                .collect(),
+        )
     }
 
     fn f32_both(token: &str, expected: f32) {
@@ -707,7 +768,202 @@ mod tests {
     }
 
     #[test]
+    fn structs_apply_presence_recursion_roles_and_input_order() {
+        let empty = structure([]);
+        assert!(is_supported(&empty));
+        ok_both(tree([]), &empty, object([]));
+        let nested = structure([field(
+            "items",
+            TypeDescriptor::list(TypeDescriptor::map(TypeDescriptor::bool()).unwrap()).unwrap(),
+        )]);
+        let optional = TypeDescriptor::optional(TypeDescriptor::string()).unwrap();
+        let tri = TypeDescriptor::tri_state(TypeDescriptor::string()).unwrap();
+        let descriptor = structure([
+            field("required", TypeDescriptor::i8()),
+            field("optional", optional),
+            field("tri", tri),
+            field("nested", nested),
+        ]);
+        let nested_tree = tree([(
+            "items",
+            OpaqueTree::List(vec![tree([("flag", OpaqueTree::Bool(true))])]),
+        )]);
+        let nested_value = object([(
+            "items",
+            Value::list([object([("flag", Value::bool(true))])]),
+        )]);
+        ok_both(
+            tree([
+                ("tri", OpaqueTree::Null),
+                ("nested", nested_tree),
+                ("required", number("7")),
+                ("optional", OpaqueTree::String("yes".into())),
+            ]),
+            &descriptor,
+            object([
+                ("tri", Value::null()),
+                ("nested", nested_value),
+                ("required", Value::i64(7)),
+                ("optional", Value::string("yes")),
+            ]),
+        );
+        null(OpaqueTree::Null, &descriptor, None);
+        for wrapped in [
+            TypeDescriptor::optional(descriptor.clone()).unwrap(),
+            TypeDescriptor::tri_state(descriptor.clone()).unwrap(),
+        ] {
+            slot_both(OpaqueTree::Null, &wrapped, SlotValue::Null);
+        }
+        representation(OpaqueTree::List(vec![]), &descriptor, None);
+        representation(tree([]), &descriptor, None);
+        null(
+            tree([
+                ("required", OpaqueTree::Null),
+                ("nested", tree([("items", OpaqueTree::List(vec![]))])),
+            ]),
+            &descriptor,
+            None,
+        );
+        null(
+            tree([
+                ("required", number("1")),
+                ("optional", OpaqueTree::Null),
+                ("nested", tree([("items", OpaqueTree::List(vec![]))])),
+            ]),
+            &descriptor,
+            None,
+        );
+        let optional = TypeDescriptor::optional(TypeDescriptor::bool()).unwrap();
+        let tri = TypeDescriptor::tri_state(TypeDescriptor::bool()).unwrap();
+        let presence = structure([field("optional", optional), field("tri", tri)]);
+        ok_both(tree([]), &presence, object([]));
+        ok_both(
+            tree([("tri", OpaqueTree::Null)]),
+            &presence,
+            object([("tri", Value::null())]),
+        );
+        ok_both(
+            tree([("tri", OpaqueTree::Bool(true))]),
+            &presence,
+            object([("tri", Value::bool(true))]),
+        );
+
+        let tolerant = structure([
+            field("first", TypeDescriptor::string()),
+            field("second", TypeDescriptor::string()),
+        ]);
+        let unknown = tree([
+            (SENTINEL, OpaqueTree::String(SENTINEL.into())),
+            (SENTINEL, number("128")),
+        ]);
+        let input = tree([
+            ("second", OpaqueTree::String("two".into())),
+            ("unknown", unknown.clone()),
+            ("first", OpaqueTree::String("one".into())),
+        ]);
+        error_role(
+            input.clone(),
+            &tolerant,
+            DecodeRole::ProviderInput,
+            C::RepresentationMismatch,
+            Some(SENTINEL),
+        );
+        let consumer = |input| decode_tree(input, &tolerant, DecodeRole::ConsumerOutput);
+        assert_eq!(
+            consumer(input.clone()),
+            Ok(SlotValue::Value(object([
+                ("second", Value::string("two")),
+                ("first", Value::string("one")),
+            ])))
+        );
+        assert_eq!(
+            consumer(input),
+            consumer(tree([
+                ("second", OpaqueTree::String("two".into())),
+                ("unknown", OpaqueTree::Null),
+                ("first", OpaqueTree::String("one".into())),
+            ]))
+        );
+
+        let recursive = TypeDescriptor::list(
+            TypeDescriptor::map(structure([field(
+                "known",
+                TypeDescriptor::optional(TypeDescriptor::bool()).unwrap(),
+            )]))
+            .unwrap(),
+        )
+        .unwrap();
+        let input = OpaqueTree::List(vec![tree([("key", tree([("unknown", unknown)]))])]);
+        error_role(
+            input.clone(),
+            &recursive,
+            DecodeRole::ProviderInput,
+            C::RepresentationMismatch,
+            Some(SENTINEL),
+        );
+        assert_eq!(
+            decode_tree(input, &recursive, DecodeRole::ConsumerOutput),
+            Ok(SlotValue::Value(Value::list([object([(
+                "key",
+                object([]),
+            )])])))
+        );
+    }
+
+    #[test]
+    fn struct_failures_follow_support_duplicate_and_supplied_entry_precedence() {
+        let descriptor = structure([
+            field("bad", TypeDescriptor::i8()),
+            field("missing", TypeDescriptor::bool()),
+        ]);
+        duplicate(
+            tree([
+                ("bad", number("128")),
+                (SENTINEL, OpaqueTree::Null),
+                (SENTINEL, OpaqueTree::String(SENTINEL.into())),
+            ]),
+            &descriptor,
+            Some(SENTINEL),
+        );
+        duplicate(
+            tree([("bad", number("128")), ("bad", OpaqueTree::Null)]),
+            &descriptor,
+            Some("128"),
+        );
+        error_both(
+            tree([("bad", number("128")), ("unknown", OpaqueTree::Null)]),
+            &descriptor,
+            C::IntegerRange,
+            Some("128"),
+        );
+        let unknown_first = tree([
+            ("unknown", OpaqueTree::String(SENTINEL.into())),
+            ("bad", number("128")),
+        ]);
+        error_role(
+            unknown_first.clone(),
+            &descriptor,
+            DecodeRole::ProviderInput,
+            C::RepresentationMismatch,
+            Some(SENTINEL),
+        );
+        error_role(
+            unknown_first,
+            &descriptor,
+            DecodeRole::ConsumerOutput,
+            C::IntegerRange,
+            Some("128"),
+        );
+        range(tree([("bad", number("128"))]), &descriptor, Some("128"));
+    }
+
+    #[test]
     fn recursive_support_inventory_is_complete_before_payload_inspection() {
+        let strings = TypeDescriptor::list(TypeDescriptor::string()).unwrap();
+        let structure = structure([
+            field("value", TypeDescriptor::bool()),
+            field("items", strings),
+        ]);
         let supported = [
             TypeDescriptor::optional(TypeDescriptor::i8()).unwrap(),
             TypeDescriptor::tri_state(TypeDescriptor::string()).unwrap(),
@@ -717,6 +973,8 @@ mod tests {
                 TypeDescriptor::map(TypeDescriptor::list(TypeDescriptor::bool()).unwrap()).unwrap(),
             )
             .unwrap(),
+            structure.clone(),
+            TypeDescriptor::map(TypeDescriptor::list(structure).unwrap()).unwrap(),
         ];
         assert!(supported.iter().all(is_supported));
         let unsupported =
@@ -727,8 +985,6 @@ mod tests {
 
     #[test]
     fn unsupported_descriptors_precede_payload_inspection() {
-        let field = FieldDescriptor::new("field", TypeDescriptor::bool(), None);
-        let variant = VariantDescriptor::new("variant", VariantPayload::Unit, None);
         let secret = TypeDescriptor::secret(TypeDescriptor::i8()).unwrap();
         let optional_secret = TypeDescriptor::optional(secret.clone()).unwrap();
         let secret_optional =
@@ -738,8 +994,27 @@ mod tests {
         let map_secret = TypeDescriptor::map(secret.clone()).unwrap();
         let deep_secret =
             TypeDescriptor::list(TypeDescriptor::map(optional_secret.clone()).unwrap()).unwrap();
-        let structure = TypeDescriptor::structure([field]).unwrap();
-        let enumeration = TypeDescriptor::enumeration([variant]).unwrap();
+        let structure = structure([field("field", optional_secret.clone())]);
+        let enumeration = TypeDescriptor::enumeration([boxology_contract::VariantDescriptor::new(
+            "variant",
+            boxology_contract::VariantPayload::Unit,
+            None,
+        )])
+        .unwrap();
+        unsupported(OpaqueTree::Null, &structure, None);
+        unsupported(
+            tree([
+                (SENTINEL, OpaqueTree::String(SENTINEL.into())),
+                (SENTINEL, OpaqueTree::Null),
+            ]),
+            &structure,
+            Some(SENTINEL),
+        );
+        unsupported(
+            tree([("field", OpaqueTree::String(SENTINEL.into()))]),
+            &structure,
+            Some(SENTINEL),
+        );
         unsupported(OpaqueTree::Null, &optional_secret, None);
         unsupported(OpaqueTree::Bool(true), &list_secret, None);
         unsupported(
@@ -767,6 +1042,9 @@ mod tests {
             TypeDescriptor::list(TypeDescriptor::blob()).unwrap(),
             structure.clone(),
             TypeDescriptor::map(structure).unwrap(),
+            TypeDescriptor::structure([field("event", enumeration.clone())]).unwrap(),
+            TypeDescriptor::map(enumeration.clone()).unwrap(),
+            TypeDescriptor::structure([field("blob", TypeDescriptor::blob())]).unwrap(),
             enumeration.clone(),
             TypeDescriptor::list(enumeration).unwrap(),
         ];
