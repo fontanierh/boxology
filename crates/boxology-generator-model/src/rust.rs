@@ -1,4 +1,5 @@
 use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, RelativePath, Span};
+use std::collections::BTreeSet;
 use syn::ext::IdentExt;
 
 const RULE: &str = "every declared .rs input must parse as a complete Rust file";
@@ -11,6 +12,8 @@ const AMBIGUOUS_RULE: &str =
 const UNREACHABLE_RULE: &str =
     "Boxology-annotated items must be reachable from the declared crate root";
 const CONDITIONAL_RULE: &str = "cfg and cfg_attr are forbidden on exported items, their fields or variants, surrounding impls, and ancestor module declarations";
+const COLLISION_RULE: &str = "contract type names must be unique in the flat lifted namespace";
+const COLLISION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2-D4";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -22,6 +25,51 @@ pub struct ParsedRustInputs {
 pub struct ParsedRustInput {
     path: RelativePath,
     syntax: syn::File,
+}
+
+/// A reachable module-scope contract struct or enum found by provisional declaration discovery.
+pub struct ContractDeclaration<'a> {
+    source: &'a RelativePath,
+    identifier_span: Span,
+    module_path: Vec<String>,
+    lifted_name: String,
+    syntax: ContractDeclarationSyntax<'a>,
+}
+
+/// The parsed syntax belonging to a discovered contract declaration.
+#[derive(Clone, Copy)]
+pub enum ContractDeclarationSyntax<'a> {
+    /// A contract struct declaration.
+    Struct(&'a syn::ItemStruct),
+    /// A contract enum declaration, including a provisionally recognized error enum.
+    Enum(&'a syn::ItemEnum),
+}
+
+impl ContractDeclaration<'_> {
+    /// Returns the declaration's exact logical source path.
+    pub fn source(&self) -> &RelativePath {
+        self.source
+    }
+
+    /// Returns the declaration identifier's one-based source span.
+    pub fn identifier_span(&self) -> Span {
+        self.identifier_span
+    }
+
+    /// Returns the canonical unraw module components, empty at the crate root.
+    pub fn module_path(&self) -> &[String] {
+        &self.module_path
+    }
+
+    /// Returns the owned declaration name in its unraw spelling.
+    pub fn lifted_name(&self) -> &str {
+        &self.lifted_name
+    }
+
+    /// Returns the declaration's parsed struct-or-enum syntax.
+    pub fn syntax(&self) -> ContractDeclarationSyntax<'_> {
+        self.syntax
+    }
 }
 
 impl ParsedRustInputs {
@@ -70,6 +118,66 @@ impl ParsedRustInputs {
     /// Returns parsed inputs in logical-path byte order.
     pub fn as_slice(&self) -> &[ParsedRustInput] {
         &self.inputs
+    }
+
+    /// Provisionally discovers reachable contract structs and enums and rejects lifted-name collisions.
+    ///
+    /// This phase intentionally ignores deferred placements and is not complete authoring-grammar
+    /// validation.
+    pub fn discover_contract_declarations(
+        &self,
+    ) -> Result<Vec<ContractDeclaration<'_>>, Diagnostics> {
+        self.resolve_reachable_inputs()?;
+        let root = &self.inputs[self.crate_root];
+        let module_dir = root
+            .path
+            .as_str()
+            .rsplit_once('/')
+            .map_or("", |pair| pair.0);
+        let mut visited = vec![false; self.inputs.len()];
+        visited[self.crate_root] = true;
+        let mut declarations = Vec::new();
+        self.collect_contract_declarations(
+            self.crate_root,
+            &root.syntax.items,
+            module_dir,
+            &mut Vec::new(),
+            &mut visited,
+            &mut declarations,
+        );
+        declarations.sort_by(|left, right| {
+            left.module_path
+                .cmp(&right.module_path)
+                .then_with(|| {
+                    left.source
+                        .as_str()
+                        .as_bytes()
+                        .cmp(right.source.as_str().as_bytes())
+                })
+                .then(left.identifier_span.cmp(&right.identifier_span))
+        });
+
+        let mut names = BTreeSet::new();
+        let mut diagnostics = Vec::new();
+        for declaration in &declarations {
+            if !names.insert(declaration.lifted_name.clone()) {
+                diagnostics.push(Diagnostic {
+                    path: declaration.source.clone(),
+                    span: declaration.identifier_span,
+                    code: "BXG0021",
+                    offending: "colliding lifted contract type name".into(),
+                    rule: COLLISION_RULE,
+                    rule_source: COLLISION_RULE_SOURCE,
+                });
+            }
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if diagnostics.is_empty() {
+            Ok(declarations)
+        } else {
+            Err(Diagnostics(diagnostics))
+        }
     }
 
     /// Validates default module lookup and returns unique reachable files in logical-path byte order.
@@ -205,6 +313,75 @@ impl ParsedRustInputs {
         self.inputs
             .binary_search_by(|input| input.path.as_str().as_bytes().cmp(path.as_bytes()))
             .ok()
+    }
+
+    fn collect_contract_declarations<'a>(
+        &'a self,
+        source: usize,
+        items: &'a [syn::Item],
+        module_dir: &str,
+        module_path: &mut Vec<String>,
+        visited: &mut [bool],
+        declarations: &mut Vec<ContractDeclaration<'a>>,
+    ) {
+        for item in items {
+            let declaration = match item {
+                syn::Item::Struct(item) if has_boxology(&item.attrs, "contract") => {
+                    Some((&item.ident, ContractDeclarationSyntax::Struct(item)))
+                }
+                syn::Item::Enum(item) if has_boxology(&item.attrs, "contract") => {
+                    Some((&item.ident, ContractDeclarationSyntax::Enum(item)))
+                }
+                _ => None,
+            };
+            if let Some((identifier, syntax)) = declaration {
+                declarations.push(ContractDeclaration {
+                    source: &self.inputs[source].path,
+                    identifier_span: source_span(identifier.span()),
+                    module_path: module_path.clone(),
+                    lifted_name: identifier.unraw().to_string(),
+                    syntax,
+                });
+            }
+
+            let syn::Item::Mod(module) = item else {
+                continue;
+            };
+            let name = module.ident.unraw().to_string();
+            let child_dir = if module_dir.is_empty() {
+                name.clone()
+            } else {
+                format!("{module_dir}/{name}")
+            };
+            module_path.push(name);
+            if let Some((_, items)) = &module.content {
+                self.collect_contract_declarations(
+                    source,
+                    items,
+                    &child_dir,
+                    module_path,
+                    visited,
+                    declarations,
+                );
+            } else {
+                let target = self
+                    .find(&format!("{child_dir}.rs"))
+                    .or_else(|| self.find(&format!("{child_dir}/mod.rs")))
+                    .expect("structural validation guarantees one outline target");
+                if !visited[target] {
+                    visited[target] = true;
+                    self.collect_contract_declarations(
+                        target,
+                        &self.inputs[target].syntax.items,
+                        &child_dir,
+                        module_path,
+                        visited,
+                        declarations,
+                    );
+                }
+            }
+            module_path.pop();
+        }
     }
 
     fn inspect_unreachable(
@@ -523,6 +700,14 @@ mod tests {
         }
     }
 
+    fn discovery_errors(request: &GenerationRequest) -> Diagnostics {
+        let parsed = ParsedRustInputs::parse(request).unwrap();
+        match parsed.discover_contract_declarations() {
+            Ok(_) => panic!("expected contract declaration diagnostics"),
+            Err(diagnostics) => diagnostics,
+        }
+    }
+
     fn span(start: (usize, usize), end: (usize, usize)) -> Span {
         Span {
             start: LineColumn {
@@ -707,6 +892,133 @@ mod tests {
         let valid = request("root.rs", &[("root.rs", source)]);
         let parsed = ParsedRustInputs::parse(&valid).unwrap();
         assert!(parsed.resolve_reachable_inputs().is_ok());
+    }
+
+    #[test]
+    fn provisional_discovery_is_canonical_and_ignores_deferred_placements_and_non_contract_leaves()
+    {
+        let files = [
+            (
+                "src/root.rs",
+                concat!(
+                    "#[boxology::contract]\nstruct Foo;\nmod alpha;\nmod r#inline {\n",
+                    "#[boxology::contract(error)]\nenum Fault { HiddenVariant }\n",
+                    "#[boxology::contract]\nstruct r#foo;\nstruct Plain;\n",
+                    "fn body() { #[boxology::contract] struct Local; }\n",
+                    "#[boxology::contract] fn misplaced() {}\n",
+                    "#[boxology::contract] type Alias = u8;\n",
+                    "#[boxology::contract] union Deferred { value: u8 }\n",
+                    "macro_rules! hidden { () => { #[boxology::contract] struct Macro; } }\n",
+                    "struct Host;\nimpl Host { #[boxology::capability] fn cap(&self) {} }\n}\n",
+                ),
+            ),
+            (
+                "src/alpha.rs",
+                "#[boxology::contract]\nenum Ordinary { Hidden }\nmod deep;\n",
+            ),
+            (
+                "src/alpha/deep/mod.rs",
+                "#[boxology::contract]\nstruct Deep;\n",
+            ),
+        ];
+        let project = |files: &[(&str, &str)]| {
+            let request = request("src/root.rs", files);
+            let parsed = ParsedRustInputs::parse(&request).unwrap();
+            parsed
+                .discover_contract_declarations()
+                .unwrap()
+                .into_iter()
+                .map(|declaration| {
+                    let (kind, syntax_name) = match declaration.syntax() {
+                        ContractDeclarationSyntax::Struct(item) => ("struct", item.ident.unraw()),
+                        ContractDeclarationSyntax::Enum(item) => ("enum", item.ident.unraw()),
+                    };
+                    assert_eq!(syntax_name, declaration.lifted_name());
+                    let span = declaration.identifier_span();
+                    format!(
+                        "{kind}|[{}]|{}|{}|{}:{}-{}:{}",
+                        declaration.module_path().join("::"),
+                        declaration.lifted_name(),
+                        declaration.source().as_str(),
+                        span.start().line(),
+                        span.start().column(),
+                        span.end().line(),
+                        span.end().column(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = project(&files);
+        let expected = [
+            "struct|[]|Foo|src/root.rs|2:8-2:11",
+            "enum|[alpha]|Ordinary|src/alpha.rs|2:6-2:14",
+            "struct|[alpha::deep]|Deep|src/alpha/deep/mod.rs|2:8-2:12",
+            "enum|[inline]|Fault|src/root.rs|6:6-6:11",
+            "struct|[inline]|foo|src/root.rs|8:8-8:13",
+        ];
+        assert_eq!(first, expected);
+        assert_eq!(first, project(&files.into_iter().rev().collect::<Vec<_>>()));
+    }
+
+    #[test]
+    fn raw_struct_and_enum_collisions_are_complete_repeatable_exact_and_payload_safe() {
+        let files = [
+            (
+                "root.rs",
+                "#[boxology::contract(root_payload)]\nstruct Foo { winner_field: u8 }\nmod a;\nmod z;\n",
+            ),
+            (
+                "a.rs",
+                "#[boxology::contract(loser_payload)]\nstruct r#Foo { loser_field: u8 }\n",
+            ),
+            (
+                "z.rs",
+                "#[boxology::contract(error)]\nenum Foo { SecretVariant }\n",
+            ),
+        ];
+        let first = discovery_errors(&request("root.rs", &files));
+        let reversed = files.into_iter().rev().collect::<Vec<_>>();
+        assert_eq!(first, discovery_errors(&request("root.rs", &reversed)));
+        assert_eq!(first.as_slice().len(), 2);
+        for (diagnostic, (path, expected_span)) in first.as_slice().iter().zip([
+            ("a.rs", span((2, 8), (2, 13))),
+            ("z.rs", span((2, 6), (2, 9))),
+        ]) {
+            assert_eq!(
+                (diagnostic.code(), diagnostic.path().as_str()),
+                ("BXG0021", path)
+            );
+            assert_eq!(diagnostic.span(), expected_span);
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "colliding lifted contract type name"
+            );
+            assert_eq!(diagnostic.rule(), COLLISION_RULE);
+            assert_eq!(diagnostic.rule_source(), COLLISION_RULE_SOURCE);
+        }
+        let rendered = first.to_string();
+        for sentinel in ["Foo", "payload", "field", "SecretVariant", "root.rs"] {
+            assert!(!rendered.contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn earlier_structural_and_conditional_phases_suppress_collisions() {
+        for (source, code) in [
+            (
+                "#[boxology::contract] struct Foo;\n#[boxology::contract] enum Foo { A }\nmod missing;",
+                "BXG0017",
+            ),
+            (
+                "#[cfg(secret)]\n#[boxology::contract] struct Foo;\n#[boxology::contract] enum Foo { A }",
+                "BXG0020",
+            ),
+        ] {
+            let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+            assert_eq!(diagnostics.as_slice().len(), 1);
+            assert_eq!(diagnostics.as_slice()[0].code(), code);
+            assert!(!diagnostics.to_string().contains("BXG0021"));
+        }
     }
 
     #[test]

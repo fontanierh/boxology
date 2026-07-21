@@ -1,9 +1,12 @@
 use boxology_contract::BoxId;
-use boxology_generator_model::{GenerationRequest, Manifest, ParsedRustInputs};
+use boxology_generator_model::{
+    ContractDeclarationSyntax, GenerationRequest, Manifest, ParsedRustInputs,
+};
 use std::{fs, path::Path};
 
 pub(crate) fn run(out: &Path) -> Result<(), String> {
     let id = || BoxId::new("subject-box").expect("fixed id is valid");
+    let input = |path: &str, bytes: &[u8]| (path.into(), bytes.to_vec());
     let request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -14,10 +17,10 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
             ),
             (
                 "source/custom-entry.rs".into(),
-                b"mod flat;\nmod inline { mod r#type; }\nfn custom_entry() {}\n".to_vec(),
+                b"#[boxology::contract]\nstruct Root;\nmod flat;\nmod inline { #[boxology::contract] struct Inner; mod r#type; }\nfn custom_entry() {}\n".to_vec(),
             ),
-            ("source/flat.rs".into(), b"fn flat() {}\n".to_vec()),
-            ("source/inline/type.rs".into(), b"struct Raw;\n".to_vec()),
+            ("source/flat.rs".into(), b"#[boxology::contract]\nenum Flat { A }\n".to_vec()),
+            ("source/inline/type.rs".into(), b"#[boxology::contract(error)]\nenum Raw { A }\n".to_vec()),
             ("source/unreachable.rs".into(), b"fn hidden() {}\n".to_vec()),
             ("src/z.rs".into(), b"fn z() {}\n".to_vec()),
             ("src/a.rs".into(), b"struct A;\nfn a() {}\n".to_vec()),
@@ -37,6 +40,43 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         .map(|input| input.path().as_str())
         .collect::<Vec<_>>()
         .join("\n");
+    let declaration_projection = rust_inputs
+        .discover_contract_declarations()
+        .map_err(|error| format!("fixed contract declarations failed: {error}"))?
+        .into_iter()
+        .map(|declaration| {
+            let kind = match declaration.syntax() {
+                ContractDeclarationSyntax::Struct(_) => "struct",
+                ContractDeclarationSyntax::Enum(_) => "enum",
+            };
+            format!(
+                "{kind} module={:?} name={} source={} span={:?}",
+                declaration.module_path(),
+                declaration.lifted_name(),
+                declaration.source().as_str(),
+                declaration.identifier_span()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let collision_request = GenerationRequest::new(
+        id(),
+        "c.rs".into(),
+        vec![
+            input("boxology.toml", request.inputs()[0].bytes()),
+            input("c.rs", b"#[boxology::contract] struct Clash;\nmod n;\n"),
+            input("n.rs", b"#[boxology::contract] enum r#Clash { A }\n"),
+        ],
+        vec![],
+        vec![],
+    )
+    .map_err(|error| format!("fixed collision request failed: {error}"))?;
+    let collision_inputs = ParsedRustInputs::parse(&collision_request)
+        .map_err(|error| format!("fixed collision inputs failed: {error}"))?;
+    let collision_diagnostics = match collision_inputs.discover_contract_declarations() {
+        Ok(_) => return Err("fixed collision unexpectedly succeeded".into()),
+        Err(diagnostics) => diagnostics,
+    };
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -95,7 +135,6 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         Ok(_) => return Err("fixed invalid module topology unexpectedly resolved".into()),
         Err(diagnostics) => diagnostics,
     };
-    let input = |path: &str, bytes: &[u8]| (path.into(), bytes.to_vec());
     let declaration_request = GenerationRequest::new(
         id(),
         "d/r.rs".into(),
@@ -175,6 +214,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("{declaration_diagnostics}\n"),
     )
     .map_err(|error| format!("write declaration-diagnostics.txt: {error}"))?;
+    fs::write(
+        out.join("contract-declarations.txt"),
+        format!("success\n{declaration_projection}\ncollision\n{collision_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write contract-declarations.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
