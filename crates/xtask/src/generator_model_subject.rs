@@ -129,6 +129,19 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let role_diagnostics = invalid_roles[0]
         .as_ref()
         .expect_err("fixed invalid roles must fail");
+    let valid_deprecations = contracts(b"#[deprecated]\n#[boxology::contract]\nstruct Value { #[deprecated(note = \"field\")] field: u8 }\n#[deprecated(note = \"type\")]\n#[boxology::contract]\nenum Event { #[deprecated] Unit, Named { #[deprecated(note = \"variant field\")] value: u8 } }\n", false)?;
+    let invalid_deprecations = contracts(b"#[deprecated(PrivateType)]\n#[boxology::contract]\nstruct Invalid { #[deprecated(note = PrivateField)] field: u8 }\n#[boxology::contract]\nenum InvalidEvent { #[deprecated(PrivateVariant)] Bad { #[deprecated(note = PrivateVariantField)] value: u8 } }\n", false)?;
+    if valid_deprecations[0] != valid_deprecations[1]
+        || invalid_deprecations[0] != invalid_deprecations[1]
+    {
+        return Err("contract deprecation result changed with input order".into());
+    }
+    let deprecation_projection = valid_deprecations[0]
+        .as_ref()
+        .map_err(|error| format!("fixed valid deprecations failed: {error}"))?;
+    let deprecation_diagnostics = invalid_deprecations[0]
+        .as_ref()
+        .expect_err("fixed invalid deprecations must fail");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -284,6 +297,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{role_projection}\ninvalid\n{role_diagnostics}\n"),
     )
     .map_err(|error| format!("write contract-roles.txt: {error}"))?;
+    fs::write(
+        out.join("contract-deprecations.txt"),
+        format!("success\n{deprecation_projection}\ninvalid\n{deprecation_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write contract-deprecations.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),

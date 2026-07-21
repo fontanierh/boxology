@@ -20,6 +20,8 @@ const DERIVE_RULE: &str =
 const CONTRACT_ROLE_RULE: &str =
     "contract declarations use #[boxology::contract]; only enums may use the single error marker";
 const CONTRACT_ROLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1-D4";
+const DEPRECATION_RULE: &str = "deprecation may appear at most once per exported type, field, or variant as #[deprecated] or #[deprecated(note = \"...\")]";
+const DEPRECATION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2,D5a";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -207,6 +209,14 @@ impl ParsedRustInputs {
         }
         for declaration in &mut declarations {
             validate_contract_role(declaration, &mut diagnostics);
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        for declaration in &declarations {
+            validate_contract_deprecations(declaration, &mut diagnostics);
         }
         diagnostics.sort();
         diagnostics.dedup();
@@ -738,6 +748,93 @@ fn contract_role_diagnostic(path: &RelativePath, attribute: &syn::Attribute) -> 
     }
 }
 
+fn validate_contract_deprecations(
+    declaration: &ContractDeclaration<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let path = declaration.source;
+    match declaration.syntax {
+        ContractDeclarationSyntax::Struct(item) => {
+            validate_deprecations(path, &item.attrs, diagnostics);
+            for field in &item.fields {
+                validate_deprecations(path, &field.attrs, diagnostics);
+            }
+        }
+        ContractDeclarationSyntax::Enum(item) => {
+            validate_deprecations(path, &item.attrs, diagnostics);
+            for variant in &item.variants {
+                validate_deprecations(path, &variant.attrs, diagnostics);
+                for field in &variant.fields {
+                    validate_deprecations(path, &field.attrs, diagnostics);
+                }
+            }
+        }
+    }
+}
+
+fn validate_deprecations(
+    path: &RelativePath,
+    attributes: &[syn::Attribute],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut deprecations = attributes.iter().filter(|attribute| {
+        matches!(attribute.style, syn::AttrStyle::Outer)
+            && attribute
+                .path()
+                .get_ident()
+                .is_some_and(|identifier| identifier.unraw() == "deprecated")
+    });
+    let Some(owner) = deprecations.next() else {
+        return;
+    };
+    if !valid_deprecation(owner) {
+        diagnostics.push(deprecation_diagnostic(path, owner));
+    }
+    diagnostics.extend(deprecations.map(|attribute| deprecation_diagnostic(path, attribute)));
+}
+
+fn valid_deprecation(attribute: &syn::Attribute) -> bool {
+    let syn::Meta::List(list) = &attribute.meta else {
+        return matches!(&attribute.meta, syn::Meta::Path(_));
+    };
+    let Ok(entries) = list.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+    ) else {
+        return false;
+    };
+    let Some(syn::Meta::NameValue(note)) = entries.first().filter(|_| entries.len() == 1) else {
+        return false;
+    };
+    note.path
+        .get_ident()
+        .is_some_and(|identifier| identifier.unraw() == "note")
+        && matches!(
+            &note.value,
+            syn::Expr::Lit(syn::ExprLit {
+                attrs,
+                lit: syn::Lit::Str(_),
+                ..
+            }) if attrs.is_empty()
+        )
+}
+
+fn deprecation_diagnostic(path: &RelativePath, attribute: &syn::Attribute) -> Diagnostic {
+    Diagnostic {
+        path: path.clone(),
+        span: source_span(
+            attribute
+                .path()
+                .get_ident()
+                .expect("deprecation validation owns direct attributes")
+                .span(),
+        ),
+        code: "BXG0025",
+        offending: "invalid or duplicate deprecation attribute".into(),
+        rule: DEPRECATION_RULE,
+        rule_source: DEPRECATION_RULE_SOURCE,
+    }
+}
+
 fn validate_attributes(
     path: &RelativePath,
     attributes: &[syn::Attribute],
@@ -1231,8 +1328,7 @@ mod tests {
     fn contract_attribute_allowlist_accepts_all_supported_sites_and_forms() {
         let source = concat!(
             "/// declaration docs\n#[doc = \"more docs\"]\n#[deprecated]\n",
-            "#[deprecated(note = \"later\")]\n#[derive(Debug, r#Clone)]\n",
-            "#[derive(PartialEq)]\n#[boxology::contract]\n",
+            "#[derive(Debug, r#Clone)]\n#[derive(PartialEq)]\n#[boxology::contract]\n",
             "struct Named { #[doc = \"field\"] #[derive(Clone)] named: u8 }\n",
             "#[::boxology::contract]\n",
             "struct Tuple(#[::boxology::field(anything)] #[deprecated(note = \"later\")] u8);\n",
@@ -1450,6 +1546,225 @@ mod tests {
             &[(
                 "root.rs",
                 "#[derive(Copy)] #[boxology::contract(private)] struct S;",
+            )],
+        );
+    }
+
+    #[test]
+    fn deprecations_accept_exact_forms_at_every_owned_site() {
+        let source = concat!(
+            "#[deprecated]\n#[boxology::contract]\n",
+            "struct Bare { #[deprecated(note = r#\"PrivateNamed\"#,)] named: u8 }\n",
+            "#[r#deprecated(r#note = r##\"PrivateRaw\"##,)]\n#[boxology::contract]\n",
+            "struct Tuple(#[deprecated] u8);\n",
+            "#[deprecated(note = \"PrivateEnum\")]\n#[boxology::contract(error)]\nenum Event {\n",
+            "#[deprecated] Unit,\n",
+            "#[deprecated(note = \"PrivateTupleVariant\")] Tuple(#[deprecated] u8),\n",
+            "Named { #[deprecated(note = \"PrivateNamedVariantField\")] value: u8 },\n}\n",
+            "#[deprecated(PrivateInternal)] struct Internal;\n",
+        );
+        let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)])).unwrap();
+        let declarations = parsed.discover_contract_declarations().unwrap();
+        assert_eq!(
+            declarations
+                .iter()
+                .map(ContractDeclaration::lifted_name)
+                .collect::<Vec<_>>(),
+            ["Bare", "Tuple", "Event"]
+        );
+    }
+
+    #[test]
+    fn invalid_deprecations_are_exact_complete_repeatable_and_payload_safe() {
+        let files = [
+            ("root.rs", "mod z; mod a;\n"),
+            (
+                "a.rs",
+                concat!(
+                    "#[deprecated()] #[boxology::contract] struct PrivateEmpty;\n",
+                    "#[deprecated(note)] #[boxology::contract] struct PrivateBareNote;\n",
+                    "#[deprecated = \"PrivateAssigned\"] #[boxology::contract] struct PrivateAssignment;\n",
+                    "#[deprecated(since = \"PrivateSince\")] #[boxology::contract] struct PrivateSinceType;\n",
+                    "#[deprecated(note = \"PrivateOne\", since = \"PrivateTwo\")] #[boxology::contract] struct PrivateMany;\n",
+                    "#[deprecated(note = \"PrivateOne\", note = \"PrivateTwo\")] #[boxology::contract] struct PrivateRepeated;\n",
+                ),
+            ),
+            (
+                "z.rs",
+                concat!(
+                    "#[deprecated(PrivatePath::note = \"PrivateQualified\")] #[boxology::contract] struct PrivateQualifiedType;\n",
+                    "#[deprecated(note::<PrivateType> = \"PrivateParameterized\")] #[boxology::contract] struct PrivateParameterizedType;\n",
+                    "#[deprecated(note = 7)] #[boxology::contract] struct PrivateNumber;\n",
+                    "#[deprecated(note = concat!(\"PrivateComputed\"))] #[boxology::contract] struct PrivateComputedType;\n",
+                    "#[deprecated(note = #[PrivateExprAttr] \"PrivateAttributed\")] #[boxology::contract] struct PrivateAttributedType;\n",
+                    "#[deprecated(note => \"PrivateMalformed\")] #[boxology::contract] struct PrivateMalformedType;\n",
+                    "#[deprecated(note)] #[deprecated(since = \"PrivateDuplicate\")] #[boxology::contract] struct PrivateDuplicateType;\n",
+                ),
+            ),
+        ];
+        let first = discovery_errors(&request_in_order("root.rs", &files, false));
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, false))
+        );
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, true))
+        );
+        let expected = [
+            ("a.rs", 1, 3),
+            ("a.rs", 2, 3),
+            ("a.rs", 3, 3),
+            ("a.rs", 4, 3),
+            ("a.rs", 5, 3),
+            ("a.rs", 6, 3),
+            ("z.rs", 1, 3),
+            ("z.rs", 2, 3),
+            ("z.rs", 3, 3),
+            ("z.rs", 4, 3),
+            ("z.rs", 5, 3),
+            ("z.rs", 6, 3),
+            ("z.rs", 7, 3),
+            ("z.rs", 7, 23),
+        ];
+        assert_eq!(first.as_slice().len(), expected.len());
+        for (diagnostic, (path, line, column)) in first.as_slice().iter().zip(expected) {
+            assert_eq!(
+                (diagnostic.code(), diagnostic.path().as_str()),
+                ("BXG0025", path)
+            );
+            assert_eq!(diagnostic.span(), span((line, column), (line, column + 10)));
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "invalid or duplicate deprecation attribute"
+            );
+            assert_eq!(diagnostic.rule(), DEPRECATION_RULE);
+            assert_eq!(diagnostic.rule_source(), DEPRECATION_RULE_SOURCE);
+        }
+        assert!(first.as_slice().windows(2).all(|pair| pair[0] <= pair[1]));
+        let rendered = format!("{first}\n{first:?}");
+        for private in [
+            "PrivateEmpty",
+            "PrivateBareNote",
+            "PrivateAssigned",
+            "PrivateAssignment",
+            "PrivateSince",
+            "PrivateOne",
+            "PrivateTwo",
+            "PrivateMany",
+            "PrivateRepeated",
+            "PrivatePath",
+            "PrivateQualified",
+            "PrivateType",
+            "PrivateParameterized",
+            "PrivateNumber",
+            "PrivateComputed",
+            "PrivateExprAttr",
+            "PrivateAttributed",
+            "PrivateMalformed",
+            "PrivateDuplicate",
+        ] {
+            assert!(!rendered.contains(private));
+        }
+    }
+
+    #[test]
+    fn every_earlier_phase_suppresses_deprecation_validation() {
+        let syntax = parse_errors(&request(
+            "root.rs",
+            &[
+                (
+                    "root.rs",
+                    "#[deprecated(Private)] #[boxology::contract] struct S;",
+                ),
+                ("broken.rs", "fn broken() { @ }"),
+            ],
+        ));
+        assert!(
+            syntax
+                .as_slice()
+                .iter()
+                .all(|diagnostic| diagnostic.code() == "BXG0014")
+        );
+
+        let suppressed = |code, files: &[(&str, &str)]| {
+            let diagnostics = discovery_errors(&request("root.rs", files));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|diagnostic| diagnostic.code() == code)
+            );
+            assert!(!diagnostics.to_string().contains("BXG0025"));
+        };
+        suppressed(
+            "BXG0016",
+            &[(
+                "root.rs",
+                "#[path = \"x.rs\"] mod x; #[deprecated(Private)] #[boxology::contract] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0017",
+            &[(
+                "root.rs",
+                "mod missing; #[deprecated(Private)] #[boxology::contract] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0018",
+            &[
+                (
+                    "root.rs",
+                    "mod both; #[deprecated(Private)] #[boxology::contract] struct S;",
+                ),
+                ("both.rs", ""),
+                ("both/mod.rs", ""),
+            ],
+        );
+        suppressed(
+            "BXG0019",
+            &[
+                ("root.rs", ""),
+                (
+                    "dead.rs",
+                    "#[deprecated(Private)] #[boxology::contract] struct S;",
+                ),
+            ],
+        );
+        suppressed(
+            "BXG0020",
+            &[(
+                "root.rs",
+                "#[cfg(Private)] #[deprecated(Private)] #[boxology::contract] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0021",
+            &[(
+                "root.rs",
+                "#[deprecated(Private)] #[boxology::contract] struct S; #[boxology::contract] enum S { A }",
+            )],
+        );
+        suppressed(
+            "BXG0022",
+            &[(
+                "root.rs",
+                "#[::deprecated(Private)] #[boxology::contract] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0023",
+            &[(
+                "root.rs",
+                "#[derive(Copy)] #[deprecated(Private)] #[boxology::contract] struct S;",
+            )],
+        );
+        suppressed(
+            "BXG0024",
+            &[(
+                "root.rs",
+                "#[deprecated(Private)] #[boxology::contract(Private)] struct S;",
             )],
         );
     }
