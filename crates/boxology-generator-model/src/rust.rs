@@ -24,6 +24,10 @@ const DEPRECATION_RULE: &str = "deprecation may appear at most once per exported
 const DEPRECATION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2,D5a";
 const DOCUMENTATION_RULE: &str = "documentation attributes must use #[doc = \"...\"] with a direct string literal and no expression attributes";
 const DOCUMENTATION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2";
+const FIELD_IDENTITY_RULE: &str =
+    "named field identities must be unique within each immediate contract field container";
+const VARIANT_IDENTITY_RULE: &str = "variant identities must be unique within each contract enum";
+const MEMBER_IDENTITY_RULE_SOURCE: &str = "specs/s2-contract-generator.md D4";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -358,6 +362,14 @@ impl ParsedRustInputs {
         }
         for declaration in &declarations {
             validate_contract_documentation(declaration, &mut diagnostics);
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        for declaration in &declarations {
+            validate_member_identities(declaration, &mut diagnostics);
         }
         diagnostics.sort();
         diagnostics.dedup();
@@ -941,6 +953,60 @@ fn validate_contract_documentation(
     }
 }
 
+fn validate_member_identities(
+    declaration: &ContractDeclaration<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match declaration.syntax {
+        ContractDeclarationSyntax::Struct(item) => {
+            validate_field_identities(declaration.source, &item.fields, diagnostics);
+        }
+        ContractDeclarationSyntax::Enum(item) => {
+            let mut variants = BTreeSet::new();
+            for variant in &item.variants {
+                if !variants.insert(member_identity_name(&variant.ident)) {
+                    diagnostics.push(Diagnostic {
+                        path: declaration.source.clone(),
+                        span: source_span(variant.ident.span()),
+                        code: "BXG0028",
+                        offending: "duplicate contract enum variant identity".into(),
+                        rule: VARIANT_IDENTITY_RULE,
+                        rule_source: MEMBER_IDENTITY_RULE_SOURCE,
+                    });
+                }
+                validate_field_identities(declaration.source, &variant.fields, diagnostics);
+            }
+        }
+    }
+}
+
+fn validate_field_identities(
+    path: &RelativePath,
+    fields: &syn::Fields,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let syn::Fields::Named(fields) = fields else {
+        return;
+    };
+    let mut identities = BTreeSet::new();
+    for field in &fields.named {
+        let identifier = field
+            .ident
+            .as_ref()
+            .expect("named fields always carry identifiers");
+        if !identities.insert(member_identity_name(identifier)) {
+            diagnostics.push(Diagnostic {
+                path: path.clone(),
+                span: source_span(identifier.span()),
+                code: "BXG0027",
+                offending: "duplicate named contract field identity".into(),
+                rule: FIELD_IDENTITY_RULE,
+                rule_source: MEMBER_IDENTITY_RULE_SOURCE,
+            });
+        }
+    }
+}
+
 fn project_declaration<'ast>(
     syntax: ContractDeclarationSyntax<'ast>,
 ) -> (ContractDeclarationShape<'ast>, ContractSiteMetadata) {
@@ -991,9 +1057,13 @@ fn project_fields<'ast>(fields: &'ast syn::Fields) -> ContractFields<'ast> {
 
 fn member_identity(identifier: &syn::Ident) -> ContractMemberIdentity<'_> {
     ContractMemberIdentity {
-        name: identifier.unraw().to_string(),
+        name: member_identity_name(identifier),
         ident: identifier,
     }
+}
+
+fn member_identity_name(identifier: &syn::Ident) -> String {
+    identifier.unraw().to_string()
 }
 
 fn project_metadata(attributes: &[syn::Attribute]) -> ContractSiteMetadata {
@@ -2525,6 +2595,193 @@ mod tests {
             assert_eq!(diagnostics.as_slice().len(), 1);
             assert_eq!(diagnostics.as_slice()[0].code(), code);
             assert!(!diagnostics.to_string().contains("BXG0021"));
+        }
+    }
+
+    #[test]
+    fn member_identity_namespaces_accept_distinct_and_provisional_shapes() {
+        let source = concat!(
+            "#[boxology::contract]\n",
+            "struct First { same: u8, Field: u8, field: u8, café: u8, 東京: u8 }\n",
+            "#[boxology::contract]\nstruct Second { same: u8 }\n",
+            "#[boxology::contract]\nstruct Tuple(u8, u16);\n",
+            "#[boxology::contract]\nstruct Unit;\n",
+            "#[boxology::contract(error)]\nenum Event {\n",
+            "same,\nField { same: u8, café: u8 },\n",
+            "field { same: u16, 東京: u8 },\nTuple(u8),\nUnit,\n}\n",
+        );
+        let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)])).unwrap();
+        let declarations = parsed.discover_contract_declarations().unwrap();
+        let [first, second, tuple, unit, event] = declarations.as_slice() else {
+            panic!()
+        };
+        let named = |declaration: &ContractDeclaration<'_>| {
+            let ContractDeclarationShape::Struct(ContractFields::Named(fields)) =
+                declaration.shape()
+            else {
+                panic!()
+            };
+            fields
+                .iter()
+                .map(|field| field.identity().unwrap().name().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(named(first), ["same", "Field", "field", "café", "東京"]);
+        assert_eq!(named(second), ["same"]);
+        assert!(matches!(
+            tuple.shape(),
+            ContractDeclarationShape::Struct(ContractFields::Unnamed(_))
+        ));
+        assert!(matches!(
+            unit.shape(),
+            ContractDeclarationShape::Struct(ContractFields::Unit)
+        ));
+        let ContractDeclarationShape::Enum(variants) = event.shape() else {
+            panic!()
+        };
+        assert_eq!(
+            variants
+                .iter()
+                .map(|variant| variant.identity().name())
+                .collect::<Vec<_>>(),
+            ["same", "Field", "field", "Tuple", "Unit"]
+        );
+        for variant in &variants[1..=2] {
+            let ContractFields::Named(fields) = variant.fields() else {
+                panic!()
+            };
+            assert_eq!(fields[0].identity().unwrap().name(), "same");
+        }
+    }
+
+    #[test]
+    fn duplicate_member_identities_use_raw_unspelled_source_order_and_exact_spans() {
+        let source = concat!(
+            "#[boxology::contract]\nstruct Duplicates {\n",
+            "name: u8,\nr#name: u8,\ntrio: u8,\ntrio: u8,\ntrio: u8,\n",
+            "café: u8,\ncafé: u8,\n}\n",
+            "#[boxology::contract]\nenum Events {\n",
+            "Variant,\nr#Variant,\nTrio,\nTrio,\nTrio,\n",
+            "Named {\nfield: u8,\nfield: u8,\n}\n}\n",
+        );
+        let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+        let expected = [
+            ("BXG0027", 4, 7),
+            ("BXG0027", 6, 5),
+            ("BXG0027", 7, 5),
+            ("BXG0027", 9, 5),
+            ("BXG0028", 14, 10),
+            ("BXG0028", 16, 5),
+            ("BXG0028", 17, 5),
+            ("BXG0027", 20, 6),
+        ];
+        assert_eq!(diagnostics.as_slice().len(), expected.len());
+        for (diagnostic, (code, line, end)) in diagnostics.as_slice().iter().zip(expected) {
+            assert_eq!(diagnostic.code(), code);
+            assert_eq!(diagnostic.span(), span((line, 1), (line, end)));
+            assert_eq!(diagnostic.rule_source(), MEMBER_IDENTITY_RULE_SOURCE);
+            if code == "BXG0027" {
+                assert_eq!(
+                    diagnostic.offending_construct(),
+                    "duplicate named contract field identity"
+                );
+                assert_eq!(diagnostic.rule(), FIELD_IDENTITY_RULE);
+            } else {
+                assert_eq!(
+                    diagnostic.offending_construct(),
+                    "duplicate contract enum variant identity"
+                );
+                assert_eq!(diagnostic.rule(), VARIANT_IDENTITY_RULE);
+            }
+        }
+        assert!(
+            diagnostics
+                .as_slice()
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+    }
+
+    #[test]
+    fn member_identity_findings_are_complete_deterministic_deduplicated_and_safe() {
+        let files = [
+            (
+                "root.rs",
+                "mod a; mod z;\n#[boxology::contract]\nstruct RootPayload {\nRootSecret: PrivateScalar,\nRootSecret: PrivateScalar,\n}\n",
+            ),
+            (
+                "a.rs",
+                "#[boxology::contract]\nenum EnvelopePayload {\nVariantSecret {\nFieldSecret: PrivateScalar,\nFieldSecret: PrivateScalar,\n},\nVariantSecret,\n}\n",
+            ),
+            (
+                "z.rs",
+                "#[boxology::contract]\nstruct UnicodePayload {\n東京秘密: PrivateScalar,\n東京秘密: PrivateScalar,\n}\n",
+            ),
+        ];
+        let canonical = request_in_order("root.rs", &files, false);
+        let first = discovery_errors(&canonical);
+        assert_eq!(first, discovery_errors(&canonical));
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, true))
+        );
+        assert_eq!(
+            first
+                .as_slice()
+                .iter()
+                .map(|diagnostic| (
+                    diagnostic.path().as_str(),
+                    diagnostic.span().start().line(),
+                    diagnostic.code(),
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("a.rs", 5, "BXG0027"),
+                ("a.rs", 7, "BXG0028"),
+                ("root.rs", 5, "BXG0027"),
+                ("z.rs", 4, "BXG0027"),
+            ]
+        );
+        assert!(first.as_slice().windows(2).all(|pair| pair[0] < pair[1]));
+        let parsed = ParsedRustInputs::parse(&canonical).unwrap();
+        assert!(parsed.discover_contract_declarations().is_err());
+        let rendered = format!("{first}\n{first:?}");
+        for private in [
+            "RootPayload",
+            "RootSecret",
+            "EnvelopePayload",
+            "VariantSecret",
+            "FieldSecret",
+            "UnicodePayload",
+            "東京秘密",
+            "PrivateScalar",
+        ] {
+            assert!(!rendered.contains(private));
+        }
+    }
+
+    #[test]
+    fn earlier_phases_suppress_member_identity_validation() {
+        for (source, code) in [
+            (
+                "#[Private]\n#[boxology::contract]\nstruct S { duplicate: u8, duplicate: u8 }\n#[boxology::contract]\nenum E { Duplicate, Duplicate }",
+                "BXG0022",
+            ),
+            (
+                "#[doc]\n#[boxology::contract]\nstruct S { duplicate: u8, duplicate: u8 }\n#[boxology::contract]\nenum E { Duplicate, Duplicate }",
+                "BXG0026",
+            ),
+        ] {
+            let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|diagnostic| diagnostic.code() == code)
+            );
+            let rendered = diagnostics.to_string();
+            assert!(!rendered.contains("BXG0027"));
+            assert!(!rendered.contains("BXG0028"));
         }
     }
 

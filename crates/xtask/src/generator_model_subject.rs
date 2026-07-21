@@ -240,6 +240,23 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     let doc_diagnostics = invalid_docs[0]
         .as_ref()
         .expect_err("fixed invalid documentation must fail");
+    let valid_members = contracts(
+        b"#[boxology::contract]\nstruct First { r#type: u8, field: u16 }\n#[boxology::contract(error)]\nenum Event { r#match, Named { r#type: u8, field: u16 }, Tuple(u8), Unit }\n",
+        2,
+    )?;
+    let invalid_members = contracts(
+        b"#[boxology::contract]\nstruct PrivateOne { PrivateField: u8, PrivateField: u16 }\n#[boxology::contract(error)]\nenum PrivateEvent { PrivateVariant { PrivateNested: u8, PrivateNested: u16 }, PrivateVariant }\n",
+        2,
+    )?;
+    if valid_members[0] != valid_members[1] || invalid_members[0] != invalid_members[1] {
+        return Err("contract member result changed with input order".into());
+    }
+    let member_projection = valid_members[0]
+        .as_ref()
+        .map_err(|error| format!("fixed valid members failed: {error}"))?;
+    let member_diagnostics = invalid_members[0]
+        .as_ref()
+        .expect_err("fixed invalid members must fail");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -410,6 +427,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{docs}\ninvalid\n{doc_diagnostics}\n"),
     )
     .map_err(|error| format!("write contract-docs.txt: {error}"))?;
+    fs::write(
+        out.join("contract-members.txt"),
+        format!("success\n{member_projection}\ninvalid\n{member_diagnostics}\n"),
+    )
+    .map_err(|error| format!("write contract-members.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
