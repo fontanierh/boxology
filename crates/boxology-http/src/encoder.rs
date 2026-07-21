@@ -1,7 +1,10 @@
 use std::{error::Error, fmt};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use boxology_contract::{DescriptorRef, SlotValue, TypeDescriptor, ValueRef};
+use boxology_contract::{
+    DescriptorRef, OpaqueTree, SlotValue, TypeDescriptor, ValueRef, VariantDescriptor,
+    VariantPayload,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EncodeErrorCategory {
@@ -60,6 +63,23 @@ pub(crate) fn encode_result(
     Ok(output)
 }
 
+pub(crate) fn encode_domain(
+    error_tag: &str,
+    payload: &SlotValue,
+    descriptor: &TypeDescriptor,
+) -> Result<Vec<u8>, EncodeError> {
+    if !is_supported(descriptor) {
+        return failure(EncodeErrorCategory::UnsupportedDescriptor);
+    }
+    let DescriptorRef::Enum(variants) = descriptor.view() else {
+        return mismatch();
+    };
+    let mut output = br#"{"error":{"kind":"domain","value":"#.to_vec();
+    enumeration(&mut output, error_tag, payload, variants)?;
+    output.extend_from_slice(b"}}");
+    Ok(output)
+}
+
 fn is_supported(descriptor: &TypeDescriptor) -> bool {
     match descriptor.view() {
         DescriptorRef::Bool
@@ -82,6 +102,10 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
         DescriptorRef::Struct(fields) => {
             fields.iter().all(|field| is_supported(field.descriptor()))
         }
+        DescriptorRef::Enum(variants) => variants.iter().all(|variant| match variant.payload() {
+            VariantPayload::Unit => true,
+            VariantPayload::Value(descriptor) => is_supported(descriptor),
+        }),
         _ => false,
     }
 }
@@ -107,6 +131,12 @@ fn encode_value(
         DescriptorRef::List(inner) => return list(output, value, inner),
         DescriptorRef::Map(inner) => return map(output, value, inner),
         DescriptorRef::Struct(fields) => return structure(output, value, fields),
+        DescriptorRef::Enum(variants) => {
+            let ValueRef::Enum { tag, payload } = value else {
+                return mismatch();
+            };
+            return enumeration(output, tag, payload, variants);
+        }
         DescriptorRef::Bool => {
             let ValueRef::Bool(value) = value else {
                 return mismatch();
@@ -133,6 +163,87 @@ fn encode_value(
         _ => return failure(EncodeErrorCategory::UnsupportedDescriptor),
     };
     encode_value(output, value, descriptor)
+}
+
+fn enumeration(
+    output: &mut Vec<u8>,
+    tag: &str,
+    payload: &SlotValue,
+    variants: &[VariantDescriptor],
+) -> Result<(), EncodeError> {
+    output.extend_from_slice(br#"{"tag":"#);
+    text(output, tag);
+    output.extend_from_slice(b",\"payload\":");
+    if let Some(variant) = variants.iter().find(|variant| variant.tag() == tag) {
+        match (variant.payload(), payload) {
+            (VariantPayload::Unit, SlotValue::Null) => output.extend_from_slice(b"null"),
+            (VariantPayload::Unit, SlotValue::Missing) => {
+                return failure(EncodeErrorCategory::MissingValue);
+            }
+            (VariantPayload::Unit, SlotValue::Value(_)) => return mismatch(),
+            (VariantPayload::Value(_), SlotValue::Missing) => {
+                return failure(EncodeErrorCategory::MissingValue);
+            }
+            (VariantPayload::Value(descriptor), SlotValue::Null)
+                if matches!(descriptor.view(), DescriptorRef::Optional(_)) =>
+            {
+                output.extend_from_slice(b"null")
+            }
+            (VariantPayload::Value(_), SlotValue::Null) => {
+                return failure(EncodeErrorCategory::NullConformance);
+            }
+            (VariantPayload::Value(descriptor), SlotValue::Value(value)) => {
+                encode_value(output, value.view(), descriptor)?;
+            }
+        }
+    } else {
+        let SlotValue::Value(value) = payload else {
+            return mismatch();
+        };
+        let ValueRef::Opaque(payload) = value.view() else {
+            return mismatch();
+        };
+        opaque(output, payload.reveal());
+    }
+    output.push(b'}');
+    Ok(())
+}
+
+fn opaque(output: &mut Vec<u8>, tree: &OpaqueTree) {
+    match tree {
+        OpaqueTree::Null => output.extend_from_slice(b"null"),
+        OpaqueTree::Bool(value) => {
+            output.extend_from_slice(if *value { b"true" } else { b"false" })
+        }
+        OpaqueTree::Number(value) => output.extend_from_slice(value.as_str().as_bytes()),
+        OpaqueTree::String(value) => text(output, value),
+        OpaqueTree::List(items) => {
+            output.push(b'[');
+            separated(items, output, opaque);
+            output.push(b']');
+        }
+        OpaqueTree::Object(entries) => {
+            output.push(b'{');
+            for (index, (key, value)) in entries.iter().enumerate() {
+                if index != 0 {
+                    output.push(b',');
+                }
+                text(output, key);
+                output.push(b':');
+                opaque(output, value);
+            }
+            output.push(b'}');
+        }
+    }
+}
+
+fn separated<T>(items: &[T], output: &mut Vec<u8>, encode: fn(&mut Vec<u8>, &T)) {
+    for (index, item) in items.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        encode(output, item);
+    }
 }
 
 fn list(
@@ -225,6 +336,11 @@ fn string(output: &mut Vec<u8>, value: ValueRef<'_>) -> Result<(), EncodeError> 
     let ValueRef::String(value) = value else {
         return mismatch();
     };
+    text(output, value);
+    Ok(())
+}
+
+fn text(output: &mut Vec<u8>, value: &str) {
     output.push(b'"');
     for character in value.chars() {
         match character {
@@ -248,7 +364,6 @@ fn string(output: &mut Vec<u8>, value: ValueRef<'_>) -> Result<(), EncodeError> 
         }
     }
     output.push(b'"');
-    Ok(())
 }
 
 fn signed(
@@ -332,8 +447,8 @@ mod tests {
     use super::EncodeErrorCategory as C;
     use super::*;
     use boxology_contract::{
-        ContractValue as Value, DecodeRole, FieldDescriptor, OpaquePayload, OpaqueTree,
-        TypeDescriptor as D, VariantDescriptor, VariantPayload,
+        ContractValue as Value, DecodeRole, FieldDescriptor, OpaqueNumber, OpaquePayload,
+        OpaqueTree, TypeDescriptor as D, VariantDescriptor, VariantPayload,
     };
 
     const PREFIX: &[u8] = br#"{"result":{"value":"#;
@@ -369,6 +484,38 @@ mod tests {
 
     fn field(name: &str, descriptor: D) -> FieldDescriptor {
         FieldDescriptor::new(name, descriptor, None)
+    }
+
+    fn variant(tag: &str, payload: VariantPayload) -> VariantDescriptor {
+        VariantDescriptor::new(tag, payload, None)
+    }
+
+    fn enum_descriptor(variants: impl IntoIterator<Item = VariantDescriptor>) -> D {
+        D::enumeration(variants).unwrap()
+    }
+
+    fn enum_slot(tag: &str, payload: SlotValue) -> SlotValue {
+        value(Value::enum_value(tag, payload))
+    }
+
+    fn canonical_domain(tag: &str, payload: SlotValue, descriptor: &D, token: &str) {
+        const PREFIX: &[u8] = br#"{"error":{"kind":"domain","value":"#;
+        let first = encode_domain(tag, &payload, descriptor).unwrap();
+        assert_eq!(first, [PREFIX, token.as_bytes(), b"}}"].concat());
+        let tree = crate::syntax::parse(
+            &first[PREFIX.len()..first.len() - 2],
+            crate::syntax::SyntaxLimits(first.len(), crate::syntax::DEFAULT_DEPTH_LIMIT),
+        )
+        .unwrap();
+        let decoded =
+            crate::semantic::decode_tree(tree, descriptor, DecodeRole::ConsumerOutput).unwrap();
+        let SlotValue::Value(value) = decoded else {
+            panic!("domain enum must decode as a value")
+        };
+        let ValueRef::Enum { tag, payload } = value.view() else {
+            panic!("domain descriptor must decode an enum")
+        };
+        assert_eq!(encode_domain(tag, payload, descriptor).unwrap(), first);
     }
 
     #[test]
@@ -497,14 +644,8 @@ mod tests {
         ] {
             category(slot, descriptor, C::IntegerRange);
         }
-        let variant = VariantDescriptor::new("x", VariantPayload::Unit, None);
         let unsupported = |slot, descriptor| category(slot, descriptor, C::UnsupportedDescriptor);
-        for descriptor in [
-            D::enumeration([variant]).unwrap(),
-            D::secret(D::bool()).unwrap(),
-        ] {
-            unsupported(value(Value::bool(true)), descriptor);
-        }
+        unsupported(value(Value::bool(true)), D::secret(D::bool()).unwrap());
     }
 
     #[test]
@@ -662,13 +803,8 @@ mod tests {
             C::IntegerRange,
         );
 
-        let enumeration =
-            D::enumeration([VariantDescriptor::new("x", VariantPayload::Unit, None)]).unwrap();
         let secret = D::secret(D::bool()).unwrap();
         for descriptor in [
-            D::list(enumeration.clone()).unwrap(),
-            D::map(enumeration.clone()).unwrap(),
-            D::structure([field("x", enumeration)]).unwrap(),
             D::list(secret.clone()).unwrap(),
             D::map(secret.clone()).unwrap(),
             D::structure([field("x", secret)]).unwrap(),
@@ -680,6 +816,192 @@ mod tests {
             ] {
                 category(slot, descriptor.clone(), C::UnsupportedDescriptor);
             }
+        }
+    }
+
+    #[test]
+    fn known_enums_and_domain_errors_have_exact_recursive_bytes() {
+        let record = D::structure([field("z", D::bool()), field("a", D::string())]).unwrap();
+        let inner = enum_descriptor([
+            variant("idle", VariantPayload::Unit),
+            variant("text", VariantPayload::Value(D::string())),
+        ]);
+        let descriptor = enum_descriptor([
+            variant("unit", VariantPayload::Unit),
+            variant("scalar", VariantPayload::Value(D::i8())),
+            variant(
+                "optional",
+                VariantPayload::Value(D::optional(D::string()).unwrap()),
+            ),
+            variant("record", VariantPayload::Value(record)),
+            variant("nested", VariantPayload::Value(inner)),
+            variant("tag\n\"", VariantPayload::Unit),
+        ]);
+        for (slot, token) in [
+            (
+                enum_slot("unit", SlotValue::Null),
+                r#"{"tag":"unit","payload":null}"#,
+            ),
+            (
+                enum_slot("scalar", value(Value::i64(-7))),
+                r#"{"tag":"scalar","payload":-7}"#,
+            ),
+            (
+                enum_slot("optional", SlotValue::Null),
+                r#"{"tag":"optional","payload":null}"#,
+            ),
+            (
+                enum_slot(
+                    "record",
+                    value(object([
+                        ("a", Value::string("x")),
+                        ("z", Value::bool(true)),
+                    ])),
+                ),
+                r#"{"tag":"record","payload":{"z":true,"a":"x"}}"#,
+            ),
+            (
+                enum_slot("nested", enum_slot("text", value(Value::string("inside")))),
+                r#"{"tag":"nested","payload":{"tag":"text","payload":"inside"}}"#,
+            ),
+            (
+                enum_slot("tag\n\"", SlotValue::Null),
+                r#"{"tag":"tag\n\"","payload":null}"#,
+            ),
+        ] {
+            canonical(slot, &descriptor, token);
+        }
+        canonical_domain(
+            "unit",
+            SlotValue::Null,
+            &descriptor,
+            r#"{"tag":"unit","payload":null}"#,
+        );
+        canonical_domain(
+            "record",
+            value(object([
+                ("a", Value::string("why")),
+                ("z", Value::bool(false)),
+            ])),
+            &descriptor,
+            r#"{"tag":"record","payload":{"z":false,"a":"why"}}"#,
+        );
+    }
+
+    fn opaque_payload() -> SlotValue {
+        value(Value::opaque(OpaquePayload::new(OpaqueTree::Object(vec![
+            (
+                "same".into(),
+                OpaqueTree::Number(OpaqueNumber::new("1e0").unwrap()),
+            ),
+            (
+                "same".into(),
+                OpaqueTree::Number(OpaqueNumber::new("1.0").unwrap()),
+            ),
+            (
+                "k\n".into(),
+                OpaqueTree::List(vec![
+                    OpaqueTree::String("v\t".into()),
+                    OpaqueTree::Bool(true),
+                    OpaqueTree::Null,
+                ]),
+            ),
+        ]))))
+    }
+
+    #[test]
+    fn unknown_enums_forward_only_opaque_payloads_without_canonicalizing_them() {
+        let descriptor = enum_descriptor([variant("known", VariantPayload::Unit)]);
+        let token = r#"{"tag":"future","payload":{"same":1e0,"same":1.0,"k\n":["v\t",true,null]}}"#;
+        canonical(enum_slot("future", opaque_payload()), &descriptor, token);
+        canonical_domain("future", opaque_payload(), &descriptor, token);
+        canonical(
+            enum_slot("future", opaque_payload()),
+            &enum_descriptor([]),
+            token,
+        );
+    }
+
+    fn domain_category(tag: &str, payload: SlotValue, descriptor: D, expected: C) {
+        let error = encode_domain(tag, &payload, &descriptor).unwrap_err();
+        assert_eq!(error.category(), expected);
+        let rendered = format!("{error:?}{error}");
+        for secret in ["DO_NOT_LEAK_TAG", "DO_NOT_LEAK_VALUE", "DO_NOT_LEAK_KEY"] {
+            assert!(!rendered.contains(secret));
+        }
+    }
+
+    #[test]
+    fn enum_failures_enforce_presence_opacity_support_and_redaction_precedence() {
+        let descriptor = enum_descriptor([
+            variant("unit", VariantPayload::Unit),
+            variant("value", VariantPayload::Value(D::bool())),
+        ]);
+        for (tag, payload, expected) in [
+            ("unit", SlotValue::Missing, C::MissingValue),
+            ("unit", value(Value::bool(true)), C::RepresentationMismatch),
+            ("value", SlotValue::Missing, C::MissingValue),
+            ("value", SlotValue::Null, C::NullConformance),
+            ("future", SlotValue::Missing, C::RepresentationMismatch),
+            ("future", SlotValue::Null, C::RepresentationMismatch),
+            (
+                "DO_NOT_LEAK_TAG",
+                value(Value::string("DO_NOT_LEAK_VALUE")),
+                C::RepresentationMismatch,
+            ),
+        ] {
+            category(
+                enum_slot(tag, payload.clone()),
+                descriptor.clone(),
+                expected,
+            );
+            domain_category(tag, payload, descriptor.clone(), expected);
+        }
+        category(
+            value(Value::bool(true)),
+            descriptor.clone(),
+            C::RepresentationMismatch,
+        );
+        domain_category(
+            "DO_NOT_LEAK_TAG",
+            value(Value::string("DO_NOT_LEAK_KEY")),
+            enum_descriptor([]),
+            C::RepresentationMismatch,
+        );
+        category(
+            enum_slot("DO_NOT_LEAK_TAG", value(Value::string("DO_NOT_LEAK_VALUE"))),
+            enum_descriptor([]),
+            C::RepresentationMismatch,
+        );
+        domain_category(
+            "unit",
+            SlotValue::Null,
+            D::bool(),
+            C::RepresentationMismatch,
+        );
+
+        let unsupported = enum_descriptor([variant(
+            "bad",
+            VariantPayload::Value(
+                D::structure([field("DO_NOT_LEAK_KEY", D::secret(D::bool()).unwrap())]).unwrap(),
+            ),
+        )]);
+        for payload in [
+            SlotValue::Missing,
+            SlotValue::Null,
+            value(Value::string("DO_NOT_LEAK_VALUE")),
+        ] {
+            category(
+                enum_slot("DO_NOT_LEAK_TAG", payload.clone()),
+                unsupported.clone(),
+                C::UnsupportedDescriptor,
+            );
+            domain_category(
+                "DO_NOT_LEAK_TAG",
+                payload,
+                unsupported.clone(),
+                C::UnsupportedDescriptor,
+            );
         }
     }
 }
