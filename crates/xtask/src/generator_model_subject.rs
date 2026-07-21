@@ -399,6 +399,54 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     if capability_signatures_forward != capability_signatures(true)? {
         return Err("capability signature result changed with input order".into());
     }
+    let capability_metadata = |reversed| -> Result<String, String> {
+        let mut files = vec![
+            input("boxology.toml", request.inputs()[0].bytes()),
+            input("metadata/root.rs", b"mod child; struct Root; impl Root { #[boxology::capability] async fn BadName(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"Bad-Override\", exposure = \"internal\", idempotency = \"inherent\",)] async fn raw(&self, a: A, b: B) -> R { loop {} } }"),
+            input("metadata/child.rs", b"struct Child; impl Child { #[boxology::capability(name = \"greet\", exposure = \"external\")] async fn hello(&self, a: A, b: B) -> R { loop {} } }"),
+        ];
+        if reversed {
+            files.reverse();
+        }
+        let case = GenerationRequest::new(id(), "metadata/root.rs".into(), files, vec![], vec![])
+            .map_err(|error| format!("fixed capability-metadata request failed: {error}"))?;
+        let parsed = ParsedRustInputs::parse(&case)
+            .map_err(|error| format!("fixed capability-metadata inputs failed: {error}"))?;
+        let projection = parsed
+            .validate_capability_marker_metadata()
+            .map_err(|error| format!("fixed capability metadata failed: {error}"))?
+            .iter()
+            .map(|item| {
+                format!(
+                    "{}|{:?}|{:?}|{:?}",
+                    item.method().sig.ident,
+                    item.marker_metadata().name_override(),
+                    item.marker_metadata().max_exposure(),
+                    item.marker_metadata().idempotency()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let invalid = GenerationRequest::new(id(), "invalid.rs".into(), vec![input("boxology.toml", request.inputs()[0].bytes()), input("invalid.rs", b"struct H; impl H { #[boxology::capability(DO_NOT_LEAK = \"private\")] async fn a(&self, x: A, y: B) -> R { loop {} } #[boxology::capability(idempotency = \"keyed\")] async fn b(&self, x: A, y: B) -> R { loop {} } }")], vec![], vec![])
+            .map_err(|error| format!("fixed invalid metadata request failed: {error}"))?;
+        let diagnostics = ParsedRustInputs::parse(&invalid)
+            .unwrap()
+            .validate_capability_marker_metadata()
+            .err()
+            .ok_or("fixed invalid metadata must fail")?;
+        let rendered = format!("{diagnostics}\n{diagnostics:?}");
+        if rendered.contains("DO_NOT_LEAK")
+            || rendered.contains("private")
+            || rendered.contains("keyed")
+        {
+            return Err("capability metadata diagnostic leaked payload".into());
+        }
+        Ok(format!("success\n{projection}\ninvalid\n{diagnostics}\n"))
+    };
+    let capability_metadata_forward = capability_metadata(false)?;
+    if capability_metadata_forward != capability_metadata(true)? {
+        return Err("capability metadata result changed with input order".into());
+    }
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -589,6 +637,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         capability_signatures_forward,
     )
     .map_err(|error| format!("write capability-signatures.txt: {error}"))?;
+    fs::write(
+        out.join("capability-metadata.txt"),
+        capability_metadata_forward,
+    )
+    .map_err(|error| format!("write capability-metadata.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
