@@ -31,6 +31,9 @@ const VARIANT_IDENTITY_RULE: &str = "variant identities must be unique within ea
 const MEMBER_IDENTITY_RULE_SOURCE: &str = "specs/s2-contract-generator.md D4";
 const CONTRACT_PLACEMENT_RULE: &str = "direct boxology::contract annotations are allowed only on reachable module-scope structs and enums";
 const CONTRACT_PLACEMENT_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1-D2";
+const CAPABILITY_PLACEMENT_RULE: &str =
+    "direct boxology::capability annotations are allowed only on functions in inherent impls";
+const CAPABILITY_PLACEMENT_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D8";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -42,6 +45,15 @@ pub struct ParsedRustInputs {
 pub struct ParsedRustInput {
     path: RelativePath,
     syntax: syn::File,
+}
+
+/// A borrowed capability method found by structural declaration discovery.
+pub struct CapabilityDeclaration<'ast> {
+    source: &'ast RelativePath,
+    module_path: Vec<String>,
+    identifier_span: Span,
+    implementation: &'ast syn::ItemImpl,
+    method: &'ast syn::ImplItemFn,
 }
 
 /// A reachable module-scope contract struct or enum found by provisional declaration discovery.
@@ -65,6 +77,21 @@ macro_rules! model_getters {
     ($this:ident; $(#[$meta:meta] $name:ident: $return:ty = $body:expr;)*) => {$(
         #[$meta] pub fn $name(&$this) -> $return { $body }
     )*};
+}
+
+impl<'ast> CapabilityDeclaration<'ast> {
+    model_getters! { self;
+        #[doc = "Returns the declaration's exact logical source path."]
+        source: &RelativePath = self.source;
+        #[doc = "Returns the canonical unraw module components, empty at the crate root."]
+        module_path: &[String] = &self.module_path;
+        #[doc = "Returns the method identifier's one-based source span."]
+        identifier_span: Span = self.identifier_span;
+        #[doc = "Returns the borrowed owning inherent impl."]
+        implementation: &'ast syn::ItemImpl = self.implementation;
+        #[doc = "Returns the borrowed annotated method."]
+        method: &'ast syn::ImplItemFn = self.method;
+    }
 }
 
 impl ContractSiteMetadata {
@@ -300,6 +327,7 @@ impl ParsedRustInputs {
         let mut visited = vec![false; self.inputs.len()];
         visited[self.crate_root] = true;
         let mut declarations = Vec::new();
+        let mut capabilities = Vec::new();
         self.collect_contract_declarations(
             self.crate_root,
             &root.syntax.items,
@@ -307,6 +335,7 @@ impl ParsedRustInputs {
             &mut Vec::new(),
             &mut visited,
             &mut declarations,
+            &mut capabilities,
         );
         declarations.sort_by(|left, right| {
             left.module_path
@@ -389,6 +418,53 @@ impl ParsedRustInputs {
             declaration.projection = Some(project_declaration(declaration.syntax));
         }
         Ok(declarations)
+    }
+
+    /// Discovers structurally placed capability methods in deterministic reachable modules.
+    pub fn discover_capability_declarations(
+        &self,
+    ) -> Result<Vec<CapabilityDeclaration<'_>>, Diagnostics> {
+        let _ = self.discover_contract_declarations()?;
+        let reachable = self.resolve_reachable_inputs()?;
+        let root = &self.inputs[self.crate_root];
+        let module_dir = root
+            .path
+            .as_str()
+            .rsplit_once('/')
+            .map_or("", |pair| pair.0);
+        let mut visited = vec![false; self.inputs.len()];
+        visited[self.crate_root] = true;
+        let mut contracts = Vec::new();
+        let mut declarations = Vec::new();
+        self.collect_contract_declarations(
+            self.crate_root,
+            &root.syntax.items,
+            module_dir,
+            &mut Vec::new(),
+            &mut visited,
+            &mut contracts,
+            &mut declarations,
+        );
+        declarations.sort_by(|left, right| {
+            left.module_path
+                .cmp(&right.module_path)
+                .then_with(|| {
+                    left.source
+                        .as_str()
+                        .as_bytes()
+                        .cmp(right.source.as_str().as_bytes())
+                })
+                .then(left.identifier_span.cmp(&right.identifier_span))
+        });
+        let mut diagnostics = Vec::new();
+        validate_capability_placement(&reachable, &declarations, &mut diagnostics);
+        diagnostics.sort();
+        diagnostics.dedup();
+        if diagnostics.is_empty() {
+            Ok(declarations)
+        } else {
+            Err(Diagnostics(diagnostics))
+        }
     }
 
     /// Validates default module lookup and returns unique reachable files in logical-path byte order.
@@ -526,6 +602,7 @@ impl ParsedRustInputs {
             .ok()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn collect_contract_declarations<'a>(
         &'a self,
         source: usize,
@@ -534,8 +611,18 @@ impl ParsedRustInputs {
         module_path: &mut Vec<String>,
         visited: &mut [bool],
         declarations: &mut Vec<ContractDeclaration<'a>>,
+        capabilities: &mut Vec<CapabilityDeclaration<'a>>,
     ) {
         for item in items {
+            if !matches!(item, syn::Item::Mod(_)) {
+                CapabilityCollector {
+                    source: &self.inputs[source].path,
+                    module_path: module_path.clone(),
+                    implementation: None,
+                    declarations: capabilities,
+                }
+                .visit_item(item);
+            }
             let declaration = match item {
                 syn::Item::Struct(item) if has_boxology(&item.attrs, "contract") => {
                     Some((&item.ident, ContractDeclarationSyntax::Struct(item)))
@@ -575,6 +662,7 @@ impl ParsedRustInputs {
                     module_path,
                     visited,
                     declarations,
+                    capabilities,
                 );
             } else {
                 let target = self
@@ -590,6 +678,7 @@ impl ParsedRustInputs {
                         module_path,
                         visited,
                         declarations,
+                        capabilities,
                     );
                 }
             }
@@ -604,17 +693,11 @@ impl ParsedRustInputs {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         for item in items {
-            add_dead(&self.inputs[source].path, item_attrs(item), diagnostics);
-            if let syn::Item::Mod(module) = item
-                && let Some((_, items)) = &module.content
-            {
-                self.inspect_unreachable(source, items, diagnostics);
+            UnreachableVisitor {
+                path: &self.inputs[source].path,
+                diagnostics,
             }
-            if let syn::Item::Impl(implementation) = item {
-                for item in &implementation.items {
-                    add_dead(&self.inputs[source].path, impl_attrs(item), diagnostics);
-                }
-            }
+            .visit_item(item);
         }
     }
 
@@ -649,14 +732,16 @@ impl ParsedRustInputs {
                     }
                 }
             }
-            if let syn::Item::Impl(implementation) = item {
-                for item in &implementation.items {
-                    let attributes = impl_attrs(item);
-                    if is_export(attributes) {
-                        self.validate_context(source, attributes, ancestors, diagnostics);
-                        self.add_conditionals(source, &implementation.attrs, diagnostics);
-                    }
+            if !matches!(item, syn::Item::Mod(_)) {
+                CapabilityConditionalVisitor {
+                    inputs: self,
+                    source,
+                    ancestors,
+                    inline_modules: Vec::new(),
+                    implementation_attrs: None,
+                    diagnostics,
                 }
+                .visit_item(item);
             }
             let syn::Item::Mod(module) = item else {
                 continue;
@@ -721,6 +806,125 @@ impl ParsedRustInputs {
     }
 }
 
+struct CapabilityCollector<'a, 'ast> {
+    source: &'ast RelativePath,
+    module_path: Vec<String>,
+    implementation: Option<&'ast syn::ItemImpl>,
+    declarations: &'a mut Vec<CapabilityDeclaration<'ast>>,
+}
+
+impl<'ast> Visit<'ast> for CapabilityCollector<'_, 'ast> {
+    fn visit_attribute(&mut self, _: &'ast syn::Attribute) {}
+
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if module.content.is_some() {
+            self.module_path.push(module.ident.unraw().to_string());
+            syn::visit::visit_item_mod(self, module);
+            self.module_path.pop();
+        }
+    }
+
+    fn visit_item_impl(&mut self, implementation: &'ast syn::ItemImpl) {
+        let outer = self.implementation.replace(implementation);
+        syn::visit::visit_item_impl(self, implementation);
+        self.implementation = outer;
+    }
+
+    fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
+        if let Some(implementation) = self.implementation
+            && implementation.trait_.is_none()
+            && has_boxology(&method.attrs, "capability")
+        {
+            self.declarations.push(CapabilityDeclaration {
+                source: self.source,
+                module_path: self.module_path.clone(),
+                identifier_span: source_span(method.sig.ident.span()),
+                implementation,
+                method,
+            });
+        }
+        syn::visit::visit_impl_item_fn(self, method);
+    }
+}
+
+struct CapabilityConditionalVisitor<'a, 'ast> {
+    inputs: &'a ParsedRustInputs,
+    source: usize,
+    ancestors: &'a [(usize, &'ast syn::ItemMod)],
+    inline_modules: Vec<&'ast [syn::Attribute]>,
+    implementation_attrs: Option<&'ast [syn::Attribute]>,
+    diagnostics: &'a mut Vec<Diagnostic>,
+}
+
+impl<'ast> CapabilityConditionalVisitor<'_, 'ast> {
+    fn inspect(&mut self, attributes: &'ast [syn::Attribute]) {
+        if is_export(attributes) {
+            self.inputs
+                .validate_context(self.source, attributes, self.ancestors, self.diagnostics);
+            if let Some(implementation) = self.implementation_attrs {
+                self.inputs
+                    .add_conditionals(self.source, implementation, self.diagnostics);
+            }
+            for attributes in &self.inline_modules {
+                self.inputs
+                    .add_conditionals(self.source, attributes, self.diagnostics);
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for CapabilityConditionalVisitor<'_, 'ast> {
+    fn visit_attribute(&mut self, _: &'ast syn::Attribute) {}
+
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if let Some((_, items)) = &module.content {
+            self.inline_modules.push(&module.attrs);
+            items.iter().for_each(|item| self.visit_item(item));
+            self.inline_modules.pop();
+        }
+    }
+
+    fn visit_item_impl(&mut self, implementation: &'ast syn::ItemImpl) {
+        let outer = self.implementation_attrs.replace(&implementation.attrs);
+        syn::visit::visit_item_impl(self, implementation);
+        self.implementation_attrs = outer;
+    }
+
+    fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
+        self.inspect(&method.attrs);
+        syn::visit::visit_impl_item_fn(self, method);
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        self.inspect(&function.attrs);
+        syn::visit::visit_item_fn(self, function);
+    }
+
+    fn visit_trait_item_fn(&mut self, method: &'ast syn::TraitItemFn) {
+        self.inspect(&method.attrs);
+        syn::visit::visit_trait_item_fn(self, method);
+    }
+}
+
+struct UnreachableVisitor<'a> {
+    path: &'a RelativePath,
+    diagnostics: &'a mut Vec<Diagnostic>,
+}
+
+impl<'ast> Visit<'ast> for UnreachableVisitor<'_> {
+    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+        if boxology_leaf(attribute).is_some() {
+            self.diagnostics.push(module_diagnostic(
+                self.path,
+                attribute_span(attribute, true),
+                "BXG0019",
+                "Boxology-annotated item",
+                UNREACHABLE_RULE,
+            ));
+        }
+    }
+}
+
 impl ParsedRustInput {
     /// Returns the exact validated logical input path.
     pub fn path(&self) -> &RelativePath {
@@ -754,16 +958,6 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     }
 }
 
-fn impl_attrs(item: &syn::ImplItem) -> &[syn::Attribute] {
-    match item {
-        syn::ImplItem::Const(syn::ImplItemConst { attrs, .. })
-        | syn::ImplItem::Fn(syn::ImplItemFn { attrs, .. })
-        | syn::ImplItem::Type(syn::ImplItemType { attrs, .. })
-        | syn::ImplItem::Macro(syn::ImplItemMacro { attrs, .. }) => attrs,
-        _ => &[],
-    }
-}
-
 fn boxology_leaf(attribute: &syn::Attribute) -> Option<&syn::Ident> {
     let path = attribute.path();
     if !matches!(&attribute.style, syn::AttrStyle::Outer)
@@ -777,21 +971,6 @@ fn boxology_leaf(attribute: &syn::Attribute) -> Option<&syn::Ident> {
         return None;
     }
     Some(&path.segments[1].ident)
-}
-
-fn add_dead(path: &RelativePath, attributes: &[syn::Attribute], diagnostics: &mut Vec<Diagnostic>) {
-    if let Some(attribute) = attributes
-        .iter()
-        .find(|attribute| boxology_leaf(attribute).is_some())
-    {
-        diagnostics.push(module_diagnostic(
-            path,
-            attribute_span(attribute, true),
-            "BXG0019",
-            "Boxology-annotated item",
-            UNREACHABLE_RULE,
-        ));
-    }
 }
 
 fn has_boxology(attributes: &[syn::Attribute], leaf: &str) -> bool {
@@ -929,37 +1108,74 @@ fn validate_contract_placement(
         .map(std::ptr::from_ref)
         .collect::<BTreeSet<_>>();
     for input in reachable {
-        ContractPlacementVisitor {
+        PlacementVisitor {
             path: &input.path,
             allowed: &allowed,
             diagnostics,
+            leaf: "contract",
+            code: "BXG0029",
+            offending: "misplaced contract declaration annotation",
+            rule: CONTRACT_PLACEMENT_RULE,
+            rule_source: CONTRACT_PLACEMENT_RULE_SOURCE,
         }
         .visit_file(&input.syntax);
     }
 }
 
-struct ContractPlacementVisitor<'a> {
+fn validate_capability_placement(
+    reachable: &[&ParsedRustInput],
+    declarations: &[CapabilityDeclaration<'_>],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let allowed = declarations
+        .iter()
+        .flat_map(|declaration| declaration.method.attrs.iter())
+        .filter(|attribute| {
+            boxology_leaf(attribute).is_some_and(|leaf| leaf.unraw() == "capability")
+        })
+        .map(std::ptr::from_ref)
+        .collect::<BTreeSet<_>>();
+    for input in reachable {
+        PlacementVisitor {
+            path: &input.path,
+            allowed: &allowed,
+            diagnostics,
+            leaf: "capability",
+            code: "BXG0030",
+            offending: "misplaced capability annotation",
+            rule: CAPABILITY_PLACEMENT_RULE,
+            rule_source: CAPABILITY_PLACEMENT_RULE_SOURCE,
+        }
+        .visit_file(&input.syntax);
+    }
+}
+
+struct PlacementVisitor<'a> {
     path: &'a RelativePath,
     allowed: &'a BTreeSet<*const syn::Attribute>,
     diagnostics: &'a mut Vec<Diagnostic>,
+    leaf: &'static str,
+    code: &'static str,
+    offending: &'static str,
+    rule: &'static str,
+    rule_source: &'static str,
 }
 
-impl<'ast> Visit<'ast> for ContractPlacementVisitor<'_> {
+impl<'ast> Visit<'ast> for PlacementVisitor<'_> {
     fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
         if let Some(leaf) = boxology_leaf(attribute)
-            && leaf.unraw() == "contract"
+            && leaf.unraw() == self.leaf
             && !self.allowed.contains(&std::ptr::from_ref(attribute))
         {
             self.diagnostics.push(Diagnostic {
                 path: self.path.clone(),
                 span: source_span(leaf.span()),
-                code: "BXG0029",
-                offending: "misplaced contract declaration annotation".into(),
-                rule: CONTRACT_PLACEMENT_RULE,
-                rule_source: CONTRACT_PLACEMENT_RULE_SOURCE,
+                code: self.code,
+                offending: self.offending.into(),
+                rule: self.rule,
+                rule_source: self.rule_source,
             });
         }
-        syn::visit::visit_attribute(self, attribute);
     }
 }
 
@@ -1467,6 +1683,14 @@ mod tests {
         }
     }
 
+    fn capability_errors(request: &GenerationRequest) -> Diagnostics {
+        let parsed = ParsedRustInputs::parse(request).unwrap();
+        parsed
+            .discover_capability_declarations()
+            .err()
+            .expect("expected capability declaration diagnostics")
+    }
+
     fn span(start: (usize, usize), end: (usize, usize)) -> Span {
         Span {
             start: LineColumn {
@@ -1552,7 +1776,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_boxology_paths_are_exact_and_owned_by_the_first_attribute() {
+    fn direct_boxology_paths_are_exact_and_each_marker_is_reported() {
         let expected = |line, end| {
             format!(
                 "BXG0019 dead.rs:{line}:3-{line}:{end} offending={:?} rule={UNREACHABLE_RULE:?} source={RULE_SOURCE:?}",
@@ -1570,7 +1794,7 @@ mod tests {
         let source = "#[r#boxology::r#contract] struct Raw;\n#[::r#boxology::r#capability] fn leading() {}\n#[boxology::contract]\n#[::boxology::capability]\nfn twice() {}\n#[alias::contract] fn alias() {}\n#[crate::boxology::contract] fn prefixed() {}\n#[boxology] fn short() {}\n#[boxology::contract::nested] fn long() {}\n";
         let errors =
             resolution_errors(&request("root.rs", &[("root.rs", ""), ("dead.rs", source)]));
-        let rendered = [(1, 26), (2, 30), (3, 22)]
+        let rendered = [(1, 26), (2, 30), (3, 22), (4, 26)]
             .map(|(line, end)| expected(line, end))
             .join("\n");
         assert_eq!(errors.to_string(), rendered);
@@ -1628,6 +1852,7 @@ mod tests {
             ("root.rs", 23, 7),
             ("root.rs", 24, 11),
             ("z-dead.rs", 3, 22),
+            ("z-dead.rs", 4, 26),
         ];
         let expected = sites.map(|(path, line, end)| {
             let start = if end == 7 { 4 } else { 3 };
@@ -1693,7 +1918,7 @@ mod tests {
                         "{kind}|[{}]|{}|{}|{}:{}-{}:{}",
                         declaration.module_path().join("::"),
                         declaration.lifted_name(),
-                        declaration.source().as_str(),
+                        declaration.source().as_str().to_owned(),
                         span.start().line(),
                         span.start().column(),
                         span.end().line(),
@@ -1932,6 +2157,70 @@ mod tests {
             "BXG0028",
             "#[boxology::contract] enum E { Same, Same } #[::boxology::contract] fn misplaced() {}",
         );
+    }
+
+    #[test]
+    fn capability_placement_rejects_structured_sites_exactly_without_payload_leaks() {
+        let source = "#[::boxology::capability]\nfn PrivatePath() {}\ntrait T {\n#[::boxology::capability(PrivateList)]\nfn PrivateTrait();\n}\nstruct Host; impl T for Host {\n#[::boxology::capability = \"PrivateValue\"]\nfn PrivateTraitImpl(&self) {}\n}\nimpl Host {\n#[::boxology::capability]\nconst PRIVATE_CONST: u8 = 0;\n}\nstruct Nested {\n#[::boxology::capability]\nfield: u8,\n}\nfn nested() {\n#[::boxology::capability]\nlet local = 0;\n}\nmacro_rules! hidden { () => { #[boxology::capability] fn token() {} } }\n#[holder = { #[boxology::capability] 1 }] fn payload() {}";
+        let diagnostics = capability_errors(&request("root.rs", &[("root.rs", source)]));
+        let lines = [1, 4, 8, 12, 16, 20];
+        for (diagnostic, line) in diagnostics.as_slice().iter().zip(lines) {
+            assert_eq!(diagnostic.code(), "BXG0030");
+            assert_eq!(diagnostic.span(), span((line, 15), (line, 25)));
+        }
+        let rendered = format!("{diagnostics}\n{diagnostics:?}");
+        for sentinel in ["PrivatePath", "PrivateList", "PrivateValue", "local"] {
+            assert!(!rendered.contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn all_predecessor_phases_suppress_capability_placement() {
+        let suppressed = |code, source| {
+            let diagnostics = capability_errors(&request("root.rs", &[("root.rs", source)]));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|error| error.code() == code)
+            );
+            diagnostics
+        };
+        for (code, source) in [
+            (
+                "BXG0017",
+                "mod missing; #[boxology::capability] fn misplaced() {}",
+            ),
+            (
+                "BXG0021",
+                "#[boxology::contract] struct S; #[boxology::contract] enum S { A } #[boxology::capability] fn misplaced() {}",
+            ),
+            (
+                "BXG0029",
+                "#[boxology::contract] fn bad() {} #[boxology::capability] fn misplaced() {}",
+            ),
+        ] {
+            suppressed(code, source);
+        }
+        let module_cfg = suppressed(
+            "BXG0020",
+            "fn block() {\n#[cfg(Ancestor)]\nmod local { struct H; impl H { #[boxology::capability] fn method() {} } }\n}",
+        );
+        assert_eq!(module_cfg.as_slice().len(), 1);
+        assert_eq!(module_cfg.as_slice()[0].span(), span((2, 3), (2, 6)));
+        let unreachable = capability_errors(&request(
+            "root.rs",
+            &[
+                ("root.rs", "#[boxology::capability] fn misplaced() {}"),
+                (
+                    "dead.rs",
+                    "trait T { #[boxology::capability(Private)] fn method(); } struct S { #[boxology::capability] field: u8 } fn f() { #[boxology::capability] let local = 0; struct H; impl H { #[boxology::capability] fn nested() {} } } macro_rules! hidden { () => { #[boxology::capability] fn token() {} } }",
+                ),
+            ],
+        ));
+        assert_eq!(unreachable.as_slice()[0].code(), "BXG0019");
+        assert_eq!(unreachable.as_slice().len(), 4);
+        assert!(!format!("{unreachable:?}").contains("Private"));
     }
 
     #[test]
