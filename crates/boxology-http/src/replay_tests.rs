@@ -42,11 +42,52 @@ fn error_role(
 ) {
     let error = decode(raw, descriptor, role).unwrap_err();
     assert_eq!(error.category(), category);
+    assert_eq!(
+        format!("{error:?}"),
+        match category {
+            C::RepresentationMismatch => "SemanticError(RepresentationMismatch)",
+            C::NonCanonicalInteger => "SemanticError(NonCanonicalInteger)",
+            C::IntegerRange => "SemanticError(IntegerRange)",
+            C::NonFiniteFloat => "SemanticError(NonFiniteFloat)",
+            C::DuplicateObjectKey => "SemanticError(DuplicateObjectKey)",
+            C::NullConformance => "SemanticError(NullConformance)",
+            C::UnsupportedDescriptor => "SemanticError(UnsupportedDescriptor)",
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        match category {
+            C::RepresentationMismatch => "representation mismatch",
+            C::NonCanonicalInteger => "non-canonical integer",
+            C::IntegerRange => "integer outside descriptor range",
+            C::NonFiniteFloat => "non-finite float",
+            C::DuplicateObjectKey => "duplicate object key",
+            C::NullConformance => "null violates descriptor",
+            C::UnsupportedDescriptor => "unsupported descriptor",
+        }
+    );
     if let Some(forbidden) = forbidden {
         assert!(!format!("{error:?}").contains(forbidden));
         assert!(!error.to_string().contains(forbidden));
     }
     assert!(error.source().is_none());
+}
+
+fn hostile_error_role(
+    raw: &[u8],
+    descriptor: &TypeDescriptor,
+    role: DecodeRole,
+    category: C,
+    hostile: &str,
+) {
+    assert!(String::from_utf8_lossy(raw).contains(hostile));
+    error_role(raw, descriptor, role, category, Some(hostile));
+}
+
+fn hostile_error_both(raw: &[u8], descriptor: &TypeDescriptor, category: C, hostile: &str) {
+    for role in ROLES {
+        hostile_error_role(raw, descriptor, role, category, hostile);
+    }
 }
 
 fn error_both(raw: &[u8], descriptor: &TypeDescriptor, category: C) {
@@ -358,4 +399,223 @@ fn aggregate_bytes_preserve_order_roles_and_unknown_enum_opacity() {
         assert_eq!(payload.reveal(), expected);
         assert!(!format!("{payload:?}").contains(SENTINEL));
     }
+}
+
+#[test]
+fn strict_scalar_bytes_report_every_semantic_category_without_input_leakage() {
+    for (raw, descriptor, hostile) in [
+        (
+            br#""DO_NOT_LEAK""#.as_slice(),
+            TypeDescriptor::bool(),
+            SENTINEL,
+        ),
+        (br#"{"DO_NOT_LEAK":1}"#, TypeDescriptor::string(), SENTINEL),
+        (br#""DO_NOT_LEAK""#, TypeDescriptor::i8(), SENTINEL),
+        (
+            b"9223372036854775807",
+            TypeDescriptor::i64(),
+            "9223372036854775807",
+        ),
+        (br#""DO_NOT_LEAK""#, TypeDescriptor::f32(), SENTINEL),
+    ] {
+        hostile_error_both(raw, &descriptor, C::RepresentationMismatch, hostile);
+    }
+
+    for (raw, descriptor) in [
+        (b"1.5".as_slice(), TypeDescriptor::i8()),
+        (b"1e2", TypeDescriptor::u32()),
+        (br#""01""#, TypeDescriptor::i64()),
+        (br#""-0""#, TypeDescriptor::i64()),
+        (br#""+1""#, TypeDescriptor::i64()),
+        (br#"" 1""#, TypeDescriptor::i64()),
+        (br#""-1""#, TypeDescriptor::u64()),
+        (br#""+1""#, TypeDescriptor::u64()),
+        (br#""01""#, TypeDescriptor::u64()),
+        (br#""1 ""#, TypeDescriptor::u64()),
+    ] {
+        error_both(raw, &descriptor, C::NonCanonicalInteger);
+    }
+
+    for (raw, descriptor) in [
+        (b"-129".as_slice(), TypeDescriptor::i8()),
+        (b"128", TypeDescriptor::i8()),
+        (b"-1", TypeDescriptor::u8()),
+        (b"256", TypeDescriptor::u8()),
+        (br#""-9223372036854775809""#, TypeDescriptor::i64()),
+        (br#""9223372036854775808""#, TypeDescriptor::i64()),
+        (br#""18446744073709551616""#, TypeDescriptor::u64()),
+    ] {
+        error_both(raw, &descriptor, C::IntegerRange);
+    }
+    for (raw, descriptor) in [
+        (b"3.5e38".as_slice(), TypeDescriptor::f32()),
+        (b"-3.5e38", TypeDescriptor::f32()),
+        (b"1e309", TypeDescriptor::f64()),
+        (b"-1e309", TypeDescriptor::f64()),
+    ] {
+        error_both(raw, &descriptor, C::NonFiniteFloat);
+    }
+    error_both(b"null", &TypeDescriptor::string(), C::NullConformance);
+}
+
+#[test]
+fn strict_aggregate_bytes_check_outer_null_duplicate_and_child_order_precedence() {
+    let list = TypeDescriptor::list(TypeDescriptor::i8()).unwrap();
+    let map = TypeDescriptor::map(TypeDescriptor::i8()).unwrap();
+    let structure = structure([field("required", TypeDescriptor::i8())]);
+    let enumeration = enumeration([variant("Unit", VariantPayload::Unit)]);
+    for (raw, descriptor) in [
+        (br#"{"DO_NOT_LEAK":128}"#.as_slice(), &list),
+        (br#"["DO_NOT_LEAK"]"#, &map),
+        (br#"["DO_NOT_LEAK"]"#, &structure),
+        (br#"["DO_NOT_LEAK"]"#, &enumeration),
+    ] {
+        hostile_error_both(raw, descriptor, C::RepresentationMismatch, SENTINEL);
+    }
+    for (raw, descriptor) in [
+        (b"[null]".as_slice(), &list),
+        (br#"{"x":null}"#, &map),
+        (br#"{"required":null}"#, &structure),
+    ] {
+        error_both(raw, descriptor, C::NullConformance);
+    }
+
+    hostile_error_both(
+        br#"{"a":"DO_NOT_LEAK","\u0061":128}"#,
+        &map,
+        C::DuplicateObjectKey,
+        SENTINEL,
+    );
+    for (raw, descriptor, category, hostile) in [
+        (b"[128,1.5]".as_slice(), &list, C::IntegerRange, "128"),
+        (b"[1.5,128]", &list, C::NonCanonicalInteger, "1.5"),
+        (
+            br#"{"first":128,"second":1.5}"#,
+            &map,
+            C::IntegerRange,
+            "128",
+        ),
+        (
+            br#"{"first":1.5,"second":128}"#,
+            &map,
+            C::NonCanonicalInteger,
+            "1.5",
+        ),
+    ] {
+        hostile_error_both(raw, descriptor, category, hostile);
+    }
+}
+
+#[test]
+fn strict_struct_bytes_preserve_duplicate_role_and_conformance_precedence() {
+    let descriptor = structure([
+        field("first", TypeDescriptor::i8()),
+        field("second", TypeDescriptor::bool()),
+    ]);
+    hostile_error_both(
+        br#"{"first":128,"\u0066irst":"DO_NOT_LEAK"}"#,
+        &descriptor,
+        C::DuplicateObjectKey,
+        SENTINEL,
+    );
+    hostile_error_both(
+        br#"{"first":128,"unknown":"DO_NOT_LEAK"}"#,
+        &descriptor,
+        C::IntegerRange,
+        "128",
+    );
+
+    let first_fails = br#"{"first":128,"second":"DO_NOT_LEAK"}"#;
+    for hostile in ["128", SENTINEL] {
+        hostile_error_both(first_fails, &descriptor, C::IntegerRange, hostile);
+    }
+    let second_fails = br#"{"second":"DO_NOT_LEAK","first":128}"#;
+    for hostile in [SENTINEL, "128"] {
+        hostile_error_both(
+            second_fails,
+            &descriptor,
+            C::RepresentationMismatch,
+            hostile,
+        );
+    }
+
+    let unknown_first = br#"{"DO_NOT_LEAK":{"hostile":1,"hostile":2},"first":128}"#;
+    hostile_error_role(
+        unknown_first,
+        &descriptor,
+        DecodeRole::ProviderInput,
+        C::RepresentationMismatch,
+        SENTINEL,
+    );
+    hostile_error_role(
+        unknown_first,
+        &descriptor,
+        DecodeRole::ConsumerOutput,
+        C::IntegerRange,
+        "128",
+    );
+    hostile_error_both(br#"{"first":128}"#, &descriptor, C::IntegerRange, "128");
+    error_both(b"{}", &descriptor, C::RepresentationMismatch);
+}
+
+#[test]
+fn strict_enum_bytes_validate_envelope_before_variant_payload_and_role_tolerance() {
+    let descriptor = enumeration([
+        variant("Unit", VariantPayload::Unit),
+        variant("Count", VariantPayload::Value(TypeDescriptor::i8())),
+        variant(
+            "Record",
+            VariantPayload::Value(structure([field("value", TypeDescriptor::i8())])),
+        ),
+    ]);
+    for raw in [
+        b"null".as_slice(),
+        b"[]",
+        b"{}",
+        br#"{"tag":"Unit"}"#,
+        br#"{"payload":null}"#,
+        br#"{"tag":"Count","payload":128,"extra":"DO_NOT_LEAK"}"#,
+        br#"{"tag":{"DO_NOT_LEAK":1},"payload":null}"#,
+    ] {
+        error_both(raw, &descriptor, C::RepresentationMismatch);
+    }
+    hostile_error_both(
+        br#"{"tag":"Unit","\u0074ag":"DO_NOT_LEAK","payload":null}"#,
+        &descriptor,
+        C::DuplicateObjectKey,
+        SENTINEL,
+    );
+    hostile_error_both(
+        br#"{"tag":"Unit","payload":"DO_NOT_LEAK"}"#,
+        &descriptor,
+        C::RepresentationMismatch,
+        SENTINEL,
+    );
+    error_both(
+        br#"{"tag":"Count","payload":null}"#,
+        &descriptor,
+        C::NullConformance,
+    );
+    hostile_error_both(
+        br#"{"tag":"Count","payload":128}"#,
+        &descriptor,
+        C::IntegerRange,
+        "128",
+    );
+    hostile_error_both(
+        br#"{"tag":"Record","payload":{"value":128,"value":"DO_NOT_LEAK"}}"#,
+        &descriptor,
+        C::DuplicateObjectKey,
+        SENTINEL,
+    );
+
+    let unknown = br#"{"tag":"DO_NOT_LEAK","payload":{"x":128,"x":1.5}}"#;
+    hostile_error_role(
+        unknown,
+        &descriptor,
+        DecodeRole::ProviderInput,
+        C::RepresentationMismatch,
+        SENTINEL,
+    );
+    assert!(decode(unknown, &descriptor, DecodeRole::ConsumerOutput).is_ok());
 }
