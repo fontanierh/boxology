@@ -13,3 +13,4 @@ client = []
 base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+ryu = "=1.0.23"
