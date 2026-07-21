@@ -11,7 +11,7 @@ mod rust;
 
 pub use manifest::Manifest;
 pub use rust::{
-    ContractDeclaration, ContractDeclarationRole, ContractDeclarationShape,
+    CapabilityDeclaration, ContractDeclaration, ContractDeclarationRole, ContractDeclarationShape,
     ContractDeclarationSyntax, ContractDeprecation, ContractField, ContractFields,
     ContractMemberIdentity, ContractSiteMetadata, ContractVariant, ParsedRustInput,
     ParsedRustInputs,

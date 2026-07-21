@@ -272,10 +272,29 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
                     .map_err(|error| format!("fixed placement request failed: {error}"))?;
             let parsed = ParsedRustInputs::parse(&case)
                 .map_err(|error| format!("fixed placement inputs failed: {error}"))?;
-            Ok(parsed.discover_contract_declarations().map(|declarations| {
-                declarations
+            let contracts = parsed.discover_contract_declarations();
+            if contracts.as_ref().is_ok_and(Vec::is_empty) {
+                return Ok(parsed.discover_capability_declarations().map(|items| {
+                    items
+                        .iter()
+                        .map(|item| {
+                            format!(
+                                "{}|{:?}|{}|{:?}|{}",
+                                item.method().sig.ident,
+                                item.module_path(),
+                                item.source().as_str(),
+                                item.identifier_span(),
+                                item.implementation().items.len()
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }));
+            }
+            Ok(contracts.map(|items| {
+                items
                     .iter()
-                    .map(|declaration| declaration.lifted_name())
+                    .map(|item| item.lifted_name())
                     .collect::<Vec<_>>()
                     .join("\n")
             }))
@@ -296,6 +315,18 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         b"struct Hidden { #[::boxology::contract = \"PrivateValue\"] value: u8 }\n",
     )?
     .expect_err("fixed invalid placement must fail");
+    let capability_projection = placement(
+        b"mod child; struct Root; impl Root { #[boxology::capability] fn root() {} } mod inline { struct Inline; impl Inline { #[::r#boxology::r#capability] fn inline() {} } } fn outer() { mod local { struct Host; impl Host { #[boxology::capability] fn cap() {} } } } #[holder = { struct Phantom; impl Phantom { #[cfg(Private)] #[boxology::capability] fn hidden() {} } }] fn payload() {}\n",
+        b"struct Child; impl Child { #[::boxology::capability] fn child() {} }\n",
+    )?.map_err(|error| format!("fixed valid capability placement failed: {error}"))?;
+    let expected_capabilities = "root|[]|placement/root.rs|Span { start: LineColumn { line: 1, column: 64 }, end: LineColumn { line: 1, column: 68 } }|1\nchild|[\"child\"]|placement/child.rs|Span { start: LineColumn { line: 1, column: 57 }, end: LineColumn { line: 1, column: 62 } }|1\ninline|[\"inline\"]|placement/root.rs|Span { start: LineColumn { line: 1, column: 151 }, end: LineColumn { line: 1, column: 157 } }|1\ncap|[\"local\"]|placement/root.rs|Span { start: LineColumn { line: 1, column: 244 }, end: LineColumn { line: 1, column: 247 } }|1";
+    if capability_projection != expected_capabilities {
+        return Err("fixed capability projection changed".into());
+    }
+    let capability_diagnostics = placement(
+        b"mod child; #[boxology::capability] fn PrivatePath() {} #[boxology::capability(PrivateList)] trait PrivateTrait {}\n",
+        b"struct Hidden { #[::boxology::capability = \"PrivateValue\"] value: u8 }\n",
+    )?.expect_err("fixed invalid capability placement must fail");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -476,6 +507,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{placement_projection}\ninvalid\n{placement_diagnostics}\n"),
     )
     .map_err(|error| format!("write contract-placement.txt: {error}"))?;
+    fs::write(
+        out.join("capability-placement.txt"),
+        format!("success\n{capability_projection}\ninvalid\n{capability_diagnostics}\n",),
+    )
+    .map_err(|error| format!("write capability-placement.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
