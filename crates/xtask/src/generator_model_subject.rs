@@ -447,6 +447,70 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     if capability_metadata_forward != capability_metadata(true)? {
         return Err("capability metadata result changed with input order".into());
     }
+    let capability_identities = |reversed| -> Result<String, String> {
+        let make = |root: &[u8], child: &[u8]| -> Result<GenerationRequest, String> {
+            let mut files = vec![
+                input(
+                    "boxology.toml",
+                    b"schema = 1\nid = \"hello\"\nkind = \"box\"\n",
+                ),
+                input("identity/root.rs", root),
+                input("identity/child.rs", child),
+            ];
+            if reversed {
+                files.reverse();
+            }
+            GenerationRequest::new(
+                BoxId::new("hello").unwrap(),
+                "identity/root.rs".into(),
+                files,
+                vec![],
+                vec![],
+            )
+            .map_err(|error| format!("fixed capability-identity request failed: {error}"))
+        };
+        let valid = make(
+            b"mod child; struct H; impl H { #[boxology::capability] async fn default_name(&self, a: A, b: B) -> R { loop {} } #[boxology::capability(name = \"rescued\")] async fn BadName(&self, a: A, b: B) -> R { loop {} } #[boxology::capability] async fn r#type(&self, a: A, b: B) -> R { loop {} } }",
+            b"struct C; impl C { #[boxology::capability(name = \"greet\", exposure = \"external\")] async fn hello(&self, a: A, b: B) -> R { loop {} } }",
+        )?;
+        let projection = ParsedRustInputs::parse(&valid)
+            .map_err(|error| format!("fixed capability-identity inputs failed: {error}"))?
+            .validate_capability_identities()
+            .map_err(|error| format!("fixed capability identities failed: {error}"))?
+            .iter()
+            .map(|item| format!("{}|{:?}", item.id(), item.marker_metadata().name_override()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let invalid = make(
+            b"mod child; struct H; impl H { #[boxology::capability(name = \"DO_NOT_LEAK_\\u{e9}\")] async fn bad(&self, a: A, b: B) -> R { loop {} } }",
+            b"",
+        )?;
+        let invalid_diagnostics = ParsedRustInputs::parse(&invalid)
+            .unwrap()
+            .validate_capability_identities()
+            .err()
+            .ok_or("fixed invalid capability identity must fail")?;
+        let collision = make(
+            b"mod child; struct H; impl H { #[boxology::capability] async fn do_not_leak_collision(&self, a: A, b: B) -> R { loop {} } }",
+            b"struct C; impl C { #[boxology::capability(name = \"do_not_leak_collision\")] async fn other(&self, a: A, b: B) -> R { loop {} } }",
+        )?;
+        let collision_diagnostics = ParsedRustInputs::parse(&collision)
+            .unwrap()
+            .validate_capability_identities()
+            .err()
+            .ok_or("fixed capability collision must fail")?;
+        let output = format!(
+            "success\n{projection}\ninvalid-name\n{invalid_diagnostics}\ncollision\n{collision_diagnostics}\n"
+        );
+        if output.contains("DO_NOT_LEAK") || output.contains("do_not_leak_collision") {
+            return Err("capability identity diagnostic leaked payload".into());
+        }
+        Ok(output)
+    };
+    let capability_identities_forward = capability_identities(false)?;
+    if capability_identities_forward != capability_identities(true)? {
+        return Err("capability identity result changed with input order".into());
+    }
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -642,6 +706,11 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         capability_metadata_forward,
     )
     .map_err(|error| format!("write capability-metadata.txt: {error}"))?;
+    fs::write(
+        out.join("capability-identities.txt"),
+        capability_identities_forward,
+    )
+    .map_err(|error| format!("write capability-identities.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
