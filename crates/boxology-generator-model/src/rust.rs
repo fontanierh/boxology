@@ -14,6 +14,9 @@ const UNREACHABLE_RULE: &str =
 const CONDITIONAL_RULE: &str = "cfg and cfg_attr are forbidden on exported items, their fields or variants, surrounding impls, and ancestor module declarations";
 const COLLISION_RULE: &str = "contract type names must be unique in the flat lifted namespace";
 const COLLISION_RULE_SOURCE: &str = "specs/s2-contract-generator.md D2-D4";
+const ATTRIBUTE_RULE: &str = "contract declarations, their fields, and variants may use only doc, direct boxology attributes, deprecated, and derive";
+const DERIVE_RULE: &str =
+    "contract declarations, their fields, and variants may derive only Debug, Clone, and PartialEq";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -173,11 +176,18 @@ impl ParsedRustInputs {
         }
         diagnostics.sort();
         diagnostics.dedup();
-        if diagnostics.is_empty() {
-            Ok(declarations)
-        } else {
-            Err(Diagnostics(diagnostics))
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
         }
+        for declaration in &declarations {
+            validate_contract_attributes(declaration, &mut diagnostics);
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        diagnostics
+            .is_empty()
+            .then_some(declarations)
+            .ok_or(Diagnostics(diagnostics))
     }
 
     /// Validates default module lookup and returns unique reachable files in logical-path byte order.
@@ -616,6 +626,126 @@ fn attribute_span(attribute: &syn::Attribute, close_path: bool) -> proc_macro2::
     start.join(end).expect("attribute path spans one source")
 }
 
+fn validate_contract_attributes(
+    declaration: &ContractDeclaration<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let path = declaration.source;
+    match declaration.syntax {
+        ContractDeclarationSyntax::Struct(item) => {
+            validate_attributes(path, &item.attrs, diagnostics);
+            for field in &item.fields {
+                validate_attributes(path, &field.attrs, diagnostics);
+            }
+        }
+        ContractDeclarationSyntax::Enum(item) => {
+            validate_attributes(path, &item.attrs, diagnostics);
+            for variant in &item.variants {
+                validate_attributes(path, &variant.attrs, diagnostics);
+                for field in &variant.fields {
+                    validate_attributes(path, &field.attrs, diagnostics);
+                }
+            }
+        }
+    }
+}
+
+fn validate_attributes(
+    path: &RelativePath,
+    attributes: &[syn::Attribute],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for attribute in attributes {
+        if boxology_leaf(attribute).is_some() {
+            continue;
+        }
+        let name = attribute
+            .path()
+            .get_ident()
+            .filter(|_| matches!(attribute.style, syn::AttrStyle::Outer))
+            .map(|identifier| identifier.unraw().to_string());
+        match name.as_deref() {
+            Some("doc" | "deprecated") => {}
+            Some("derive") => validate_derives(path, attribute, diagnostics),
+            _ => diagnostics.push(module_diagnostic(
+                path,
+                attribute_span(attribute, false),
+                "BXG0022",
+                "non-allowlisted contract attribute",
+                ATTRIBUTE_RULE,
+            )),
+        }
+    }
+}
+
+fn validate_derives(
+    path: &RelativePath,
+    attribute: &syn::Attribute,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Ok(derives) = attribute.parse_args_with(
+        syn::punctuated::Punctuated::<ParsedDerive, syn::Token![,]>::parse_terminated,
+    ) else {
+        diagnostics.push(module_diagnostic(
+            path,
+            attribute_span(attribute, false),
+            "BXG0023",
+            "non-allowlisted contract derive",
+            DERIVE_RULE,
+        ));
+        return;
+    };
+    for derive in derives {
+        let allowed = derive
+            .path
+            .get_ident()
+            .map(syn::Ident::unraw)
+            .is_some_and(|name| name == "Debug" || name == "Clone" || name == "PartialEq");
+        if !allowed {
+            diagnostics.push(module_diagnostic(
+                path,
+                derive.span,
+                "BXG0023",
+                "non-allowlisted contract derive",
+                DERIVE_RULE,
+            ));
+        }
+    }
+}
+
+struct ParsedDerive {
+    path: syn::Path,
+    span: proc_macro2::Span,
+}
+
+impl syn::parse::Parse for ParsedDerive {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let start = input.cursor();
+        let mut path: syn::Path = input.parse()?;
+        if input.peek(syn::token::Paren) {
+            path.segments.last_mut().unwrap().arguments =
+                syn::PathArguments::Parenthesized(input.parse()?);
+        }
+        let finish = input.cursor();
+        let (first, mut cursor) = start.token_tree().expect("a parsed path has tokens");
+        let mut last = first.span();
+        while cursor != finish {
+            let (token, next) = cursor
+                .token_tree()
+                .expect("finish follows parsed path tokens");
+            last = token.span();
+            cursor = next;
+        }
+        Ok(Self {
+            path,
+            span: first
+                .span()
+                .join(last)
+                .expect("derive path spans one source"),
+        })
+    }
+}
+
 fn append_errors(path: &RelativePath, error: syn::Error, diagnostics: &mut Vec<Diagnostic>) {
     for component in error {
         diagnostics.push(Diagnostic {
@@ -1000,6 +1130,161 @@ mod tests {
         for sentinel in ["Foo", "payload", "field", "SecretVariant", "root.rs"] {
             assert!(!rendered.contains(sentinel));
         }
+    }
+
+    #[test]
+    fn contract_attribute_allowlist_accepts_all_supported_sites_and_forms() {
+        let source = concat!(
+            "/// declaration docs\n#[doc = \"more docs\"]\n#[deprecated]\n",
+            "#[deprecated(note = \"later\")]\n#[derive(Debug, r#Clone)]\n",
+            "#[derive(PartialEq)]\n#[boxology::contract(payload)]\n",
+            "struct Named { #[doc = \"field\"] #[derive(Clone)] named: u8 }\n",
+            "#[::boxology::contract]\n",
+            "struct Tuple(#[::boxology::field(anything)] #[deprecated(note = \"later\")] u8);\n",
+            "#[derive()]\n#[boxology::contract(error)]\nenum Event {\n",
+            "#[doc = \"variant\"] Unit,\n",
+            "Tuple(#[derive(Debug, PartialEq)] u8),\n",
+            "Named { #[boxology::field] value: u8 },\n}\n",
+        );
+        let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)])).unwrap();
+        let declarations = parsed.discover_contract_declarations().unwrap();
+        assert_eq!(
+            declarations
+                .iter()
+                .map(ContractDeclaration::lifted_name)
+                .collect::<Vec<_>>(),
+            ["Named", "Tuple", "Event"]
+        );
+    }
+
+    #[test]
+    fn rejected_attributes_are_owned_by_each_direct_contract_site() {
+        let source = concat!(
+            "#[PrivateDeclAttr(secret)]\n#[boxology::contract]\nstruct S {\n",
+            "#[PrivateFieldAttr(secret)]\nvalue: u8,\n}\n",
+            "#[boxology::contract]\nenum E {\n",
+            "#[PrivateVariantAttr(secret)]\nA,\nB {\n",
+            "#[::PrivateVariantFieldAttr(secret)]\nvalue: u8,\n}\n}\n",
+        );
+        let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+        let expected = [
+            span((1, 3), (1, 18)),
+            span((4, 3), (4, 19)),
+            span((9, 3), (9, 21)),
+            span((12, 3), (12, 28)),
+        ];
+        assert_eq!(diagnostics.as_slice().len(), expected.len());
+        for (diagnostic, expected) in diagnostics.as_slice().iter().zip(expected) {
+            assert_eq!(diagnostic.code(), "BXG0022");
+            assert_eq!(diagnostic.span(), expected);
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "non-allowlisted contract attribute"
+            );
+            assert_eq!(diagnostic.rule(), ATTRIBUTE_RULE);
+            assert_eq!(diagnostic.rule_source(), RULE_SOURCE);
+        }
+        let output = format!("{diagnostics}\n{diagnostics:?}");
+        for private in [
+            "PrivateDeclAttr",
+            "PrivateFieldAttr",
+            "PrivateVariantAttr",
+            "PrivateVariantFieldAttr",
+            "secret",
+        ] {
+            assert!(!output.contains(private));
+        }
+    }
+
+    #[test]
+    fn derive_allowlist_is_exact_complete_and_payload_safe() {
+        let source = concat!(
+            "#[boxology::contract]\n#[derive(Debug, r#Clone, PartialEq)]\n#[derive()]\n",
+            "#[derive(Debug, serde::Serialize, Clone)]\n#[derive(::PartialEq)]\n",
+            "#[derive(Debug<u8>)]\n#[derive(Debug(u8))]\n#[derive(Fn() -> SecretReturn)]\n",
+            "#[derive(Copy)]\n#[derive]\n#[derive = \"PrivateValue\"]\nstruct Bad;\n",
+        );
+        let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+        let expected = [
+            span((4, 17), (4, 33)),
+            span((5, 10), (5, 21)),
+            span((6, 10), (6, 19)),
+            span((7, 10), (7, 19)),
+            span((8, 10), (8, 30)),
+            span((9, 10), (9, 14)),
+            span((10, 3), (10, 9)),
+            span((11, 3), (11, 9)),
+        ];
+        assert_eq!(diagnostics.as_slice().len(), expected.len());
+        for (diagnostic, expected) in diagnostics.as_slice().iter().zip(expected) {
+            assert_eq!(diagnostic.code(), "BXG0023");
+            assert_eq!(diagnostic.span(), expected);
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "non-allowlisted contract derive"
+            );
+            assert_eq!(diagnostic.rule(), DERIVE_RULE);
+        }
+        let output = format!("{diagnostics}\n{diagnostics:?}");
+        for private in [
+            "serde",
+            "Serialize",
+            "SecretReturn",
+            "Copy",
+            "PrivateValue",
+            "u8",
+        ] {
+            assert!(!output.contains(private));
+        }
+    }
+
+    #[test]
+    fn earlier_phases_suppress_allowlist_and_findings_are_input_order_invariant() {
+        let collision = discovery_errors(&request(
+            "root.rs",
+            &[(
+                "root.rs",
+                "#[boxology::contract]\n#[PrivateOne]\nstruct Foo;\n#[boxology::contract]\n#[PrivateTwo]\nenum Foo { A }",
+            )],
+        ));
+        assert_eq!(collision.as_slice().len(), 1);
+        assert_eq!(collision.as_slice()[0].code(), "BXG0021");
+        for (source, code) in [
+            (
+                "#[boxology::contract]\n#[Private]\nstruct Unique;\nmod missing;",
+                "BXG0017",
+            ),
+            (
+                "#[cfg(secret)]\n#[boxology::contract]\n#[Private]\nstruct Unique;",
+                "BXG0020",
+            ),
+        ] {
+            let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+            assert_eq!(diagnostics.as_slice()[0].code(), code);
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|diagnostic| !matches!(diagnostic.code(), "BXG0022" | "BXG0023"))
+            );
+        }
+
+        let files = [
+            ("root.rs", "mod z; mod a;"),
+            ("z.rs", "#[boxology::contract]\n#[Private]\nstruct Z;"),
+            ("a.rs", "#[boxology::contract]\n#[derive(Copy)]\nstruct A;"),
+        ];
+        let first = discovery_errors(&request("root.rs", &files));
+        let reversed = files.into_iter().rev().collect::<Vec<_>>();
+        assert_eq!(first, discovery_errors(&request("root.rs", &reversed)));
+        assert_eq!(
+            first
+                .as_slice()
+                .iter()
+                .map(|diagnostic| (diagnostic.path().as_str(), diagnostic.code()))
+                .collect::<Vec<_>>(),
+            [("a.rs", "BXG0023"), ("z.rs", "BXG0022")]
+        );
     }
 
     #[test]

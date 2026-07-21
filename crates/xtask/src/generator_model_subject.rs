@@ -77,6 +77,41 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         Ok(_) => return Err("fixed collision unexpectedly succeeded".into()),
         Err(diagnostics) => diagnostics,
     };
+    let attributes = |source: &[u8]| -> Result<_, String> {
+        let evaluate = |reversed| -> Result<_, String> {
+            let mut files = vec![
+                input("boxology.toml", request.inputs()[0].bytes()),
+                input("attributes.rs", source),
+            ];
+            if reversed {
+                files.reverse();
+            }
+            let case = GenerationRequest::new(id(), "attributes.rs".into(), files, vec![], vec![])
+                .map_err(|error| format!("fixed attribute request failed: {error}"))?;
+            let parsed = ParsedRustInputs::parse(&case)
+                .map_err(|error| format!("fixed attribute inputs failed: {error}"))?;
+            Ok(parsed.discover_contract_declarations().map(|declarations| {
+                declarations
+                    .iter()
+                    .map(|declaration| declaration.lifted_name())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }))
+        };
+        Ok([evaluate(false)?, evaluate(true)?])
+    };
+    let valid_attributes = attributes(b"#[doc = \"allowed\"]\n#[deprecated(note = \"later\")]\n#[derive(Debug, Clone, PartialEq)]\n#[boxology::contract]\nstruct Allowed { #[boxology::field] value: u8 }\n")?;
+    let invalid_attributes = attributes(b"#[boxology::contract]\n#[PrivateAttribute(secret)]\nstruct Invalid { #[derive(PrivateDerive)] field: u8 }\n")?;
+    if valid_attributes[0] != valid_attributes[1] || invalid_attributes[0] != invalid_attributes[1]
+    {
+        return Err("contract attribute result changed with input order".into());
+    }
+    let attribute_projection = valid_attributes[0]
+        .as_ref()
+        .map_err(|error| format!("fixed valid attributes failed: {error}"))?;
+    let attribute_diagnostics = invalid_attributes[0]
+        .as_ref()
+        .expect_err("fixed invalid attributes must fail");
     let invalid_manifest_request = GenerationRequest::new(
         id(),
         "source/custom-entry.rs".into(),
@@ -219,6 +254,14 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         format!("success\n{declaration_projection}\ncollision\n{collision_diagnostics}\n"),
     )
     .map_err(|error| format!("write contract-declarations.txt: {error}"))?;
+    fs::write(
+        out.join("contract-attributes.txt"),
+        format!(
+            "success count={}\n{attribute_projection}\ninvalid\n{attribute_diagnostics}\n",
+            attribute_projection.lines().count()
+        ),
+    )
+    .map_err(|error| format!("write contract-attributes.txt: {error}"))?;
     fs::write(
         out.join("rust-diagnostics.txt"),
         format!("{rust_diagnostics}\n"),
