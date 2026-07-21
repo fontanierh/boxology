@@ -1,8 +1,8 @@
 use std::{error::Error, fmt};
 
 use boxology_contract::{
-    ConformanceErrorKind, ContractValue, DecodeRole, DescriptorRef, FieldDescriptor, OpaqueTree,
-    SlotValue, TypeDescriptor,
+    ConformanceErrorKind, ContractValue, DecodeRole, DescriptorRef, FieldDescriptor, OpaquePayload,
+    OpaqueTree, SlotValue, TypeDescriptor, VariantDescriptor, VariantPayload,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,9 +55,12 @@ pub(crate) fn decode_tree(
     if !is_supported(descriptor) {
         return failure(SemanticErrorCategory::UnsupportedDescriptor);
     }
-    let slot = match tree {
-        OpaqueTree::Null => SlotValue::Null,
-        tree => SlotValue::Value(decode_value(tree, descriptor, role)?),
+    let slot = match (tree, descriptor.view()) {
+        (tree @ OpaqueTree::Null, DescriptorRef::Enum(variants)) => {
+            SlotValue::Value(decode_enum(tree, variants, role)?)
+        }
+        (OpaqueTree::Null, _) => SlotValue::Null,
+        (tree, _) => SlotValue::Value(decode_value(tree, descriptor, role)?),
     };
     descriptor.conform(role, slot).map_err(|error| {
         let category = if matches!(error.kind(), ConformanceErrorKind::UnexpectedNull) {
@@ -90,6 +93,10 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
         DescriptorRef::Struct(fields) => {
             fields.iter().all(|field| is_supported(field.descriptor()))
         }
+        DescriptorRef::Enum(variants) => variants.iter().all(|variant| match variant.payload() {
+            VariantPayload::Unit => true,
+            VariantPayload::Value(descriptor) => is_supported(descriptor),
+        }),
         _ => false,
     }
 }
@@ -109,6 +116,7 @@ fn decode_value(
         DescriptorRef::List(inner) => decode_list(tree, inner, role),
         DescriptorRef::Map(inner) => decode_map(tree, inner, role),
         DescriptorRef::Struct(fields) => decode_struct(tree, fields, role),
+        DescriptorRef::Enum(variants) => decode_enum(tree, variants, role),
         _ => decode_scalar(tree, descriptor),
     }
 }
@@ -171,6 +179,49 @@ fn decode_struct(
     }
     ContractValue::object(output)
         .map_err(|_| SemanticError(SemanticErrorCategory::DuplicateObjectKey))
+}
+
+fn decode_enum(
+    tree: OpaqueTree,
+    variants: &[VariantDescriptor],
+    role: DecodeRole,
+) -> Result<ContractValue, SemanticError> {
+    let entries = object_entries(tree)?;
+    if entries.len() != 2
+        || entries
+            .iter()
+            .any(|(key, _)| key != "tag" && key != "payload")
+    {
+        return failure(SemanticErrorCategory::RepresentationMismatch);
+    }
+    let tag = entries.iter().find(|(key, _)| key == "tag").unwrap();
+    let OpaqueTree::String(tag) = &tag.1 else {
+        return failure(SemanticErrorCategory::RepresentationMismatch);
+    };
+    let tag = tag.clone();
+    let payload = entries
+        .into_iter()
+        .find(|(key, _)| key == "payload")
+        .unwrap()
+        .1;
+    let Some(variant) = variants.iter().find(|variant| variant.tag() == tag) else {
+        return match role {
+            DecodeRole::ProviderInput => failure(SemanticErrorCategory::RepresentationMismatch),
+            DecodeRole::ConsumerOutput => Ok(ContractValue::enum_value(
+                tag,
+                SlotValue::Value(ContractValue::opaque(OpaquePayload::new(payload))),
+            )),
+        };
+    };
+    let payload = match variant.payload() {
+        VariantPayload::Unit if matches!(payload, OpaqueTree::Null) => SlotValue::Null,
+        VariantPayload::Unit => return failure(SemanticErrorCategory::RepresentationMismatch),
+        VariantPayload::Value(_) if matches!(payload, OpaqueTree::Null) => SlotValue::Null,
+        VariantPayload::Value(descriptor) => {
+            SlotValue::Value(decode_value(payload, descriptor, role)?)
+        }
+    };
+    Ok(ContractValue::enum_value(tag, payload))
 }
 
 fn decode_scalar(
@@ -288,7 +339,10 @@ fn failure<T>(category: SemanticErrorCategory) -> Result<T, SemanticError> {
 mod tests {
     use super::SemanticErrorCategory as C;
     use super::*;
-    use boxology_contract::{ContractValue as Value, FieldDescriptor, OpaqueNumber, ValueRef};
+    use boxology_contract::{
+        ContractValue as Value, FieldDescriptor, OpaqueNumber, ValueRef, VariantDescriptor,
+        VariantPayload,
+    };
 
     const ROLES: [DecodeRole; 2] = [DecodeRole::ProviderInput, DecodeRole::ConsumerOutput];
     const SENTINEL: &str = "DO_NOT_LEAK";
@@ -386,6 +440,25 @@ mod tests {
 
     fn structure(fields: impl IntoIterator<Item = FieldDescriptor>) -> TypeDescriptor {
         TypeDescriptor::structure(fields).unwrap()
+    }
+
+    fn variant(tag: &str, payload: VariantPayload) -> VariantDescriptor {
+        VariantDescriptor::new(tag, payload, None)
+    }
+
+    fn enumeration(variants: impl IntoIterator<Item = VariantDescriptor>) -> TypeDescriptor {
+        TypeDescriptor::enumeration(variants).unwrap()
+    }
+
+    fn envelope(tag: &str, payload: OpaqueTree) -> OpaqueTree {
+        tree([
+            ("tag", OpaqueTree::String(tag.into())),
+            ("payload", payload),
+        ])
+    }
+
+    fn enum_value(tag: &str, payload: SlotValue) -> Value {
+        Value::enum_value(tag, payload)
     }
 
     fn tree(entries: impl IntoIterator<Item = (&'static str, OpaqueTree)>) -> OpaqueTree {
@@ -958,11 +1031,300 @@ mod tests {
     }
 
     #[test]
+    fn known_enums_decode_all_supported_payload_shapes_and_orders() {
+        let empty = enumeration([]);
+        assert!(is_supported(&empty));
+        error_role(
+            envelope("none", OpaqueTree::Null),
+            &empty,
+            DecodeRole::ProviderInput,
+            C::RepresentationMismatch,
+            None,
+        );
+
+        let descriptor = enumeration([
+            variant("EmptyName", VariantPayload::Unit),
+            variant("Count", VariantPayload::Value(TypeDescriptor::i8())),
+            variant(
+                "Maybe",
+                VariantPayload::Value(TypeDescriptor::optional(TypeDescriptor::string()).unwrap()),
+            ),
+            variant(
+                "Record",
+                VariantPayload::Value(structure([field("ok", TypeDescriptor::bool())])),
+            ),
+            variant(
+                "Items",
+                VariantPayload::Value(
+                    TypeDescriptor::list(TypeDescriptor::map(TypeDescriptor::u8()).unwrap())
+                        .unwrap(),
+                ),
+            ),
+            variant(
+                "Nested",
+                VariantPayload::Value(enumeration([variant("Inner", VariantPayload::Unit)])),
+            ),
+        ]);
+        let hello = br#"{"tag":"EmptyName","payload":null}"#;
+        let hello = crate::syntax::parse(
+            hello,
+            crate::syntax::SyntaxLimits(hello.len(), crate::syntax::DEFAULT_DEPTH_LIMIT),
+        )
+        .unwrap();
+        ok_both(hello, &descriptor, enum_value("EmptyName", SlotValue::Null));
+        ok_both(
+            tree([
+                ("payload", number("7")),
+                ("tag", OpaqueTree::String("Count".into())),
+            ]),
+            &descriptor,
+            enum_value("Count", SlotValue::Value(Value::i64(7))),
+        );
+        ok_both(
+            envelope("Maybe", OpaqueTree::Null),
+            &descriptor,
+            enum_value("Maybe", SlotValue::Null),
+        );
+        ok_both(
+            envelope("Record", tree([("ok", OpaqueTree::Bool(true))])),
+            &descriptor,
+            enum_value(
+                "Record",
+                SlotValue::Value(object([("ok", Value::bool(true))])),
+            ),
+        );
+        ok_both(
+            envelope("Items", OpaqueTree::List(vec![tree([("x", number("2"))])])),
+            &descriptor,
+            enum_value(
+                "Items",
+                SlotValue::Value(Value::list([object([("x", Value::u64(2))])])),
+            ),
+        );
+        ok_both(
+            envelope("Nested", envelope("Inner", OpaqueTree::Null)),
+            &descriptor,
+            enum_value(
+                "Nested",
+                SlotValue::Value(enum_value("Inner", SlotValue::Null)),
+            ),
+        );
+    }
+
+    #[test]
+    fn enums_recurse_through_aggregates_with_the_same_role() {
+        let event = enumeration([
+            variant("Known", VariantPayload::Unit),
+            variant(
+                "Object",
+                VariantPayload::Value(structure([field("name", TypeDescriptor::string())])),
+            ),
+        ]);
+        let descriptor = structure([field(
+            "events",
+            TypeDescriptor::list(TypeDescriptor::map(event).unwrap()).unwrap(),
+        )]);
+        let input = tree([(
+            "events",
+            OpaqueTree::List(vec![tree([
+                ("known", envelope("Known", OpaqueTree::Null)),
+                (
+                    "object",
+                    envelope(
+                        "Object",
+                        tree([
+                            ("name", OpaqueTree::String("Ada".into())),
+                            ("unknown", OpaqueTree::String(SENTINEL.into())),
+                        ]),
+                    ),
+                ),
+            ])]),
+        )]);
+        error_role(
+            input.clone(),
+            &descriptor,
+            DecodeRole::ProviderInput,
+            C::RepresentationMismatch,
+            Some(SENTINEL),
+        );
+        assert_eq!(
+            decode_tree(input, &descriptor, DecodeRole::ConsumerOutput),
+            Ok(SlotValue::Value(object([(
+                "events",
+                Value::list([object([
+                    ("known", enum_value("Known", SlotValue::Null)),
+                    (
+                        "object",
+                        enum_value(
+                            "Object",
+                            SlotValue::Value(object([("name", Value::string("Ada"))])),
+                        ),
+                    ),
+                ])]),
+            )])))
+        );
+    }
+
+    #[test]
+    fn unknown_consumer_payload_is_exact_opaque_and_provider_never_inspects_it() {
+        let descriptor = enumeration([variant("Known", VariantPayload::Unit)]);
+        let raw = br#"{"tag":"FUTURE_SECRET_TAG","payload":{"b":1.0,"a":1,"a":1e0,"nested":[null,{"x":2,"x":3}]}}"#;
+        let parsed = crate::syntax::parse(
+            raw,
+            crate::syntax::SyntaxLimits(raw.len(), crate::syntax::DEFAULT_DEPTH_LIMIT),
+        )
+        .unwrap();
+        let OpaqueTree::Object(entries) = &parsed else {
+            panic!("fixture is not an object");
+        };
+        let expected = entries
+            .iter()
+            .find(|(key, _)| key == "payload")
+            .unwrap()
+            .1
+            .clone();
+        error_role(
+            parsed.clone(),
+            &descriptor,
+            DecodeRole::ProviderInput,
+            C::RepresentationMismatch,
+            Some("FUTURE_SECRET_TAG"),
+        );
+        let SlotValue::Value(value) =
+            decode_tree(parsed, &descriptor, DecodeRole::ConsumerOutput).unwrap()
+        else {
+            panic!("unknown enum decoded as null");
+        };
+        let ValueRef::Enum { tag, payload } = value.view() else {
+            panic!("unknown enum decoded at wrong shape");
+        };
+        assert_eq!(tag, "FUTURE_SECRET_TAG");
+        let SlotValue::Value(payload) = payload else {
+            panic!("unknown payload decoded as null slot");
+        };
+        let ValueRef::Opaque(payload) = payload.view() else {
+            panic!("unknown payload was not opaque");
+        };
+        assert_eq!(payload.reveal(), &expected);
+        assert!(!format!("{payload:?}").contains("FUTURE_SECRET_TAG"));
+
+        let SlotValue::Value(value) = decode_tree(
+            envelope("FutureNull", OpaqueTree::Null),
+            &descriptor,
+            DecodeRole::ConsumerOutput,
+        )
+        .unwrap() else {
+            panic!("unknown null enum decoded as null");
+        };
+        let ValueRef::Enum { payload, .. } = value.view() else {
+            panic!("unknown null decoded at wrong shape");
+        };
+        let SlotValue::Value(payload) = payload else {
+            panic!("raw null was collapsed to a null slot");
+        };
+        let ValueRef::Opaque(payload) = payload.view() else {
+            panic!("raw null was not opaque");
+        };
+        assert_eq!(payload.reveal(), &OpaqueTree::Null);
+    }
+
+    #[test]
+    fn enum_envelopes_and_known_payloads_preserve_error_precedence() {
+        let descriptor = enumeration([
+            variant("Unit", VariantPayload::Unit),
+            variant("Required", VariantPayload::Value(TypeDescriptor::i8())),
+            variant(
+                "Map",
+                VariantPayload::Value(TypeDescriptor::map(TypeDescriptor::i8()).unwrap()),
+            ),
+            variant(
+                "Struct",
+                VariantPayload::Value(structure([field("x", TypeDescriptor::i8())])),
+            ),
+        ]);
+        for malformed in [
+            OpaqueTree::Null,
+            OpaqueTree::List(vec![]),
+            tree([]),
+            tree([("tag", OpaqueTree::String("Unit".into()))]),
+            tree([("payload", OpaqueTree::Null)]),
+            tree([
+                ("tag", OpaqueTree::String("Unit".into())),
+                ("payload", OpaqueTree::Null),
+                ("extra", OpaqueTree::Null),
+            ]),
+            tree([("tag", OpaqueTree::Null), ("payload", OpaqueTree::Null)]),
+            tree([
+                ("kind", OpaqueTree::String("Unit".into())),
+                ("payload", OpaqueTree::Null),
+            ]),
+        ] {
+            representation(malformed, &descriptor, None);
+        }
+        for duplicate_envelope in [
+            tree([
+                ("tag", OpaqueTree::String("Unit".into())),
+                ("tag", OpaqueTree::String(SENTINEL.into())),
+                ("payload", OpaqueTree::Null),
+            ]),
+            tree([
+                ("tag", OpaqueTree::String("Unit".into())),
+                ("payload", OpaqueTree::Null),
+                ("payload", OpaqueTree::String(SENTINEL.into())),
+            ]),
+            tree([
+                ("tag", OpaqueTree::String("Unit".into())),
+                ("payload", OpaqueTree::Null),
+                (SENTINEL, OpaqueTree::Null),
+                (SENTINEL, OpaqueTree::Bool(true)),
+            ]),
+        ] {
+            duplicate(duplicate_envelope, &descriptor, Some(SENTINEL));
+        }
+        representation(
+            envelope("Unit", OpaqueTree::String(SENTINEL.into())),
+            &descriptor,
+            Some(SENTINEL),
+        );
+        representation(
+            envelope("Required", OpaqueTree::Bool(true)),
+            &descriptor,
+            None,
+        );
+        null(envelope("Required", OpaqueTree::Null), &descriptor, None);
+        range(
+            envelope("Required", number("128")),
+            &descriptor,
+            Some("128"),
+        );
+        duplicate(
+            envelope(
+                "Map",
+                tree([(SENTINEL, number("128")), (SENTINEL, OpaqueTree::Null)]),
+            ),
+            &descriptor,
+            Some(SENTINEL),
+        );
+        duplicate(
+            envelope(
+                "Struct",
+                tree([("x", number("128")), ("x", OpaqueTree::Null)]),
+            ),
+            &descriptor,
+            Some("128"),
+        );
+    }
+
+    #[test]
     fn recursive_support_inventory_is_complete_before_payload_inspection() {
         let strings = TypeDescriptor::list(TypeDescriptor::string()).unwrap();
         let structure = structure([
             field("value", TypeDescriptor::bool()),
             field("items", strings),
+        ]);
+        let enumeration = enumeration([
+            variant("unit", VariantPayload::Unit),
+            variant("value", VariantPayload::Value(structure.clone())),
         ]);
         let supported = [
             TypeDescriptor::optional(TypeDescriptor::i8()).unwrap(),
@@ -975,6 +1337,9 @@ mod tests {
             .unwrap(),
             structure.clone(),
             TypeDescriptor::map(TypeDescriptor::list(structure).unwrap()).unwrap(),
+            enumeration.clone(),
+            TypeDescriptor::list(TypeDescriptor::map(enumeration).unwrap()).unwrap(),
+            TypeDescriptor::enumeration([]).unwrap(),
         ];
         assert!(supported.iter().all(is_supported));
         let unsupported =
@@ -995,12 +1360,27 @@ mod tests {
         let deep_secret =
             TypeDescriptor::list(TypeDescriptor::map(optional_secret.clone()).unwrap()).unwrap();
         let structure = structure([field("field", optional_secret.clone())]);
-        let enumeration = TypeDescriptor::enumeration([boxology_contract::VariantDescriptor::new(
-            "variant",
-            boxology_contract::VariantPayload::Unit,
-            None,
-        )])
-        .unwrap();
+        let secret_enum = enumeration([variant(
+            "secret",
+            VariantPayload::Value(optional_secret.clone()),
+        )]);
+        let blob_enum = enumeration([variant(
+            "blob",
+            VariantPayload::Value(TypeDescriptor::list(TypeDescriptor::blob()).unwrap()),
+        )]);
+        let hostile = tree([
+            ("tag", OpaqueTree::String("secret".into())),
+            (
+                "payload",
+                tree([(SENTINEL, OpaqueTree::Null), (SENTINEL, number("1"))]),
+            ),
+        ]);
+        unsupported(hostile.clone(), &secret_enum, Some(SENTINEL));
+        unsupported(
+            OpaqueTree::List(vec![hostile]),
+            &TypeDescriptor::list(blob_enum.clone()).unwrap(),
+            Some(SENTINEL),
+        );
         unsupported(OpaqueTree::Null, &structure, None);
         unsupported(
             tree([
@@ -1042,11 +1422,11 @@ mod tests {
             TypeDescriptor::list(TypeDescriptor::blob()).unwrap(),
             structure.clone(),
             TypeDescriptor::map(structure).unwrap(),
-            TypeDescriptor::structure([field("event", enumeration.clone())]).unwrap(),
-            TypeDescriptor::map(enumeration.clone()).unwrap(),
+            TypeDescriptor::structure([field("event", secret_enum.clone())]).unwrap(),
+            TypeDescriptor::map(blob_enum.clone()).unwrap(),
             TypeDescriptor::structure([field("blob", TypeDescriptor::blob())]).unwrap(),
-            enumeration.clone(),
-            TypeDescriptor::list(enumeration).unwrap(),
+            secret_enum.clone(),
+            TypeDescriptor::list(blob_enum).unwrap(),
         ];
         for descriptor in descriptors {
             unsupported(
