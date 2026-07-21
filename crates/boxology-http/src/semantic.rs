@@ -11,6 +11,7 @@ pub(crate) enum SemanticErrorCategory {
     NonCanonicalInteger,
     IntegerRange,
     NonFiniteFloat,
+    DuplicateObjectKey,
     NullConformance,
     UnsupportedDescriptor,
 }
@@ -22,6 +23,7 @@ impl SemanticErrorCategory {
             Self::NonCanonicalInteger => "non-canonical integer",
             Self::IntegerRange => "integer outside descriptor range",
             Self::NonFiniteFloat => "non-finite float",
+            Self::DuplicateObjectKey => "duplicate object key",
             Self::NullConformance => "null violates descriptor",
             Self::UnsupportedDescriptor => "unsupported descriptor",
         }
@@ -55,7 +57,7 @@ pub(crate) fn decode_tree(
     }
     let slot = match tree {
         OpaqueTree::Null => SlotValue::Null,
-        tree => SlotValue::Value(decode_scalar(tree, descriptor)?),
+        tree => SlotValue::Value(decode_value(tree, descriptor)?),
     };
     descriptor.conform(role, slot).map_err(|error| {
         let category = if matches!(error.kind(), ConformanceErrorKind::UnexpectedNull) {
@@ -68,21 +70,70 @@ pub(crate) fn decode_tree(
 }
 
 fn is_supported(descriptor: &TypeDescriptor) -> bool {
-    matches!(
-        descriptor.view(),
+    match descriptor.view() {
         DescriptorRef::Bool
-            | DescriptorRef::String
-            | DescriptorRef::I8
-            | DescriptorRef::I16
-            | DescriptorRef::I32
-            | DescriptorRef::I64
-            | DescriptorRef::U8
-            | DescriptorRef::U16
-            | DescriptorRef::U32
-            | DescriptorRef::U64
-            | DescriptorRef::F32
-            | DescriptorRef::F64
-    )
+        | DescriptorRef::String
+        | DescriptorRef::I8
+        | DescriptorRef::I16
+        | DescriptorRef::I32
+        | DescriptorRef::I64
+        | DescriptorRef::U8
+        | DescriptorRef::U16
+        | DescriptorRef::U32
+        | DescriptorRef::U64
+        | DescriptorRef::F32
+        | DescriptorRef::F64 => true,
+        DescriptorRef::Optional(inner)
+        | DescriptorRef::TriState(inner)
+        | DescriptorRef::List(inner)
+        | DescriptorRef::Map(inner) => is_supported(inner),
+        _ => false,
+    }
+}
+
+fn decode_value(
+    tree: OpaqueTree,
+    descriptor: &TypeDescriptor,
+) -> Result<ContractValue, SemanticError> {
+    if matches!(tree, OpaqueTree::Null) {
+        return Ok(ContractValue::null());
+    }
+    match descriptor.view() {
+        DescriptorRef::Optional(inner) | DescriptorRef::TriState(inner) => {
+            decode_value(tree, inner)
+        }
+        DescriptorRef::List(inner) => decode_list(tree, inner),
+        DescriptorRef::Map(inner) => decode_map(tree, inner),
+        _ => decode_scalar(tree, descriptor),
+    }
+}
+
+fn decode_list(tree: OpaqueTree, element: &TypeDescriptor) -> Result<ContractValue, SemanticError> {
+    let OpaqueTree::List(items) = tree else {
+        return failure(SemanticErrorCategory::RepresentationMismatch);
+    };
+    items
+        .into_iter()
+        .map(|item| decode_value(item, element))
+        .collect::<Result<Vec<_>, _>>()
+        .map(ContractValue::list)
+}
+
+fn decode_map(tree: OpaqueTree, element: &TypeDescriptor) -> Result<ContractValue, SemanticError> {
+    let OpaqueTree::Object(entries) = tree else {
+        return failure(SemanticErrorCategory::RepresentationMismatch);
+    };
+    for (index, (key, _)) in entries.iter().enumerate() {
+        if entries[..index].iter().any(|(earlier, _)| earlier == key) {
+            return failure(SemanticErrorCategory::DuplicateObjectKey);
+        }
+    }
+    let entries = entries
+        .into_iter()
+        .map(|(key, value)| decode_value(value, element).map(|value| (key, value)))
+        .collect::<Result<Vec<_>, _>>()?;
+    ContractValue::object(entries)
+        .map_err(|_| SemanticError(SemanticErrorCategory::DuplicateObjectKey))
 }
 
 fn decode_scalar(
@@ -251,6 +302,7 @@ mod tests {
     error_helper!(noncanonical, NonCanonicalInteger);
     error_helper!(range, IntegerRange);
     error_helper!(nonfinite, NonFiniteFloat);
+    error_helper!(duplicate, DuplicateObjectKey);
     error_helper!(null, NullConformance);
     error_helper!(unsupported, UnsupportedDescriptor);
 
@@ -269,6 +321,19 @@ mod tests {
             TypeDescriptor::f32(),
             TypeDescriptor::f64(),
         ]
+    }
+
+    fn slot_both(tree: OpaqueTree, descriptor: &TypeDescriptor, expected: SlotValue) {
+        for role in ROLES {
+            assert_eq!(
+                decode_tree(tree.clone(), descriptor, role),
+                Ok(expected.clone())
+            );
+        }
+    }
+
+    fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+        Value::object(entries.into_iter().map(|(key, value)| (key.into(), value))).unwrap()
     }
 
     fn f32_both(token: &str, expected: f32) {
@@ -480,24 +545,237 @@ mod tests {
     }
 
     #[test]
+    fn top_level_presence_wrappers_preserve_null_and_value_without_missing() {
+        let string = TypeDescriptor::string();
+        for descriptor in [
+            TypeDescriptor::optional(string.clone()).unwrap(),
+            TypeDescriptor::tri_state(string.clone()).unwrap(),
+        ] {
+            slot_both(OpaqueTree::Null, &descriptor, SlotValue::Null);
+            ok_both(
+                OpaqueTree::String("value".into()),
+                &descriptor,
+                Value::string("value"),
+            );
+        }
+
+        let list = TypeDescriptor::list(string.clone()).unwrap();
+        for descriptor in [
+            TypeDescriptor::optional(list.clone()).unwrap(),
+            TypeDescriptor::tri_state(list).unwrap(),
+        ] {
+            slot_both(OpaqueTree::Null, &descriptor, SlotValue::Null);
+            ok_both(
+                OpaqueTree::List(vec![OpaqueTree::String("item".into())]),
+                &descriptor,
+                Value::list([Value::string("item")]),
+            );
+        }
+
+        let map = TypeDescriptor::map(string).unwrap();
+        for descriptor in [
+            TypeDescriptor::optional(map.clone()).unwrap(),
+            TypeDescriptor::tri_state(map).unwrap(),
+        ] {
+            slot_both(OpaqueTree::Null, &descriptor, SlotValue::Null);
+            ok_both(
+                OpaqueTree::Object(vec![("key".into(), OpaqueTree::String("value".into()))]),
+                &descriptor,
+                object([("key", Value::string("value"))]),
+            );
+        }
+    }
+
+    #[test]
+    fn lists_and_maps_preserve_empty_order_nested_values_and_optional_nulls() {
+        let optional_string = TypeDescriptor::optional(TypeDescriptor::string()).unwrap();
+        let list_optional = TypeDescriptor::list(optional_string.clone()).unwrap();
+        ok_both(
+            OpaqueTree::List(vec![OpaqueTree::Null, OpaqueTree::String("item".into())]),
+            &list_optional,
+            Value::list([Value::null(), Value::string("item")]),
+        );
+        ok_both(
+            OpaqueTree::List(Vec::new()),
+            &list_optional,
+            Value::list([]),
+        );
+
+        let map_optional = TypeDescriptor::map(optional_string).unwrap();
+        ok_both(
+            OpaqueTree::Object(vec![
+                ("z arbitrary key".into(), OpaqueTree::Null),
+                ("".into(), OpaqueTree::String("second".into())),
+            ]),
+            &map_optional,
+            object([
+                ("z arbitrary key", Value::null()),
+                ("", Value::string("second")),
+            ]),
+        );
+        ok_both(OpaqueTree::Object(Vec::new()), &map_optional, object([]));
+
+        let nested = TypeDescriptor::map(TypeDescriptor::list(map_optional).unwrap()).unwrap();
+        ok_both(
+            OpaqueTree::Object(vec![(
+                "outer".into(),
+                OpaqueTree::List(vec![OpaqueTree::Object(vec![
+                    ("first".into(), OpaqueTree::String("one".into())),
+                    ("second".into(), OpaqueTree::Null),
+                ])]),
+            )]),
+            &nested,
+            object([(
+                "outer",
+                Value::list([object([
+                    ("first", Value::string("one")),
+                    ("second", Value::null()),
+                ])]),
+            )]),
+        );
+    }
+
+    #[test]
+    fn container_failures_follow_outer_and_input_order_precedence() {
+        let list_i8 = TypeDescriptor::list(TypeDescriptor::i8()).unwrap();
+        let map_i8 = TypeDescriptor::map(TypeDescriptor::i8()).unwrap();
+        representation(
+            OpaqueTree::Object(vec![(SENTINEL.into(), OpaqueTree::Null)]),
+            &list_i8,
+            Some(SENTINEL),
+        );
+        representation(
+            OpaqueTree::List(vec![OpaqueTree::String(SENTINEL.into())]),
+            &map_i8,
+            Some(SENTINEL),
+        );
+        null(OpaqueTree::List(vec![OpaqueTree::Null]), &list_i8, None);
+        null(
+            OpaqueTree::Object(vec![("key".into(), OpaqueTree::Null)]),
+            &map_i8,
+            None,
+        );
+
+        for (tree, category, token) in [
+            (
+                OpaqueTree::List(vec![number("128"), number("1.0")]),
+                C::IntegerRange,
+                "128",
+            ),
+            (
+                OpaqueTree::List(vec![number("1.0"), number("128")]),
+                C::NonCanonicalInteger,
+                "1.0",
+            ),
+            (
+                OpaqueTree::Object(vec![
+                    ("first".into(), number("128")),
+                    ("second".into(), number("1.0")),
+                ]),
+                C::IntegerRange,
+                "128",
+            ),
+            (
+                OpaqueTree::Object(vec![
+                    ("first".into(), number("1.0")),
+                    ("second".into(), number("128")),
+                ]),
+                C::NonCanonicalInteger,
+                "1.0",
+            ),
+        ] {
+            let descriptor = if matches!(tree, OpaqueTree::List(_)) {
+                &list_i8
+            } else {
+                &map_i8
+            };
+            error_both(tree, descriptor, category, Some(token));
+        }
+    }
+
+    #[test]
+    fn duplicate_map_keys_win_before_value_lowering_without_leaking() {
+        let descriptor = TypeDescriptor::map(TypeDescriptor::i8()).unwrap();
+        duplicate(
+            OpaqueTree::Object(vec![
+                (SENTINEL.into(), OpaqueTree::String(SENTINEL.into())),
+                (SENTINEL.into(), number("128")),
+            ]),
+            &descriptor,
+            Some(SENTINEL),
+        );
+    }
+
+    #[test]
+    fn recursive_support_inventory_is_complete_before_payload_inspection() {
+        let supported = [
+            TypeDescriptor::optional(TypeDescriptor::i8()).unwrap(),
+            TypeDescriptor::tri_state(TypeDescriptor::string()).unwrap(),
+            TypeDescriptor::list(TypeDescriptor::optional(TypeDescriptor::f32()).unwrap()).unwrap(),
+            TypeDescriptor::map(TypeDescriptor::list(TypeDescriptor::u16()).unwrap()).unwrap(),
+            TypeDescriptor::optional(
+                TypeDescriptor::map(TypeDescriptor::list(TypeDescriptor::bool()).unwrap()).unwrap(),
+            )
+            .unwrap(),
+        ];
+        assert!(supported.iter().all(is_supported));
+        let unsupported =
+            TypeDescriptor::list(TypeDescriptor::secret(TypeDescriptor::string()).unwrap())
+                .unwrap();
+        assert!(!is_supported(&unsupported));
+    }
+
+    #[test]
     fn unsupported_descriptors_precede_payload_inspection() {
         let field = FieldDescriptor::new("field", TypeDescriptor::bool(), None);
         let variant = VariantDescriptor::new("variant", VariantPayload::Unit, None);
         let secret = TypeDescriptor::secret(TypeDescriptor::i8()).unwrap();
+        let optional_secret = TypeDescriptor::optional(secret.clone()).unwrap();
+        let secret_optional =
+            TypeDescriptor::secret(TypeDescriptor::optional(TypeDescriptor::string()).unwrap())
+                .unwrap();
+        let list_secret = TypeDescriptor::list(secret.clone()).unwrap();
+        let map_secret = TypeDescriptor::map(secret.clone()).unwrap();
+        let deep_secret =
+            TypeDescriptor::list(TypeDescriptor::map(optional_secret.clone()).unwrap()).unwrap();
+        let structure = TypeDescriptor::structure([field]).unwrap();
+        let enumeration = TypeDescriptor::enumeration([variant]).unwrap();
+        unsupported(OpaqueTree::Null, &optional_secret, None);
+        unsupported(OpaqueTree::Bool(true), &list_secret, None);
+        unsupported(
+            OpaqueTree::Object(vec![
+                (SENTINEL.into(), OpaqueTree::String(SENTINEL.into())),
+                (SENTINEL.into(), OpaqueTree::Null),
+            ]),
+            &map_secret,
+            Some(SENTINEL),
+        );
+        unsupported(
+            OpaqueTree::List(vec![OpaqueTree::String(SENTINEL.into())]),
+            &list_secret,
+            Some(SENTINEL),
+        );
         let descriptors = [
             TypeDescriptor::blob(),
             secret.clone(),
-            TypeDescriptor::optional(TypeDescriptor::i8()).unwrap(),
-            TypeDescriptor::tri_state(TypeDescriptor::i8()).unwrap(),
-            TypeDescriptor::list(TypeDescriptor::i8()).unwrap(),
-            TypeDescriptor::map(TypeDescriptor::i8()).unwrap(),
-            TypeDescriptor::structure([field]).unwrap(),
-            TypeDescriptor::enumeration([variant]).unwrap(),
-            TypeDescriptor::list(secret).unwrap(),
+            optional_secret.clone(),
+            secret_optional,
+            list_secret,
+            map_secret,
+            TypeDescriptor::map(optional_secret.clone()).unwrap(),
+            deep_secret,
+            TypeDescriptor::list(TypeDescriptor::blob()).unwrap(),
+            structure.clone(),
+            TypeDescriptor::map(structure).unwrap(),
+            enumeration.clone(),
+            TypeDescriptor::list(enumeration).unwrap(),
         ];
-        let payload = OpaqueTree::String(SENTINEL.into());
         for descriptor in descriptors {
-            unsupported(payload.clone(), &descriptor, Some(SENTINEL));
+            unsupported(
+                OpaqueTree::Object(vec![(SENTINEL.into(), OpaqueTree::String(SENTINEL.into()))]),
+                &descriptor,
+                Some(SENTINEL),
+            );
         }
     }
 }
