@@ -19,6 +19,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-fixture-tests"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "hello-contract",
+]
+
+[[package]]
 name = "boxology-generator-model"
 version = "0.0.0"
 dependencies = [
@@ -145,6 +153,13 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hello-contract"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
 
 [[package]]
 name = "indexmap"

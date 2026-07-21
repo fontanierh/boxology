@@ -4,7 +4,9 @@ members = [
     "crates/boxology-contract",
     "crates/boxology-generator-model",
     "crates/boxology-runtime",
+    "crates/fixtures/fixture-tests",
     "crates/fixtures/generated-style-fmt",
+    "crates/fixtures/hello/generated/contract",
     "crates/xtask",
 ]
 
