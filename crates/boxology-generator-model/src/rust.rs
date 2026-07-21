@@ -1,6 +1,7 @@
 use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, RelativePath, Span};
 use std::collections::BTreeSet;
 use syn::ext::IdentExt;
+use syn::visit::Visit;
 
 const RULE: &str = "every declared .rs input must parse as a complete Rust file";
 const RULE_SOURCE: &str = "specs/s2-contract-generator.md D2";
@@ -28,6 +29,8 @@ const FIELD_IDENTITY_RULE: &str =
     "named field identities must be unique within each immediate contract field container";
 const VARIANT_IDENTITY_RULE: &str = "variant identities must be unique within each contract enum";
 const MEMBER_IDENTITY_RULE_SOURCE: &str = "specs/s2-contract-generator.md D4";
+const CONTRACT_PLACEMENT_RULE: &str = "direct boxology::contract annotations are allowed only on reachable module-scope structs and enums";
+const CONTRACT_PLACEMENT_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1-D2";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -287,7 +290,7 @@ impl ParsedRustInputs {
     pub fn discover_contract_declarations(
         &self,
     ) -> Result<Vec<ContractDeclaration<'_>>, Diagnostics> {
-        self.resolve_reachable_inputs()?;
+        let reachable = self.resolve_reachable_inputs()?;
         let root = &self.inputs[self.crate_root];
         let module_dir = root
             .path
@@ -371,6 +374,12 @@ impl ParsedRustInputs {
         for declaration in &declarations {
             validate_member_identities(declaration, &mut diagnostics);
         }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        validate_contract_placement(&reachable, &declarations, &mut diagnostics);
         diagnostics.sort();
         diagnostics.dedup();
         if !diagnostics.is_empty() {
@@ -902,6 +911,55 @@ fn contract_role_diagnostic(path: &RelativePath, attribute: &syn::Attribute) -> 
         offending: "invalid contract declaration annotation".into(),
         rule: CONTRACT_ROLE_RULE,
         rule_source: CONTRACT_ROLE_RULE_SOURCE,
+    }
+}
+
+fn validate_contract_placement(
+    reachable: &[&ParsedRustInput],
+    declarations: &[ContractDeclaration<'_>],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let allowed = declarations
+        .iter()
+        .flat_map(|declaration| match declaration.syntax {
+            ContractDeclarationSyntax::Struct(item) => item.attrs.iter(),
+            ContractDeclarationSyntax::Enum(item) => item.attrs.iter(),
+        })
+        .filter(|attribute| boxology_leaf(attribute).is_some_and(|leaf| leaf.unraw() == "contract"))
+        .map(std::ptr::from_ref)
+        .collect::<BTreeSet<_>>();
+    for input in reachable {
+        ContractPlacementVisitor {
+            path: &input.path,
+            allowed: &allowed,
+            diagnostics,
+        }
+        .visit_file(&input.syntax);
+    }
+}
+
+struct ContractPlacementVisitor<'a> {
+    path: &'a RelativePath,
+    allowed: &'a BTreeSet<*const syn::Attribute>,
+    diagnostics: &'a mut Vec<Diagnostic>,
+}
+
+impl<'ast> Visit<'ast> for ContractPlacementVisitor<'_> {
+    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+        if let Some(leaf) = boxology_leaf(attribute)
+            && leaf.unraw() == "contract"
+            && !self.allowed.contains(&std::ptr::from_ref(attribute))
+        {
+            self.diagnostics.push(Diagnostic {
+                path: self.path.clone(),
+                span: source_span(leaf.span()),
+                code: "BXG0029",
+                offending: "misplaced contract declaration annotation".into(),
+                rule: CONTRACT_PLACEMENT_RULE,
+                rule_source: CONTRACT_PLACEMENT_RULE_SOURCE,
+            });
+        }
+        syn::visit::visit_attribute(self, attribute);
     }
 }
 
@@ -1596,8 +1654,7 @@ mod tests {
     }
 
     #[test]
-    fn provisional_discovery_is_canonical_and_ignores_deferred_placements_and_non_contract_leaves()
-    {
+    fn provisional_discovery_is_canonical_and_ignores_unresolved_macro_tokens() {
         let files = [
             (
                 "src/root.rs",
@@ -1605,10 +1662,6 @@ mod tests {
                     "#[boxology::contract]\nstruct Foo;\nmod alpha;\nmod r#inline {\n",
                     "#[boxology::contract(error)]\nenum Fault { HiddenVariant }\n",
                     "#[boxology::contract]\nstruct r#foo;\nstruct Plain;\n",
-                    "fn body() { #[boxology::contract] struct Local; }\n",
-                    "#[boxology::contract] fn misplaced() {}\n",
-                    "#[boxology::contract] type Alias = u8;\n",
-                    "#[boxology::contract] union Deferred { value: u8 }\n",
                     "macro_rules! hidden { () => { #[boxology::contract] struct Macro; } }\n",
                     "struct Host;\nimpl Host { #[boxology::capability] fn cap(&self) {} }\n}\n",
                 ),
@@ -1659,6 +1712,226 @@ mod tests {
         ];
         assert_eq!(first, expected);
         assert_eq!(first, project(&files.into_iter().rev().collect::<Vec<_>>()));
+    }
+
+    #[test]
+    fn placement_accepts_exact_markers_on_reachable_module_scope_structs_and_enums() {
+        let files = [
+            (
+                "root.rs",
+                "#[boxology::contract]\nstruct Root;\nmod outline;\nmod inline { #[r#boxology::r#contract] enum Inline { A } }\n",
+            ),
+            (
+                "outline.rs",
+                "#[::boxology::contract]\nstruct Outline;\n#[boxology::contract(error)]\nenum Fault { A }\n",
+            ),
+        ];
+        for reversed in [false, true] {
+            let parsed =
+                ParsedRustInputs::parse(&request_in_order("root.rs", &files, reversed)).unwrap();
+            assert_eq!(
+                parsed
+                    .discover_contract_declarations()
+                    .unwrap()
+                    .iter()
+                    .map(|declaration| (declaration.lifted_name(), declaration.role()))
+                    .collect::<Vec<_>>(),
+                [
+                    ("Root", ContractDeclarationRole::Value),
+                    ("Inline", ContractDeclarationRole::Value),
+                    ("Outline", ContractDeclarationRole::Value),
+                    ("Fault", ContractDeclarationRole::Error),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn placement_visitor_covers_structured_attribute_sites_with_exact_leaf_spans() {
+        let source = concat!(
+            "#[::boxology::contract]\nconst ITEM_CONST: u8 = 0;\n",
+            "#[::boxology::contract]\nextern crate core as item_extern;\n",
+            "#[::boxology::contract]\nfn item_function() {}\n",
+            "#[::boxology::contract]\nextern \"C\" {\n",
+            "#[::boxology::contract]\nfn foreign_function();\n",
+            "#[::boxology::contract]\nstatic FOREIGN_STATIC: u8;\n",
+            "#[::boxology::contract]\ntype ForeignType;\n",
+            "#[::boxology::contract]\nforeign_macro!();\n}\n",
+            "#[::boxology::contract]\nmacro_item!();\n",
+            "#[::boxology::contract]\nmod item_module {}\n",
+            "#[::boxology::contract]\nstatic ITEM_STATIC: u8 = 0;\n",
+            "#[::boxology::contract]\ntrait ItemTrait {\n",
+            "#[::boxology::contract]\nconst TRAIT_CONST: u8;\n",
+            "#[::boxology::contract]\nfn trait_method();\n",
+            "#[::boxology::contract]\ntype TraitType;\n",
+            "#[::boxology::contract]\ntrait_macro!();\n}\n",
+            "#[::boxology::contract]\ntrait ItemTraitAlias = Send;\n",
+            "#[::boxology::contract]\ntype ItemType = u8;\n",
+            "type NestedType = fn(\n#[::boxology::contract]\nu8\n);\n",
+            "#[::boxology::contract]\nunion ItemUnion {\n",
+            "#[::boxology::contract]\nunion_field: u8,\n}\n",
+            "#[::boxology::contract]\nuse core::fmt as item_use;\n",
+            "struct Host;\n#[::boxology::contract]\nimpl Host {\n",
+            "#[::boxology::contract]\nconst IMPL_CONST: u8 = 0;\n",
+            "#[::boxology::contract]\nfn impl_method() {\n#[::boxology::contract]\nstruct MethodLocal;\n}\n",
+            "#[::boxology::contract]\ntype ImplType = u8;\n",
+            "#[::boxology::contract]\nimpl_macro!();\n}\n",
+            "struct PlainNamed {\n#[::boxology::contract]\nnamed: u8,\n}\n",
+            "struct PlainTuple(\n#[::boxology::contract]\nu8);\n",
+            "enum PlainEnum {\n#[::boxology::contract]\nUnit,\nNamed {\n",
+            "#[::boxology::contract]\nfield: u8 },\nTuple(\n#[::boxology::contract]\nu8),\n}\n",
+            "#[boxology::contract]\nstruct ContractNamed {\n#[::boxology::contract]\nfield: u8,\n}\n",
+            "#[boxology::contract]\nstruct ContractTuple(\n#[::boxology::contract]\nu8);\n",
+            "#[boxology::contract]\nenum ContractEnum {\n#[::boxology::contract]\nUnit,\n",
+            "Named {\n#[::boxology::contract]\nfield: u8 },\n",
+            "Tuple(\n#[::boxology::contract]\nu8),\n}\n",
+            "#[::boxology::contract]\nfn contexts<\n#[::boxology::contract]\nT\n>(\n",
+            "#[::boxology::contract]\nargument: T\n) {\n",
+            "#[::boxology::contract]\nstruct Local;\n",
+            "struct Pattern { field: u8 }\n#[::boxology::contract]\nlet Pattern {\n",
+            "#[::boxology::contract]\nfield,\n} = \n#[::boxology::contract]\nPattern { field: 0 };\n",
+            "struct Record { value: u8 }\nlet _ = Record {\n",
+            "#[::boxology::contract]\nvalue: 0 };\nmatch 0 {\n",
+            "#[::boxology::contract]\narm => arm,\n};\n}\n",
+        );
+        let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+        let expected = source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("#[::boxology::contract]"))
+            .map(|(line, _)| span((line + 1, 15), (line + 1, 23)))
+            .collect::<Vec<_>>();
+        assert_eq!(diagnostics.as_slice().len(), expected.len());
+        for (diagnostic, expected_span) in diagnostics.as_slice().iter().zip(expected) {
+            assert_eq!(diagnostic.code(), "BXG0029");
+            assert_eq!(diagnostic.path().as_str(), "root.rs");
+            assert_eq!(diagnostic.span(), expected_span);
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "misplaced contract declaration annotation"
+            );
+            assert_eq!(diagnostic.rule(), CONTRACT_PLACEMENT_RULE);
+            assert_eq!(diagnostic.rule_source(), CONTRACT_PLACEMENT_RULE_SOURCE);
+        }
+    }
+
+    #[test]
+    fn misplaced_forms_are_payload_safe_and_never_use_contract_role_validation() {
+        let source = concat!(
+            "#[boxology::contract]\nfn PrivatePath() {}\n",
+            "#[boxology::contract(PrivateList)]\nfn PrivateListOwner() {}\n",
+            "#[boxology::contract = \"PrivateNameValue\"]\nfn PrivateValueOwner() {}\n",
+        );
+        let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+        assert_eq!(diagnostics.as_slice().len(), 3);
+        for (diagnostic, line) in diagnostics.as_slice().iter().zip([1, 3, 5]) {
+            assert_eq!(diagnostic.code(), "BXG0029");
+            assert_eq!(diagnostic.span(), span((line, 13), (line, 21)));
+        }
+        let rendered = format!("{diagnostics}\n{diagnostics:?}");
+        assert!(!rendered.contains("BXG0024"));
+        for sentinel in [
+            "PrivatePath",
+            "PrivateList",
+            "PrivateListOwner",
+            "PrivateNameValue",
+            "PrivateValueOwner",
+        ] {
+            assert!(!rendered.contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn placement_findings_aggregate_by_path_and_ignore_request_order() {
+        let files = [
+            (
+                "root.rs",
+                "mod z;\nmod a;\n#[::boxology::contract]\nfn root_marker() {}\n",
+            ),
+            (
+                "a.rs",
+                "struct A {\n#[::boxology::contract]\nfield: u8,\n}\n",
+            ),
+            ("z.rs", "#[::boxology::contract]\nfn z_marker() {}\n"),
+        ];
+        let first = discovery_errors(&request_in_order("root.rs", &files, false));
+        assert_eq!(
+            first,
+            discovery_errors(&request_in_order("root.rs", &files, true))
+        );
+        assert_eq!(
+            first
+                .as_slice()
+                .iter()
+                .map(|diagnostic| (diagnostic.path().as_str(), diagnostic.span()))
+                .collect::<Vec<_>>(),
+            [
+                ("a.rs", span((2, 15), (2, 23))),
+                ("root.rs", span((3, 15), (3, 23))),
+                ("z.rs", span((1, 15), (1, 23))),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_earlier_phase_suppresses_contract_placement_validation() {
+        let syntax = parse_errors(&request(
+            "root.rs",
+            &[
+                ("root.rs", "#[::boxology::contract] fn misplaced() {}"),
+                ("broken.rs", "fn broken() { @ }"),
+            ],
+        ));
+        assert!(
+            syntax
+                .as_slice()
+                .iter()
+                .all(|diagnostic| diagnostic.code() == "BXG0014")
+        );
+        let suppressed = |code, source| {
+            let diagnostics = discovery_errors(&request("root.rs", &[("root.rs", source)]));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|diagnostic| diagnostic.code() == code)
+            );
+            assert!(!diagnostics.to_string().contains("BXG0029"));
+        };
+        suppressed(
+            "BXG0017",
+            "mod missing; #[::boxology::contract] fn misplaced() {}",
+        );
+        let unreachable = discovery_errors(&request(
+            "root.rs",
+            &[
+                ("root.rs", "#[::boxology::contract] fn misplaced() {}"),
+                ("dead.rs", "#[boxology::contract] fn dead() {}"),
+            ],
+        ));
+        assert!(
+            unreachable
+                .as_slice()
+                .iter()
+                .all(|diagnostic| diagnostic.code() == "BXG0019")
+        );
+        assert!(!unreachable.to_string().contains("BXG0029"));
+        suppressed(
+            "BXG0020",
+            "#[cfg(Private)] #[boxology::contract] struct S; #[::boxology::contract] fn misplaced() {}",
+        );
+        suppressed(
+            "BXG0021",
+            "#[boxology::contract] struct S; #[boxology::contract] enum S { A } #[::boxology::contract] fn misplaced() {}",
+        );
+        suppressed(
+            "BXG0024",
+            "#[boxology::contract(Private)] struct S; #[::boxology::contract] fn misplaced() {}",
+        );
+        suppressed(
+            "BXG0028",
+            "#[boxology::contract] enum E { Same, Same } #[::boxology::contract] fn misplaced() {}",
+        );
     }
 
     #[test]
