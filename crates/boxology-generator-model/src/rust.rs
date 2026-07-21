@@ -34,6 +34,8 @@ const CONTRACT_PLACEMENT_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1-
 const CAPABILITY_PLACEMENT_RULE: &str =
     "direct boxology::capability annotations are allowed only on functions in inherent impls";
 const CAPABILITY_PLACEMENT_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D8";
+const CAPABILITY_CALL_SHAPE_RULE: &str = "v0 capabilities must be async methods with a shared &self receiver, exactly two typed parameters after the receiver, no variadic parameter, and an explicit return type";
+const CAPABILITY_CALL_SHAPE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D1,D8";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -467,6 +469,32 @@ impl ParsedRustInputs {
         }
     }
 
+    /// Validates the structural call frame of every discovered capability method.
+    pub fn validate_capability_call_shapes(
+        &self,
+    ) -> Result<Vec<CapabilityDeclaration<'_>>, Diagnostics> {
+        let declarations = self.discover_capability_declarations()?;
+        let mut diagnostics = declarations
+            .iter()
+            .filter(|declaration| !valid_capability_call_shape(declaration.method))
+            .map(|declaration| Diagnostic {
+                path: declaration.source.clone(),
+                span: declaration.identifier_span,
+                code: "BXG0031",
+                offending: "invalid structural capability signature".into(),
+                rule: CAPABILITY_CALL_SHAPE_RULE,
+                rule_source: CAPABILITY_CALL_SHAPE_RULE_SOURCE,
+            })
+            .collect::<Vec<_>>();
+        diagnostics.sort();
+        diagnostics.dedup();
+        if diagnostics.is_empty() {
+            Ok(declarations)
+        } else {
+            Err(Diagnostics(diagnostics))
+        }
+    }
+
     /// Validates default module lookup and returns unique reachable files in logical-path byte order.
     pub fn resolve_reachable_inputs(&self) -> Result<Vec<&ParsedRustInput>, Diagnostics> {
         let root = &self.inputs[self.crate_root];
@@ -804,6 +832,24 @@ impl ParsedRustInputs {
                 ));
             });
     }
+}
+
+fn valid_capability_call_shape(method: &syn::ImplItemFn) -> bool {
+    let signature = &method.sig;
+    let mut inputs = signature.inputs.iter();
+    let receiver = inputs.next().and_then(|argument| match argument {
+        syn::FnArg::Receiver(receiver) => Some(receiver),
+        syn::FnArg::Typed(_) => None,
+    });
+    signature.asyncness.is_some()
+        && receiver.is_some_and(|receiver| {
+            matches!(receiver.kind, syn::ReceiverKind::Reference(_, _, None))
+                && receiver.mutability.is_none()
+        })
+        && inputs.len() == 2
+        && inputs.all(|argument| matches!(argument, syn::FnArg::Typed(_)))
+        && signature.variadic.is_none()
+        && matches!(signature.output, syn::ReturnType::Type(_, _))
 }
 
 struct CapabilityCollector<'a, 'ast> {
@@ -1691,6 +1737,14 @@ mod tests {
             .expect("expected capability declaration diagnostics")
     }
 
+    fn capability_shape_errors(request: &GenerationRequest) -> Diagnostics {
+        let parsed = ParsedRustInputs::parse(request).unwrap();
+        parsed
+            .validate_capability_call_shapes()
+            .err()
+            .expect("expected capability call-shape diagnostics")
+    }
+
     fn span(start: (usize, usize), end: (usize, usize)) -> Span {
         Span {
             start: LineColumn {
@@ -2221,6 +2275,248 @@ mod tests {
         assert_eq!(unreachable.as_slice()[0].code(), "BXG0019");
         assert_eq!(unreachable.as_slice().len(), 4);
         assert!(!format!("{unreachable:?}").contains("Private"));
+    }
+
+    #[test]
+    fn capability_call_shapes_accept_only_the_structural_frame_without_reading_types() {
+        let source = "struct Host; impl Host { #[boxology::capability] pub async fn public(&self, request: PrivateGeneric<'_>, context: &'static mut PrivateContext) -> impl PrivateOutput { loop {} } #[boxology::capability(PrivateMetadata)] async fn private(&self, _: [Private; 7], _: fn(Private) -> Private) -> PrivateReturn { loop {} } }";
+        let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)])).unwrap();
+        let validated = parsed.validate_capability_call_shapes().unwrap();
+        assert_eq!(
+            validated
+                .iter()
+                .map(|declaration| declaration.method().sig.ident.to_string())
+                .collect::<Vec<_>>(),
+            ["public", "private"]
+        );
+    }
+
+    #[test]
+    fn capability_call_shape_diagnostics_are_complete_exact_and_payload_safe() {
+        let source = concat!(
+            "struct Host; impl Host {\n",
+            "#[boxology::capability] fn Sync(&self, a: PrivateA, b: PrivateB) -> PrivateR {}\n",
+            "#[boxology::capability] async fn MissingReceiver(a: PrivateA, b: PrivateB) -> PrivateR {}\n",
+            "#[boxology::capability] async fn ByValue(self, a: PrivateA, b: PrivateB) -> PrivateR {}\n",
+            "#[boxology::capability] async fn Mutable(&mut self, a: PrivateA, b: PrivateB) -> PrivateR {}\n",
+            "#[boxology::capability] async fn Typed(self: &Self, a: PrivateA, b: PrivateB) -> PrivateR {}\n",
+            "#[boxology::capability] async fn Zero(&self) -> PrivateR {}\n",
+            "#[boxology::capability] async fn One(&self, a: PrivateA) -> PrivateR {}\n",
+            "#[boxology::capability] async fn Three(&self, a: PrivateA, b: PrivateB, c: PrivateC) -> PrivateR {}\n",
+            "#[boxology::capability] async fn MissingReturn(&self, a: PrivateA, b: PrivateB) {}\n",
+            "#[boxology::capability] async unsafe extern \"C\" fn Variadic(&self, a: PrivateA, b: PrivateB, ...) -> PrivateR {}\n",
+            "#[boxology::capability(PrivateAttribute)] fn EverythingWrong(self) {}\n",
+            "}\n",
+        );
+        let request = request("root.rs", &[("root.rs", source)]);
+        assert_eq!(
+            ParsedRustInputs::parse(&request)
+                .unwrap()
+                .discover_capability_declarations()
+                .unwrap()
+                .len(),
+            11
+        );
+        let diagnostics = capability_shape_errors(&request);
+        assert_eq!(diagnostics.as_slice().len(), 11);
+        let identifiers = [
+            "Sync",
+            "MissingReceiver",
+            "ByValue",
+            "Mutable",
+            "Typed",
+            "Zero",
+            "One",
+            "Three",
+            "MissingReturn",
+            "Variadic",
+            "EverythingWrong",
+        ];
+        for (diagnostic, (line, identifier)) in
+            diagnostics.as_slice().iter().zip((2..=12).zip(identifiers))
+        {
+            let column = source
+                .lines()
+                .nth(line - 1)
+                .unwrap()
+                .find(identifier)
+                .unwrap()
+                + 1;
+            assert_eq!(diagnostic.code(), "BXG0031");
+            assert_eq!(
+                diagnostic.span(),
+                span((line, column), (line, column + identifier.len()))
+            );
+            assert_eq!(
+                diagnostic.offending_construct(),
+                "invalid structural capability signature"
+            );
+            assert_eq!(diagnostic.rule(), CAPABILITY_CALL_SHAPE_RULE);
+            assert_eq!(diagnostic.rule_source(), CAPABILITY_CALL_SHAPE_RULE_SOURCE);
+        }
+        let rendered = format!("{diagnostics}\n{diagnostics:?}");
+        for private in [
+            "PrivateA",
+            "PrivateR",
+            "EverythingWrong",
+            "PrivateAttribute",
+        ] {
+            assert!(!rendered.contains(private));
+        }
+    }
+
+    #[test]
+    fn capability_call_shape_results_are_deterministic_across_modules_and_input_order() {
+        let files = [
+            (
+                "root.rs",
+                "mod z; mod a; struct R; impl R { #[boxology::capability] async fn root(&self, a: A, b: B) -> R { loop {} } }",
+            ),
+            (
+                "a.rs",
+                "struct A; impl A { #[boxology::capability] fn invalid_a(&self) {} }",
+            ),
+            (
+                "z.rs",
+                "struct Z; impl Z { #[boxology::capability] fn invalid_z(&self, a: A, b: B) {} }",
+            ),
+        ];
+        let evaluate = |reversed| {
+            let request = request_in_order("root.rs", &files, reversed);
+            let parsed = ParsedRustInputs::parse(&request).unwrap();
+            parsed
+                .validate_capability_call_shapes()
+                .map(|declarations| {
+                    declarations
+                        .iter()
+                        .map(|item| {
+                            (
+                                item.source().as_str().to_owned(),
+                                item.module_path().to_vec(),
+                                item.identifier_span(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+        };
+        let first = evaluate(false).unwrap_err();
+        let second = evaluate(true).unwrap_err();
+        assert_eq!(first, second);
+        assert_eq!(
+            first
+                .as_slice()
+                .iter()
+                .map(|diagnostic| (diagnostic.path().as_str(), diagnostic.span().start().line()))
+                .collect::<Vec<_>>(),
+            [("a.rs", 1), ("z.rs", 1)]
+        );
+    }
+
+    #[test]
+    fn every_predecessor_phase_suppresses_capability_call_shape_validation() {
+        let invalid = "struct H; impl H { #[boxology::capability] fn invalid() {} }";
+        let syntax = parse_errors(&request(
+            "root.rs",
+            &[("root.rs", invalid), ("broken.rs", "fn broken() { @ }")],
+        ));
+        assert!(
+            syntax
+                .as_slice()
+                .iter()
+                .all(|diagnostic| diagnostic.code() == "BXG0014")
+        );
+        assert!(!syntax.to_string().contains("BXG0031"));
+        let cases: &[(&str, &[(&str, &str)])] = &[
+            (
+                "BXG0016",
+                &[(
+                    "root.rs",
+                    "#[path=\"x\"] mod x; struct H; impl H { #[boxology::capability] fn invalid() {} }",
+                )],
+            ),
+            (
+                "BXG0017",
+                &[(
+                    "root.rs",
+                    "mod missing; struct H; impl H { #[boxology::capability] fn invalid() {} }",
+                )],
+            ),
+            (
+                "BXG0018",
+                &[
+                    ("root.rs", "mod both;"),
+                    ("both.rs", ""),
+                    ("both/mod.rs", ""),
+                ],
+            ),
+            (
+                "BXG0019",
+                &[
+                    ("root.rs", invalid),
+                    ("dead.rs", "#[boxology::contract] struct Dead;"),
+                ],
+            ),
+            (
+                "BXG0020",
+                &[("root.rs", "#[cfg(x)] #[boxology::contract] struct S;")],
+            ),
+            (
+                "BXG0021",
+                &[(
+                    "root.rs",
+                    "#[boxology::contract] struct S; #[boxology::contract] enum S { A }",
+                )],
+            ),
+            (
+                "BXG0022",
+                &[("root.rs", "#[Private] #[boxology::contract] struct S;")],
+            ),
+            (
+                "BXG0023",
+                &[("root.rs", "#[derive(Copy)] #[boxology::contract] struct S;")],
+            ),
+            (
+                "BXG0024",
+                &[("root.rs", "#[boxology::contract(Private)] struct S;")],
+            ),
+            (
+                "BXG0025",
+                &[(
+                    "root.rs",
+                    "#[deprecated(Private)] #[boxology::contract] struct S;",
+                )],
+            ),
+            (
+                "BXG0026",
+                &[("root.rs", "#[doc] #[boxology::contract] struct S;")],
+            ),
+            (
+                "BXG0027",
+                &[("root.rs", "#[boxology::contract] struct S { a: u8, a: u8 }")],
+            ),
+            (
+                "BXG0028",
+                &[("root.rs", "#[boxology::contract] enum S { A, A }")],
+            ),
+            (
+                "BXG0029",
+                &[("root.rs", "#[boxology::contract] fn bad() {}")],
+            ),
+            (
+                "BXG0030",
+                &[("root.rs", "#[boxology::capability] fn bad() {}")],
+            ),
+        ];
+        for (code, files) in cases {
+            let diagnostics = capability_shape_errors(&request("root.rs", files));
+            assert!(
+                diagnostics
+                    .as_slice()
+                    .iter()
+                    .all(|diagnostic| diagnostic.code() == *code)
+            );
+            assert!(!diagnostics.to_string().contains("BXG0031"));
+        }
     }
 
     #[test]
