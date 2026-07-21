@@ -10,6 +10,7 @@ pub(crate) enum SemanticErrorCategory {
     RepresentationMismatch,
     NonCanonicalInteger,
     IntegerRange,
+    NonFiniteFloat,
     NullConformance,
     UnsupportedDescriptor,
 }
@@ -20,6 +21,7 @@ impl SemanticErrorCategory {
             Self::RepresentationMismatch => "representation mismatch",
             Self::NonCanonicalInteger => "non-canonical integer",
             Self::IntegerRange => "integer outside descriptor range",
+            Self::NonFiniteFloat => "non-finite float",
             Self::NullConformance => "null violates descriptor",
             Self::UnsupportedDescriptor => "unsupported descriptor",
         }
@@ -78,6 +80,8 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
             | DescriptorRef::U16
             | DescriptorRef::U32
             | DescriptorRef::U64
+            | DescriptorRef::F32
+            | DescriptorRef::F64
     )
 }
 
@@ -102,6 +106,8 @@ fn decode_scalar(
         DescriptorRef::U32 => unsigned(tree, u32::MAX.into()),
         DescriptorRef::I64 => wide_signed(tree),
         DescriptorRef::U64 => wide_unsigned(tree),
+        DescriptorRef::F32 => float32(tree),
+        DescriptorRef::F64 => float64(tree),
         _ => failure(SemanticErrorCategory::UnsupportedDescriptor),
     }
 }
@@ -154,6 +160,25 @@ macro_rules! wide_integer {
 wide_integer!(wide_signed, i64, ContractValue::i64, true);
 wide_integer!(wide_unsigned, u64, ContractValue::u64, false);
 
+macro_rules! float {
+    ($name:ident, $type:ty, $constructor:path) => {
+        fn $name(tree: OpaqueTree) -> Result<ContractValue, SemanticError> {
+            let OpaqueTree::Number(number) = tree else {
+                return failure(SemanticErrorCategory::RepresentationMismatch);
+            };
+            number
+                .as_str()
+                .parse::<$type>()
+                .ok()
+                .and_then(|value| $constructor(value).ok())
+                .ok_or(SemanticError(SemanticErrorCategory::NonFiniteFloat))
+        }
+    };
+}
+
+float!(float32, f32, ContractValue::f32);
+float!(float64, f64, ContractValue::f64);
+
 fn canonical_integer(text: &str, signed: bool) -> bool {
     let digits = if signed {
         text.strip_prefix('-').unwrap_or(text)
@@ -176,7 +201,8 @@ mod tests {
     use super::SemanticErrorCategory as C;
     use super::*;
     use boxology_contract::{
-        ContractValue as Value, FieldDescriptor, OpaqueNumber, VariantDescriptor, VariantPayload,
+        ContractValue as Value, FieldDescriptor, OpaqueNumber, ValueRef, VariantDescriptor,
+        VariantPayload,
     };
 
     const ROLES: [DecodeRole; 2] = [DecodeRole::ProviderInput, DecodeRole::ConsumerOutput];
@@ -224,6 +250,7 @@ mod tests {
     error_helper!(representation, RepresentationMismatch);
     error_helper!(noncanonical, NonCanonicalInteger);
     error_helper!(range, IntegerRange);
+    error_helper!(nonfinite, NonFiniteFloat);
     error_helper!(null, NullConformance);
     error_helper!(unsupported, UnsupportedDescriptor);
 
@@ -239,7 +266,35 @@ mod tests {
             TypeDescriptor::u16(),
             TypeDescriptor::u32(),
             TypeDescriptor::u64(),
+            TypeDescriptor::f32(),
+            TypeDescriptor::f64(),
         ]
+    }
+
+    fn f32_both(token: &str, expected: f32) {
+        for role in ROLES {
+            let slot = decode_tree(number(token), &TypeDescriptor::f32(), role).unwrap();
+            let SlotValue::Value(value) = slot else {
+                panic!("float decoded as null");
+            };
+            let ValueRef::F32(actual) = value.view() else {
+                panic!("float decoded at the wrong width");
+            };
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+    }
+
+    fn f64_both(token: &str, expected: f64) {
+        for role in ROLES {
+            let slot = decode_tree(number(token), &TypeDescriptor::f64(), role).unwrap();
+            let SlotValue::Value(value) = slot else {
+                panic!("float decoded as null");
+            };
+            let ValueRef::F64(actual) = value.view() else {
+                panic!("float decoded at the wrong width");
+            };
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
     }
 
     #[test]
@@ -371,13 +426,65 @@ mod tests {
     }
 
     #[test]
+    fn finite_floats_decode_at_the_declared_width_in_both_roles() {
+        for (token, expected) in [
+            ("1", 1.0),
+            ("0.5", 0.5),
+            ("1e2", 100.0),
+            ("3.4028235e38", f32::MAX),
+            ("-3.4028235e38", -f32::MAX),
+            ("16777217", 16_777_216.0),
+            ("0", 0.0),
+            ("-0", -0.0),
+        ] {
+            f32_both(token, expected);
+        }
+        for (token, expected) in [
+            ("-2", -2.0),
+            ("0.25", 0.25),
+            ("1e-3", 0.001),
+            ("1.7976931348623157e308", f64::MAX),
+            ("-1.7976931348623157e308", -f64::MAX),
+            ("16777217", 16_777_217.0),
+            ("0", 0.0),
+            ("-0", -0.0),
+        ] {
+            f64_both(token, expected);
+        }
+    }
+
+    #[test]
+    fn float_failures_are_exact_payload_free_and_role_symmetric() {
+        for (descriptor, token) in [
+            (TypeDescriptor::f32(), "1e39"),
+            (TypeDescriptor::f32(), "-1e39"),
+            (TypeDescriptor::f64(), "1e309"),
+            (TypeDescriptor::f64(), "-1e309"),
+        ] {
+            nonfinite(number(token), &descriptor, Some(token));
+        }
+        for descriptor in [TypeDescriptor::f32(), TypeDescriptor::f64()] {
+            representation(OpaqueTree::String("1.25".into()), &descriptor, Some("1.25"));
+            representation(
+                OpaqueTree::String(SENTINEL.into()),
+                &descriptor,
+                Some(SENTINEL),
+            );
+            representation(OpaqueTree::Bool(true), &descriptor, None);
+            representation(
+                OpaqueTree::List(vec![OpaqueTree::String(SENTINEL.into())]),
+                &descriptor,
+                Some(SENTINEL),
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_descriptors_precede_payload_inspection() {
         let field = FieldDescriptor::new("field", TypeDescriptor::bool(), None);
         let variant = VariantDescriptor::new("variant", VariantPayload::Unit, None);
         let secret = TypeDescriptor::secret(TypeDescriptor::i8()).unwrap();
         let descriptors = [
-            TypeDescriptor::f32(),
-            TypeDescriptor::f64(),
             TypeDescriptor::blob(),
             secret.clone(),
             TypeDescriptor::optional(TypeDescriptor::i8()).unwrap(),
