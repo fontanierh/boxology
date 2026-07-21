@@ -12,6 +12,7 @@ The strategy review of 2026-07-18 predates this directory and remains at [`boxol
 
 ## Index
 
+- [2026-07-21 — Generated-box critical-path review](2026-07-21-generated-box-critical-path.md)
 - [2026-07-21 — Overnight v0 situation report](2026-07-21-overnight-v0-sitrep.md)
 - [2026-07-20 — V0 situation report and the S2 crate-root decision gate](2026-07-20-v0-sitrep-and-s2-decision-gate.md)
 - [2026-07-19 — S0 situation report and review of the 400-line PR budget](2026-07-19-s0-sitrep-and-pr-budget-review.md)
