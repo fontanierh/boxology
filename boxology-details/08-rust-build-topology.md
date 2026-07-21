@@ -22,46 +22,73 @@ boxes/customer/
 
 The exact directory and crate names are tooling choices. The semantic distinction is not: another box may compile against the contract crate but never against the implementation crate.
 
+The future author-facing `boxology` facade crate is distinct from today's kernel crate, `boxology-contract`. `boxology-contract` continues to own the value/descriptor ABI. The facade re-exports the contract and implementation macros plus public authoring names from the kernel/runtime, including `CallContext`, so examples use one stable `boxology::...` path.
+
+Inside each implementation `Cargo.toml`, `boxology_generated_contract` is a fixed dependency **alias**, not a global package name. The generated package remains box-specific and workspace-unique:
+
+```toml
+[dependencies]
+boxology = { workspace = true }
+boxology_generated_contract = { package = "hello-contract", path = "../generated/contract" }
+```
+
 This does not weaken the single-owner rule. Both crates belong to the same box package, and a box-owned pull request may change its implementation inputs together with deterministic contract outputs attributable to them.
 
 ## Rust-first contract authoring
 
-Developers and agents do not maintain a second API definition or an exported service trait. The authoring source is ordinary Rust implementation code. An annotation marks an implementation method as an exported capability and supplies the metadata that cannot be inferred from its Rust signature.
-
-Conceptually:
+Developers and agents write one declaration-only contract block beside ordinary Rust implementation code. The block is deliberately a small Rust-like grammar rather than arbitrary Rust:
 
 ```rust
-impl CustomerService {
-    #[capability(id = "customer.get")]
-    #[exposure("internal")]
-    pub async fn get_customer(
+boxology::contract! {
+    #[error]
+    pub enum GreetError {
+        EmptyName,
+    }
+
+    #[capability(exposure = external)]
+    pub async fn greet(name: String) -> Result<String, GreetError>;
+}
+
+pub struct HelloService;
+
+#[boxology::implementation]
+impl HelloService {
+    async fn greet(
         &self,
-        context: CallContext,
-        input: GetCustomer,
-    ) -> Result<Customer, GetCustomerError> {
-        // business logic
+        context: boxology::CallContext,
+        name: String,
+    ) -> Result<String, GreetError> {
+        // ordinary Rust body
+        todo!()
     }
 }
 ```
 
-The exact macro spelling remains a tooling choice. No exported service trait, file layout, or internal service pattern is required merely because a method is exported. Unannotated methods remain ordinary internal Rust code.
+The contract signature and implementation signature intentionally repeat. The first is the language-neutral public contract and deterministic generation input. The second is ordinary executable Rust. Generated compile-time glue makes rustc prove they agree, so the repetition cannot silently drift; it avoids both a second handwritten interface file and a partial Rust type resolver.
 
-The necessary restriction is at the boundary: inputs, outputs, errors, and other values crossing an annotated method must implement the contract-type model and be representable by the language-neutral schema. The generator rejects a boundary it cannot express faithfully. Internal implementation types and organization remain unconstrained. The complete source model is defined in [Canonical Capability Contract](09-capability-contract.md).
+The contract has one input value; multiple logical inputs use a named struct. Context is implicit there. The implementation receives `&self`, `boxology::CallContext`, then exactly that input and returns exactly the declared result. Its body, helpers, imports, aliases, macros, and private types are ordinary Rust. No exported service trait, internal service pattern, or organization beyond one inherent implementation is prescribed.
 
-Developers author annotated boundary-type declarations beside the implementation. The pre-Cargo generator lifts each declaration into the generated contract crate, where the one real compiled type implements `ContractType`. The implementation-side annotation resolves to a re-export of that generated type. Consumers, the implementation adapter, and bindings therefore share one contract type without a second handwritten declaration.
+During normal compilation, `boxology::contract!` does not emit a second independent definition. It re-exports the sole compiled public type through the fixed `boxology_generated_contract` dependency alias and requires that crate's digest-keyed generated marker. Consumers, the implementation adapter, and bindings therefore share one type. A stale or mismatched generated crate fails compilation instead of creating two authorities.
 
-Because this happens before Cargo type-checking, an exported declaration must be syntactically self-contained and target-independent. The generator rejects aliases to unannotated boundary types, macro-generated fields or variants, `cfg`-dependent contract shapes, and attributes or derives it cannot explicitly propagate. Structured errors use this same lifting path rather than a separate implementation-side derive model.
+## Deterministic generation before Cargo
 
-## Generation before Cargo
-
-Cargo determines its package graph before compiling a procedural macro, so annotation expansion alone cannot create a sibling contract crate in the same build. The platform therefore owns a deterministic generation step before Cargo runs:
+Procedural macros cannot create a sibling contract crate in the same Cargo build. Boxology therefore generates before the normal Cargo build, but parses only the grammar it owns:
 
 ```text
-annotated implementation methods
--> platform contract generator
+declared logical Rust inputs
+-> deterministic module traversal and direct-site discovery
+-> shared controlled-contract parser
+-> deterministic contract emitter
 -> generated contract crate and schema
--> Cargo build
+-> normal Cargo build
+-> generated signature assertions
 ```
+
+Each reachable box contains exactly one direct `boxology::contract!` invocation and one direct `#[boxology::implementation]` on a non-generic inherent impl for one concrete receiver. `cfg` or `cfg_attr` on either site or its module ancestry is rejected. The existing deterministic module traversal finds the sites. Generator and procedural macros use the same `boxology-contract-syntax` parser, so accepted syntax cannot drift between generation and compilation. Implementation bodies remain opaque.
+
+Generation is a pure, pre-Cargo transformation of explicit bytes. It does not run Cargo, rustc, build scripts, user procedural macros, user code, runtime initialization, or implementation bodies. It writes the complete generated tree atomically. The generator and later `contract!` expansion both call the shared parser's same semantic-digest function. That function domain-separates and SHA-256-hashes the ordered normalized contract model: declarations, names, semantic docs/deprecation, fields/variants/types, and capability signatures/metadata. It excludes spelling whitespace, non-documentation comments, spans, paths, implementation/private code, and unrelated source. This is not a raw-source hash or the separately specified public contract revision.
+
+The generated crate exposes the marker keyed by that digest. The later normal Cargo build expands the contract facade and implementation attribute. Before generated adapter invocation, the implementation macro structurally rejects a generic impl, trait impl, non-concrete receiver, impl or method `where` clause, generic capability method, altered receiver, extra parameter, or `impl Trait`. Generated calls then make rustc prove alias-resolved exact nominal input/output/error identity, `Send + Sync + 'static` on the receiver, and `Send` on each future. Implementation imports, type aliases, qualified paths, macros, helpers, and private code otherwise remain ordinary Rust. Rustc mismatch prose is not a byte-stable Boxology diagnostic promise.
 
 The generated outputs include the material required by the selected bindings, including:
 
@@ -72,7 +99,7 @@ The generated outputs include the material required by the selected bindings, in
 - A language-neutral schema used for compatibility analysis and non-Rust bindings.
 - Programmable contract-level test bindings so consumers do not hand-maintain mocks of generated APIs.
 
-The contract crate defines only the implementation-neutral dispatch side. It never imports, names, or reaches into the implementation crate. The generator separately emits adapter code inside the implementation crate that implements the generated dispatch interface and invokes the annotated methods. The composition connects that adapter to the typed handles. Whether the generated interface is internally represented by a trait, function table, or another erased mechanism remains an implementation detail.
+The contract crate defines only the implementation-neutral dispatch side. It never imports, names, or reaches into the implementation crate. The generator separately emits adapter code inside the implementation crate that implements the generated dispatch interface and invokes the checked implementation methods. The composition connects that adapter to the typed handles. Whether the generated interface is internally represented by a trait, function table, or another erased mechanism remains an implementation detail.
 
 The generated crate is checked into Git as a declared derived artifact so a clone remains an ordinary Cargo workspace with useful editor behavior and reviewable contract diffs. It is never hand-edited. The box's `boxology.toml` records the generator identity, semantic inputs, outputs, and regeneration command. CI uses the generator resolved by the protected workspace toolchain to recreate every submitted generated output byte-for-byte under the ownership rules in [Packages, Providers, and Compositions](02-packages.md#ownership-and-derived-artifact-enforcement).
 
@@ -95,7 +122,7 @@ Updating the workspace generator does not mass-regenerate every box. Existing ge
 
 Generator releases must be backward-compatible:
 
-- Previously valid annotated source remains accepted.
+- Previously valid contract blocks remain accepted.
 - Unchanged source produces a semantically equivalent contract even when the generated representation improves.
 - Existing generated crates remain compatible with the current runtime and workspace tooling.
 
@@ -225,7 +252,7 @@ The generator's own conformance suite runs on Linux and macOS and compares deriv
 
 The generated Hello World project exercises the complete minimal topology:
 
-1. One implementation method is annotated as a unary capability.
+1. One controlled contract block declares a unary capability and one checked inherent implementation supplies it.
 2. The generator produces its contract crate, schema, typed handle, implementation-neutral dispatch interface, and implementation-local adapter.
 3. The composition invokes the capability through an in-process Rust binding.
 4. The same composition exposes the capability through HTTP from the same extracted contract.

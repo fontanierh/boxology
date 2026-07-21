@@ -29,7 +29,7 @@ Boxes are the most common contract-bearing owners, but providers, compositions, 
 
 The word **package** in the ownership model names a semantic owner, not necessarily one Cargo package or crate. A native box owns a handwritten implementation crate and a mechanically generated contract crate. Both compilation units belong to the same logical box, factory area, quality contract, and pull-request owner.
 
-The generated contract crate is a declared derived output of the box's annotated Rust implementation methods. It does not become a separate accountable package merely because Cargo compiles it independently. Conversely, an application composition is a separate logical owner even when it compiles both box implementations into one binary.
+The generated contract crate is a declared derived output of the box's controlled Rust contract block. It does not become a separate accountable package merely because Cargo compiles it independently. Conversely, an application composition is a separate logical owner even when it compiles both box implementations into one binary.
 
 This distinction preserves the universal ownership rule while allowing Cargo to enforce that boxes compile only against foreign contracts. The complete crate-role and edge policy is defined in [Rust Build Topology](08-rust-build-topology.md).
 

@@ -16,7 +16,7 @@ The runtime's central object is a typed capability or endpoint definition. That 
 
 The desired endpoint API should collect the information required by bindings without requiring handwritten transport-specific adapters.
 
-Rust implementation methods are the authoring source. A method becomes part of the box contract when it is annotated as a capability. No exported service trait, parallel interface file, or prescribed internal organization is required. Unannotated methods remain internal implementation details.
+Each Rust box declares its exported types and capability signatures once in a constrained `boxology::contract!` block. An ordinary inherent `impl` marked `#[boxology::implementation]` supplies the behavior. No exported service trait, separate interface file, or prescribed organization behind that boundary is required. Other methods and types remain internal implementation details.
 
 The metadata discussed included:
 
@@ -31,13 +31,13 @@ The metadata discussed included:
 
 The source model, schema-safe type subset, invocation envelope, and binding rules are defined in [Canonical Capability Contract](09-capability-contract.md). Values crossing the capability boundary must implement the generated contract-type model and be representable faithfully; unsupported boundary types are generation errors rather than silently lossy bindings.
 
-Every annotated method receives an explicit `CallContext` and generated caller handles are asynchronous. The implementation returns a declared structured domain error. The generated handle wraps that result in a distinct invocation-error type that can represent deadline, cancellation, availability, contract, or response failures. Local bindings use the same caller type without pretending that local and remote execution have identical operational behavior.
+Context is implicit in the contract declaration and explicit as `CallContext` in the implementation. Generated caller handles are asynchronous. The implementation returns the declared structured domain error. The generated handle wraps that result in a distinct invocation-error type that can represent deadline, cancellation, availability, contract, or response failures. Local bindings use the same caller type without pretending that local and remote execution have identical operational behavior.
 
 ## Generated contract crate
 
-Each native box owns one generated contract crate in addition to its handwritten implementation crate. A deterministic platform generator runs before Cargo, reads annotated implementation methods, and produces the contract-safe Rust types, typed caller handles, implementation-neutral server-side dispatch interface, metadata, language-neutral schema, and programmable test bindings required by configured bindings and box tests.
+Each native box owns one generated contract crate in addition to its handwritten implementation crate. A deterministic platform generator parses the controlled contract block before Cargo and produces the contract-safe Rust types, typed caller handles, implementation-neutral server-side dispatch interface, metadata, language-neutral schema, and programmable test bindings required by configured bindings and box tests. The normal Cargo compilation checks the ordinary implementation against that generated contract.
 
-The contract crate never depends on the implementation. The generator emits separate box-local adapter code inside the implementation crate to connect annotated methods to the contract's dispatch interface; the composition performs the final binding. The generated outputs are checked into Git as declared, reproducible artifacts and are never edited manually. CI regenerates submitted outputs byte-for-byte from the box's permitted source inputs using the generator resolved by the workspace toolchain. Other boxes compile only against the generated contract, never against the providing box's implementation. See [Rust Build Topology](08-rust-build-topology.md).
+The contract crate never depends on the implementation. The generator emits separate box-local adapter code inside the implementation crate to connect checked methods to the contract's dispatch interface; the composition performs the final binding. The generated outputs are checked into Git as declared, reproducible artifacts and are never edited manually. CI regenerates submitted outputs byte-for-byte from the box's permitted source inputs using the generator resolved by the workspace toolchain. Other boxes compile only against the generated contract, never against the providing box's implementation. See [Rust Build Topology](08-rust-build-topology.md).
 
 The workspace supplies one current, backward-compatible generator rather than selecting one per box. Generated outputs record which release produced them. Updating the workspace tool does not rewrite every contract: a box moves to the current generator lazily when its contract is next generated, while older generated crates remain supported.
 
