@@ -5,6 +5,7 @@ use std::env;
 #[allow(dead_code)]
 mod api;
 mod pairing;
+mod receive;
 mod state;
 
 pub const SCHEMA: u8 = 1;
@@ -134,7 +135,15 @@ pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
             ),
         };
     }
-    failure(command, AppError::unsupported())
+    let result = match command {
+        "poll" => receive::poll(input),
+        "ack" => receive::ack(input),
+        _ => return failure(command, AppError::unsupported()),
+    };
+    match result {
+        Ok(data) => success(command, data),
+        Err(error) => failure(command, error),
+    }
 }
 
 fn status(input: &[u8]) -> (String, ExitClass) {
@@ -167,6 +176,21 @@ fn status(input: &[u8]) -> (String, ExitClass) {
 
 fn enabled() -> bool {
     env::var(ENABLED_VARIABLE).is_ok_and(|value| value == "1")
+}
+
+pub(crate) fn api_error(error: api::ApiError) -> AppError {
+    AppError {
+        code: error.code,
+        message: match error.exit {
+            ExitClass::Conflict => "Telegram polling is unavailable",
+            ExitClass::Permanent => "Telegram rejected the request",
+            ExitClass::Ambiguous => "Telegram delivery is ambiguous",
+            _ => "Telegram is temporarily unavailable",
+        },
+        retryable: matches!(error.exit, ExitClass::Transient),
+        exit: error.exit,
+        retry_after: error.retry_after,
+    }
 }
 
 pub(crate) fn parse<T: for<'de> Deserialize<'de>>(input: &[u8]) -> Result<T, AppError> {
