@@ -51,25 +51,35 @@ Exact stable pin in `rust-toolchain.toml` (latest stable at T1 time, recorded th
 
 ### D4 — PR validation workflow
 
-`pr.yml` runs on pull requests and pushes to `main`:
+`pr.yml` runs on pull requests and pushes to `main`. Its Linux jobs use the
+disposable `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` runner supplied
+by S0-T8; the one-runner policy may queue concurrent Linux jobs. The hosted
+`linux-x86-contract` workflow is a non-required audit lane for `main`, manual
+dispatch, and CI-contract pull requests (see below).
 
 | Job | Command | Runner |
 | --- | --- | --- |
-| checks-linux | `cargo xtask ci --base <event base SHA>` (fmt-by-selection, clippy, test, doc, whitespace, links, budget, deny, determinism local); produce normal/meta roots with `determinism-manifest --out linux/` and `--out linux-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both | `ubuntu-24.04` |
+| checks-linux | `cargo xtask ci --base <event base SHA>` (fmt-by-selection, clippy, test, doc, whitespace, links, budget, deny, determinism local); produce normal/meta roots with `determinism-manifest --out linux/` and `--out linux-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both; evidence target `aarch64-unknown-linux-gnu` | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 | checks-macos | `cargo xtask test` + `cargo xtask determinism`; produce normal/meta roots with `determinism-manifest --out macos/` and `--out macos-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both | `macos-15` |
-| deny | `cargo xtask deny` (pinned `cargo-deny check bans licenses sources`) | `ubuntu-24.04` |
-| determinism-compare | download/unpack normal roots; verify `linux/` as `x86_64-unknown-linux-gnu` and `macos/` as `aarch64-apple-darwin` with `determinism-verify --require-image`; `cargo xtask determinism-compare linux/ macos/` | `ubuntu-24.04` |
-| determinism-meta-cross | download/unpack meta roots; verify the same exact targets with `determinism-verify --require-image`; `cargo xtask determinism-meta-cross linux-meta/ macos-meta/` succeeds only for the exact expected comparator finding | `ubuntu-24.04` |
-| **validation** | aggregator: `needs:` every job above **including determinism-meta-cross**, `if: always()`, fails unless all succeeded | `ubuntu-24.04` |
+| deny | `cargo xtask deny` (pinned `cargo-deny check bans licenses sources`) | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
+| determinism-compare | download/unpack normal roots; verify `linux/` as `aarch64-unknown-linux-gnu` and `macos/` as `aarch64-apple-darwin` with `determinism-verify --require-image`; `cargo xtask determinism-compare linux/ macos/` | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
+| determinism-meta-cross | download/unpack meta roots; verify the same exact targets with `determinism-verify --require-image`; `cargo xtask determinism-meta-cross linux-meta/ macos-meta/` succeeds only for the exact expected comparator finding | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
+| **validation** | aggregator: `needs:` every job above **including determinism-meta-cross**, `if: always()`, fails unless all succeeded | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 
-The `pr.yml` command surface (including commands reached through `ci`) is: `ci`, `test`, `links`, `budget`, `deny`, `determinism`, `determinism-manifest --out <dir>`, `determinism-manifest --out <dir> --meta-cross`, `determinism-compare <a> <b>`, `determinism-meta-cross <linux> <macos>`, and `determinism-verify <dir> --target <triple>` (`--require-image` requires CI runner image evidence). D6's `advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]` command and the internal `subject-run <name> --out <dir>` determinism child helper complete the S0 xtask command set; `advisories` is not part of `pr.yml`; `subject-run` appears there only as the child process determinism spawns and is never invoked by the workflow itself. The producer → tar/upload → download/unpack → verify → compare/gate data flow above is the executable contract; the consumer jobs inspect exactly what the platform jobs upload. This table is the **end state after T7**; each task enables only the jobs whose commands exist, adding its job to the aggregator's `needs` in the same PR (staged, never dangling).
+`linux-x86.yml` (the `linux-x86-contract` workflow) is not part of `validation`. On `main`, on manual
+dispatch, and on pull requests changing the CI contract, it runs the complete
+`cargo xtask ci` host-local suite on hosted `ubuntu-24.04` and asserts
+`x86_64-unknown-linux-gnu`. It preserves explicit x86 coverage without making
+the stable PR aggregator depend on a second runner or on hosted capacity.
+
+The `pr.yml` command surface (including commands reached through `ci`) is: `ci`, `test`, `links`, `budget`, `deny`, `determinism`, `determinism-manifest --out <dir>`, `determinism-manifest --out <dir> --meta-cross`, `determinism-compare <a> <b>`, `determinism-meta-cross <linux> <macos>`, and `determinism-verify <dir> --target <triple>` (`--require-image` requires CI runner image evidence). D6's `advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]` command and the internal `subject-run <name> --out <dir>` determinism child helper complete the S0 xtask command set; `advisories` is not part of `pr.yml`; `subject-run` appears there only as the child process determinism spawns and is never invoked by the workflow itself. The producer → tar/upload → download/unpack → verify → compare/gate data flow above is the executable contract; the consumer jobs inspect exactly what the platform jobs upload. This table is the **end state after T8**; each task enables only the jobs whose commands exist, adding its job to the aggregator's `needs` in the same PR (staged, never dangling).
 
 Rules:
 
 - **`validation` is the single stable required-check name.** New jobs must be added to its `needs` list; because it runs `if: always()`, a skipped or failed dependency cannot silently produce a green aggregate. This exact check is the branch-protection target if/when protection is available (D9).
 - Each complete `MANIFEST` / `trees/` / `evidence/` root is transported as one uncompressed tar so empty required directories are preserved. Tar is transport-only: consumers unpack it into a fresh root before `determinism-verify`, and no tar archive is ever compared.
 - **The `ci` interface is explicit and single:** `cargo xtask ci --base <sha>` runs everything including budget; `cargo xtask ci --no-budget` is the mode for `main` pushes (no meaningful base) and exploratory local runs. Local acceptance runs use `--base origin/main` explicitly — no command discovers Git or GitHub context implicitly. `ci` includes the pinned `deny` invocation, so **local/CI parity has no semantic exceptions**: `cargo xtask deny` verifies the pinned cargo-deny version is installed and errors with the install command otherwise.
-- **Runner labels are fixed major-OS labels, not immutable pins.** GitHub updates `ubuntu-24.04`/`macos-15` images continuously; each job therefore records the runner image version and target triple into the job log and the determinism evidence. The supported triples are stated: `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` — the matrix is deliberately cross-architecture as well as cross-OS. If truly immutable environments are ever required, hosted runners cannot provide them; that would be a containerized-runner decision taken then.
+- **Runner labels are fixed major-OS labels, not immutable pins.** GitHub updates `ubuntu-24.04`/`macos-15` images continuously; each job therefore records the runner image version and target triple into the job log and the determinism evidence. The stable PR matrix uses `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`; the non-required x86 audit lane additionally asserts `x86_64-unknown-linux-gnu`. The ARM64 Linux runner is a disposable container in a dedicated Colima VM, not a macOS job runner. If truly immutable environments are ever required, hosted runners cannot provide them; that would be a containerized-runner decision taken then.
 - Actions pinned by full commit SHA; dependency caching; concurrency groups cancel superseded runs.
 - **Wall-clock is a monitored target, not an acceptance invariant:** the measured quantity is job duration excluding queue time, on cache-hit runs, tracked as the median of the last ten `main` runs, with 10 minutes as the alarm threshold. A stream that pushes it over addresses it in that stream's spec.
 
@@ -149,7 +159,7 @@ The authoritative operator procedure is [`ops/ci-runner/README.md`](../ops/ci-ru
 | T5 | `deny.toml`, pinned cargo-deny gate job, scheduled advisory workflow | 1 |
 | T6 | Determinism harness core: subject model, per-experiment protocol, manifest format, diagnostics | 2 |
 | T7 | Meta-fixtures + expected-failure lanes (local and cross-platform) + artifact retention and compare job | 2 |
-| T8 | Isolated Linux ARM64 self-hosted runner: PR 1 contract/runbook/image/supervisor/smoke; PR 2 activation in `pr.yml` | 2 |
+| T8 | Isolated Linux ARM64 self-hosted runner: PR 1 contract/runbook/image/supervisor/smoke; PR 2 activation in `pr.yml` plus the non-required hosted x86 audit workflow | 2 |
 
 T1 → T2 strictly; T3–T5 independent after T2; T6 → T7, parallel with T3–T5.
 

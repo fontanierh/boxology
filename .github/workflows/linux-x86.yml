@@ -1,0 +1,78 @@
+# Non-required x86 audit lane. The stable PR aggregator runs Linux on the
+# isolated ARM64 runner; this preserves an explicit hosted x86_64 check on
+# main, on demand, and whenever the CI contract itself changes.
+
+name: linux-x86-contract
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .cargo/config.toml
+      - .github/workflows/**
+      - Cargo.lock
+      - Cargo.toml
+      - crates/xtask/**
+      - deny.toml
+      - ops/ci-runner/**
+      - rust-toolchain.toml
+      - specs/s0-repo-bootstrap.md
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_DENY_VERSION: "0.20.2"
+
+jobs:
+  linux-x86:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+          test "$(rustc -vV | sed -n 's/^host: //p')" = x86_64-unknown-linux-gnu
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/bin/cargo-deny
+            target
+          key: cargo-linux-x86-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            cargo-linux-x86-deny-${{ env.CARGO_DENY_VERSION }}-
+      - name: Install pinned cargo-deny
+        run: |
+          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
+            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
+          fi
+          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
+      - name: cargo xtask ci (pull request)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: cargo xtask ci --base "$BASE_SHA"
+      - name: cargo xtask ci (main or manual)
+        if: github.event_name != 'pull_request'
+        run: cargo xtask ci --no-budget

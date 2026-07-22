@@ -1,8 +1,9 @@
 # Boxology Linux ARM64 CI runner
 
 This is the authoritative runbook for S0-T8. It provisions exactly one disposable
-GitHub Actions JIT runner inside a native ARM64 Colima VM. It is deliberately not
-part of `pr.yml` until PR 2.
+GitHub Actions JIT runner inside a native ARM64 Colima VM. After PR 2, the Linux
+jobs in `pr.yml` use this runner label; the one-runner policy intentionally queues
+concurrent Linux jobs rather than registering a second runner.
 
 ## Pinned inputs
 
@@ -19,7 +20,7 @@ Use an Apple-silicon Mac with approved, already-installed and version-pinned
 Colima, Docker CLI/Buildx, `curl`, `jq`, `uuidgen`, `security`, and `launchctl`. Record the
 approved Colima version beside the installation; this repository does not install
 host software. Use a private GitHub repository with trusted Henry/agent
-collaborators; private forking is not changed or required for PR-1 activation.
+collaborators; private forking is not changed or required for activation.
 
 Create the dedicated Keychain item interactively; the token is never written to
 the checkout, plist, environment, command line, or a persistent file:
@@ -116,11 +117,22 @@ launchctl bootstrap "gui/$(id -u)" /PATH/TO/com.fontanierh.boxology-ci-runner.pl
 launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-runner"
 ```
 
-The workflow is manual-only; PR1 does not claim it has run. Dispatch
+The workflow is manual-only and remains the operator's end-to-end health check. Dispatch
 [`self-hosted-runner-smoke.yml`](../../.github/workflows/self-hosted-runner-smoke.yml) after the supervisor is ready; it is read-only, contains no secrets,
 and is safe to remain queued while no runner exists. It checks Linux, ARM64/aarch64, non-root identity,
 image evidence, checkout credential hygiene, and the ARM host branch of the
 determinism fixture.
+
+## CI activation
+
+The activated `pr.yml` Linux lane assigns `checks-linux`, `deny`, both determinism
+consumers, and `validation` to `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]`.
+The Linux evidence and determinism verification target is `aarch64-unknown-linux-gnu`;
+the hosted macOS job remains `macos-15` because the container is Linux, not macOS.
+The non-required `linux-x86-contract` workflow preserves hosted
+`x86_64-unknown-linux-gnu` coverage on `main`, manual dispatch, and CI-contract pull
+requests. Consequently this runner removes hosted Linux minutes from the stable PR
+lane, but it does not claim to remove macOS or the explicit x86 audit lane.
 
 ## Health, cleanup, and rollback
 
@@ -132,9 +144,10 @@ contain secrets.
 
 To stop service, unload the installed plist, remove only its current container
 and named volume, and stop the dedicated Colima profile. A stale supervisor lock
-may be removed only after confirming no supervisor process remains. To roll back,
-leave the smoke workflow unused and keep the hosted-x86 D4 workflow active; do
-not register a persistent runner or alter `pr.yml` as part of this procedure.
+may be removed only after confirming no supervisor process remains. To roll back the
+active lane, revert the reviewed PR-2 workflow routing while leaving the hosted-x86
+audit workflow available. Do not register a persistent runner or widen the
+container's mounts, network, capabilities, or credentials as a rollback shortcut.
 
 Safety boundaries: no repository checkout in the image, read-only root, bounded
 CPU/memory, no host path mounts/socket/host networking, no privileged container,
