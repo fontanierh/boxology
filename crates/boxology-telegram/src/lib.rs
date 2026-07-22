@@ -195,7 +195,11 @@ fn status(input: &[u8]) -> (String, ExitClass) {
             serde_json::json!({"probe": true, "api_reachable": true, "bot_matches": bot_matches, "webhook_configured": !webhook.url.is_empty(), "get_updates_compatible": webhook.url.is_empty()}),
         );
     }
-    let state = match state::Paths::from_env().and_then(|paths| state::read(&paths)) {
+    let paths = match state::Paths::from_env() {
+        Ok(paths) => paths,
+        Err(error) => return failure("status", error),
+    };
+    let state = match state::read(&paths) {
         Ok(state) => state,
         Err(error) => return failure("status", error),
     };
@@ -204,7 +208,14 @@ fn status(input: &[u8]) -> (String, ExitClass) {
         "enabled": enabled(),
         "paired": state.pairing.is_some(),
         "next_offset": state.next_offset,
-        "inbox": {"unhandled": state.events.iter().filter(|event| !event.handled).count()}
+        "telegram_confirmed_before": state.confirmed_before,
+        "consumer_locked": state::consumer_locked(&paths).unwrap_or(false),
+        "inbox": {"unhandled": state.events.iter().filter(|event| !event.handled).count(), "bytes": serde_json::to_vec(&state.events).map_or(0, |bytes| bytes.len()), "full": state.events.len() >= 1000},
+        "asks": {"active": state.asks.iter().filter(|ask| ask.state == "open").count(), "total": state.asks.len()},
+        "outbound": {"ambiguous": state.outbound.iter().filter(|record| record.state == "ambiguous").count(), "total": state.outbound.len()},
+        "pending_pair": state.pending_pair.is_some(),
+        "last_receive_at": state.last_receive_at,
+        "last_error_code": state.last_error_code
     });
     success("status", data)
 }

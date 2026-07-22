@@ -46,6 +46,8 @@ pub(crate) struct Message {
     pub chat: Chat,
     pub text: Option<String>,
     pub reply_to_message: Option<Box<Message>>,
+    #[serde(default)]
+    pub forward_origin: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

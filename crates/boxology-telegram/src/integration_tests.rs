@@ -102,6 +102,7 @@ impl Drop for Context {
         unsafe {
             std::env::remove_var(ENABLED_VARIABLE);
             std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN");
+            std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE");
             std::env::remove_var("BOXOLOGY_TELEGRAM_HOME");
         }
         let _ = fs::remove_dir_all(&self.root);
@@ -124,6 +125,10 @@ fn ok(result: &str) -> Value {
 
 fn response(result: &Value) -> Option<String> {
     Some(json!({"ok": true, "result": result}).to_string())
+}
+
+fn raw(body: &str) -> Option<String> {
+    Some(body.to_string())
 }
 
 fn run(args: &[&str], request: Value) -> (String, ExitClass) {
@@ -379,4 +384,106 @@ fn status_probe_is_constrained_and_listener_requires_lease() {
     assert_eq!(exit, ExitClass::Authorization);
     assert!(!String::from_utf8_lossy(&output).contains("fake-token"));
     context.replace_fake(vec![]);
+}
+
+#[test]
+fn rate_limits_are_retryable_and_errors_are_redacted() {
+    let mut context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    context.replace_fake(vec![raw(r#"{"ok":false,"error_code":429,"description":"secret rate detail","parameters":{"retry_after":3}}"#)]);
+    let request = json!({"schema": SCHEMA, "text": "rate limited", "dedup_key": "rate-1"});
+    let (rate, exit) = run(&["send"], request.clone());
+    assert_eq!(exit, ExitClass::Transient, "{rate}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&rate).unwrap()["error"]["retry_after_seconds"],
+        3
+    );
+    assert!(!rate.contains("secret rate detail"));
+    context.replace_fake(vec![raw(
+        r#"{"ok":false,"error_code":403,"description":"secret permanent detail"}"#,
+    )]);
+    let (permanent, exit) = run(&["send"], request);
+    assert_eq!(exit, ExitClass::Permanent);
+    assert!(!permanent.contains("secret permanent detail"));
+}
+
+#[test]
+fn malformed_receive_does_not_advance_offset_and_webhooks_are_refused() {
+    let mut context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    context.replace_fake(vec![raw("not-json")]);
+    let (_poll, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
+    assert_eq!(exit, ExitClass::Transient);
+    assert_eq!(state::read(&paths).unwrap().next_offset, 0);
+    drop(context);
+
+    let context = Context::new(vec![
+        response(&json!({"id": 7, "is_bot": true, "username": "fake_bot"})),
+        response(&json!({"url": "https://example.invalid/hook"})),
+    ]);
+    let (pair, exit) = run(&["pair", "begin"], json!({"schema": SCHEMA}));
+    assert_eq!(exit, ExitClass::Conflict);
+    assert!(!pair.contains("example.invalid"));
+    drop(context);
+}
+
+#[test]
+fn listener_emits_startup_error_and_stopped_without_leaking_token() {
+    let context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    context.fake.requests.lock().unwrap().clear();
+    let mut context = context;
+    context.replace_fake(vec![raw(
+        r#"{"ok":false,"error_code":403,"description":"secret listener detail"}"#,
+    )]);
+    let mut output = Vec::new();
+    let exit = super::listen::run(
+        br#"{"schema":1,"long_poll_seconds":1,"heartbeat_seconds":10}"#,
+        &mut output,
+    );
+    assert_eq!(exit, ExitClass::Permanent);
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("\"kind\":\"startup\""));
+    assert!(text.contains("\"reason\":\"fatal_error\""));
+    assert!(!text.contains("secret listener detail"));
+    assert!(!text.contains("fake-token"));
+}
+
+#[test]
+fn strict_input_and_private_token_file_checks_fail_closed() {
+    let context = Context::new(vec![]);
+    unsafe {
+        std::env::remove_var(ENABLED_VARIABLE);
+        std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN");
+    }
+    let duplicate = super::execute(
+        &["status".into()],
+        br#"{"schema":1,"schema":1,"probe":false}"#,
+    );
+    assert_eq!(duplicate.1, ExitClass::Input);
+    let oversized = vec![b' '; 65_537];
+    let (_, exit) = super::execute(&["status".into()], &oversized);
+    assert_eq!(exit, ExitClass::Input);
+    let token_path = context.root.join("token");
+    fs::write(&token_path, b"999:file-token\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    unsafe {
+        std::env::set_var("BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE", &token_path);
+    }
+    assert_eq!(api::load_token().unwrap(), "999:file-token");
+    unsafe {
+        std::env::set_var("BOXOLOGY_TELEGRAM_BOT_TOKEN", "999:other");
+    }
+    assert_eq!(api::load_token().unwrap_err().code, "token_sources");
+    unsafe {
+        std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE");
+    }
+    drop(context);
 }

@@ -42,8 +42,15 @@ fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
     } else {
         None
     };
-    let current = state::read(&paths)?;
+    let mut current = state::read(&paths)?;
     ensure_pairing(&current)?;
+    if inbox_full(&current) {
+        state::update(&paths, |state| {
+            state.prune_handled();
+            Ok(())
+        })?;
+        current = state::read(&paths)?;
+    }
     if let Some(event) = oldest_unhandled(&current) {
         return Ok(poll_result(Some(event), false, &current, false));
     }
@@ -140,6 +147,7 @@ pub(crate) fn ack(input: &[u8]) -> Result<Value, AppError> {
         {
             ask.state = "answered".into();
         }
+        state.prune_handled();
         Ok(
             json!({"event_id": request.event_id, "handled": true, "already_handled": already_handled}),
         )
@@ -154,6 +162,7 @@ fn project(update: &api::Update, state: &State) -> Option<EventRecord> {
     let user = message.from.as_ref()?;
     if user.is_bot
         || message.chat.kind != "private"
+        || message.forward_origin.is_some()
         || state.pairing.as_ref()?.user_id != user.id
         || state.pairing.as_ref()?.chat_id != message.chat.id
     {
