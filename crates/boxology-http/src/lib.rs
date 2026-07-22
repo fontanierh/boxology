@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "client")]
-#[allow(dead_code)]
 mod client;
+#[cfg(any(feature = "client", feature = "server"))]
+#[cfg_attr(not(feature = "client"), allow(dead_code))]
+mod conformance;
 #[allow(dead_code)]
 mod encoder;
 #[cfg(test)]
@@ -14,3 +16,6 @@ mod semantic;
 mod server;
 #[allow(dead_code)]
 mod syntax;
+
+#[cfg(feature = "client")]
+pub use client::{HttpClientConfig, HttpClientTarget};

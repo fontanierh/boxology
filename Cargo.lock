@@ -61,6 +61,7 @@ dependencies = [
  "base64",
  "boxology-contract",
  "boxology-runtime",
+ "hello-contract",
  "http",
  "reqwest",
  "ryu",

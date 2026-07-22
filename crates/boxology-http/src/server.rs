@@ -4,8 +4,8 @@ use crate::{
     syntax::{SyntaxError, SyntaxLimits, parse},
 };
 use boxology_contract::{
-    BoxId, CapabilityDescriptor, CapabilityName, CapabilityShape, DecodeRole, DescriptorRef,
-    Detail, ExposureLevel, IdempotencyKey, SlotValue, TypeDescriptor, VariantPayload,
+    BoxId, CapabilityDescriptor, CapabilityName, DecodeRole, ExposureLevel, IdempotencyKey,
+    SlotValue, TypeDescriptor,
 };
 use boxology_runtime::TransportExposure;
 use http::{HeaderMap, HeaderValue};
@@ -128,56 +128,13 @@ fn resolve_route<'a, E: ExposureView>(
     Ok(exposure)
 }
 
-fn conform_exposure(descriptor: &CapabilityDescriptor) -> Result<(), Detail> {
-    if descriptor.shape() != CapabilityShape::Unary {
-        return Err(
-            Detail::new("http_non_unary").with_message("HTTP supports unary capabilities only")
-        );
-    }
-    for (slot, ty) in [
-        ("input", descriptor.input()),
-        ("output", descriptor.output()),
-        ("error", descriptor.error()),
-    ] {
-        if matches!(ty.view(), DescriptorRef::TriState(_)) {
-            return Err(Detail::new("http_top_level_field")
-                .with_message(format!("HTTP cannot represent top-level Field in {slot}")));
-        }
-    }
-    for ty in [descriptor.input(), descriptor.output(), descriptor.error()] {
-        if secret_contains_presence(ty, false) {
-            return Err(Detail::new("http_secret_presence")
-                .with_message("HTTP cannot represent presence inside Secret"));
-        }
-    }
-    Ok(())
-}
-
-fn secret_contains_presence(descriptor: &TypeDescriptor, inside_secret: bool) -> bool {
-    match descriptor.view() {
-        DescriptorRef::Optional(inner) | DescriptorRef::TriState(inner) => {
-            inside_secret || secret_contains_presence(inner, inside_secret)
-        }
-        DescriptorRef::Secret(inner) => secret_contains_presence(inner, true),
-        DescriptorRef::List(inner) | DescriptorRef::Map(inner) => {
-            secret_contains_presence(inner, inside_secret)
-        }
-        DescriptorRef::Struct(fields) => fields
-            .iter()
-            .any(|field| secret_contains_presence(field.descriptor(), inside_secret)),
-        DescriptorRef::Enum(variants) => variants.iter().any(|variant| match variant.payload() {
-            VariantPayload::Unit => false,
-            VariantPayload::Value(inner) => secret_contains_presence(inner, inside_secret),
-        }),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conformance::conform_capability;
     use boxology_contract::{
-        CapabilityId, ContractValue, FieldDescriptor, Idempotency, VariantDescriptor,
+        CapabilityId, CapabilityShape, ContractValue, FieldDescriptor, Idempotency,
+        VariantDescriptor, VariantPayload,
     };
     use http::{HeaderValue, header::ACCEPT};
 
@@ -467,8 +424,9 @@ mod tests {
             CapabilityShape::BidirectionalStreaming,
             CapabilityShape::EventSubscription,
         ] {
-            let error = conform_exposure(&with_slots(shape, tri.clone(), tri.clone(), tri.clone()))
-                .unwrap_err();
+            let error =
+                conform_capability(&with_slots(shape, tri.clone(), tri.clone(), tri.clone()))
+                    .unwrap_err();
             assert_eq!(error.code(), "http_non_unary");
         }
     }
@@ -491,7 +449,7 @@ mod tests {
                 "error",
             ),
         ] {
-            let error = conform_exposure(&descriptor).unwrap_err();
+            let error = conform_capability(&descriptor).unwrap_err();
             assert_eq!(error.code(), "http_top_level_field");
             assert_eq!(
                 error.message(),
@@ -500,7 +458,7 @@ mod tests {
         }
         let all = with_slots(CapabilityShape::Unary, field(), field(), field());
         assert_eq!(
-            conform_exposure(&all).unwrap_err().message(),
+            conform_capability(&all).unwrap_err().message(),
             Some("HTTP cannot represent top-level Field in input")
         );
     }
@@ -520,7 +478,7 @@ mod tests {
             None,
         )])
         .unwrap();
-        let error = conform_exposure(&with_slots(
+        let error = conform_capability(&with_slots(
             CapabilityShape::Unary,
             TypeDescriptor::string(),
             TypeDescriptor::secret(nested).unwrap(),
@@ -542,7 +500,7 @@ mod tests {
         .unwrap();
         let error_slot = TypeDescriptor::secret(tri_in_struct).unwrap();
         assert_eq!(
-            conform_exposure(&with_slots(
+            conform_capability(&with_slots(
                 CapabilityShape::Unary,
                 TypeDescriptor::string(),
                 TypeDescriptor::string(),
@@ -570,7 +528,7 @@ mod tests {
             TypeDescriptor::optional(TypeDescriptor::secret(TypeDescriptor::string()).unwrap())
                 .unwrap(),
         ] {
-            conform_exposure(&with_slots(
+            conform_capability(&with_slots(
                 CapabilityShape::Unary,
                 input,
                 TypeDescriptor::string(),
