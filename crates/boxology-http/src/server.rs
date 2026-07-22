@@ -1,11 +1,12 @@
 use crate::{
-    encoder::WireCallError,
+    encoder::{WireCallError, encode_domain, encode_result},
     semantic::decode_tree,
     syntax::{SyntaxError, SyntaxLimits, parse},
 };
 use boxology_contract::{
     BoxId, CallContext, Caller, CancelToken, CapabilityDescriptor, CapabilityName, Deadline,
-    DecodeRole, ExposureLevel, IdempotencyKey, SlotValue, TraceContext, TypeDescriptor,
+    DecodeRole, ErasedCallError, ExposureLevel, IdempotencyKey, SlotValue, TraceContext,
+    TypeDescriptor,
 };
 use boxology_runtime::{TransportExposure, TransportTaskTracker};
 use http::{HeaderMap, HeaderValue, Method};
@@ -143,6 +144,130 @@ impl DispatchTasks {
     fn len(&self) -> usize {
         self.0.tasks.lock().unwrap().len()
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct EncodedResponse {
+    status: u16,
+    body: Vec<u8>,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum DispatchOutcome {
+    Response(EncodedResponse),
+    Abandoned,
+}
+
+async fn dispatch_request(
+    tasks: &DispatchTasks,
+    exposure: TransportExposure,
+    context: CallContext,
+    input: SlotValue,
+) -> DispatchOutcome {
+    let descriptor = exposure.descriptor();
+    dispatch_request_with(
+        tasks,
+        descriptor,
+        context,
+        input,
+        move |context, input| async move { exposure.dispatch(context, input).await },
+    )
+    .await
+}
+
+async fn dispatch_request_with<F, Fut>(
+    tasks: &DispatchTasks,
+    descriptor: &'static CapabilityDescriptor,
+    context: CallContext,
+    input: SlotValue,
+    dispatch: F,
+) -> DispatchOutcome
+where
+    F: FnOnce(CallContext, SlotValue) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'static,
+{
+    let Some(deadline) = context.deadline() else {
+        return response_error(WireCallError::Internal);
+    };
+    let cancellation = context.cancellation().clone();
+    if deadline.instant() <= tokio::time::Instant::now().into_std() {
+        cancellation.cancel();
+        return response_error(WireCallError::DeadlineExceeded);
+    }
+    let task_cancellation = cancellation.clone();
+    let task = tasks.spawn(
+        cancellation.clone(),
+        invoke_if_live(deadline, task_cancellation, context, input, dispatch),
+    );
+    await_dispatch(task, cancellation, deadline, descriptor).await
+}
+
+async fn invoke_if_live<F, Fut>(
+    deadline: Deadline,
+    cancellation: CancelToken,
+    context: CallContext,
+    input: SlotValue,
+    dispatch: F,
+) -> Result<SlotValue, ErasedCallError>
+where
+    F: FnOnce(CallContext, SlotValue) -> Fut,
+    Fut: Future<Output = Result<SlotValue, ErasedCallError>>,
+{
+    if deadline.instant() <= tokio::time::Instant::now().into_std() {
+        cancellation.cancel();
+        return Err(ErasedCallError::Deadline);
+    }
+    dispatch(context, input).await
+}
+
+async fn await_dispatch(
+    mut task: tokio::task::JoinHandle<Result<SlotValue, ErasedCallError>>,
+    cancellation: CancelToken,
+    deadline: Deadline,
+    descriptor: &CapabilityDescriptor,
+) -> DispatchOutcome {
+    let timeout = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline.instant()));
+    tokio::pin!(timeout);
+    tokio::select! {
+        biased;
+        joined = &mut task => match joined {
+            Ok(result) => encode_dispatch_result(result, descriptor),
+            Err(_) => response_error(WireCallError::Internal),
+        },
+        () = &mut timeout => {
+            cancellation.cancel();
+            response_error(WireCallError::DeadlineExceeded)
+        },
+        () = cancellation.cancelled() => DispatchOutcome::Abandoned,
+    }
+}
+
+fn encode_dispatch_result(
+    result: Result<SlotValue, ErasedCallError>,
+    descriptor: &CapabilityDescriptor,
+) -> DispatchOutcome {
+    match result {
+        Ok(value) => match encode_result(&value, descriptor.output()) {
+            Ok(body) => DispatchOutcome::Response(EncodedResponse { status: 200, body }),
+            Err(_) => response_error(WireCallError::InvalidUpstreamResponse),
+        },
+        Err(ErasedCallError::Domain { error_tag, payload }) => {
+            match encode_domain(&error_tag, &payload, descriptor.error()) {
+                Ok(body) => DispatchOutcome::Response(EncodedResponse { status: 422, body }),
+                Err(_) => response_error(WireCallError::InvalidUpstreamResponse),
+            }
+        }
+        Err(error) => {
+            response_error(WireCallError::from_erased(&error).unwrap_or(WireCallError::Internal))
+        }
+    }
+}
+
+fn response_error(error: WireCallError) -> DispatchOutcome {
+    let encoded = error.encode();
+    DispatchOutcome::Response(EncodedResponse {
+        status: encoded.status(),
+        body: encoded.body().to_vec(),
+    })
 }
 
 fn decode_request_body(
@@ -525,7 +650,7 @@ mod tests {
     use super::*;
     use crate::conformance::conform_capability;
     use boxology_contract::{
-        CapabilityId, CapabilityShape, ContractValue, FieldDescriptor, Idempotency,
+        CapabilityId, CapabilityShape, ContractValue, Detail, FieldDescriptor, Idempotency,
         VariantDescriptor, VariantPayload,
     };
     use http::{HeaderValue, header::ACCEPT};
@@ -686,6 +811,278 @@ mod tests {
         );
         tasks.wait_empty().await;
         assert_eq!((tasks.len(), tracker.len()), (0, 0));
+    }
+
+    fn dispatch_descriptor(
+        output: TypeDescriptor,
+        error: TypeDescriptor,
+    ) -> &'static CapabilityDescriptor {
+        Box::leak(Box::new(with_slots(
+            CapabilityShape::Unary,
+            TypeDescriptor::string(),
+            output,
+            error,
+        )))
+    }
+
+    fn string_dispatch_descriptor() -> &'static CapabilityDescriptor {
+        dispatch_descriptor(
+            TypeDescriptor::string(),
+            TypeDescriptor::enumeration([]).unwrap(),
+        )
+    }
+
+    fn dispatch_context(after: Option<Duration>, cancellation: CancelToken) -> CallContext {
+        CallContext::new(
+            Caller::Anonymous,
+            after.map(|after| Deadline::at(tokio::time::Instant::now().into_std() + after)),
+            cancellation,
+            TraceContext::empty(),
+            None,
+        )
+    }
+
+    fn exact_error(error: WireCallError) -> DispatchOutcome {
+        let (status, code, message) = error.spec();
+        DispatchOutcome::Response(EncodedResponse {
+            status,
+            body: format!(r#"{{"error":{{"kind":"call","code":"{code}","message":"{message}"}}}}"#)
+                .into_bytes(),
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_rejects_missing_and_expired_deadlines_before_spawning() {
+        let descriptor = string_dispatch_descriptor();
+        for (after, expected, cancelled) in [
+            (None, WireCallError::Internal, false),
+            (Some(Duration::ZERO), WireCallError::DeadlineExceeded, true),
+        ] {
+            let tracker = TransportTaskTracker::new();
+            let tasks = DispatchTasks::new(tracker.clone());
+            let token = CancelToken::new();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let invoked = calls.clone();
+            let outcome = dispatch_request_with(
+                &tasks,
+                descriptor,
+                dispatch_context(after, token.clone()),
+                SlotValue::Null,
+                move |_, _| {
+                    invoked.fetch_add(1, Ordering::Relaxed);
+                    std::future::ready(Ok(SlotValue::Null))
+                },
+            )
+            .await;
+            assert_eq!(outcome, exact_error(expected));
+            assert_eq!(calls.load(Ordering::Relaxed), 0);
+            assert_eq!(tasks.len() + tracker.len(), 0);
+            assert_eq!(token.is_cancelled(), cancelled);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_encodes_success_domain_and_all_call_errors_canonically() {
+        let errors = TypeDescriptor::enumeration([VariantDescriptor::new(
+            "denied",
+            VariantPayload::Value(TypeDescriptor::string()),
+            None,
+        )])
+        .unwrap();
+        let descriptor = dispatch_descriptor(TypeDescriptor::string(), errors);
+        let cases = [
+            (
+                Ok(SlotValue::Value(ContractValue::string("yes"))),
+                200,
+                br#"{"result":{"value":"yes"}}"#.as_slice(),
+            ),
+            (
+                Err(ErasedCallError::Domain {
+                    error_tag: "denied".into(),
+                    payload: SlotValue::Value(ContractValue::string("no")),
+                }),
+                422,
+                br#"{"error":{"kind":"domain","value":{"tag":"denied","payload":"no"}}}"#
+                    .as_slice(),
+            ),
+        ];
+        for (result, status, body) in cases {
+            assert_eq!(
+                encode_dispatch_result(result, descriptor),
+                DispatchOutcome::Response(EncodedResponse {
+                    status,
+                    body: body.to_vec()
+                })
+            );
+        }
+
+        let detail = || Detail::new("DO_NOT_LEAK").with_message("DO_NOT_LEAK");
+        let failures = [
+            (ErasedCallError::Deadline, WireCallError::DeadlineExceeded),
+            (ErasedCallError::Cancelled, WireCallError::Internal),
+            (
+                ErasedCallError::Unavailable(detail()),
+                WireCallError::Unavailable,
+            ),
+            (
+                ErasedCallError::ContractViolation(detail()),
+                WireCallError::InvalidRequest,
+            ),
+            (
+                ErasedCallError::InvalidResponse(detail()),
+                WireCallError::InvalidUpstreamResponse,
+            ),
+            (ErasedCallError::Internal(detail()), WireCallError::Internal),
+        ];
+        for (failure, expected) in failures {
+            assert_eq!(
+                encode_dispatch_result(Err(failure), descriptor),
+                exact_error(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_handler_values_are_canonical_502_without_payload_leaks() {
+        let descriptor = string_dispatch_descriptor();
+        let malformed = [
+            Ok(SlotValue::Null),
+            Err(ErasedCallError::Domain {
+                error_tag: "unknown".into(),
+                payload: SlotValue::Value(ContractValue::sensitive(ContractValue::string(
+                    "DO_NOT_LEAK",
+                ))),
+            }),
+        ];
+        for result in malformed {
+            let outcome = encode_dispatch_result(result, descriptor);
+            assert_eq!(outcome, exact_error(WireCallError::InvalidUpstreamResponse));
+            let DispatchOutcome::Response(response) = outcome else {
+                unreachable!()
+            };
+            assert!(!String::from_utf8_lossy(&response.body).contains("DO_NOT_LEAK"));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn handler_internal_and_genuine_join_failure_are_distinct_but_canonical_500() {
+        let descriptor = string_dispatch_descriptor();
+        let tasks = DispatchTasks::new(TransportTaskTracker::new());
+        let token = CancelToken::new();
+        let deadline = dispatch_context(Some(Duration::from_secs(1)), token.clone())
+            .deadline()
+            .unwrap();
+        let guarded = tasks.spawn(token.clone(), async {
+            Err(ErasedCallError::Internal(Detail::new("DO_NOT_LEAK")))
+        });
+        assert_eq!(
+            await_dispatch(guarded, token.clone(), deadline, descriptor).await,
+            exact_error(WireCallError::Internal)
+        );
+        let panicked = tasks.spawn(token.clone(), async { panic!("DO_NOT_LEAK") });
+        assert_eq!(
+            await_dispatch(panicked, token, deadline, descriptor).await,
+            exact_error(WireCallError::Internal)
+        );
+        tasks.wait_empty().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dispatch_race_order_is_completion_then_deadline_then_cancellation() {
+        let descriptor = string_dispatch_descriptor();
+        let tasks = DispatchTasks::new(TransportTaskTracker::new());
+        let token = CancelToken::new();
+        token.cancel();
+        let done = tasks.spawn(token.clone(), async {
+            Ok(SlotValue::Value(ContractValue::string("done")))
+        });
+        tokio::task::yield_now().await;
+        let now = Deadline::at(tokio::time::Instant::now().into_std());
+        assert_eq!(
+            await_dispatch(done, token.clone(), now, descriptor).await,
+            DispatchOutcome::Response(EncodedResponse {
+                status: 200,
+                body: br#"{"result":{"value":"done"}}"#.to_vec()
+            })
+        );
+
+        let pending = tasks.spawn(token.clone(), std::future::pending());
+        assert_eq!(
+            await_dispatch(pending, token, now, descriptor).await,
+            exact_error(WireCallError::DeadlineExceeded)
+        );
+        tasks.abort_all();
+        tasks.wait_empty().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timeout_and_request_cancellation_leave_dispatch_owned_until_completion() {
+        for deadline_wins in [true, false] {
+            let tracker = TransportTaskTracker::new();
+            let tasks = DispatchTasks::new(tracker.clone());
+            let token = CancelToken::new();
+            let release = Arc::new(tokio::sync::Notify::new());
+            let waiter = release.clone();
+            let handler_token = token.clone();
+            let task = tasks.spawn(token.clone(), async move {
+                waiter.notified().await;
+                assert!(handler_token.is_cancelled());
+                Ok(SlotValue::Value(ContractValue::string("late")))
+            });
+            let descriptor = string_dispatch_descriptor();
+            let deadline =
+                Deadline::at(tokio::time::Instant::now().into_std() + Duration::from_secs(1));
+            let wait = tokio::spawn({
+                let token = token.clone();
+                async move { await_dispatch(task, token, deadline, descriptor).await }
+            });
+            tokio::task::yield_now().await;
+            if deadline_wins {
+                tokio::time::advance(Duration::from_secs(1)).await;
+            } else {
+                token.cancel();
+            }
+            let outcome = wait.await.unwrap();
+            assert_eq!(
+                outcome,
+                if deadline_wins {
+                    exact_error(WireCallError::DeadlineExceeded)
+                } else {
+                    DispatchOutcome::Abandoned
+                }
+            );
+            assert_eq!((tasks.len(), tracker.len()), (1, 1));
+            release.notify_one();
+            tasks.wait_empty().await;
+            assert_eq!((tasks.len(), tracker.len()), (0, 0));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expiry_between_admission_and_task_invocation_skips_handler() {
+        let token = CancelToken::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let invoked = calls.clone();
+        let descriptor = string_dispatch_descriptor();
+        let context = dispatch_context(Some(Duration::from_secs(1)), token.clone());
+        let deadline = context.deadline().unwrap();
+        let request = invoke_if_live(
+            deadline,
+            token.clone(),
+            context,
+            SlotValue::Null,
+            move |_, _| {
+                invoked.fetch_add(1, Ordering::Relaxed);
+                std::future::ready(Ok(SlotValue::Null))
+            },
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            encode_dispatch_result(request.await, descriptor),
+            exact_error(WireCallError::DeadlineExceeded)
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert!(token.is_cancelled());
     }
 
     fn body_limits(max_bytes: usize) -> SyntaxLimits {
