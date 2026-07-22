@@ -21,7 +21,7 @@ pub(crate) enum WireCallError {
 }
 
 impl WireCallError {
-    const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::UnknownBox,
         Self::UnknownCapability,
         Self::InvalidRequest,
@@ -34,7 +34,7 @@ impl WireCallError {
         Self::Internal,
     ];
 
-    fn spec(self) -> (u16, &'static str, &'static str) {
+    pub(crate) fn spec(self) -> (u16, &'static str, &'static str) {
         match self {
             Self::UnknownBox => (404, "unknown_box", "unknown box"),
             Self::UnknownCapability => (404, "unknown_capability", "unknown capability"),
