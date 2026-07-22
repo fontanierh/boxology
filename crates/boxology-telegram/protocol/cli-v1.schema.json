@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "boxology-telegram schema 1 requests",
+  "description": "Command-specific JSON objects read from standard input by boxology-telegram.",
+  "oneOf": [
+    {"$ref": "#/$defs/send"},
+    {"$ref": "#/$defs/reply"},
+    {"$ref": "#/$defs/poll"},
+    {"$ref": "#/$defs/listen"},
+    {"$ref": "#/$defs/ack"},
+    {"$ref": "#/$defs/ask"},
+    {"$ref": "#/$defs/status"},
+    {"$ref": "#/$defs/resolveSend"},
+    {"$ref": "#/$defs/pairBegin"},
+    {"$ref": "#/$defs/pairComplete"},
+    {"$ref": "#/$defs/pairRevoke"}
+  ],
+  "$defs": {
+    "schema": {"type": "integer", "const": 1},
+    "key": {"type": "string", "minLength": 1, "maxLength": 128},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "send": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "text", "dedup_key"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "text": {"$ref": "#/$defs/text"}, "dedup_key": {"$ref": "#/$defs/key"}}
+    },
+    "reply": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "event_id", "text", "dedup_key"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "event_id": {"type": "string", "pattern": "^tg:", "maxLength": 128}, "text": {"$ref": "#/$defs/text"}, "dedup_key": {"$ref": "#/$defs/key"}}
+    },
+    "poll": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 50}}
+    },
+    "listen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "long_poll_seconds": {"type": "integer", "minimum": 1, "maximum": 50}, "heartbeat_seconds": {"type": "integer", "minimum": 10, "maximum": 300}}
+    },
+    "ack": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "event_id"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "event_id": {"type": "string", "pattern": "^tg:", "maxLength": 128}}
+    },
+    "alternative": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key", "label", "text"],
+      "properties": {"key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,32}$"}, "label": {"type": "string", "minLength": 1, "maxLength": 40}, "text": {"type": "string", "minLength": 1, "maxLength": 1024}}
+    },
+    "ask": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "summary", "recommendation", "lifecycle_key", "dedup_key"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "summary": {"type": "string", "minLength": 1, "maxLength": 4096}, "recommendation": {"type": "string", "minLength": 1, "maxLength": 1024}, "alternatives": {"type": "array", "maxItems": 4, "items": {"$ref": "#/$defs/alternative"}}, "lifecycle_key": {"$ref": "#/$defs/key"}, "dedup_key": {"$ref": "#/$defs/key"}}
+    },
+    "status": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "probe"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "probe": {"type": "boolean"}}
+    },
+    "resolution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {"kind": {"enum": ["delivered", "not_delivered"]}, "message_id": {"type": "integer", "exclusiveMinimum": 0}}
+    },
+    "resolveSend": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "dedup_key", "resolution"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "dedup_key": {"$ref": "#/$defs/key"}, "resolution": {"$ref": "#/$defs/resolution"}}
+    },
+    "pairBegin": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "nonce_ttl_seconds": {"type": "integer", "minimum": 60, "maximum": 600}}
+    },
+    "pairComplete": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}, "timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 50}}
+    },
+    "pairRevoke": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {"schema": {"$ref": "#/$defs/schema"}}
+    }
+  }
+}

@@ -113,6 +113,30 @@ pub(crate) struct OutboundRecord {
     pub ask_id: Option<String>,
 }
 
+impl State {
+    pub(crate) fn prune_handled(&mut self) {
+        while self.events.len() >= 1_000
+            || serde_json::to_vec(&self.events).is_ok_and(|bytes| bytes.len() >= 8 * 1024 * 1024)
+        {
+            let Some(index) = self.events.iter().position(|event| {
+                event.handled
+                    && !self.outbound.iter().any(|outbound| {
+                        outbound.event_id.as_deref() == Some(event.event_id.as_str())
+                            && matches!(outbound.state.as_str(), "in_flight" | "ambiguous")
+                    })
+                    && event.ask_id.as_ref().is_none_or(|ask_id| {
+                        self.asks
+                            .iter()
+                            .all(|ask| &ask.ask_id != ask_id || ask.state != "open")
+                    })
+            }) else {
+                break;
+            };
+            self.events.remove(index);
+        }
+    }
+}
+
 impl Default for State {
     fn default() -> Self {
         Self {
@@ -224,6 +248,22 @@ pub(crate) fn read(paths: &Paths) -> Result<State, AppError> {
 }
 
 #[allow(dead_code)]
+pub(crate) fn consumer_locked(paths: &Paths) -> Result<bool, AppError> {
+    paths.prepare()?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&paths.consumer_lock)
+        .map_err(local_io)?;
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            Ok(false)
+        }
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(error)) => Err(local_io(error)),
+    }
+}
 pub(crate) fn update<T>(
     paths: &Paths,
     change: impl FnOnce(&mut State) -> Result<T, AppError>,
