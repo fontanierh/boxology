@@ -172,6 +172,7 @@ impl Paths {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn for_test(root: PathBuf) -> Self {
         Self::at(root)
     }
@@ -200,6 +201,7 @@ pub(crate) fn read(paths: &Paths) -> Result<State, AppError> {
     state
 }
 
+#[allow(dead_code)]
 pub(crate) fn update<T>(
     paths: &Paths,
     change: impl FnOnce(&mut State) -> Result<T, AppError>,
@@ -213,8 +215,10 @@ pub(crate) fn update<T>(
     Ok(result)
 }
 
+#[allow(dead_code)]
 pub(crate) struct ConsumerLock(File);
 
+#[allow(dead_code)]
 impl ConsumerLock {
     pub(crate) fn acquire(paths: &Paths) -> Result<Self, AppError> {
         paths.prepare()?;
@@ -289,6 +293,7 @@ fn read_unlocked(path: &Path) -> Result<State, AppError> {
     Ok(state)
 }
 
+#[allow(dead_code)]
 fn write_unlocked(root: &Path, path: &Path, state: &State) -> Result<(), AppError> {
     let bytes = serde_json::to_vec(state).map_err(|_| {
         AppError::new(
@@ -348,6 +353,7 @@ fn ensure_lock_file(path: &Path) -> Result<(), AppError> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
         .map_err(local_io)?;
     set_private(&file)
@@ -397,4 +403,40 @@ fn local_io(_: std::io::Error) -> AppError {
         "local state is unavailable",
         ExitClass::Local,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_root() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("boxology-telegram-state-{nonce}"))
+    }
+
+    #[test]
+    fn update_persists_state_and_consumer_lock_is_exclusive() {
+        let root = test_root();
+        let paths = Paths::for_test(root.clone());
+        let result = update(&paths, |state| {
+            state.next_offset = 4;
+            Ok(state.next_offset)
+        })
+        .expect("state update");
+        assert_eq!(result, 4);
+        assert_eq!(read(&paths).expect("state read").next_offset, 4);
+
+        let first = ConsumerLock::acquire(&paths).expect("first consumer lock");
+        let second = match ConsumerLock::acquire(&paths) {
+            Ok(_) => panic!("second lock must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(second.code, "consumer_locked");
+        drop(first);
+        fs::remove_dir_all(root).expect("remove test state");
+    }
 }

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 
+mod state;
+
 pub const SCHEMA: u8 = 1;
 pub const ENABLED_VARIABLE: &str = "BOXOLOGY_TELEGRAM_ENABLED";
 const MAX_INPUT: usize = 65_536;
@@ -11,7 +13,13 @@ pub enum ExitClass {
     Success = 0,
     Input = 2,
     Authorization = 3,
+    Conflict = 4,
+    Local = 5,
     Policy = 6,
+    Transient = 7,
+    Permanent = 8,
+    Ambiguous = 9,
+    Invariant = 10,
 }
 
 #[derive(Debug)]
@@ -23,6 +31,15 @@ pub struct AppError {
 }
 
 impl AppError {
+    pub const fn new(code: &'static str, message: &'static str, exit: ExitClass) -> Self {
+        Self {
+            code,
+            message,
+            retryable: false,
+            exit,
+        }
+    }
+
     pub const fn input(code: &'static str, message: &'static str) -> Self {
         Self {
             code,
@@ -111,11 +128,16 @@ fn status(input: &[u8]) -> (String, ExitClass) {
     if request.probe {
         return failure("status", AppError::unsupported());
     }
+    let state = match state::Paths::from_env().and_then(|paths| state::read(&paths)) {
+        Ok(state) => state,
+        Err(error) => return failure("status", error),
+    };
     let data = serde_json::json!({
         "probe": false,
         "enabled": enabled(),
-        "paired": false,
-        "next_offset": 0
+        "paired": state.pairing.is_some(),
+        "next_offset": state.next_offset,
+        "inbox": {"unhandled": state.events.iter().filter(|event| !event.handled).count()}
     });
     success("status", data)
 }
