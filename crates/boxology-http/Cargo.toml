@@ -7,7 +7,7 @@ publish = false
 [features]
 default = ["server"]
 server = ["dep:boxology-runtime", "dep:http"]
-client = ["dep:http", "dep:reqwest"]
+client = ["dep:http", "dep:reqwest", "dep:tokio"]
 
 [dependencies]
 base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
@@ -16,7 +16,8 @@ boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime", optional 
 http = { version = "=1.4.2", optional = true }
 reqwest = { version = "=0.13.4", default-features = false, optional = true }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+tokio = { version = "=1.53.0", default-features = false, features = ["macros", "time"], optional = true }
 ryu = "=1.0.23"
 
 [dev-dependencies]
-tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }
+tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "test-util", "time"] }
