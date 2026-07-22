@@ -6,9 +6,14 @@ umask 077
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-com.fontanierh.boxology-ci-runner}"
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-$(/usr/bin/id -un)}"
 RUNNER_GROUP_ID="${RUNNER_GROUP_ID:-1}"
+MAX_RUNNERS="${MAX_RUNNERS:-10}"
 DOCKER_CONTEXT=colima-boxology-ci-arm64
-RUNTIME_DIR=/tmp/boxology-ci-runner
+RUNTIME_DIR="${RUNTIME_DIR:-/tmp/boxology-ci-runner}"
 LOCK="$RUNTIME_DIR/supervisor.lock"
+CONTAINER_CPUS="${CONTAINER_CPUS:-4}"
+CONTAINER_MEMORY="${CONTAINER_MEMORY:-8g}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
 IMAGE_ID=boxology-linux-arm64-pr
 IMAGE_VERSION=ubuntu-24.04-arm64-runner-2.336.0-rust-1.97.1-deny-0.20.2
 BASE_DIGEST=sha256:7f622ca8766bccb22f04242ecb6f19f770b2f08827dc4b8c707de5e78a6da7ab
@@ -16,6 +21,7 @@ RUNNER_SHA256=58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1
 RUNNER_NAME= RUNNER_ID=
 [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 64
 [[ "$RUNNER_GROUP_ID" =~ ^[0-9]+$ ]] || exit 64
+[[ "$MAX_RUNNERS" =~ ^[0-9]+$ && "$MAX_RUNNERS" -ge 1 && "$MAX_RUNNERS" -le 90 ]] || exit 64
 for tool in curl docker jq security uuidgen; do command -v "$tool" >/dev/null || exit 69; done
 export DOCKER_CONTEXT
 [[ "$(docker context show 2>/dev/null)" = "$DOCKER_CONTEXT" ]] || exit 69
@@ -158,7 +164,8 @@ check_repo() {
   runners="$(api GET '/actions/runners?per_page=100')" || return 1
   validate_runner_list "$runners" || return 1
   jq -e '(.total_count | numbers) < 100' <<<"$runners" >/dev/null || return 1
-  jq -e '[.runners[] | select(.labels | any(.name == "boxology-linux-arm64-pr"))] | length == 0' \
+  jq -e --argjson max "$MAX_RUNNERS" \
+    '([.runners[] | select(.labels | any(.name == "boxology-linux-arm64-pr"))] | length) < $max' \
     <<<"$runners" >/dev/null
 }
 verify_image() {
@@ -204,11 +211,12 @@ run_once() {
   volume="$candidate_volume"; if ! docker volume create "$volume" >/dev/null; then delete_jit_runner; return 1; fi; container="$candidate_container"
   status=0
   printf '%s' "$jit" | docker run --interactive --name "$container" --network bridge --user runner --init \
-      --read-only --cpus 4 --memory 8g --memory-swap 8g --cap-drop=ALL --security-opt no-new-privileges:true --pids-limit 512 \
+      --read-only --cpus "$CONTAINER_CPUS" --memory "$CONTAINER_MEMORY" --memory-swap "$CONTAINER_MEMORY" --cap-drop=ALL --security-opt no-new-privileges:true --pids-limit 512 \
       --tmpfs /tmp:rw,noexec,nosuid,size=256m --tmpfs /run:rw,noexec,nosuid,size=16m \
       --mount "type=volume,source=$volume,target=/runner" \
       --env ImageOS=ubuntu24.04-arm64-colima \
       --env ImageVersion="$IMAGE_VERSION" --env HOME=/runner/home --env CARGO_HOME=/runner/_work/.cargo \
+      --env CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" --env RUST_TEST_THREADS="$RUST_TEST_THREADS" \
       --env RUNNER_TEMP=/runner/_work/_temp \
       --env TMPDIR=/runner/_work/_temp \
       "$CI_RUNNER_IMAGE" >/dev/null 2>/dev/null &

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.fontanierh.boxology-ci-runner-slots</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/jim/.crab/ci-runner/supervise-slots.sh</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>REPOSITORY</key><string>fontanierh/boxology</string>
+    <key>CI_RUNNER_IMAGE</key><string>boxology-linux-arm64-pr:verified</string>
+    <key>DOCKER_CONTEXT</key><string>colima-boxology-ci-arm64</string>
+    <key>KEYCHAIN_SERVICE</key><string>com.fontanierh.boxology-ci-runner</string>
+    <key>KEYCHAIN_ACCOUNT</key><string>jim</string>
+    <key>SUPERVISOR</key><string>/Users/jim/.crab/ci-runner/supervise.sh</string>
+    <key>SLOT_COUNT</key><string>9</string>
+    <key>SLOT_START</key><string>2</string>
+    <key>SLOT_MAX_RUNNERS</key><string>10</string>
+    <key>SLOT_ROOT_PREFIX</key><string>/Users/jim/.crab/ci-runner/linux-runner-slot-</string>
+    <key>RUNTIME_ROOT_PREFIX</key><string>/tmp/boxology-ci-runner-slot-</string>
+    <key>LOG_ROOT</key><string>/Users/jim/.crab/ci-runner/logs/linux-slots</string>
+    <key>SLOT_CARGO_BUILD_JOBS</key><string>2</string>
+    <key>SLOT_RUST_TEST_THREADS</key><string>2</string>
+    <key>SLOT_CONTAINER_CPUS</key><string>1</string>
+    <key>SLOT_CONTAINER_MEMORY</key><string>2g</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>/Users/jim/.crab/ci-runner/logs/linux-slots-supervisor.log</string>
+  <key>StandardErrorPath</key><string>/Users/jim/.crab/ci-runner/logs/linux-slots-supervisor.err.log</string>
+</dict>
+</plist>

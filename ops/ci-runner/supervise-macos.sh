@@ -8,6 +8,7 @@ RUNNER_ROOT="${RUNNER_ROOT:-/Users/jim/.crab/ci-runner/macos-runner}"
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-com.fontanierh.boxology-ci-runner}"
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-$(/usr/bin/id -un)}"
 RUNNER_GROUP_ID="${RUNNER_GROUP_ID:-1}"
+MAX_RUNNERS="${MAX_RUNNERS:-10}"
 RUNNER_VERSION=2.336.0
 RUNNER_SHA256=8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079
 RUST_VERSION=1.97.1
@@ -20,10 +21,13 @@ IMAGE_VERSION="macOS-${MACOS_VERSION}-arm64-runner-${RUNNER_VERSION}-rust-${RUST
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/boxology-ci-macos-runner}"
 LOCK="$RUNTIME_DIR/supervisor.lock"
 CACHE_ROOT="$RUNNER_ROOT/cache"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
 RUNNER_NAME= RUNNER_ID= runner_pid= run_dir= token=
 
 [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 64
 [[ "$RUNNER_GROUP_ID" =~ ^[0-9]+$ ]] || exit 64
+[[ "$MAX_RUNNERS" =~ ^[0-9]+$ && "$MAX_RUNNERS" -ge 1 && "$MAX_RUNNERS" -le 90 ]] || exit 64
 [[ "$(uname -m)" = arm64 ]] || exit 69
 for tool in curl jq security uuidgen shasum sw_vers; do command -v "$tool" >/dev/null || exit 69; done
 [[ -x "$RUNNER_BASE/run.sh" && -x "$RUNNER_BASE/bin/Runner.Listener" ]] || exit 69
@@ -130,7 +134,8 @@ check_repo() {
   runners="$(api GET '/actions/runners?per_page=100')" || return 1
   validate_runner_list "$runners" || return 1
   jq -e '(.total_count | numbers) < 100' <<<"$runners" >/dev/null || return 1
-  jq -e --arg label "$RUNNER_LABEL" '[.runners[] | select(.labels | any(.name == $label))] | length == 0' \
+  jq -e --arg label "$RUNNER_LABEL" --argjson max "$MAX_RUNNERS" \
+    '([.runners[] | select(.labels | any(.name == $label))] | length) < $max' \
     <<<"$runners" >/dev/null
 }
 verify_runner_base() {
@@ -202,6 +207,7 @@ run_once() {
     export HOME="$CACHE_ROOT/home" CARGO_HOME="$CACHE_ROOT/home/.cargo" RUSTUP_HOME=/Users/jim/.rustup \
       RUNNER_TEMP="$run_dir/_work/_temp" TMPDIR="$run_dir/_work/_temp" RUNNER_TOOL_CACHE="$run_dir/_work/_tool" \
       ImageOS="$IMAGE_OS" ImageVersion="$IMAGE_VERSION" \
+      CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" RUST_TEST_THREADS="$RUST_TEST_THREADS" \
       PATH="$CACHE_ROOT/home/.cargo/bin:/Users/jim/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
     unset GITHUB_TOKEN GH_TOKEN RUNNER_TOKEN ACTIONS_RUNTIME_TOKEN \
       AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AZURE_CLIENT_SECRET
