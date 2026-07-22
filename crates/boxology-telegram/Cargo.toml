@@ -1,0 +1,16 @@
+[package]
+name = "boxology-telegram"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "boxology-telegram"
+path = "src/main.rs"
+
+[dependencies]
+getrandom = "=0.4.3"
+reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "native-tls", "json"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+sha2 = "=0.10.9"

@@ -29,6 +29,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-generator",
     "boxology-http",
     "boxology-runtime",
+    "boxology-telegram",
     "hello-implementation",
     "xtask",
 ];
