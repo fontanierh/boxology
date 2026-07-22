@@ -1,6 +1,8 @@
 # The S0 D4 validation matrix is fully wired. Linux jobs run on the disposable
-# ARM64 runner label provisioned by ops/ci-runner; `validation` is the single stable
-# aggregate required-check name (branch-protection target per D9, when available).
+# ARM64 runner labels provisioned by ops/ci-runner; every job runs on the MacBook.
+# Linux jobs execute in the disposable Colima container and macOS jobs execute on
+# the native host runner. `validation` is the single stable aggregate required-check
+# name (branch-protection target per D9, when available).
 #
 # Candidate-writable (spec non-goal): a PR can modify this file and the checks
 # that judge it. Until S5/S7, protection is human review of changes to
@@ -105,7 +107,7 @@ jobs:
           overwrite: true
 
   checks-macos:
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -119,6 +121,10 @@ jobs:
         run: |
           echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
           rustc --version --verbose
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$ImageOS" = macos-arm64-host
           test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
