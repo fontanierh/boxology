@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "client")]
+#[allow(dead_code)]
+mod client;
 #[allow(dead_code)]
 mod encoder;
 #[cfg(test)]
