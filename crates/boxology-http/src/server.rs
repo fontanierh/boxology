@@ -4,19 +4,21 @@ use crate::{
     syntax::{SyntaxError, SyntaxLimits, parse},
 };
 use boxology_contract::{
-    BoxId, CapabilityDescriptor, CapabilityName, DecodeRole, ExposureLevel, IdempotencyKey,
-    SlotValue, TraceContext, TypeDescriptor,
+    BoxId, CapabilityDescriptor, CapabilityName, Deadline, DecodeRole, ExposureLevel,
+    IdempotencyKey, SlotValue, TraceContext, TypeDescriptor,
 };
 use boxology_runtime::TransportExposure;
 use http::{HeaderMap, HeaderValue, Method};
+use http_body::Body;
 use mediatype::{MediaTypeList, names};
-use std::time::Duration;
+use std::{future::poll_fn, pin::Pin, time::Duration};
 
 const TIMEOUT_HEADER: &str = "boxology-timeout-ms";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 const TRACEPARENT_HEADER: &str = "traceparent";
 const TRACESTATE_HEADER: &str = "tracestate";
 const MAX_TRACESTATE_BYTES: usize = 512;
+const BODY_FRAME_QUANTUM: usize = 32;
 
 fn decode_request_body(
     body: &[u8],
@@ -29,6 +31,62 @@ fn decode_request_body(
     })?;
     decode_tree(tree, descriptor, DecodeRole::ProviderInput)
         .map_err(|_| WireCallError::InvalidRequest)
+}
+
+async fn collect_and_decode_request_body<B>(
+    body: B,
+    descriptor: &TypeDescriptor,
+    limits: SyntaxLimits,
+    deadline: Deadline,
+) -> Result<SlotValue, WireCallError>
+where
+    B: Body<Data = bytes::Bytes> + Unpin,
+{
+    if body.size_hint().lower() > limits.0 as u64 {
+        return Err(WireCallError::PayloadTooLarge);
+    }
+
+    let collection = async move {
+        let mut body = body;
+        let mut collected = Vec::new();
+        loop {
+            for _ in 0..BODY_FRAME_QUANTUM {
+                let next = poll_fn(|context| Pin::new(&mut body).poll_frame(context)).await;
+                let Some(frame) = next else {
+                    return Ok(collected);
+                };
+                let frame = frame.map_err(|_| WireCallError::InvalidRequest)?;
+                let Ok(data) = frame.into_data() else {
+                    continue;
+                };
+                let remaining = limits
+                    .0
+                    .checked_sub(collected.len())
+                    .ok_or(WireCallError::PayloadTooLarge)?;
+                if data.len() > remaining {
+                    return Err(WireCallError::PayloadTooLarge);
+                }
+                reserve_body_capacity(&mut collected, data.len())?;
+                collected.extend_from_slice(&data);
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    let mut timeout = Box::pin(tokio::time::sleep_until(tokio::time::Instant::from_std(
+        deadline.instant(),
+    )));
+    tokio::pin!(collection);
+    let collected = tokio::select! {
+        biased;
+        result = &mut collection => result?,
+        () = &mut timeout => return Err(WireCallError::DeadlineExceeded),
+    };
+    decode_request_body(&collected, descriptor, limits)
+}
+
+fn reserve_body_capacity(body: &mut Vec<u8>, additional: usize) -> Result<(), WireCallError> {
+    body.try_reserve_exact(additional)
+        .map_err(|_| WireCallError::Internal)
 }
 
 fn one_header<'a>(
@@ -346,6 +404,19 @@ mod tests {
         VariantDescriptor, VariantPayload,
     };
     use http::{HeaderValue, header::ACCEPT};
+    use http_body::{Frame, SizeHint};
+    use std::{
+        collections::VecDeque,
+        error::Error,
+        fmt,
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll, Waker},
+    };
 
     #[derive(Debug, PartialEq, Eq)]
     struct Exposure {
@@ -407,6 +478,223 @@ mod tests {
 
     fn body_limits(max_bytes: usize) -> SyntaxLimits {
         SyntaxLimits(max_bytes, crate::syntax::DEFAULT_DEPTH_LIMIT)
+    }
+
+    #[derive(Debug)]
+    struct BodyFailure;
+
+    impl fmt::Display for BodyFailure {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("body failure")
+        }
+    }
+
+    impl Error for BodyFailure {}
+
+    struct TestBody {
+        frames: VecDeque<Result<Frame<bytes::Bytes>, BodyFailure>>,
+        lower: u64,
+        delay: Option<Pin<Box<tokio::time::Sleep>>>,
+        delay_after_first: Option<Duration>,
+        polls: Arc<AtomicUsize>,
+    }
+
+    impl TestBody {
+        fn new(frames: impl IntoIterator<Item = Result<Frame<bytes::Bytes>, BodyFailure>>) -> Self {
+            Self {
+                frames: frames.into_iter().collect(),
+                lower: 0,
+                delay: None,
+                delay_after_first: None,
+                polls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn delayed(mut self, delay: Duration) -> Self {
+            self.delay = Some(Box::pin(tokio::time::sleep(delay)));
+            self
+        }
+
+        fn trickled(mut self, delay: Duration) -> Self {
+            self.delay_after_first = Some(delay);
+            self
+        }
+    }
+
+    impl Body for TestBody {
+        type Data = bytes::Bytes;
+        type Error = BodyFailure;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            self.polls.fetch_add(1, Ordering::Relaxed);
+            if let Some(delay) = &mut self.delay {
+                if delay.as_mut().poll(context).is_pending() {
+                    return Poll::Pending;
+                }
+                self.delay = None;
+            }
+            let frame = self.frames.pop_front();
+            if frame.is_some()
+                && let Some(delay) = self.delay_after_first.take()
+            {
+                self.delay = Some(Box::pin(tokio::time::sleep(delay)));
+            }
+            Poll::Ready(frame)
+        }
+
+        fn size_hint(&self) -> SizeHint {
+            let mut hint = SizeHint::new();
+            hint.set_lower(self.lower);
+            hint
+        }
+    }
+
+    struct EndlessBody(Arc<AtomicUsize>);
+
+    impl Body for EndlessBody {
+        type Data = bytes::Bytes;
+        type Error = BodyFailure;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Poll::Ready(Some(Ok(Frame::data(bytes::Bytes::new()))))
+        }
+    }
+
+    fn data(value: &'static [u8]) -> Result<Frame<bytes::Bytes>, BodyFailure> {
+        Ok(Frame::data(bytes::Bytes::from_static(value)))
+    }
+
+    async fn collect(
+        body: TestBody,
+        max_bytes: usize,
+        after: Duration,
+    ) -> Result<SlotValue, WireCallError> {
+        collect_and_decode_request_body(
+            body,
+            &TypeDescriptor::string(),
+            body_limits(max_bytes),
+            Deadline::at(tokio::time::Instant::now().into_std() + after),
+        )
+        .await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn streaming_body_accepts_exact_limit_multiple_frames_and_trailers() {
+        let frames = [
+            data(b"\"he"),
+            Ok(Frame::trailers(headers("x-trailer", b"ignored"))),
+            data(b"llo\""),
+        ];
+        assert_eq!(
+            collect(TestBody::new(frames), 7, Duration::from_secs(1)).await,
+            Ok(SlotValue::Value(ContractValue::string("hello")))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn body_size_failures_precede_decode_and_definitive_hint_is_not_polled() {
+        let mut hinted = TestBody::new([data(b"\"ok\"")]);
+        hinted.lower = 6;
+        let polls = hinted.polls.clone();
+        assert_eq!(
+            collect(hinted, 5, Duration::from_secs(1)).await,
+            Err(WireCallError::PayloadTooLarge)
+        );
+        assert_eq!(polls.load(Ordering::Relaxed), 0);
+
+        for frames in [
+            vec![data(b"{bad"), data(b" payload")],
+            vec![data(b"\"okay\""), data(b"x")],
+        ] {
+            assert_eq!(
+                collect(TestBody::new(frames), 6, Duration::from_secs(1)).await,
+                Err(WireCallError::PayloadTooLarge)
+            );
+        }
+        assert_eq!(
+            collect(TestBody::new([data(b"{bad")]), 4, Duration::from_secs(1)).await,
+            Err(WireCallError::InvalidRequest)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn body_deadline_covers_already_expired_and_trickled_input() {
+        assert_eq!(
+            collect(
+                TestBody::new([data(b"\"late\"")]).delayed(Duration::from_secs(1)),
+                64,
+                Duration::ZERO,
+            )
+            .await,
+            Err(WireCallError::DeadlineExceeded)
+        );
+        assert_eq!(
+            collect(
+                TestBody::new([data(b"\"la"), data(b"te\"")]).trickled(Duration::from_secs(2)),
+                64,
+                Duration::from_secs(1),
+            )
+            .await,
+            Err(WireCallError::DeadlineExceeded)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn completion_wins_at_deadline_and_stream_errors_are_bad_requests() {
+        assert_eq!(
+            collect(
+                TestBody::new([data(b"\"done\"")]).delayed(Duration::from_secs(1)),
+                6,
+                Duration::from_secs(1),
+            )
+            .await,
+            Ok(SlotValue::Value(ContractValue::string("done")))
+        );
+        assert_eq!(
+            collect(
+                TestBody::new([Err(BodyFailure)]).delayed(Duration::from_secs(1)),
+                64,
+                Duration::from_secs(1),
+            )
+            .await,
+            Err(WireCallError::InvalidRequest)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn endlessly_ready_empty_frames_cannot_starve_deadline() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let descriptor = TypeDescriptor::string();
+        let mut collection = Box::pin(collect_and_decode_request_body(
+            EndlessBody(polls.clone()),
+            &descriptor,
+            body_limits(64),
+            Deadline::at(tokio::time::Instant::now().into_std() + Duration::from_secs(1)),
+        ));
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(collection.as_mut().poll(&mut context).is_pending());
+        assert_eq!(polls.load(Ordering::Relaxed), BODY_FRAME_QUANTUM);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(
+            collection.as_mut().poll(&mut context),
+            Poll::Ready(Err(WireCallError::DeadlineExceeded))
+        ));
+        assert_eq!(polls.load(Ordering::Relaxed), BODY_FRAME_QUANTUM * 2);
+    }
+
+    #[test]
+    fn capacity_overflow_is_an_internal_resource_failure() {
+        assert_eq!(
+            reserve_body_capacity(&mut Vec::new(), usize::MAX),
+            Err(WireCallError::Internal)
+        );
     }
 
     fn assert_body_error(
