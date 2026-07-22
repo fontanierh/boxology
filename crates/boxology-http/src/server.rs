@@ -4,14 +4,23 @@ use crate::{
     syntax::{SyntaxError, SyntaxLimits, parse},
 };
 use boxology_contract::{
-    BoxId, CapabilityDescriptor, CapabilityName, Deadline, DecodeRole, ExposureLevel,
-    IdempotencyKey, SlotValue, TraceContext, TypeDescriptor,
+    BoxId, CallContext, Caller, CancelToken, CapabilityDescriptor, CapabilityName, Deadline,
+    DecodeRole, ExposureLevel, IdempotencyKey, SlotValue, TraceContext, TypeDescriptor,
 };
-use boxology_runtime::TransportExposure;
+use boxology_runtime::{TransportExposure, TransportTaskTracker};
 use http::{HeaderMap, HeaderValue, Method};
 use http_body::Body;
 use mediatype::{MediaTypeList, names};
-use std::{future::poll_fn, pin::Pin, time::Duration};
+use std::{
+    collections::BTreeMap,
+    future::{Future, poll_fn},
+    pin::Pin,
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 const TIMEOUT_HEADER: &str = "boxology-timeout-ms";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -19,6 +28,122 @@ const TRACEPARENT_HEADER: &str = "traceparent";
 const TRACESTATE_HEADER: &str = "tracestate";
 const MAX_TRACESTATE_BYTES: usize = 512;
 const BODY_FRAME_QUANTUM: usize = 32;
+
+fn prepare_call_context(
+    head_received: Instant,
+    timeout: Option<Duration>,
+    default_timeout: Duration,
+    trace: TraceContext,
+    idempotency_key: Option<IdempotencyKey>,
+) -> Result<CallContext, WireCallError> {
+    let deadline = head_received
+        .checked_add(timeout.unwrap_or(default_timeout))
+        .map(Deadline::at)
+        .ok_or(WireCallError::Internal)?;
+    Ok(CallContext::new(
+        Caller::Anonymous,
+        Some(deadline),
+        CancelToken::new(),
+        trace,
+        idempotency_key,
+    ))
+}
+
+#[derive(Clone)]
+struct DispatchTasks(Arc<DispatchTasksInner>);
+
+struct DispatchTasksInner {
+    tracker: TransportTaskTracker,
+    next_id: AtomicU64,
+    tasks: Mutex<BTreeMap<u64, TaskControl>>,
+    empty: tokio::sync::Notify,
+}
+
+struct TaskControl {
+    cancellation: CancelToken,
+    abort: tokio::task::AbortHandle,
+}
+
+struct RemoveTask {
+    owner: Weak<DispatchTasksInner>,
+    id: u64,
+}
+
+impl Drop for RemoveTask {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner.tasks.lock().unwrap().remove(&self.id);
+            owner.empty.notify_waiters();
+        }
+    }
+}
+
+impl DispatchTasks {
+    fn new(tracker: TransportTaskTracker) -> Self {
+        Self(Arc::new(DispatchTasksInner {
+            tracker,
+            next_id: AtomicU64::new(0),
+            tasks: Mutex::new(BTreeMap::new()),
+            empty: tokio::sync::Notify::new(),
+        }))
+    }
+
+    fn spawn<F, T>(&self, cancellation: CancelToken, future: F) -> tokio::task::JoinHandle<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let id = self.0.next_id.fetch_add(1, Ordering::Relaxed);
+        let (start, started) = tokio::sync::oneshot::channel();
+        let cleanup = RemoveTask {
+            owner: Arc::downgrade(&self.0),
+            id,
+        };
+        let task = self.0.tracker.spawn(async move {
+            let _cleanup = cleanup;
+            let _ = started.await;
+            future.await
+        });
+        self.0.tasks.lock().unwrap().insert(
+            id,
+            TaskControl {
+                cancellation,
+                abort: task.abort_handle(),
+            },
+        );
+        let _ = start.send(());
+        task
+    }
+
+    fn cancel_all(&self) {
+        for task in self.0.tasks.lock().unwrap().values() {
+            task.cancellation.cancel();
+        }
+    }
+
+    fn abort_all(&self) {
+        for task in self.0.tasks.lock().unwrap().values() {
+            task.abort.abort();
+        }
+    }
+
+    async fn wait_empty(&self) {
+        loop {
+            let empty = self.0.empty.notified();
+            tokio::pin!(empty);
+            empty.as_mut().enable();
+            if self.0.tasks.lock().unwrap().is_empty() {
+                return;
+            }
+            empty.await;
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.tasks.lock().unwrap().len()
+    }
+}
 
 fn decode_request_body(
     body: &[u8],
@@ -474,6 +599,93 @@ mod tests {
             None,
         );
         descriptor
+    }
+
+    #[test]
+    fn context_uses_receipt_time_override_and_exact_metadata() {
+        let receipt = Instant::now();
+        let trace = TraceContext::new(Some("parent".into()), Some("state".into()));
+        let key = IdempotencyKey::new("key").unwrap();
+        let first = prepare_call_context(
+            receipt,
+            None,
+            Duration::from_secs(9),
+            trace.clone(),
+            Some(key.clone()),
+        )
+        .unwrap();
+        let second = prepare_call_context(
+            receipt,
+            Some(Duration::ZERO),
+            Duration::from_secs(9),
+            trace.clone(),
+            Some(key.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.caller(), Caller::Anonymous);
+        assert_eq!(
+            first.deadline().unwrap().instant(),
+            receipt + Duration::from_secs(9)
+        );
+        assert_eq!(second.deadline().unwrap().instant(), receipt);
+        assert_eq!(first.trace(), &trace);
+        assert_eq!(first.idempotency_key(), Some(&key));
+        first.cancellation().cancel();
+        assert!(!second.cancellation().is_cancelled());
+        assert!(matches!(
+            prepare_call_context(receipt, Some(Duration::MAX), Duration::ZERO, trace, None),
+            Err(WireCallError::Internal)
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn owner_cancels_aborts_cleans_and_waits_without_missing_completion() {
+        let tracker = TransportTaskTracker::new();
+        let tasks = DispatchTasks::new(tracker.clone());
+        let tokens = [CancelToken::new(), CancelToken::new()];
+        let first = tasks.spawn(tokens[0].clone(), std::future::pending::<()>());
+        let second = tasks.spawn(tokens[1].clone(), std::future::pending::<()>());
+        assert_eq!((tasks.len(), tracker.len()), (2, 2));
+        tasks.cancel_all();
+        assert!(tokens.iter().all(CancelToken::is_cancelled));
+        tasks.abort_all();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert!(second.await.unwrap_err().is_cancelled());
+        tasks.wait_empty().await;
+        assert_eq!((tasks.len(), tracker.len()), (0, 0));
+
+        let registered = tasks.clone();
+        tasks
+            .spawn(CancelToken::new(), async move {
+                assert_eq!(registered.len(), 1);
+            })
+            .await
+            .unwrap();
+        tasks.wait_empty().await;
+        assert_eq!(tasks.len(), 0);
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let waiter = release.clone();
+        let detached = tasks.spawn(CancelToken::new(), async move { waiter.notified().await });
+        drop(detached);
+        assert_eq!(tasks.len(), 1);
+        let waiting = tokio::spawn({
+            let tasks = tasks.clone();
+            async move { tasks.wait_empty().await }
+        });
+        tokio::task::yield_now().await;
+        release.notify_one();
+        waiting.await.unwrap();
+        assert_eq!(tasks.len(), 0);
+
+        assert!(
+            tasks
+                .spawn(CancelToken::new(), async { panic!("owned panic") })
+                .await
+                .is_err()
+        );
+        tasks.wait_empty().await;
+        assert_eq!((tasks.len(), tracker.len()), (0, 0));
     }
 
     fn body_limits(max_bytes: usize) -> SyntaxLimits {
