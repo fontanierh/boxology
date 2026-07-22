@@ -91,7 +91,8 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
         | DescriptorRef::F32
         | DescriptorRef::F64
         | DescriptorRef::Blob => true,
-        DescriptorRef::Optional(inner)
+        DescriptorRef::Secret(inner)
+        | DescriptorRef::Optional(inner)
         | DescriptorRef::TriState(inner)
         | DescriptorRef::List(inner)
         | DescriptorRef::Map(inner) => is_supported(inner),
@@ -102,7 +103,6 @@ fn is_supported(descriptor: &TypeDescriptor) -> bool {
             VariantPayload::Unit => true,
             VariantPayload::Value(descriptor) => is_supported(descriptor),
         }),
-        _ => false,
     }
 }
 
@@ -111,6 +111,9 @@ fn decode_value(
     descriptor: &TypeDescriptor,
     role: DecodeRole,
 ) -> Result<ContractValue, SemanticError> {
+    if let DescriptorRef::Secret(inner) = descriptor.view() {
+        return decode_value(tree, inner, role).map(ContractValue::sensitive);
+    }
     if matches!(tree, OpaqueTree::Null) {
         return Ok(ContractValue::null());
     }
@@ -221,7 +224,15 @@ fn decode_enum(
     let payload = match variant.payload() {
         VariantPayload::Unit if matches!(payload, OpaqueTree::Null) => SlotValue::Null,
         VariantPayload::Unit => return failure(SemanticErrorCategory::RepresentationMismatch),
-        VariantPayload::Value(_) if matches!(payload, OpaqueTree::Null) => SlotValue::Null,
+        VariantPayload::Value(descriptor)
+            if matches!(payload, OpaqueTree::Null)
+                && matches!(
+                    descriptor.view(),
+                    DescriptorRef::Optional(_) | DescriptorRef::TriState(_)
+                ) =>
+        {
+            SlotValue::Null
+        }
         VariantPayload::Value(descriptor) => {
             SlotValue::Value(decode_value(payload, descriptor, role)?)
         }
@@ -429,7 +440,6 @@ mod tests {
     error_helper!(nonfinite, NonFiniteFloat);
     error_helper!(duplicate, DuplicateObjectKey);
     error_helper!(null, NullConformance);
-    error_helper!(unsupported, UnsupportedDescriptor);
 
     fn supported_descriptors() -> Vec<TypeDescriptor> {
         vec![
@@ -1376,91 +1386,80 @@ mod tests {
             TypeDescriptor::enumeration([]).unwrap(),
         ];
         assert!(supported.iter().all(is_supported));
-        let unsupported =
+        let secret =
             TypeDescriptor::list(TypeDescriptor::secret(TypeDescriptor::string()).unwrap())
                 .unwrap();
-        assert!(!is_supported(&unsupported));
+        assert!(is_supported(&secret));
     }
 
     #[test]
-    fn unsupported_descriptors_precede_payload_inspection() {
-        let secret = TypeDescriptor::secret(TypeDescriptor::i8()).unwrap();
-        let optional_secret = TypeDescriptor::optional(secret.clone()).unwrap();
-        let secret_optional =
-            TypeDescriptor::secret(TypeDescriptor::optional(TypeDescriptor::string()).unwrap())
-                .unwrap();
-        let list_secret = TypeDescriptor::list(secret.clone()).unwrap();
-        let map_secret = TypeDescriptor::map(secret.clone()).unwrap();
-        let deep_secret =
-            TypeDescriptor::list(TypeDescriptor::map(optional_secret.clone()).unwrap()).unwrap();
-        let structure = structure([field("field", optional_secret.clone())]);
-        let secret_enum = enumeration([variant(
-            "secret",
-            VariantPayload::Value(optional_secret.clone()),
-        )]);
-        let hostile = tree([
-            ("tag", OpaqueTree::String("secret".into())),
-            (
-                "payload",
-                tree([(SENTINEL, OpaqueTree::Null), (SENTINEL, number("1"))]),
-            ),
-        ]);
-        unsupported(hostile.clone(), &secret_enum, Some(SENTINEL));
-        unsupported(
-            OpaqueTree::List(vec![hostile]),
-            &list_secret,
-            Some(SENTINEL),
-        );
-        unsupported(OpaqueTree::Null, &structure, None);
-        unsupported(
-            tree([
-                (SENTINEL, OpaqueTree::String(SENTINEL.into())),
-                (SENTINEL, OpaqueTree::Null),
-            ]),
-            &structure,
-            Some(SENTINEL),
-        );
-        unsupported(
-            tree([("field", OpaqueTree::String(SENTINEL.into()))]),
-            &structure,
-            Some(SENTINEL),
-        );
-        unsupported(OpaqueTree::Null, &optional_secret, None);
-        unsupported(OpaqueTree::Bool(true), &list_secret, None);
-        unsupported(
-            OpaqueTree::Object(vec![
-                (SENTINEL.into(), OpaqueTree::String(SENTINEL.into())),
-                (SENTINEL.into(), OpaqueTree::Null),
-            ]),
-            &map_secret,
-            Some(SENTINEL),
-        );
-        unsupported(
-            OpaqueTree::List(vec![OpaqueTree::String(SENTINEL.into())]),
-            &list_secret,
-            Some(SENTINEL),
-        );
-        let descriptors = [
-            secret.clone(),
-            TypeDescriptor::secret(TypeDescriptor::blob()).unwrap(),
-            optional_secret.clone(),
-            secret_optional,
-            list_secret,
-            map_secret,
-            TypeDescriptor::map(optional_secret.clone()).unwrap(),
-            deep_secret,
-            structure.clone(),
-            TypeDescriptor::map(structure).unwrap(),
-            TypeDescriptor::structure([field("event", secret_enum.clone())]).unwrap(),
-            secret_enum.clone(),
-            TypeDescriptor::list(secret_enum).unwrap(),
-        ];
-        for descriptor in descriptors {
-            unsupported(
-                OpaqueTree::Object(vec![(SENTINEL.into(), OpaqueTree::String(SENTINEL.into()))]),
-                &descriptor,
-                Some(SENTINEL),
+    fn secrets_lower_to_sensitive_values_in_both_roles() {
+        let secret = TypeDescriptor::secret(TypeDescriptor::string()).unwrap();
+        for role in ROLES {
+            assert_eq!(
+                decode_tree(OpaqueTree::String(SENTINEL.into()), &secret, role),
+                Ok(SlotValue::Value(Value::sensitive(Value::string(SENTINEL))))
             );
         }
+    }
+
+    #[test]
+    fn optional_and_struct_secrets_preserve_presence_and_wrapping() {
+        let secret = TypeDescriptor::secret(TypeDescriptor::string()).unwrap();
+        let optional = TypeDescriptor::optional(secret.clone()).unwrap();
+        slot_both(OpaqueTree::Null, &optional, SlotValue::Null);
+        ok_both(
+            OpaqueTree::String("present".into()),
+            &optional,
+            Value::sensitive(Value::string("present")),
+        );
+        ok_both(
+            tree([("secret", OpaqueTree::String("inside".into()))]),
+            &structure([field("secret", secret)]),
+            object([("secret", Value::sensitive(Value::string("inside")))]),
+        );
+    }
+
+    #[test]
+    fn nullable_secrets_keep_sensitive_null_in_aggregates_and_enums() {
+        let nullable_secret =
+            TypeDescriptor::secret(TypeDescriptor::optional(TypeDescriptor::string()).unwrap())
+                .unwrap();
+        let list = TypeDescriptor::list(nullable_secret.clone()).unwrap();
+        ok_both(
+            OpaqueTree::List(vec![OpaqueTree::Null]),
+            &list,
+            Value::list([Value::sensitive(Value::null())]),
+        );
+        let enumeration = enumeration([variant("secret", VariantPayload::Value(nullable_secret))]);
+        ok_both(
+            envelope("secret", OpaqueTree::Null),
+            &enumeration,
+            enum_value("secret", SlotValue::Value(Value::sensitive(Value::null()))),
+        );
+        representation(
+            OpaqueTree::List(vec![tree([(
+                SENTINEL,
+                OpaqueTree::String(SENTINEL.into()),
+            )])]),
+            &list,
+            Some(SENTINEL),
+        );
+    }
+
+    #[test]
+    fn secret_failures_are_redacted_and_nonsecret_values_stay_plain() {
+        let secret = TypeDescriptor::secret(TypeDescriptor::string()).unwrap();
+        null(OpaqueTree::Null, &secret, None);
+        representation(
+            tree([(SENTINEL, OpaqueTree::String(SENTINEL.into()))]),
+            &secret,
+            Some(SENTINEL),
+        );
+        ok_both(
+            OpaqueTree::String("plain".into()),
+            &TypeDescriptor::string(),
+            Value::string("plain"),
+        );
     }
 }
