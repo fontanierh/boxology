@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 
+#[allow(dead_code)]
+mod api;
 mod state;
 
 pub const SCHEMA: u8 = 1;
