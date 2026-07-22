@@ -13,8 +13,8 @@ pub use manifest::Manifest;
 pub use rust::{
     CapabilityDeclaration, CapabilityMarkerMetadata, ContractDeclaration, ContractDeclarationRole,
     ContractDeclarationShape, ContractDeclarationSyntax, ContractDeprecation, ContractField,
-    ContractFields, ContractMemberIdentity, ContractSiteMetadata, ContractVariant, ParsedRustInput,
-    ParsedRustInputs,
+    ContractFields, ContractMemberIdentity, ContractSiteMetadata, ContractVariant,
+    ControlledContract, ParsedRustInput, ParsedRustInputs,
 };
 
 use boxology_contract::BoxId;

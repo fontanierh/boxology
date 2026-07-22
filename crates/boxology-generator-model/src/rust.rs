@@ -1,4 +1,4 @@
-use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, RelativePath, Span};
+use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, POINT, RelativePath, Span};
 use boxology_contract::{BoxId, CapabilityId, CapabilityName, ExposureLevel, Idempotency};
 use std::collections::BTreeSet;
 use syn::ext::IdentExt;
@@ -43,6 +43,10 @@ const CAPABILITY_NAME_RULE: &str =
     "capability local names must match [a-z][a-z0-9_]* after applying an optional name override";
 const CAPABILITY_IDENTITY_RULE: &str = "effective capability names must be unique within a box; the first declaration in deterministic declaration order owns the identity";
 const CAPABILITY_IDENTITY_RULE_SOURCE: &str = "specs/s2-contract-generator.md D4";
+const CONTROLLED_SITE_RULE: &str =
+    "exact boxology::contract! invocations must appear once at reachable module scope";
+const CONTROLLED_PARSE_RULE: &str = "contract tokens must satisfy the controlled v0 grammar";
+const CONTROLLED_PARSE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -57,6 +61,15 @@ pub struct ParsedRustInput {
     syntax: syn::File,
 }
 
+/// One validated controlled contract discovered from the cold logical source tree.
+pub struct ControlledContract {
+    source: RelativePath,
+    span: Span,
+    model: boxology_contract_syntax::Contract,
+    capability_id: CapabilityId,
+    canonical_semantic_bytes: Vec<u8>,
+    semantic_digest: [u8; 32],
+}
 /// A borrowed capability method found by structural declaration discovery.
 pub struct CapabilityDeclaration<'ast> {
     source: &'ast RelativePath,
@@ -99,6 +112,22 @@ macro_rules! model_getters {
     )*};
 }
 
+impl ControlledContract {
+    model_getters! { self;
+        #[doc = "Returns the contract invocation's logical source path."]
+        source: &RelativePath = &self.source;
+        #[doc = "Returns the direct contract-leaf source span."]
+        span: Span = self.span;
+        #[doc = "Returns the shared-parser semantic model."]
+        model: &boxology_contract_syntax::Contract = &self.model;
+        #[doc = "Returns the box-qualified capability identity, excluded from the semantic digest."]
+        capability_id: &CapabilityId = &self.capability_id;
+        #[doc = "Returns the canonical generation-consistency bytes computed after parsing."]
+        canonical_semantic_bytes: &[u8] = &self.canonical_semantic_bytes;
+        #[doc = "Returns the SHA-256 generation-consistency digest computed after parsing."]
+        semantic_digest: &[u8; 32] = &self.semantic_digest;
+    }
+}
 impl<'ast> CapabilityDeclaration<'ast> {
     model_getters! { self;
         #[doc = "Returns the declaration's exact logical source path."]
@@ -375,6 +404,101 @@ impl ParsedRustInputs {
     /// Returns parsed inputs in logical-path byte order.
     pub fn as_slice(&self) -> &[ParsedRustInput] {
         &self.inputs
+    }
+
+    /// Discovers and parses the single reachable direct module-scope `boxology::contract!`.
+    pub fn controlled_contract(&self) -> Result<ControlledContract, Diagnostics> {
+        let reachable = self.resolve_reachable_inputs()?;
+        let root = &self.inputs[self.crate_root];
+        let mut sites = Vec::new();
+        let mut diagnostics = Vec::new();
+        for input in &reachable {
+            collect_controlled_sites(&input.path, &input.syntax.items, &mut sites);
+        }
+        sites.sort_by(|left, right| {
+            left.path
+                .as_str()
+                .as_bytes()
+                .cmp(right.path.as_str().as_bytes())
+                .then_with(|| {
+                    source_span(left.item.mac.path.segments[1].ident.span())
+                        .cmp(&source_span(right.item.mac.path.segments[1].ident.span()))
+                })
+        });
+        let allowed = sites
+            .iter()
+            .map(|site| std::ptr::from_ref(&site.item.mac))
+            .collect::<BTreeSet<_>>();
+        for input in reachable {
+            ControlledPlacementVisitor {
+                path: &input.path,
+                allowed: &allowed,
+                diagnostics: &mut diagnostics,
+            }
+            .visit_file(&input.syntax);
+        }
+        diagnostics.sort();
+        diagnostics.dedup();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        if sites.is_empty() {
+            diagnostics.push(Diagnostic {
+                path: root.path.clone(),
+                span: Span {
+                    start: POINT,
+                    end: POINT,
+                },
+                code: "BXG0037",
+                offending: "missing controlled contract invocation".into(),
+                rule: CONTROLLED_SITE_RULE,
+                rule_source: RULE_SOURCE,
+            });
+        } else {
+            for site in sites.iter().skip(1) {
+                diagnostics.push(module_diagnostic(
+                    site.path,
+                    site.item.mac.path.segments[1].ident.span(),
+                    "BXG0037",
+                    "additional controlled contract invocation",
+                    CONTROLLED_SITE_RULE,
+                ));
+            }
+        }
+        diagnostics.sort();
+        if !diagnostics.is_empty() {
+            return Err(Diagnostics(diagnostics));
+        }
+        let site = &sites[0];
+        let contract =
+            boxology_contract_syntax::parse(site.item.mac.tokens.clone()).map_err(|error| {
+                let mut errors = error
+                    .into_iter()
+                    .map(|component| Diagnostic {
+                        path: site.path.clone(),
+                        span: source_span(component.span()),
+                        code: "BXG0038",
+                        offending: "invalid controlled contract syntax".into(),
+                        rule: CONTROLLED_PARSE_RULE,
+                        rule_source: CONTROLLED_PARSE_RULE_SOURCE,
+                    })
+                    .collect::<Vec<_>>();
+                errors.sort();
+                errors.dedup();
+                Diagnostics(errors)
+            })?;
+        let name = CapabilityName::new(contract.capability.name.clone())
+            .expect("the shared parser validates capability identity grammar");
+        let (canonical_semantic_bytes, semantic_digest) =
+            boxology_contract_syntax::semantic_artifacts(&contract);
+        Ok(ControlledContract {
+            source: site.path.clone(),
+            span: source_span(site.item.mac.path.segments[1].ident.span()),
+            capability_id: CapabilityId::new(self.box_id.clone(), name),
+            model: contract,
+            canonical_semantic_bytes,
+            semantic_digest,
+        })
     }
 
     /// Provisionally discovers reachable contract structs and enums and rejects lifted-name collisions.
@@ -875,6 +999,11 @@ impl ParsedRustInputs {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         for item in items {
+            if let syn::Item::Macro(item) = item
+                && exact_contract_macro(&item.mac)
+            {
+                self.validate_context(source, &item.attrs, ancestors, diagnostics);
+            }
             let attributes = item_attrs(item);
             if is_export(attributes) {
                 self.validate_context(source, attributes, ancestors, diagnostics);
@@ -1264,6 +1393,76 @@ impl<'ast> Visit<'ast> for UnreachableVisitor<'_> {
             ));
         }
     }
+
+    fn visit_macro(&mut self, item: &'ast syn::Macro) {
+        if exact_contract_macro(item) {
+            self.diagnostics.push(module_diagnostic(
+                self.path,
+                item.path.segments[1].ident.span(),
+                "BXG0019",
+                "Boxology contract invocation",
+                UNREACHABLE_RULE,
+            ));
+        }
+    }
+}
+
+struct ControlledSite<'a> {
+    path: &'a RelativePath,
+    item: &'a syn::ItemMacro,
+}
+
+fn collect_controlled_sites<'a>(
+    path: &'a RelativePath,
+    items: &'a [syn::Item],
+    sites: &mut Vec<ControlledSite<'a>>,
+) {
+    for item in items {
+        if let syn::Item::Macro(item) = item
+            && exact_contract_macro(&item.mac)
+        {
+            sites.push(ControlledSite { path, item });
+        }
+        if let syn::Item::Mod(syn::ItemMod {
+            content: Some((_, items)),
+            ..
+        }) = item
+        {
+            collect_controlled_sites(path, items, sites);
+        }
+    }
+}
+
+struct ControlledPlacementVisitor<'a> {
+    path: &'a RelativePath,
+    allowed: &'a BTreeSet<*const syn::Macro>,
+    diagnostics: &'a mut Vec<Diagnostic>,
+}
+
+impl<'ast> Visit<'ast> for ControlledPlacementVisitor<'_> {
+    fn visit_macro(&mut self, item: &'ast syn::Macro) {
+        if exact_contract_macro(item) && !self.allowed.contains(&std::ptr::from_ref(item)) {
+            self.diagnostics.push(module_diagnostic(
+                self.path,
+                item.path.segments[1].ident.span(),
+                "BXG0036",
+                "misplaced controlled contract invocation",
+                CONTROLLED_SITE_RULE,
+            ));
+        }
+    }
+}
+
+fn exact_contract_macro(item: &syn::Macro) -> bool {
+    item.path.leading_colon.is_none()
+        && item.path.segments.len() == 2
+        && item
+            .path
+            .segments
+            .iter()
+            .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
+        && item.path.segments[0].ident == "boxology"
+        && item.path.segments[1].ident == "contract"
 }
 
 impl ParsedRustInput {
@@ -4449,5 +4648,87 @@ mod tests {
         assert_eq!(diagnostics.len(), 2);
         assert!(diagnostics.iter().all(|error| error.code() == "BXG0014"));
         assert!(!format!("{:?}", diagnostics).contains("payload"));
+    }
+
+    #[test]
+    fn controlled_contract_discovery_is_cold_exact_and_fail_closed() {
+        const HELLO: &str = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; }";
+        let api = format!("{HELLO} fn body() {{ loop {{}} }}");
+        let files = [
+            ("root.rs", "mod api; opaque!({ boxology::contract!{} });"),
+            ("api.rs", api.as_str()),
+        ];
+        let forward = request_in_order("root.rs", &files, false);
+        let reverse = request_in_order("root.rs", &files, true);
+        let forward = ParsedRustInputs::parse(&forward).unwrap();
+        let reverse = ParsedRustInputs::parse(&reverse).unwrap();
+        let mut other =
+            ParsedRustInputs::parse(&request_in_order("root.rs", &files, false)).unwrap();
+        other.box_id = BoxId::new("other").unwrap();
+        let (hello, reversed, other) = (
+            forward.controlled_contract().unwrap(),
+            reverse.controlled_contract().unwrap(),
+            other.controlled_contract().unwrap(),
+        );
+        assert_eq!(hello.source().as_str(), "api.rs");
+        assert_eq!(hello.span(), span((1, 11), (1, 19)));
+        assert_eq!(hello.model().capability.name, "greet");
+        assert_eq!(
+            (hello.canonical_semantic_bytes(), hello.semantic_digest()),
+            (
+                reversed.canonical_semantic_bytes(),
+                reversed.semantic_digest()
+            )
+        );
+        assert_ne!(hello.capability_id(), other.capability_id());
+        assert_eq!(
+            (hello.canonical_semantic_bytes(), hello.semantic_digest()),
+            (other.canonical_semantic_bytes(), other.semantic_digest())
+        );
+        for (files, expected) in [
+            (
+                vec![("root.rs", "r#boxology::contract!{} ::boxology::contract!{}")],
+                "BXG0037 root.rs:1:1-1:1 offending=\"missing controlled contract invocation\" rule=\"exact boxology::contract! invocations must appear once at reachable module scope\" source=\"specs/s2-contract-generator.md D2\"",
+            ),
+            (
+                vec![("root.rs", &format!("{HELLO} {HELLO}"))],
+                "BXG0037 root.rs:1:171-1:179 offending=\"additional controlled contract invocation\" rule=\"exact boxology::contract! invocations must appear once at reachable module scope\" source=\"specs/s2-contract-generator.md D2\"",
+            ),
+            (
+                vec![
+                    ("root.rs", "mod a; mod z;"),
+                    ("a.rs", &format!("{HELLO} {HELLO}")),
+                    ("z.rs", &format!("{HELLO} {HELLO}")),
+                ],
+                "BXG0037 a.rs:1:171-1:179 offending=\"additional controlled contract invocation\" rule=\"exact boxology::contract! invocations must appear once at reachable module scope\" source=\"specs/s2-contract-generator.md D2\"\nBXG0037 z.rs:1:11-1:19 offending=\"additional controlled contract invocation\" rule=\"exact boxology::contract! invocations must appear once at reachable module scope\" source=\"specs/s2-contract-generator.md D2\"\nBXG0037 z.rs:1:171-1:179 offending=\"additional controlled contract invocation\" rule=\"exact boxology::contract! invocations must appear once at reachable module scope\" source=\"specs/s2-contract-generator.md D2\"",
+            ),
+            (
+                vec![("root.rs", &format!("fn f() {{ {HELLO} }}"))],
+                "BXG0036 root.rs:1:20-1:28 offending=\"misplaced controlled contract invocation\" rule=\"exact boxology::contract! invocations must appear once at reachable module scope\" source=\"specs/s2-contract-generator.md D2\"",
+            ),
+            (
+                vec![("root.rs", ""), ("dead.rs", HELLO)],
+                "BXG0019 dead.rs:1:11-1:19 offending=\"Boxology contract invocation\" rule=\"Boxology-annotated items must be reachable from the declared crate root\" source=\"specs/s2-contract-generator.md D2\"",
+            ),
+            (
+                vec![("root.rs", &format!("#[cfg(x)] {HELLO}"))],
+                "BXG0020 root.rs:1:3-1:6 offending=\"cfg attribute\" rule=\"cfg and cfg_attr are forbidden on exported items, their fields or variants, surrounding impls, and ancestor module declarations\" source=\"specs/s2-contract-generator.md D2\"",
+            ),
+            (
+                vec![("root.rs", "boxology::contract! { private }")],
+                "BXG0038 root.rs:1:23-1:30 offending=\"invalid controlled contract syntax\" rule=\"contract tokens must satisfy the controlled v0 grammar\" source=\"specs/s2-contract-generator.md D3\"",
+            ),
+        ] {
+            let failure = |reversed| {
+                ParsedRustInputs::parse(&request_in_order("root.rs", &files, reversed))
+                    .unwrap()
+                    .controlled_contract()
+                    .err()
+                    .expect("failure case")
+            };
+            let diagnostics = failure(false);
+            assert_eq!(diagnostics, failure(true));
+            assert_eq!(diagnostics.to_string(), expected);
+        }
     }
 }

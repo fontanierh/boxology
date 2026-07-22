@@ -41,6 +41,7 @@ name = "boxology-contract-syntax"
 version = "0.0.0"
 dependencies = [
  "proc-macro2",
+ "sha2",
  "syn 3.0.0",
 ]
 
@@ -57,6 +58,7 @@ name = "boxology-generator-model"
 version = "0.0.0"
 dependencies = [
  "boxology-contract",
+ "boxology-contract-syntax",
  "proc-macro2",
  "syn 3.0.0",
  "toml_edit",
