@@ -1,12 +1,10 @@
 use crate::determinism::{ManifestRecord, byte_diff, manifest_side};
-use crate::determinism_compare::hex;
+use crate::determinism_compare::{Comparison, evaluate, hex};
 use crate::determinism_run::{Failure, Subject, manifest_with, report, validate_registry};
 use sha2::{Digest, Sha256};
-use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const LINUX: &[u8] = b"os=linux\narch=x86_64\n";
 const MACOS: &[u8] = b"os=macos\narch=aarch64\n";
@@ -80,15 +78,7 @@ fn canonical(root: &Path, platform: &str) -> Result<PathBuf, String> {
         .map_err(|error| format!("canonicalize {platform} root {}: {error}", root.display()))
 }
 
-fn print_stderr(stderr: &[u8]) {
-    eprintln!("determinism-meta-cross: actual stderr:");
-    eprint!("{}", String::from_utf8_lossy(stderr));
-    if !stderr.ends_with(b"\n") {
-        eprintln!();
-    }
-}
-
-fn gate(workspace: &Path, linux: &Path, macos: &Path) -> u8 {
+fn gate(linux: &Path, macos: &Path) -> u8 {
     let linux = match canonical(linux, "linux") {
         Ok(path) => path,
         Err(error) => {
@@ -103,50 +93,34 @@ fn gate(workspace: &Path, linux: &Path, macos: &Path) -> u8 {
             return 2;
         }
     };
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = match Command::new(cargo)
-        .args(["run", "-p", "xtask", "--quiet", "--", "determinism-compare"])
-        .arg(linux)
-        .arg(macos)
-        .current_dir(workspace)
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) => {
-            eprintln!("determinism-meta-cross: ERROR: start comparator: {error}");
-            return 2;
+    match evaluate(&linux, &macos) {
+        Ok(Comparison::Match { .. }) => {
+            eprintln!("determinism-meta-cross: FAIL: comparator unexpectedly passed");
+            1
         }
-    };
-    if output.status.success() {
-        eprintln!("determinism-meta-cross: FAIL: comparator unexpectedly passed");
-        return 1;
-    }
-    if output.status.code() != Some(1) {
-        eprintln!(
-            "determinism-meta-cross: ERROR: comparator exited with {}",
-            output.status
-        );
-        print_stderr(&output.stderr);
-        return 2;
-    }
-    let expected = format!("determinism: FINDING: {}", expected_finding());
-    if output
-        .stderr
-        .split(|byte| *byte == b'\n')
-        .any(|line| line == expected.as_bytes())
-    {
-        eprintln!("{expected}");
-        println!("determinism-meta-cross: PASS");
-        0
-    } else {
-        eprintln!("determinism-meta-cross: FAIL: comparator finding did not match");
-        eprintln!("determinism-meta-cross: expected: {expected}");
-        print_stderr(&output.stderr);
-        1
+        Ok(Comparison::Finding(message)) | Err(Failure::Finding(message)) => {
+            let expected = expected_finding();
+            if message == expected {
+                eprintln!("determinism: FINDING: {message}");
+                println!("determinism-meta-cross: PASS");
+                0
+            } else {
+                eprintln!("determinism-meta-cross: FAIL: comparator finding did not match");
+                eprintln!("determinism-meta-cross: expected: determinism: FINDING: {expected}");
+                eprintln!("determinism-meta-cross: actual: determinism: FINDING: {message}");
+                1
+            }
+        }
+        Err(Failure::Infra(message)) => {
+            eprintln!("determinism-meta-cross: ERROR: comparator exited with exit status: 2");
+            eprintln!("determinism-meta-cross: actual stderr:");
+            eprintln!("determinism: ERROR: {message}");
+            2
+        }
     }
 }
 
-pub(crate) fn from_args(workspace: &Path, args: &[String]) -> Option<u8> {
+pub(crate) fn from_args(args: &[String]) -> Option<u8> {
     match args {
         [linux, macos]
             if !linux.is_empty()
@@ -154,7 +128,7 @@ pub(crate) fn from_args(workspace: &Path, args: &[String]) -> Option<u8> {
                 && !macos.is_empty()
                 && !macos.starts_with('-') =>
         {
-            Some(gate(workspace, Path::new(linux), Path::new(macos)))
+            Some(gate(Path::new(linux), Path::new(macos)))
         }
         _ => None,
     }
@@ -277,7 +251,7 @@ mod tests {
             vec!["-a", "b"],
             vec!["a", "--b"],
         ] {
-            assert_eq!(from_args(&workspace(), &strings(&args)), None);
+            assert_eq!(from_args(&strings(&args)), None);
         }
         let temp = Temp::new("argv");
         let (linux, macos) = variants(&temp);
@@ -285,27 +259,24 @@ mod tests {
             linux.to_string_lossy().into_owned(),
             macos.to_string_lossy().into_owned(),
         );
-        assert_eq!(
-            from_args(&workspace(), &[linux.clone(), macos.clone()]),
-            Some(0)
-        );
-        assert_eq!(from_args(&workspace(), &[macos, linux]), Some(1));
+        assert_eq!(from_args(&[linux.clone(), macos.clone()]), Some(0));
+        assert_eq!(from_args(&[macos, linux]), Some(1));
     }
 
     #[test]
     fn gate_rejects_success_missing_corrupt_and_malformed_inputs() {
         let temp = Temp::new("reject");
         let (linux, macos) = variants(&temp);
-        assert_eq!(gate(&workspace(), &linux, &linux), 1);
+        assert_eq!(gate(&linux, &linux), 1);
         let retained = linux.join("trees/meta-platform/platform.txt");
         fs::remove_file(&retained).unwrap();
-        assert_eq!(gate(&workspace(), &linux, &macos), 1);
+        assert_eq!(gate(&linux, &macos), 1);
         let mut corrupt = LINUX.to_vec();
         corrupt[0] = b'x';
         fs::write(&retained, corrupt).unwrap();
-        assert_eq!(gate(&workspace(), &linux, &macos), 2);
+        assert_eq!(gate(&linux, &macos), 2);
         fs::write(&retained, LINUX).unwrap();
         fs::write(linux.join("MANIFEST"), b"bad\n").unwrap();
-        assert_eq!(gate(&workspace(), &linux, &macos), 2);
+        assert_eq!(gate(&linux, &macos), 2);
     }
 }

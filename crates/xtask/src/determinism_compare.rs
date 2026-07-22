@@ -8,11 +8,11 @@ use std::io::{self, Read};
 use std::path::Path;
 
 #[derive(Debug, Eq, PartialEq)]
-enum Comparison {
+pub(crate) enum Comparison {
     Match { records: usize },
     Finding(String),
 }
-fn evaluate(a: &Path, b: &Path) -> Result<Comparison, Failure> {
+pub(crate) fn evaluate(a: &Path, b: &Path) -> Result<Comparison, Failure> {
     let left_manifest = load(a, "left")?;
     let right_manifest = load(b, "right")?;
     let differences = diff_records(&left_manifest, &right_manifest);
