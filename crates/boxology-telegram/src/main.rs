@@ -6,6 +6,9 @@ fn main() -> std::process::ExitCode {
     if io::stdin().read_to_end(&mut input).is_err() {
         return std::process::ExitCode::from(2);
     }
+    if args.as_slice() == ["listen"] {
+        return std::process::ExitCode::from(boxology_telegram::run_listen(&input) as u8);
+    }
     let (output, exit) = boxology_telegram::execute(&args, &input);
     println!("{output}");
     std::process::ExitCode::from(exit as u8)

@@ -331,7 +331,7 @@ fn write_unlocked(root: &Path, path: &Path, state: &State) -> Result<(), AppErro
             ExitClass::Local,
         ));
     }
-    let temp = root.join("state.json.tmp");
+    let temp = root.join(format!("state.json.{}.tmp", unique_suffix()?));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -395,8 +395,8 @@ fn validate_file(_path: &Path, metadata: &fs::Metadata) -> Result<(), AppError> 
 fn validate_owner_and_mode(metadata: &fs::Metadata, mode: u32) -> Result<(), AppError> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o777 != mode {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != effective_uid() || metadata.permissions().mode() & 0o777 != mode {
             return Err(AppError::new(
                 "unsafe_state_permissions",
                 "state permissions are unsafe",
@@ -471,6 +471,20 @@ pub(crate) fn decode_hex(text: &str) -> Option<Vec<u8>> {
                 .collect::<Option<Vec<_>>>()
         })
         .flatten()
+}
+
+fn unique_suffix() -> Result<String, AppError> {
+    Ok(hex(&random_bytes::<16>()?))
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> u32;
+}
+
+#[cfg(unix)]
+fn effective_uid() -> u32 {
+    unsafe { geteuid() }
 }
 
 #[cfg(test)]

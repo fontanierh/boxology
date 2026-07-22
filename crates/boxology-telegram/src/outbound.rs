@@ -1,4 +1,4 @@
-use crate::api::{self, Api};
+use crate::api;
 use crate::state::{self, EventRecord, OutboundRecord, Paths};
 use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
 use serde::Deserialize;
@@ -231,7 +231,7 @@ fn deliver(
         Ok(token) => token,
         Err(error) => return Err(mark_retryable(paths, dedup_key, error)),
     };
-    let api = match Api::production(token) {
+    let api = match api::for_commands(token) {
         Ok(api) => api,
         Err(error) => return Err(mark_retryable(paths, dedup_key, error)),
     };

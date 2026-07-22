@@ -1,4 +1,4 @@
-use crate::api::{self, Api};
+use crate::api;
 use crate::state::{self, BotFingerprint, Pairing, Paths, PendingPair};
 use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
 use getrandom::fill;
@@ -57,7 +57,7 @@ fn begin(input: &[u8]) -> Result<Value, AppError> {
         ));
     }
     let token = api::load_token()?;
-    let api = Api::production(token)?;
+    let api = api::for_commands(token)?;
     let bot = api.get_me().map_err(api_error)?;
     let username = bot.username.clone().ok_or_else(|| {
         AppError::new(
@@ -152,7 +152,7 @@ fn complete(input: &[u8]) -> Result<Value, AppError> {
         ));
     }
     let token = api::load_token()?;
-    let api = Api::production(token)?;
+    let api = api::for_commands(token)?;
     let updates = api
         .get_updates(before.next_offset, timeout)
         .map_err(api_error)?;
