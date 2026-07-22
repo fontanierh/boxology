@@ -1,7 +1,11 @@
-use crate::encoder::WireCallError;
+use crate::{
+    encoder::WireCallError,
+    semantic::decode_tree,
+    syntax::{SyntaxError, SyntaxLimits, parse},
+};
 use boxology_contract::{
-    BoxId, CapabilityDescriptor, CapabilityName, CapabilityShape, DescriptorRef, Detail,
-    ExposureLevel, IdempotencyKey, TypeDescriptor, VariantPayload,
+    BoxId, CapabilityDescriptor, CapabilityName, CapabilityShape, DecodeRole, DescriptorRef,
+    Detail, ExposureLevel, IdempotencyKey, SlotValue, TypeDescriptor, VariantPayload,
 };
 use boxology_runtime::TransportExposure;
 use http::{HeaderMap, HeaderValue};
@@ -9,6 +13,19 @@ use std::time::Duration;
 
 const TIMEOUT_HEADER: &str = "boxology-timeout-ms";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
+
+fn decode_request_body(
+    body: &[u8],
+    descriptor: &TypeDescriptor,
+    limits: SyntaxLimits,
+) -> Result<SlotValue, WireCallError> {
+    let tree = parse(body, limits).map_err(|error| match error {
+        SyntaxError::PayloadTooLarge { .. } => WireCallError::PayloadTooLarge,
+        _ => WireCallError::InvalidRequest,
+    })?;
+    decode_tree(tree, descriptor, DecodeRole::ProviderInput)
+        .map_err(|_| WireCallError::InvalidRequest)
+}
 
 fn one_header<'a>(
     headers: &'a HeaderMap,
@@ -159,7 +176,9 @@ fn secret_contains_presence(descriptor: &TypeDescriptor, inside_secret: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxology_contract::{CapabilityId, FieldDescriptor, Idempotency, VariantDescriptor};
+    use boxology_contract::{
+        CapabilityId, ContractValue, FieldDescriptor, Idempotency, VariantDescriptor,
+    };
     use http::{HeaderValue, header::ACCEPT};
 
     #[derive(Debug, PartialEq, Eq)]
@@ -218,6 +237,139 @@ mod tests {
             None,
         );
         descriptor
+    }
+
+    fn body_limits(max_bytes: usize) -> SyntaxLimits {
+        SyntaxLimits(max_bytes, crate::syntax::DEFAULT_DEPTH_LIMIT)
+    }
+
+    fn assert_body_error(
+        body: &[u8],
+        descriptor: &TypeDescriptor,
+        limits: SyntaxLimits,
+        expected: WireCallError,
+    ) {
+        let error = decode_request_body(body, descriptor, limits).unwrap_err();
+        assert_eq!(error, expected);
+        let encoded = error.encode();
+        let (status, body) = match expected {
+            WireCallError::InvalidRequest => (400, br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#.as_slice()),
+            WireCallError::PayloadTooLarge => (413, br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#.as_slice()),
+            _ => unreachable!(),
+        };
+        assert_eq!(encoded.status(), status);
+        assert_eq!(encoded.body(), body);
+        assert!(
+            !encoded
+                .body()
+                .windows(11)
+                .any(|bytes| bytes == b"DO_NOT_LEAK")
+        );
+    }
+
+    #[test]
+    fn request_body_decodes_plain_structured_and_sensitive_values() {
+        let string = TypeDescriptor::string();
+        assert_eq!(
+            decode_request_body(br#""plain""#, &string, body_limits(7)),
+            Ok(SlotValue::Value(ContractValue::string("plain")))
+        );
+        let structure = TypeDescriptor::structure([
+            FieldDescriptor::new("name", string.clone(), None),
+            FieldDescriptor::new("active", TypeDescriptor::bool(), None),
+        ])
+        .unwrap();
+        let expected = ContractValue::object([
+            ("name".into(), ContractValue::string("Ada")),
+            ("active".into(), ContractValue::bool(true)),
+        ])
+        .unwrap();
+        let structured = br#"{"name":"Ada","active":true}"#;
+        assert_eq!(
+            decode_request_body(structured, &structure, body_limits(structured.len())),
+            Ok(SlotValue::Value(expected))
+        );
+        let secret = TypeDescriptor::secret(string).unwrap();
+        assert_eq!(
+            decode_request_body(br#""DO_NOT_LEAK""#, &secret, body_limits(13)),
+            Ok(SlotValue::Value(ContractValue::sensitive(
+                ContractValue::string("DO_NOT_LEAK")
+            )))
+        );
+    }
+
+    #[test]
+    fn request_body_enforces_byte_limit_before_payload_inspection() {
+        let body = br#""okay""#;
+        assert!(
+            decode_request_body(body, &TypeDescriptor::string(), body_limits(body.len())).is_ok()
+        );
+        assert_body_error(
+            body,
+            &TypeDescriptor::string(),
+            body_limits(body.len() - 1),
+            WireCallError::PayloadTooLarge,
+        );
+        assert_body_error(
+            b"{DO_NOT_LEAK",
+            &TypeDescriptor::string(),
+            body_limits(1),
+            WireCallError::PayloadTooLarge,
+        );
+    }
+
+    #[test]
+    fn request_body_maps_syntax_failures_to_canonical_bad_request() {
+        let string = TypeDescriptor::string();
+        for body in [
+            b"".as_slice(),
+            &[0xff],
+            b"DO_NOT_LEAK",
+            br#""value" trailing"#,
+        ] {
+            assert_body_error(
+                body,
+                &string,
+                body_limits(body.len()),
+                WireCallError::InvalidRequest,
+            );
+        }
+        assert_body_error(
+            b"[[]]",
+            &TypeDescriptor::list(TypeDescriptor::list(string).unwrap()).unwrap(),
+            SyntaxLimits(4, 1),
+            WireCallError::InvalidRequest,
+        );
+    }
+
+    #[test]
+    fn request_body_maps_provider_semantic_failures_to_canonical_bad_request() {
+        let map = TypeDescriptor::map(TypeDescriptor::string()).unwrap();
+        let structure = TypeDescriptor::structure([FieldDescriptor::new(
+            "known",
+            TypeDescriptor::string(),
+            None,
+        )])
+        .unwrap();
+        let enumeration = TypeDescriptor::enumeration([VariantDescriptor::new(
+            "known",
+            VariantPayload::Unit,
+            None,
+        )])
+        .unwrap();
+        for (body, descriptor) in [
+            (br#"{"DO_NOT_LEAK":"a","DO_NOT_LEAK":"b"}"#.as_slice(), &map),
+            (br#"{"DO_NOT_LEAK":"value"}"#, &structure),
+            (br#"{"tag":"DO_NOT_LEAK","payload":null}"#, &enumeration),
+            (br#""01""#, &TypeDescriptor::i64()),
+        ] {
+            assert_body_error(
+                body,
+                descriptor,
+                body_limits(body.len()),
+                WireCallError::InvalidRequest,
+            );
+        }
     }
 
     #[test]
