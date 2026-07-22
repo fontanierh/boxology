@@ -1,9 +1,13 @@
-# Boxology Linux ARM64 CI runner
+# Boxology Mac-hosted CI runners
 
-This is the authoritative runbook for S0-T8. It provisions exactly one disposable
-GitHub Actions JIT runner inside a native ARM64 Colima VM. After PR 2, the Linux
-jobs in `pr.yml` use this runner label; the one-runner policy intentionally queues
-concurrent Linux jobs rather than registering a second runner.
+This is the authoritative runbook for S0-T8. It provisions two disposable GitHub
+Actions JIT runners on the MacBook: Linux jobs run in the native ARM64 Colima VM,
+and macOS jobs run on the native Apple-silicon host. Every enabled workflow uses
+one of these labels; no enabled workflow targets a GitHub-hosted runner.
+
+The Linux and native-macOS supervisors each allow one job at a time. Concurrent
+Linux jobs queue behind the single container runner, while a Linux job and a
+macOS job may use the two host lanes concurrently.
 
 ## Pinned inputs
 
@@ -14,12 +18,18 @@ from the official source, and rebuild. Never add a tag-only fallback. The image 
 and `ImageOS`/`ImageVersion` values are the job-evidence identity; runtime self-update
 is disabled, so this image pin is authoritative.
 
+The native macOS runner uses actions/runner `2.336.0` for Apple silicon with
+archive SHA-256
+`8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079`, the
+repository Rust `1.97.1` toolchain, and cargo-deny `0.20.2`. The Mac OS version
+is included in `ImageVersion` evidence because the host is not an immutable image.
+
 ## Prerequisites
 
 Use an Apple-silicon Mac with approved, already-installed and version-pinned
-Colima, Docker CLI/Buildx, `curl`, `jq`, `uuidgen`, `security`, and `launchctl`. Record the
-approved Colima version beside the installation; this repository does not install
-host software. Use a private GitHub repository with trusted Henry/agent
+Colima, Docker CLI/Buildx, Rustup, `curl`, `jq`, `uuidgen`, `security`, and
+`launchctl`. Record the approved Colima and host macOS versions beside the
+installation; this repository does not install host software. Use a private GitHub repository with trusted Henry/agent
 collaborators; private forking is not changed or required for activation.
 
 Create the dedicated Keychain item interactively; the token is never written to
@@ -92,6 +102,38 @@ supervisor bounds each container to 4 CPUs, 8 GiB RAM without swap, and 512 pids
 It sets `TMPDIR` to the executable `_work/_temp` volume path so nested Cargo
 tests can run temporary binaries while `/tmp` remains `noexec`.
 
+## Native macOS runner
+
+Install the pinned Apple-silicon runner into the dedicated host directory. The
+bootstrap refuses to overwrite an existing install and verifies the archive
+before extraction:
+
+```sh
+./ops/ci-runner/bootstrap-macos.sh
+"$HOME/.crab/ci-runner/macos-runner-base/bin/Runner.Listener" --version
+```
+
+Copy `supervise-macos.sh` and
+`com.fontanierh.boxology-ci-macos-runner.plist` outside the checkout, then load
+the user LaunchAgent:
+
+```sh
+install -m 700 ops/ci-runner/supervise-macos.sh "$HOME/.crab/ci-runner/supervise-macos.sh"
+install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-macos-runner.plist \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner.plist"
+plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner.plist"
+launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-macos-runner"
+```
+
+The native supervisor uses the same Keychain item as the Linux supervisor,
+provisions one JIT runner with `[self-hosted, macOS, ARM64, boxology-macos-pr]`,
+copies the verified runner into a fresh per-job directory, and removes that
+directory after completion. It emits only state diagnostics; never collect raw
+runner logs because job output can contain secrets. The native runner is not
+container-isolated: it is accepted only for this private repository and trusted
+Henry/agent collaborators.
+
 ## JIT lifecycle and smoke test
 
 Install the reviewed `supervise.sh` outside this mutable checkout, make it
@@ -109,7 +151,7 @@ The smoke workflow keeps `persist-credentials: false` and asserts only broker-PA
 That argument is visible to same-user job processes by design. This residual is accepted only for trusted private collaborators; do not activate if that boundary changes.
 The supervisor waits for one job, emits sanitized state-only diagnostics, then removes failed JIT registrations, the container, and the unique volume. Failed cleanup retains owned handles/lock and backs off; a lock refuses a concurrent supervisor.
 
-Only after a successful smoke run, replace every placeholder in the plist,
+Only after a successful Linux smoke run, replace every placeholder in the plist,
 copy it and the reviewed supervisor to paths outside the checkout, then validate
 and load it in the user launchd domain:
 
@@ -119,42 +161,45 @@ launchctl bootstrap "gui/$(id -u)" /PATH/TO/com.fontanierh.boxology-ci-runner.pl
 launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-runner"
 ```
 
-The workflow is manual-only and remains the operator's end-to-end health check. Dispatch
+The Linux workflow is manual-only and remains the operator's end-to-end health check. Dispatch
 [`self-hosted-runner-smoke.yml`](../../.github/workflows/self-hosted-runner-smoke.yml) after the supervisor is ready; it is read-only, contains no secrets,
 and is safe to remain queued while no runner exists. It checks Linux, ARM64/aarch64, non-root identity,
 image evidence, checkout credential hygiene, and the ARM host branch of the
-determinism fixture.
+determinism fixture. Dispatch [`macos-self-hosted-runner-smoke.yml`](../../.github/workflows/macos-self-hosted-runner-smoke.yml)
+to verify native `macOS`/`ARM64`, `aarch64-apple-darwin`, host evidence, and the
+native determinism fixture.
 
 ## CI activation
 
 The activated `pr.yml` Linux lane assigns `checks-linux`, `deny`, both determinism
 consumers, and `validation` to `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]`.
 The Linux evidence and determinism verification target is `aarch64-unknown-linux-gnu`;
-the hosted macOS job remains `macos-15` because the container is Linux, not macOS.
-The non-required `linux-x86-contract` workflow preserves hosted
-`x86_64-unknown-linux-gnu` coverage on `main`, manual dispatch, and CI-contract pull
-requests. Consequently this runner removes hosted Linux minutes from the stable PR
-lane, but it does not claim to remove macOS or the explicit x86 audit lane.
+the `checks-macos` job and scheduled advisory workflow use
+`[self-hosted, macOS, ARM64, boxology-macos-pr]`. The x86 audit workflow is
+intentionally removed for this emergency migration; x86 coverage is a deferred
+follow-up and is not part of the active CI contract. Consequently every enabled
+workflow job runs through this MacBook and uses no GitHub-hosted Actions minutes.
 
 ## Health, cleanup, and rollback
 
 Check `colima status --profile boxology-ci-arm64`, `DOCKER_CONTEXT=colima-boxology-ci-arm64`,
-the image architecture/identity/SHA labels, and the launchd job. Inspect the current
-container only for fixed state fields and mounts; the sole mount must be the
-fresh named runner volume. Never collect raw runner logs because job output can
-contain secrets.
+the image architecture/identity/SHA labels, both launchd jobs, and the GitHub
+runner labels. Inspect the current Linux container only for fixed state fields
+and mounts; the sole mount must be the fresh named runner volume. Never collect
+raw runner logs because job output can contain secrets.
 
-To stop service, unload the installed plist, remove only its current container
-and named volume, and stop the dedicated Colima profile. A stale supervisor lock
+To stop service, unload the installed plist(s), remove only the current Linux
+container/volume and native macOS run directory, and stop the dedicated Colima
+profile. A stale supervisor lock
 may be removed only after confirming no supervisor process remains. To roll back the
-active lane, revert the reviewed PR-2 workflow routing while leaving the hosted-x86
-audit workflow available. Do not register a persistent runner or widen the
+active lane, revert the workflow routing while leaving both smoke workflows available.
+Do not register a persistent runner or widen the
 container's mounts, network, capabilities, or credentials as a rollback shortcut.
 
 Safety boundaries: no repository checkout in the image, read-only root, bounded
 CPU/memory, no host path mounts/socket/host networking, no privileged container,
 no persistent runner registration, no broker PAT in repo/plist/env/command line,
-GitHub API writes are limited to JIT registration/deletion lifecycle operations, and no
-second runner. The JIT argument's same-user
+GitHub API writes are limited to JIT registration/deletion lifecycle operations, and one
+runner per lane. The Linux JIT argument's same-user
 visibility is the documented residual; API, image, Keychain, lock, context, and
 architecture failures stop or back off rather than weakening isolation.

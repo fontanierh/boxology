@@ -1,0 +1,29 @@
+name: macos-self-hosted-runner-smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Assert native Mac runner
+        run: |
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$(rustc -vV | sed -n 's/^host: //p')" = aarch64-apple-darwin
+          test "$ImageOS" = macos-arm64-host
+          test -n "$ImageVersion"
+          test -z "${BOXOLOGY_CI_BROKER_PAT:-}"
+          test -z "${CI_RUNNER_BROKER_PAT:-}"
+          echo "runner image: $ImageOS $ImageVersion ($RUNNER_OS/$RUNNER_ARCH)"
+      - name: Exercise native determinism fixture
+        run: cargo test -p xtask determinism_cross::tests::host_fixture_passes_protocol_publishes_and_verifies -- --exact

@@ -16,12 +16,18 @@ env:
   CARGO_DENY_VERSION: "0.20.2"
 jobs:
   report:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: Record native Mac runner evidence
+        run: |
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$ImageOS" = macos-arm64-host
       - name: Install pinned toolchain
         run: rustup toolchain install
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

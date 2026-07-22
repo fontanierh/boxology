@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.fontanierh.boxology-ci-macos-runner</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/jim/.crab/ci-runner/supervise-macos.sh</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>REPOSITORY</key><string>fontanierh/boxology</string>
+    <key>RUNNER_BASE</key><string>/Users/jim/.crab/ci-runner/macos-runner-base</string>
+    <key>RUNNER_ROOT</key><string>/Users/jim/.crab/ci-runner/macos-runner</string>
+    <key>KEYCHAIN_SERVICE</key><string>com.fontanierh.boxology-ci-runner</string>
+    <key>KEYCHAIN_ACCOUNT</key><string>jim</string>
+    <key>PATH</key><string>/Users/jim/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>/Users/jim/.crab/ci-runner/logs/macos-supervisor.log</string>
+  <key>StandardErrorPath</key><string>/Users/jim/.crab/ci-runner/logs/macos-supervisor.err.log</string>
+</dict>
+</plist>

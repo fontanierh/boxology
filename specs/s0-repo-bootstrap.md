@@ -51,26 +51,25 @@ Exact stable pin in `rust-toolchain.toml` (latest stable at T1 time, recorded th
 
 ### D4 — PR validation workflow
 
-`pr.yml` runs on pull requests and pushes to `main`. Its Linux jobs use the
-disposable `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` runner supplied
-by S0-T8; the one-runner policy may queue concurrent Linux jobs. The hosted
-`linux-x86-contract` workflow is a non-required audit lane for `main`, manual
-dispatch, and CI-contract pull requests (see below).
+`pr.yml` runs on pull requests and pushes to `main`. Every enabled workflow job
+runs on the MacBook: Linux jobs use the disposable
+`[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` runner supplied by S0-T8,
+while native macOS jobs use `[self-hosted, macOS, ARM64, boxology-macos-pr]`.
+The two lanes each allow one job at a time. The x86 audit workflow is removed for
+this emergency migration and is a deferred follow-up.
 
 | Job | Command | Runner |
 | --- | --- | --- |
 | checks-linux | `cargo xtask ci --base <event base SHA>` (fmt-by-selection, clippy, test, doc, whitespace, links, budget, deny, determinism local); produce normal/meta roots with `determinism-manifest --out linux/` and `--out linux-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both; evidence target `aarch64-unknown-linux-gnu` | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
-| checks-macos | `cargo xtask test` + `cargo xtask determinism`; produce normal/meta roots with `determinism-manifest --out macos/` and `--out macos-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both | `macos-15` |
+| checks-macos | `cargo xtask test` + `cargo xtask determinism`; produce normal/meta roots with `determinism-manifest --out macos/` and `--out macos-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both; evidence target `aarch64-apple-darwin` | `[self-hosted, macOS, ARM64, boxology-macos-pr]` |
 | deny | `cargo xtask deny` (pinned `cargo-deny check bans licenses sources`) | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 | determinism-compare | download/unpack normal roots; verify `linux/` as `aarch64-unknown-linux-gnu` and `macos/` as `aarch64-apple-darwin` with `determinism-verify --require-image`; `cargo xtask determinism-compare linux/ macos/` | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 | determinism-meta-cross | download/unpack meta roots; verify the same exact targets with `determinism-verify --require-image`; `cargo xtask determinism-meta-cross linux-meta/ macos-meta/` succeeds only for the exact expected comparator finding | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 | **validation** | aggregator: `needs:` every job above **including determinism-meta-cross**, `if: always()`, fails unless all succeeded | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 
-`linux-x86.yml` (the `linux-x86-contract` workflow) is not part of `validation`. On `main`, on manual
-dispatch, and on pull requests changing the CI contract, it runs the complete
-`cargo xtask ci` host-local suite on hosted `ubuntu-24.04` and asserts
-`x86_64-unknown-linux-gnu`. It preserves explicit x86 coverage without making
-the stable PR aggregator depend on a second runner or on hosted capacity.
+The former `linux-x86.yml` audit workflow is intentionally absent. Its
+`x86_64-unknown-linux-gnu` coverage is deferred until a Mac-hosted x86-compatible
+execution lane is deliberately designed; it must not reintroduce hosted minutes.
 
 The `pr.yml` command surface (including commands reached through `ci`) is: `ci`, `test`, `links`, `budget`, `deny`, `determinism`, `determinism-manifest --out <dir>`, `determinism-manifest --out <dir> --meta-cross`, `determinism-compare <a> <b>`, `determinism-meta-cross <linux> <macos>`, and `determinism-verify <dir> --target <triple>` (`--require-image` requires CI runner image evidence). D6's `advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]` command and the internal `subject-run <name> --out <dir>` determinism child helper complete the S0 xtask command set; `advisories` is not part of `pr.yml`; `subject-run` appears there only as the child process determinism spawns and is never invoked by the workflow itself. The producer → tar/upload → download/unpack → verify → compare/gate data flow above is the executable contract; the consumer jobs inspect exactly what the platform jobs upload. This table is the **end state after T8**; each task enables only the jobs whose commands exist, adding its job to the aggregator's `needs` in the same PR (staged, never dangling).
 
@@ -79,7 +78,7 @@ Rules:
 - **`validation` is the single stable required-check name.** New jobs must be added to its `needs` list; because it runs `if: always()`, a skipped or failed dependency cannot silently produce a green aggregate. This exact check is the branch-protection target if/when protection is available (D9).
 - Each complete `MANIFEST` / `trees/` / `evidence/` root is transported as one uncompressed tar so empty required directories are preserved. Tar is transport-only: consumers unpack it into a fresh root before `determinism-verify`, and no tar archive is ever compared.
 - **The `ci` interface is explicit and single:** `cargo xtask ci --base <sha>` runs everything including budget; `cargo xtask ci --no-budget` is the mode for `main` pushes (no meaningful base) and exploratory local runs. Local acceptance runs use `--base origin/main` explicitly — no command discovers Git or GitHub context implicitly. `ci` includes the pinned `deny` invocation, so **local/CI parity has no semantic exceptions**: `cargo xtask deny` verifies the pinned cargo-deny version is installed and errors with the install command otherwise.
-- **Runner labels are fixed major-OS labels, not immutable pins.** GitHub updates `ubuntu-24.04`/`macos-15` images continuously; each job therefore records the runner image version and target triple into the job log and the determinism evidence. The stable PR matrix uses `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`; the non-required x86 audit lane additionally asserts `x86_64-unknown-linux-gnu`. The ARM64 Linux runner is a disposable container in a dedicated Colima VM, not a macOS job runner. If truly immutable environments are ever required, hosted runners cannot provide them; that would be a containerized-runner decision taken then.
+- **Runner labels are fixed capability labels, not immutable pins.** The stable PR matrix uses `aarch64-unknown-linux-gnu` in a disposable Linux container and `aarch64-apple-darwin` on the native Mac host. Both jobs record runner image/host version and target triple into evidence. The native macOS runner is trusted host execution, not container isolation; it is limited to this private repository and trusted collaborators.
 - Actions pinned by full commit SHA; dependency caching; concurrency groups cancel superseded runs.
 - **Wall-clock is a monitored target, not an acceptance invariant:** the measured quantity is job duration excluding queue time, on cache-hit runs, tracked as the median of the last ten `main` runs, with 10 minutes as the alarm threshold. A stream that pushes it over addresses it in that stream's spec.
 
@@ -125,15 +124,34 @@ Fact, verified during review: on the current private-repository plan, branch-pro
 
 `cargo xtask ci` is **temporary bootstrap orchestration**. When S5 ships `boxology check` and S7 adopts manifests on this repository: platform validation (ownership, edges, regeneration, classification) is delegated to `boxology check` invoked by `xtask ci`; xtask retains only repository-specific checks (links, budget, determinism meta-tests) under clearly separate names; and every bootstrap registry duplicated here — the derived-output exclusion list and the hand-authored formatting package-selection lists (owned and excluded, per D3) — is replaced by manifest-derived data, with the xtask copies deleted. Manifests are authoritative from S7 onward; S0 never becomes a second registry that survives.
 
-### D11 — S0-T8 isolated Linux ARM64 runner contract
+### D11 — S0-T8 Mac-hosted ARM64 runner contract
 
-S0-T8 is accepted as a two-PR migration. **PR 1** adds the design, image, host supervisor, operational runbook, launchd template, smoke workflow, and ARM64 host-fixture selection. **The existing hosted-x86 D4 contract remains active and unchanged until PR 2**; PR 1 does not edit `pr.yml`, its aggregate, or its comparison fixture.
+S0-T8 is accepted as an emergency Mac-hosted migration. PR 1 added the Linux
+image, host supervisor, operational runbook, launchd template, smoke workflow,
+and ARM64 host-fixture selection. PR 2 activated Linux routing. This follow-up
+adds the native macOS JIT runner, routes every enabled workflow through the Mac,
+and removes the hosted x86 audit until a Mac-hosted replacement exists.
 
-The accepted replacement is one native ARM64 Colima VM running Docker and one disposable GitHub Actions JIT runner for one job at a time. The supervisor provisions no second runner concurrently, uses no host mounts or host networking, gives each run a fresh named volume and container, and removes both after the job. The image contains no repository source, runs the runner as non-root, and is built from the official Ubuntu 24.04 ARM64 base pinned by OCI digest. It pins actions/runner v2.336.0 and its SHA-256 archive, the repository Rust toolchain, and cargo-deny 0.20.2; runtime self-update is disabled and the image pin is authoritative. A read-only root overlays an immutable runner install with the fresh volume for runner state, checkout, target, and Cargo home; CPU, memory, pids, capabilities, and privilege escalation are bounded. `ImageOS`, `ImageVersion`, architecture, non-root identity, base digest, and runner archive SHA are required evidence; the image labels and the smoke workflow are the evidence contract.
+The accepted replacement has two one-job JIT lanes on the Mac: a native ARM64
+Colima VM running the disposable Linux container, and a native Apple-silicon
+macOS runner copied into a fresh per-job directory. The Linux image contains no
+repository source, runs the runner as non-root, and is built from the official
+Ubuntu 24.04 ARM64 base pinned by OCI digest. Both lanes pin actions/runner
+v2.336.0, the repository Rust toolchain, and cargo-deny 0.20.2; runtime
+self-update is disabled. Linux has read-only-root, volume, CPU, memory, pids,
+capability, and privilege bounds. Native macOS is trusted host execution and
+has no container boundary; its archive checksum, host OS version, architecture,
+and target triple are required evidence.
 
-Activation gates are: a private repository with trusted Henry/agent collaborators; an operator-provided dedicated GitHub credential stored only in a macOS Keychain item; a locally built image whose identity and digest are verified; a clean ARM64 smoke dispatch; and health checks showing the single-runner policy. Private forking remains a repository-policy assumption, not a PR-1 blocker, and this work changes no GitHub setting. The supervisor fails closed when a prerequisite, API response, image identity, or lock is invalid and never uses `gh` credentials for unattended provisioning. Rollback is to stop the supervisor, remove its disposable container/volume and Colima profile, and leave the smoke workflow queued; PR 2 is reverted or not activated so the hosted-x86 D4 path remains authoritative.
+Activation gates are: a private repository with trusted Henry/agent collaborators; an operator-provided dedicated GitHub credential stored only in a macOS Keychain item; verified Linux image and native runner archive; clean Linux and macOS smoke dispatches; and health checks showing one runner per lane. The supervisors fail closed when a prerequisite, API response, identity, or lock is invalid and never use `gh` credentials for unattended provisioning. Rollback is to unload both supervisors, remove only their owned run state, stop the dedicated Colima profile, and revert workflow routing. The hosted x86 lane is not restored by rollback.
 
-The broker PAT never enters the container or job environment. Ordinary GitHub Actions read/runtime credentials may be present for actions such as checkout; the smoke workflow keeps `persist-credentials: false` and asserts only broker-PAT absence. The official runner transiently consumes the one-use JIT config through `run.sh --disableupdate --jitconfig`, so the encoded argument is visible to same-user job processes by design. This residual is accepted only under the private trusted-collaborator assumption; if that boundary changes, do not activate the runner.
+The broker PAT never enters either runner job environment. Ordinary GitHub Actions
+read/runtime credentials may be present for checkout; smoke workflows keep
+`persist-credentials: false` and assert only broker-PAT absence. Each official
+runner transiently consumes the one-use JIT config through
+`run.sh --disableupdate --jitconfig`, so the encoded argument is visible to
+same-user job processes by design. This residual and native host execution are
+accepted only under the private trusted-collaborator assumption.
 
 The authoritative operator procedure is [`ops/ci-runner/README.md`](../ops/ci-runner/README.md). This contract does not alter historical records.
 
@@ -141,12 +159,17 @@ The authoritative operator procedure is [`ops/ci-runner/README.md`](../ops/ci-ru
 
 1. `cargo xtask ci` passes locally on both supported triples and runs exactly the host-local checks CI runs.
 2. A PR introducing a clippy warning, fmt violation, broken relative link, broken anchor, or trailing whitespace fails `validation`.
-3. A PR adding >400 hand-authored lines fails `validation`; there is no bypass mechanism.
+3. Normal PRs adding >400 hand-authored lines fail `validation`. The Mac-hosted
+   runner migration is the explicitly authorized emergency exception to that
+   normal budget for this PR.
 4. Every fault-injection meta-fixture yields its expected failure class under the local protocol, with the meta-test suite itself green; the platform-dependent meta-fixture makes `determinism-compare` fail in the expected-failure lane.
 5. The `deny` job fails a PR introducing a disallowed license or non-crates.io source. The advisory path is proven two ways: a deterministic xtask integration test with a mocked advisory database exercising the find-by-title idempotent issue-upsert logic, and a `workflow_dispatch` input (`simulate_advisory=<id>`) on the scheduled workflow for a post-merge smoke run — review established scheduled workflows execute only from the default branch, so a throwaway-branch schedule cannot test this.
 6. The `validation` aggregator fails when any needed job fails or is skipped (verified by a deliberate red run).
 7. Runner image version and target triple appear in determinism evidence for both platforms.
-8. S0-T8 PR 1 passes its runbook, image, supervisor, isolation, broker-PAT-environment, and queued-smoke checks under the private/trusted-collaborator assumption; private forking is neither changed nor a hard activation gate, and the same-user JIT-config residual is documented.
+8. S0-T8 passes its runbook, image, native-runner, supervisor, isolation,
+   broker-PAT-environment, and queued-smoke checks under the private/trusted-
+   collaborator assumption; private forking is neither changed nor a hard
+   activation gate, and the same-user JIT-config/native-host residuals are documented.
 
 ## Task list
 
@@ -159,7 +182,7 @@ The authoritative operator procedure is [`ops/ci-runner/README.md`](../ops/ci-ru
 | T5 | `deny.toml`, pinned cargo-deny gate job, scheduled advisory workflow | 1 |
 | T6 | Determinism harness core: subject model, per-experiment protocol, manifest format, diagnostics | 2 |
 | T7 | Meta-fixtures + expected-failure lanes (local and cross-platform) + artifact retention and compare job | 2 |
-| T8 | Isolated Linux ARM64 self-hosted runner: PR 1 contract/runbook/image/supervisor/smoke; PR 2 activation in `pr.yml` plus the non-required hosted x86 audit workflow | 2 |
+| T8 | Mac-hosted ARM64 CI: disposable Linux Colima runner, native macOS JIT runner, activation in all workflows, smoke coverage, and deferred x86 lane | 3 |
 
 T1 → T2 strictly; T3–T5 independent after T2; T6 → T7, parallel with T3–T5.
 
@@ -172,5 +195,5 @@ The #17 and #41 reconciliation comments record this spec's narrowings (candidate
 *(None load-bearing; per review, load-bearing items may not hide here.)*
 
 - Exact toolchain version, runner-image versions, and pinned cargo-deny version — resolved at implementation time and recorded in the task PRs.
-- Whether macOS validation later narrows to merge-time only — deferred until CI cost is measured against the D4 target.
-- Hosted Linux runner drift and cost now justify the isolated native ARM64 Colima/Docker JIT runner decision in D11; PR 2 is the activation gate.
+- Whether macOS validation later narrows to merge-time only — superseded by the native Mac-hosted lane.
+- Hosted Linux/macOS runner cost now justifies the two Mac-hosted JIT lanes in D11; x86 coverage remains a deferred follow-up.
