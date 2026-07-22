@@ -4,6 +4,7 @@ use boxology_contract::{
     CallContext, CapabilityDescriptor, CapabilityId, DecodeRole, Detail, ErasedCallError,
     ErasedCallTarget, OpaqueTree, SlotValue, TypeDescriptor, ValueRef,
 };
+use boxology_runtime::RemoteImportTarget;
 use http::{HeaderValue, Method, Request, Uri, Version, header::CONTENT_TYPE, uri::Authority};
 
 use crate::{
@@ -105,6 +106,12 @@ impl ErasedCallTarget for HttpClientTarget {
                 )
                 .await
         })
+    }
+}
+
+impl RemoteImportTarget for HttpClientTarget {
+    fn supports_capability(&self, capability: &CapabilityId) -> bool {
+        self.capabilities.contains_key(capability)
     }
 }
 
@@ -501,6 +508,13 @@ mod tests {
         ContractValue, Deadline, ExposureLevel, FieldDescriptor, Idempotency, IdempotencyKey,
         TraceContext, VariantDescriptor, VariantPayload,
     };
+    #[cfg(feature = "server")]
+    use boxology_contract::{
+        ContractDescriptor, ContractRevision, ErasedTarget, ImplementationDescriptor,
+        ImportDescriptor,
+    };
+    #[cfg(feature = "server")]
+    use boxology_runtime::{CompositionBuilder, ImportHandle, ImportTarget};
     use hello_contract::HelloHandle;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -547,6 +561,24 @@ mod tests {
             )
         });
         &HELLO
+    }
+
+    #[cfg(feature = "server")]
+    fn consumer_descriptor() -> ImplementationDescriptor {
+        let revision = ContractRevision::new("r1").unwrap();
+        let contract = Box::leak(Box::new(
+            ContractDescriptor::new(BoxId::new("consumer").unwrap(), [], revision.clone()).unwrap(),
+        ));
+        ImplementationDescriptor::new(
+            contract,
+            [ImportDescriptor::new(
+                BoxId::new("hello").unwrap(),
+                revision,
+                [hello_descriptor().id().clone()],
+            )
+            .unwrap()],
+        )
+        .unwrap()
     }
 
     fn hello_context() -> CallContext {
@@ -946,6 +978,130 @@ mod tests {
             "host: {}",
             origin.strip_prefix("http://").unwrap()
         )));
+        assert_eq!(payload, "\"Ada\"");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn composition_injects_public_target_into_generated_handle() {
+        struct Consumer;
+        impl ErasedTarget for Consumer {
+            fn call<'a>(
+                &'a self,
+                _capability: &'a CapabilityId,
+                _context: CallContext,
+                _input: SlotValue,
+            ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>
+            {
+                Box::pin(std::future::pending())
+            }
+        }
+
+        let absent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unsupported = HttpClientTarget::new(
+            HttpClientConfig::new(format!("http://{}", absent.local_addr().unwrap())).unwrap(),
+            [],
+        )
+        .unwrap();
+        let mut invalid = CompositionBuilder::new();
+        invalid.add_box(consumer_descriptor(), |_| Consumer);
+        invalid.resolve_import(
+            BoxId::new("consumer").unwrap(),
+            BoxId::new("hello").unwrap(),
+            ImportTarget::remote(Arc::new(unsupported)),
+        );
+        for errors in [
+            invalid.validate().unwrap_err(),
+            invalid.start().err().unwrap(),
+        ] {
+            assert!(matches!(
+                errors.errors(),
+                [boxology_runtime::AssemblyError::MissingImportedCapability { capability, .. }]
+                    if capability == hello_descriptor().id()
+            ));
+        }
+        assert!(
+            timeout(Duration::from_millis(50), absent.accept())
+                .await
+                .is_err()
+        );
+
+        let body = br#"{"result":{"value":"Hello, Ada!"}}"#;
+        let (origin, server) = raw_server(
+            vec![http_response(
+                "200 OK",
+                &format!(
+                    "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                    body.len()
+                ),
+                body,
+            )],
+            true,
+        )
+        .await;
+        let target = HttpClientTarget::new(
+            HttpClientConfig::new(&origin).unwrap(),
+            [hello_descriptor()],
+        )
+        .unwrap();
+        let mut imported: Option<ImportHandle> = None;
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(consumer_descriptor(), |imports| {
+            imported = Some(
+                imports
+                    .handle(&BoxId::new("hello").unwrap())
+                    .unwrap()
+                    .clone(),
+            );
+            Consumer
+        });
+        builder.resolve_import(
+            BoxId::new("consumer").unwrap(),
+            BoxId::new("hello").unwrap(),
+            ImportTarget::remote(Arc::new(target)),
+        );
+        let imported = imported.unwrap();
+        assert!(matches!(
+            imported
+                .call(hello_descriptor().id(), hello_context(), SlotValue::Null)
+                .await,
+            Err(ErasedCallError::Unavailable(ref detail)) if detail.code() == "unsealed_import"
+        ));
+        let _composition = builder.start().unwrap();
+        let unknown = CapabilityId::new(
+            BoxId::new("hello").unwrap(),
+            CapabilityName::new("unknown").unwrap(),
+        );
+        assert!(matches!(
+            imported.call(&unknown, hello_context(), SlotValue::Null).await,
+            Err(ErasedCallError::ContractViolation(ref detail))
+                if detail.code() == "undeclared_import_capability"
+        ));
+        let context = context(
+            None,
+            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            Some("vendor=value"),
+            Some("request-7"),
+        );
+        assert_eq!(
+            HelloHandle::from_erased(Arc::new(imported))
+                .greet(context, "Ada".into())
+                .await
+                .unwrap(),
+            "Hello, Ada!"
+        );
+
+        let (request, second_connection) = server.await.unwrap();
+        assert!(!second_connection);
+        let request = String::from_utf8(request).unwrap();
+        let (head, payload) = request.split_once("\r\n\r\n").unwrap();
+        let lower = head.to_ascii_lowercase();
+        assert_eq!(head.lines().next(), Some("POST /rpc/hello/greet HTTP/1.1"));
+        assert!(
+            lower.contains("traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        );
+        assert!(lower.contains("tracestate: vendor=value"));
+        assert!(lower.contains("idempotency-key: request-7"));
         assert_eq!(payload, "\"Ada\"");
     }
 

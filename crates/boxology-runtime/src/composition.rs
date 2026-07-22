@@ -3,27 +3,68 @@
 use std::{collections::BTreeMap, future::Future, sync::Arc, task::Poll, time::Duration};
 
 use boxology_contract::{
-    BoxId, CapabilityDescriptor, CapabilityId, Detail, ErasedCallError, ErasedTarget,
-    ExposureLevel, ImplementationDescriptor,
+    BoxId, CallContext, CapabilityDescriptor, CapabilityId, Detail, ErasedCallError, ErasedTarget,
+    ExposureLevel, ImplementationDescriptor, SlotValue,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AssemblyError, AssemblyErrors, ImportHandle, Imports, TransportBinding, TransportExposure,
-    TransportHandle, TransportRuntime, TransportTaskTracker,
+    AssemblyError, AssemblyErrors, ImportHandle, Imports, RemoteImportTarget, TransportBinding,
+    TransportExposure, TransportHandle, TransportRuntime, TransportTaskTracker,
 };
 
 /// A selected target for one declared import slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ImportTarget(ImportTargetKind);
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 enum ImportTargetKind {
     Local(BoxId),
+    Remote(Arc<dyn RemoteImportTarget>),
 }
 impl ImportTarget {
     /// Selects a registered in-process provider box.
     pub fn local(provider: BoxId) -> Self {
         Self(ImportTargetKind::Local(provider))
+    }
+
+    /// Selects an already-configured caller-side target.
+    pub fn remote(target: Arc<dyn RemoteImportTarget>) -> Self {
+        Self(ImportTargetKind::Remote(target))
+    }
+}
+impl std::fmt::Debug for ImportTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            ImportTargetKind::Local(provider) => {
+                write!(formatter, "ImportTarget(Local({provider:?}))")
+            }
+            ImportTargetKind::Remote(_) => formatter.write_str("ImportTarget(Remote(<redacted>))"),
+        }
+    }
+}
+impl PartialEq for ImportTarget {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (ImportTargetKind::Local(left), ImportTargetKind::Local(right)) => left == right,
+            (ImportTargetKind::Remote(left), ImportTargetKind::Remote(right)) => {
+                Arc::ptr_eq(left, right)
+            }
+            _ => false,
+        }
+    }
+}
+impl Eq for ImportTarget {}
+
+struct CallerTargetAdapter(Arc<dyn RemoteImportTarget>);
+impl ErasedTarget for CallerTargetAdapter {
+    fn call<'a>(
+        &'a self,
+        capability: &'a CapabilityId,
+        context: CallContext,
+        input: SlotValue,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>
+    {
+        self.0.call(capability, context, input)
     }
 }
 struct BoxRegistration {
@@ -199,15 +240,35 @@ impl CompositionBuilder {
                 errors.push(AssemblyError::DuplicateImportResolution { consumer, slot });
                 continue;
             }
-            let ImportTargetKind::Local(target) = &resolution.target.0;
-            if let Some(&provider_index) = registrations.get(target) {
-                states.insert(key, Some(provider_index));
-            } else {
-                errors.push(AssemblyError::UnknownImportTarget {
-                    consumer: resolution.consumer.clone(),
-                    slot: resolution.slot.clone(),
-                    target: target.clone(),
-                });
+            match &resolution.target.0 {
+                ImportTargetKind::Local(target) => {
+                    if let Some(&provider_index) = registrations.get(target) {
+                        states.insert(key, Some(provider_index));
+                    } else {
+                        errors.push(AssemblyError::UnknownImportTarget {
+                            consumer: resolution.consumer.clone(),
+                            slot: resolution.slot.clone(),
+                            target: target.clone(),
+                        });
+                    }
+                }
+                ImportTargetKind::Remote(target) => {
+                    let import = consumer
+                        .descriptor
+                        .imports()
+                        .iter()
+                        .find(|import| import.slot_id() == &resolution.slot)
+                        .unwrap();
+                    for capability in import.capabilities() {
+                        if !target.supports_capability(capability) {
+                            errors.push(AssemblyError::MissingImportedCapability {
+                                consumer: resolution.consumer.clone(),
+                                slot: resolution.slot.clone(),
+                                capability: capability.clone(),
+                            });
+                        }
+                    }
+                }
             }
         }
         for (index, registration) in self.boxes.iter().enumerate() {
@@ -344,16 +405,23 @@ impl CompositionBuilder {
                         &resolution.consumer == consumer && resolution.slot == *import.slot_id()
                     })
                     .unwrap();
-                let ImportTargetKind::Local(provider) = &resolution.target.0;
-                let target = &self
-                    .boxes
-                    .iter()
-                    .find(|registration| registration.descriptor.contract().box_id() == provider)
-                    .unwrap()
-                    .target;
+                let target: Arc<dyn ErasedTarget> = match &resolution.target.0 {
+                    ImportTargetKind::Local(provider) => self
+                        .boxes
+                        .iter()
+                        .find(|registration| {
+                            registration.descriptor.contract().box_id() == provider
+                        })
+                        .unwrap()
+                        .target
+                        .clone(),
+                    ImportTargetKind::Remote(target) => {
+                        Arc::new(CallerTargetAdapter(target.clone()))
+                    }
+                };
                 let handle = registration.handles.get(import.slot_id()).unwrap();
                 assert!(
-                    handle.seal(Arc::clone(target)).is_ok(),
+                    handle.seal(target).is_ok(),
                     "import handle was already sealed"
                 );
             }

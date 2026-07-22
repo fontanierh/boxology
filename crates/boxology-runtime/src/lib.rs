@@ -31,6 +31,12 @@ use boxology_contract::{
 type ErasedCallFuture<'a> =
     Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>;
 
+/// A configured remote target that can prove which exact capabilities it supports.
+pub trait RemoteImportTarget: ErasedCallTarget {
+    /// Reports whether the target supports this exact capability identity.
+    fn supports_capability(&self, capability: &CapabilityId) -> bool;
+}
+
 /// The import handles declared by one box implementation.
 ///
 /// Lookup is deterministic by import-slot identity. A missing slot returns
@@ -168,6 +174,32 @@ mod tests {
         calls: Arc<AtomicUsize>,
         behavior: Behavior,
         drops: Option<Arc<AtomicUsize>>,
+    }
+
+    struct RemoteTarget {
+        panic_on_call: bool,
+        panic_on_poll: bool,
+    }
+
+    impl ErasedCallTarget for RemoteTarget {
+        fn call<'a>(
+            &'a self,
+            _capability: &'a CapabilityId,
+            _context: CallContext,
+            input: SlotValue,
+        ) -> ErasedCallFuture<'a> {
+            assert!(!self.panic_on_call, "remote construction panic");
+            if self.panic_on_poll {
+                return Box::pin(std::future::poll_fn(|_| panic!("remote poll panic")));
+            }
+            Box::pin(ready(Ok(input)))
+        }
+    }
+
+    impl RemoteImportTarget for RemoteTarget {
+        fn supports_capability(&self, _capability: &CapabilityId) -> bool {
+            true
+        }
     }
 
     impl Drop for Target {
@@ -712,6 +744,70 @@ mod tests {
         assert!(binding_weaks.iter().all(|weak| weak.upgrade().is_some()));
         assert!(config_weaks.iter().all(|weak| weak.upgrade().is_some()));
         assert_eq!(probe.drops.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn composition_seals_remote_target_without_a_local_provider_and_contains_panics() {
+        let slot = box_id("remote");
+        let imported = capability("remote", "call");
+        let remote: Arc<dyn RemoteImportTarget> = Arc::new(RemoteTarget {
+            panic_on_call: false,
+            panic_on_poll: false,
+        });
+        let selected = ImportTarget::remote(remote.clone());
+        assert_eq!(selected, selected.clone());
+        assert_eq!(format!("{selected:?}"), "ImportTarget(Remote(<redacted>))");
+        assert_ne!(
+            selected,
+            ImportTarget::remote(Arc::new(RemoteTarget {
+                panic_on_call: false,
+                panic_on_poll: false,
+            }))
+        );
+        assert_ne!(selected, ImportTarget::local(slot.clone()));
+
+        for (target, expected) in [
+            (selected, Ok(SlotValue::Null)),
+            (
+                ImportTarget::remote(Arc::new(RemoteTarget {
+                    panic_on_call: true,
+                    panic_on_poll: false,
+                })),
+                Err(ErasedCallError::Internal(
+                    Detail::new("panic").with_message("remote construction panic"),
+                )),
+            ),
+            (
+                ImportTarget::remote(Arc::new(RemoteTarget {
+                    panic_on_call: false,
+                    panic_on_poll: true,
+                })),
+                Err(ErasedCallError::Internal(
+                    Detail::new("panic").with_message("remote poll panic"),
+                )),
+            ),
+        ] {
+            let mut captured = None;
+            let mut builder = CompositionBuilder::new();
+            builder.add_box(
+                implementation("consumer", &[], &[("remote", &["call"])]),
+                |imports| {
+                    captured = Some(imports.handle(&slot).unwrap().clone());
+                    adapter(&Arc::new(AtomicUsize::new(0)))
+                },
+            );
+            builder.resolve_import(box_id("consumer"), slot.clone(), target);
+            let handle = captured.unwrap();
+            assert_eq!(
+                invoke(&handle, &imported, context(None), SlotValue::Null),
+                Err(ErasedCallError::Unavailable(Detail::new("unsealed_import")))
+            );
+            let _composition = builder.start().unwrap();
+            assert_eq!(
+                invoke(&handle, &imported, context(None), SlotValue::Null),
+                expected
+            );
+        }
     }
 
     #[test]
