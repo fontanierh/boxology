@@ -8,7 +8,8 @@ use boxology_contract::{
     SlotValue, TraceContext, TypeDescriptor,
 };
 use boxology_runtime::TransportExposure;
-use http::{HeaderMap, HeaderValue};
+use http::{HeaderMap, HeaderValue, Method};
+use mediatype::{MediaTypeList, names};
 use std::time::Duration;
 
 const TIMEOUT_HEADER: &str = "boxology-timeout-ms";
@@ -209,6 +210,81 @@ fn valid_tracestate_key(key: &str) -> bool {
             && key.len() <= 256
             && key.as_bytes()[0].is_ascii_lowercase()
             && key.bytes().all(allowed)
+    }
+}
+
+struct AdmittedHead<'a, E> {
+    exposure: &'a E,
+    timeout: Option<Duration>,
+    idempotency_key: Option<IdempotencyKey>,
+    trace_context: TraceContext,
+}
+
+fn admit_request_head<'a, E: ExposureView>(
+    raw_path: &str,
+    query_present: bool,
+    method: &Method,
+    headers: &HeaderMap,
+    exposures: &'a [E],
+) -> Result<AdmittedHead<'a, E>, WireCallError> {
+    let exposure = resolve_route(raw_path, query_present, exposures)?;
+    if method != Method::POST {
+        return Err(WireCallError::MethodNotAllowed);
+    }
+    validate_request_media(headers)?;
+    let timeout = parse_timeout(headers)?;
+    let idempotency_key = parse_idempotency_key(headers)?;
+    let trace_context = parse_trace_context(headers);
+    Ok(AdmittedHead {
+        exposure,
+        timeout,
+        idempotency_key,
+        trace_context,
+    })
+}
+
+fn validate_request_media(headers: &HeaderMap) -> Result<(), WireCallError> {
+    let Some(content_type) = one_header(headers, "content-type")? else {
+        return Err(WireCallError::UnsupportedMediaType);
+    };
+    let value = content_type
+        .to_str()
+        .map_err(|_| WireCallError::UnsupportedMediaType)?;
+    validate_json_content_type(value)?;
+    if headers.contains_key("content-encoding") {
+        return Err(WireCallError::UnsupportedMediaType);
+    }
+    Ok(())
+}
+
+fn validate_json_content_type(value: &str) -> Result<(), WireCallError> {
+    let mut list = MediaTypeList::new(value);
+    let first = list.next();
+    let trimmed = value.trim_end_matches([' ', '\t']);
+    let has_trailing_comma = trimmed.ends_with(',');
+    if list.next().is_some() || has_trailing_comma {
+        return Err(WireCallError::InvalidRequest);
+    }
+    if trimmed.ends_with(';') {
+        return Err(WireCallError::UnsupportedMediaType);
+    }
+    let media_type = first
+        .ok_or(WireCallError::UnsupportedMediaType)?
+        .map_err(|_| WireCallError::UnsupportedMediaType)?;
+    if media_type.ty != names::APPLICATION
+        || media_type.subty != names::JSON
+        || media_type.suffix.is_some()
+    {
+        return Err(WireCallError::UnsupportedMediaType);
+    }
+    match media_type.params.as_ref() {
+        [] => Ok(()),
+        [(name, value)]
+            if *name == names::CHARSET && value.unquoted_str().eq_ignore_ascii_case("utf-8") =>
+        {
+            Ok(())
+        }
+        _ => Err(WireCallError::UnsupportedMediaType),
     }
 }
 
@@ -546,6 +622,222 @@ mod tests {
             resolve_route("/rpc/ghost/call", true, &exposures),
             Err(WireCallError::UnknownBox)
         );
+    }
+
+    fn json_headers() -> HeaderMap {
+        headers("content-type", b"application/json")
+    }
+
+    fn assert_admission_error(
+        path: &str,
+        query_present: bool,
+        method: Method,
+        headers: &HeaderMap,
+        exposures: &[Exposure],
+        expected: WireCallError,
+    ) {
+        let error = match admit_request_head(path, query_present, &method, headers, exposures) {
+            Ok(_) => panic!("request head unexpectedly admitted"),
+            Err(error) => error,
+        };
+        assert_eq!(error, expected);
+        let encoded = error.encode();
+        let (status, code, message) = expected.spec();
+        assert_eq!(encoded.status(), status);
+        assert_eq!(
+            encoded.body(),
+            format!(r#"{{"error":{{"kind":"call","code":"{code}","message":"{message}"}}}}"#)
+                .as_bytes()
+        );
+    }
+
+    #[test]
+    fn admission_preserves_selected_exposure_and_exact_context_values() {
+        let exposures = [
+            exposure("alpha", "read", ExposureLevel::Internal),
+            exposure("alpha", "write", ExposureLevel::External),
+        ];
+        let mut headers = headers("content-type", b"Application/JSON ; Charset=\"ut\\f-8\"");
+        headers.insert(TIMEOUT_HEADER, HeaderValue::from_static("42"));
+        headers.insert(IDEMPOTENCY_HEADER, HeaderValue::from_static("request-7"));
+        headers.insert(TRACEPARENT_HEADER, HeaderValue::from_static(PARENT));
+        headers.append(TRACESTATE_HEADER, HeaderValue::from_static("one=1"));
+        headers.append(TRACESTATE_HEADER, HeaderValue::from_static("two=2"));
+        headers.insert(ACCEPT, HeaderValue::from_static("text/plain"));
+        headers.insert("x-forwarded-for", HeaderValue::from_static("ignored"));
+
+        let admitted = admit_request_head(
+            "/rpc/alpha/write",
+            false,
+            &Method::POST,
+            &headers,
+            &exposures,
+        )
+        .unwrap();
+        assert_eq!(
+            admitted.exposure.descriptor().id().to_string(),
+            "alpha.write"
+        );
+        assert_eq!(admitted.exposure.level(), ExposureLevel::External);
+        assert_eq!(admitted.timeout, Some(Duration::from_millis(42)));
+        assert_eq!(
+            admitted
+                .idempotency_key
+                .as_ref()
+                .map(IdempotencyKey::as_str),
+            Some("request-7")
+        );
+        assert_eq!(admitted.trace_context.traceparent(), Some(PARENT));
+        assert_eq!(admitted.trace_context.tracestate(), Some("one=1,two=2"));
+    }
+
+    #[test]
+    fn admission_enforces_route_then_query_then_method_precedence() {
+        let exposures = [exposure("known", "call", ExposureLevel::Internal)];
+        let bad_headers = headers(TIMEOUT_HEADER, b"bad");
+        for (path, query, expected) in [
+            ("/rpc/ghost/call", false, WireCallError::UnknownBox),
+            ("/rpc/known/ghost", false, WireCallError::UnknownCapability),
+            ("/rpc/known/call", true, WireCallError::InvalidRequest),
+        ] {
+            assert_admission_error(path, query, Method::GET, &bad_headers, &exposures, expected);
+        }
+        for method in [Method::GET, Method::HEAD, Method::OPTIONS] {
+            assert_admission_error(
+                "/rpc/known/call",
+                false,
+                method,
+                &bad_headers,
+                &exposures,
+                WireCallError::MethodNotAllowed,
+            );
+        }
+    }
+
+    #[test]
+    fn admission_enforces_media_before_contractual_headers() {
+        let exposures = [exposure("known", "call", ExposureLevel::Internal)];
+        let mut wrong = headers("content-type", b"text/plain");
+        wrong.insert(TIMEOUT_HEADER, HeaderValue::from_static("bad"));
+        let mut encoded = json_headers();
+        encoded.insert("content-encoding", HeaderValue::from_static("identity"));
+        encoded.insert(TIMEOUT_HEADER, HeaderValue::from_static("bad"));
+        for media in [HeaderMap::new(), wrong, encoded] {
+            assert_admission_error(
+                "/rpc/known/call",
+                false,
+                Method::POST,
+                &media,
+                &exposures,
+                WireCallError::UnsupportedMediaType,
+            );
+        }
+
+        let mut duplicate = json_headers();
+        duplicate.append("content-type", HeaderValue::from_static("application/json"));
+        let comma_joined = headers("content-type", b"application/json, application/json");
+        let trailing_comma = headers("content-type", b"application/json, \t");
+        for invalid in [duplicate, comma_joined, trailing_comma] {
+            assert_admission_error(
+                "/rpc/known/call",
+                false,
+                Method::POST,
+                &invalid,
+                &exposures,
+                WireCallError::InvalidRequest,
+            );
+        }
+    }
+
+    #[test]
+    fn admission_accepts_only_the_declared_json_media_forms() {
+        let exposures = [exposure("known", "call", ExposureLevel::Internal)];
+        for raw in [
+            b"application/json".as_slice(),
+            b"APPLICATION/JSON",
+            b" application/json ",
+            b"application/json;charset=utf-8",
+            b"application/json ; CHARSET=\"UTF-8\" ",
+            b"application/json; charset=\"ut\\f-8\"",
+        ] {
+            let headers = headers("content-type", raw);
+            assert!(
+                admit_request_head(
+                    "/rpc/known/call",
+                    false,
+                    &Method::POST,
+                    &headers,
+                    &exposures
+                )
+                .is_ok(),
+                "rejected {raw:?}"
+            );
+        }
+        for raw in [
+            b"application/json; charset=ascii".as_slice(),
+            b"application/json; charset =utf-8",
+            b"application/json; charset= utf-8",
+            b"application/json; charset=utf-8; version=1",
+            b"application/json; charset=utf-8; charset=utf-8",
+            b"application/json; boundary=x",
+            b"application/json; note=\"a,b\"",
+            b"application/json;",
+            b"application/problem+json",
+        ] {
+            assert_admission_error(
+                "/rpc/known/call",
+                false,
+                Method::POST,
+                &headers("content-type", raw),
+                &exposures,
+                WireCallError::UnsupportedMediaType,
+            );
+        }
+    }
+
+    #[test]
+    fn admission_validates_fallible_headers_before_non_failing_trace_context() {
+        let exposures = [exposure("known", "call", ExposureLevel::Internal)];
+        let mut bad_timeout = json_headers();
+        bad_timeout.insert(TIMEOUT_HEADER, HeaderValue::from_static("bad"));
+        bad_timeout.insert(IDEMPOTENCY_HEADER, HeaderValue::from_static("also bad"));
+        assert_admission_error(
+            "/rpc/known/call",
+            false,
+            Method::POST,
+            &bad_timeout,
+            &exposures,
+            WireCallError::InvalidRequest,
+        );
+
+        let mut bad_idempotency = json_headers();
+        bad_idempotency.insert(TIMEOUT_HEADER, HeaderValue::from_static("7"));
+        bad_idempotency.insert(IDEMPOTENCY_HEADER, HeaderValue::from_static("bad key"));
+        assert_admission_error(
+            "/rpc/known/call",
+            false,
+            Method::POST,
+            &bad_idempotency,
+            &exposures,
+            WireCallError::InvalidRequest,
+        );
+
+        let mut bad_trace = json_headers();
+        bad_trace.insert(TRACEPARENT_HEADER, HeaderValue::from_static("malformed"));
+        bad_trace.insert(
+            TRACESTATE_HEADER,
+            HeaderValue::from_static("also malformed"),
+        );
+        let admitted = admit_request_head(
+            "/rpc/known/call",
+            false,
+            &Method::POST,
+            &bad_trace,
+            &exposures,
+        )
+        .unwrap();
+        assert_eq!(admitted.trace_context.traceparent(), None);
+        assert_eq!(admitted.trace_context.tracestate(), None);
     }
 
     #[test]
