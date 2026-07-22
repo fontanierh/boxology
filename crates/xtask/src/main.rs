@@ -21,6 +21,7 @@ mod records;
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
 const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-contract",
+    "boxology-contract-syntax",
     "boxology-fixture-tests",
     "boxology-generator-model",
     "boxology-http",
