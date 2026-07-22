@@ -2,6 +2,7 @@ use crate::{AppError, ExitClass, SCHEMA};
 use getrandom::fill;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -199,18 +200,10 @@ impl State {
 
     pub(crate) fn validate(&self) -> Result<(), AppError> {
         if self.schema != SCHEMA || self.next_offset < 0 || self.confirmed_before < 0 {
-            return Err(AppError::new(
-                "corrupt_state",
-                "local state is invalid",
-                ExitClass::Invariant,
-            ));
+            return Err(invalid_state());
         }
         if self.confirmed_before > self.next_offset {
-            return Err(AppError::new(
-                "corrupt_state",
-                "local state has invalid receipt offsets",
-                ExitClass::Invariant,
-            ));
+            return Err(invalid_state());
         }
         if self.events.len() > 1_000 || self.asks.len() > 256 || self.outbound.len() > 1_024 {
             return Err(AppError::new(
@@ -219,7 +212,263 @@ impl State {
                 ExitClass::Local,
             ));
         }
+        if self.pairing.is_some() && self.bot.is_none() {
+            return Err(invalid_state());
+        }
+        if self.pending_pair.is_some() && self.bot.is_none() {
+            return Err(invalid_state());
+        }
+        if self.pairing.is_some() && self.pending_pair.is_some() {
+            return Err(invalid_state());
+        }
+        if let Some(bot) = &self.bot
+            && (bot.id <= 0 || !valid_username(&bot.username))
+        {
+            return Err(invalid_state());
+        }
+        if let Some(pairing) = &self.pairing
+            && (pairing.user_id <= 0
+                || pairing.chat_id <= 0
+                || pairing.user_id != pairing.chat_id
+                || pairing.paired_at < 0)
+        {
+            return Err(invalid_state());
+        }
+        if let Some(pending) = &self.pending_pair
+            && (!valid_hex(&pending.digest, 64)
+                || !valid_hex(&pending.salt, 32)
+                || pending.expires_at <= 0)
+        {
+            return Err(invalid_state());
+        }
+        if self.last_receive_at.is_some_and(|value| value < 0)
+            || self
+                .last_error_code
+                .as_deref()
+                .is_some_and(|value| !valid_code(value))
+        {
+            return Err(invalid_state());
+        }
+
+        let mut event_ids = HashSet::new();
+        let mut update_ids = HashSet::new();
+        for event in &self.events {
+            if !event_ids.insert(event.event_id.as_str())
+                || !update_ids.insert(event.update_id)
+                || !valid_event(event, self.next_offset)
+            {
+                return Err(invalid_state());
+            }
+        }
+        let mut ask_ids = HashSet::new();
+        let mut lifecycle_keys = HashSet::new();
+        for ask in &self.asks {
+            if !ask_ids.insert(ask.ask_id.as_str()) || !valid_ask(ask) {
+                return Err(invalid_state());
+            }
+            if ask.state == "open" && !lifecycle_keys.insert(ask.lifecycle_key.as_str()) {
+                return Err(invalid_state());
+            }
+        }
+        let mut outbound_keys = HashSet::new();
+        for outbound in &self.outbound {
+            if !outbound_keys.insert(outbound.dedup_key.as_str()) || !valid_outbound(outbound) {
+                return Err(invalid_state());
+            }
+            let live = matches!(
+                outbound.state.as_str(),
+                "in_flight" | "ambiguous" | "retryable"
+            );
+            if live
+                && (outbound
+                    .event_id
+                    .as_deref()
+                    .is_some_and(|event_id| !event_ids.contains(event_id))
+                    || outbound
+                        .ask_id
+                        .as_deref()
+                        .is_some_and(|ask_id| !ask_ids.contains(ask_id)))
+            {
+                return Err(invalid_state());
+            }
+        }
+        for event in &self.events {
+            if !event.handled
+                && event
+                    .ask_id
+                    .as_deref()
+                    .is_some_and(|ask_id| !ask_ids.contains(ask_id))
+            {
+                return Err(invalid_state());
+            }
+        }
         Ok(())
+    }
+}
+
+fn invalid_state() -> AppError {
+    AppError::new(
+        "corrupt_state",
+        "local state is invalid",
+        ExitClass::Invariant,
+    )
+}
+
+fn valid_username(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn valid_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn valid_key(value: &str, max: usize) -> bool {
+    !value.is_empty() && value.len() <= max && !value.chars().any(char::is_whitespace)
+}
+
+fn valid_hex(value: &str, length: usize) -> bool {
+    value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_ask_id(value: &str) -> bool {
+    value
+        .strip_prefix("ask:")
+        .is_some_and(|value| valid_hex(value, 32))
+}
+
+fn event_parts(value: &str) -> Option<(i64, i64)> {
+    let mut parts = value.split(':');
+    let prefix = parts.next()?;
+    let update_id = parts.next()?.parse().ok()?;
+    let message_id = parts.next()?.parse().ok()?;
+    (prefix == "tg" && parts.next().is_none() && update_id >= 0 && message_id > 0)
+        .then_some((update_id, message_id))
+}
+
+fn valid_event(event: &EventRecord, next_offset: i64) -> bool {
+    let Some((update_id, message_id)) = event_parts(&event.event_id) else {
+        return false;
+    };
+    if update_id != event.update_id
+        || event.update_id >= next_offset
+        || event.received_at < 0
+        || event.text.chars().count() > 4096
+        || event
+            .ask_id
+            .as_deref()
+            .is_some_and(|ask_id| !valid_ask_id(ask_id))
+        || event
+            .lifecycle_key
+            .as_deref()
+            .is_some_and(|key| !valid_key(key, 128))
+    {
+        return false;
+    }
+    if let Some(target) = &event.reply_to
+        && (target.outbound_message_id.is_none_or(|id| id <= 0)
+            || target
+                .ask_id
+                .as_deref()
+                .is_some_and(|ask_id| !valid_ask_id(ask_id)))
+    {
+        return false;
+    }
+    let kind_valid = match event.kind.as_str() {
+        "text" => {
+            !event.text.is_empty()
+                && event.ask_id.is_none()
+                && event.lifecycle_key.is_none()
+                && event.choice.is_none()
+        }
+        "ask_reply" => {
+            !event.text.is_empty()
+                && event.ask_id.is_some()
+                && event.lifecycle_key.is_some()
+                && event.reply_to.is_some()
+                && event.choice.is_none()
+        }
+        "ask_choice" => {
+            event.text.is_empty()
+                && event.ask_id.is_some()
+                && event.lifecycle_key.is_some()
+                && event.reply_to.is_some()
+                && event.choice.as_ref().is_some_and(valid_choice)
+        }
+        _ => false,
+    };
+    kind_valid && message_id > 0
+}
+
+fn valid_choice(choice: &ChoiceRecord) -> bool {
+    let key_valid = match choice.kind.as_str() {
+        "recommendation" | "need_context" => choice.key.is_none(),
+        "alternative" => choice.key.as_deref().is_some_and(|key| valid_key(key, 32)),
+        _ => false,
+    };
+    key_valid && valid_hex(&choice.token_digest, 64) && valid_hex(&choice.salt, 32)
+}
+
+fn valid_ask(ask: &AskRecord) -> bool {
+    if !valid_ask_id(&ask.ask_id)
+        || !valid_key(&ask.lifecycle_key, 128)
+        || !valid_key(&ask.dedup_key, 128)
+        || !matches!(ask.state.as_str(), "open" | "answered")
+        || ask.message_id.is_some_and(|id| id <= 0)
+        || !(2..=6).contains(&ask.choices.len())
+        || ask.choices.iter().any(|choice| !valid_choice(choice))
+    {
+        return false;
+    }
+    let mut choices = HashSet::new();
+    let mut recommendations = 0;
+    let mut context = 0;
+    let mut alternatives = 0;
+    for choice in &ask.choices {
+        if !choices.insert((choice.kind.as_str(), choice.key.as_deref())) {
+            return false;
+        }
+        match choice.kind.as_str() {
+            "recommendation" => recommendations += 1,
+            "need_context" => context += 1,
+            "alternative" => alternatives += 1,
+            _ => return false,
+        }
+    }
+    recommendations == 1 && context == 1 && alternatives <= 4
+}
+
+fn valid_outbound(outbound: &OutboundRecord) -> bool {
+    if !valid_key(&outbound.dedup_key, 128)
+        || !valid_hex(&outbound.payload_hash, 64)
+        || outbound
+            .event_id
+            .as_deref()
+            .is_some_and(|event_id| event_parts(event_id).is_none())
+        || outbound
+            .ask_id
+            .as_deref()
+            .is_some_and(|ask_id| !valid_ask_id(ask_id))
+    {
+        return false;
+    }
+    match outbound.kind.as_str() {
+        "send" if outbound.event_id.is_none() && outbound.ask_id.is_none() => {}
+        "reply" if outbound.event_id.is_some() => {}
+        "ask" if outbound.ask_id.is_some() && outbound.event_id.is_none() => {}
+        _ => return false,
+    }
+    match outbound.state.as_str() {
+        "delivered" => outbound.message_id.is_some_and(|id| id > 0),
+        "in_flight" | "ambiguous" | "retryable" => outbound.message_id.is_none(),
+        _ => false,
     }
 }
 
@@ -346,6 +595,7 @@ pub(crate) fn validate_ancestors(path: &Path) -> std::io::Result<()> {
 pub(crate) fn consumer_locked(paths: &Paths) -> Result<bool, AppError> {
     paths.prepare()?;
     let file = open_protected(&paths.consumer_lock, true, true, false).map_err(local_io)?;
+    validate_file(&file.metadata().map_err(local_io)?)?;
     match file.try_lock() {
         Ok(()) => {
             let _ = file.unlock();
@@ -376,6 +626,7 @@ impl ConsumerLock {
     pub(crate) fn acquire(paths: &Paths) -> Result<Self, AppError> {
         paths.prepare()?;
         let file = open_protected(&paths.consumer_lock, true, true, false).map_err(local_io)?;
+        validate_file(&file.metadata().map_err(local_io)?)?;
         file.try_lock().map_err(|error| match error {
             std::fs::TryLockError::WouldBlock => AppError::new(
                 "consumer_locked",
@@ -399,6 +650,7 @@ struct StateLock(File);
 impl StateLock {
     fn acquire(path: &Path) -> Result<Self, AppError> {
         let file = open_protected(path, true, true, false).map_err(local_io)?;
+        validate_file(&file.metadata().map_err(local_io)?)?;
         file.lock().map_err(local_io)?;
         Ok(Self(file))
     }
