@@ -1,0 +1,145 @@
+# Boxology Linux ARM64 CI runner
+
+This is the authoritative runbook for S0-T8. It provisions exactly one disposable
+GitHub Actions JIT runner inside a native ARM64 Colima VM. It is deliberately not
+part of `pr.yml` until PR 2.
+
+## Pinned inputs
+
+`Dockerfile` records literal (non-overridable) pins for the Ubuntu 24.04 ARM64 OCI digest, actions/runner `2.336.0`
+archive SHA-256 (`58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1`), Rust `1.97.1`, and cargo-deny `0.20.2`. If either source pin is
+changed, replace the base digest, archive URL, and checksum literals together, verify them
+from the official source, and rebuild. Never add a tag-only fallback. The image labels
+and `ImageOS`/`ImageVersion` values are the job-evidence identity; runtime self-update
+is disabled, so this image pin is authoritative.
+
+## Prerequisites
+
+Use an Apple-silicon Mac with approved, already-installed and version-pinned
+Colima, Docker CLI/Buildx, `curl`, `jq`, `uuidgen`, `security`, and `launchctl`. Record the
+approved Colima version beside the installation; this repository does not install
+host software. Use a private GitHub repository with trusted Henry/agent
+collaborators; private forking is not changed or required for PR-1 activation.
+
+Create the dedicated Keychain item interactively; the token is never written to
+the checkout, plist, environment, command line, or a persistent file:
+
+```sh
+security add-generic-password -U -a "$USER" \
+  -s com.fontanierh.boxology-ci-runner -w
+```
+
+The item must contain an operator-approved token able to read the private
+repository and create a JIT runner (`Administration: write` for a fine-grained
+repository token). Access is limited to trusted Henry/agent collaborators. The
+repository's private-forking setting is not changed and is not a PR-1 blocker.
+Do not use `gh`'s credential store for the supervisor.
+
+## VM and image
+
+Create a profile with no host mounts and no host network address. Keep this
+profile dedicated to this runner:
+
+```sh
+colima start --profile boxology-ci-arm64 --arch aarch64 --vm-type vz \
+  --mount=none --network-address=false --cpu 4 --memory 8 --disk 30
+docker context use colima-boxology-ci-arm64
+test "$(docker context show)" = colima-boxology-ci-arm64
+```
+
+From the repository root, build and load the pinned ARM64 image. The Dockerfile
+copies only its entrypoint; it never copies repository source into the image:
+
+```sh
+docker buildx build --platform linux/arm64 --load \
+  -f ops/ci-runner/Dockerfile -t boxology-linux-arm64-pr:verified .
+docker image inspect boxology-linux-arm64-pr:verified
+```
+
+Before provisioning, run this credential-free local ARM64 image smoke (no GitHub access). The first container stages the copied runner on executable tmpfs because `run.sh --help` writes `run-helper.sh`; the second uses a fresh named `/runner` volume, exercises the real entrypoint, and expects its fail-closed empty-input status:
+```sh
+set -euo pipefail
+image=boxology-linux-arm64-pr:verified
+docker run --rm --platform linux/arm64 --network none --read-only --user runner \
+  --tmpfs /tmp:rw,exec,nosuid,size=512m,mode=1777 --entrypoint /bin/bash "$image" -ceu '
+  test "$(uname -m)" = aarch64
+  test "$(id -u)" -ne 0
+  rustc --version | grep -F 1.97.1
+  cargo deny --version | grep -F 0.20.2
+  cp -a /opt/actions-runner/. /tmp/runner
+  /tmp/runner/run.sh --help >/dev/null
+'
+volume="boxology-local-smoke-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+docker volume create "$volume" >/dev/null
+cleanup() { docker volume rm "$volume" >/dev/null 2>&1 || true; }
+trap cleanup EXIT INT TERM
+set +e
+docker run --rm --platform linux/arm64 --network none --read-only --user runner \
+  --mount "type=volume,source=$volume,target=/runner" --tmpfs /tmp:rw,noexec,nosuid,size=256m,mode=1777 \
+  "$image" </dev/null
+exit_code=$?
+set -e
+test "$exit_code" -eq 64
+```
+
+Verify architecture, the pinned base digest, the runner SHA-256 label, and
+`org.boxology.ci.image-id`/`org.boxology.ci.image-version` labels before starting
+the supervisor. A missing or changed identity is a fail-closed condition.
+At runtime the image root is read-only; the unique named volume mounted at
+`/runner` holds the copied runner state, checkout, target, and Cargo home. The
+supervisor bounds each container to 4 CPUs, 8 GiB RAM without swap, and 512 pids.
+
+## JIT lifecycle and smoke test
+
+Install the reviewed `supervise.sh` outside this mutable checkout, make it
+executable, and invoke it with non-secret settings such as
+`REPOSITORY=fontanierh/boxology` and `CI_RUNNER_IMAGE=boxology-linux-arm64-pr:verified`.
+Set `RUNNER_GROUP_ID` when the repository's approved runner group is not the
+default `1`.
+It reads the Keychain item, verifies the pinned Docker context and repository privacy.
+The operator, not the supervisor, confirms the trusted Henry/agent collaborator boundary;
+the supervisor does not inspect collaborators. It makes bounded API requests for one
+encoded JIT configuration over the GitHub API and passes it only on container stdin.
+The broker PAT never enters the container or job environment; ordinary GitHub Actions
+read/runtime credentials may be present for checkout.
+The smoke workflow keeps `persist-credentials: false` and asserts only broker-PAT absence. The official runner transiently consumes `run.sh --disableupdate --jitconfig`; runtime self-update is disabled and the image pin is authoritative.
+That argument is visible to same-user job processes by design. This residual is accepted only for trusted private collaborators; do not activate if that boundary changes.
+The supervisor waits for one job, emits sanitized state-only diagnostics, then removes failed JIT registrations, the container, and the unique volume. Failed cleanup retains owned handles/lock and backs off; a lock refuses a concurrent supervisor.
+
+Only after a successful smoke run, replace every placeholder in the plist,
+copy it and the reviewed supervisor to paths outside the checkout, then validate
+and load it in the user launchd domain:
+
+```sh
+plutil -lint /PATH/TO/com.fontanierh.boxology-ci-runner.plist
+launchctl bootstrap "gui/$(id -u)" /PATH/TO/com.fontanierh.boxology-ci-runner.plist
+launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-runner"
+```
+
+The workflow is manual-only; PR1 does not claim it has run. Dispatch
+[`self-hosted-runner-smoke.yml`](../../.github/workflows/self-hosted-runner-smoke.yml) after the supervisor is ready; it is read-only, contains no secrets,
+and is safe to remain queued while no runner exists. It checks Linux, ARM64/aarch64, non-root identity,
+image evidence, checkout credential hygiene, and the ARM host branch of the
+determinism fixture.
+
+## Health, cleanup, and rollback
+
+Check `colima status --profile boxology-ci-arm64`, `DOCKER_CONTEXT=colima-boxology-ci-arm64`,
+the image architecture/identity/SHA labels, and the launchd job. Inspect the current
+container only for fixed state fields and mounts; the sole mount must be the
+fresh named runner volume. Never collect raw runner logs because job output can
+contain secrets.
+
+To stop service, unload the installed plist, remove only its current container
+and named volume, and stop the dedicated Colima profile. A stale supervisor lock
+may be removed only after confirming no supervisor process remains. To roll back,
+leave the smoke workflow unused and keep the hosted-x86 D4 workflow active; do
+not register a persistent runner or alter `pr.yml` as part of this procedure.
+
+Safety boundaries: no repository checkout in the image, read-only root, bounded
+CPU/memory, no host path mounts/socket/host networking, no privileged container,
+no persistent runner registration, no broker PAT in repo/plist/env/command line,
+GitHub API writes are limited to JIT registration/deletion lifecycle operations, and no
+second runner. The JIT argument's same-user
+visibility is the documented residual; API, image, Keychain, lock, context, and
+architecture failures stop or back off rather than weakening isolation.

@@ -1,0 +1,31 @@
+name: self-hosted-runner-smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Assert isolated ARM64 image
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = aarch64
+          test "$(id -u)" -ne 0
+          test "$ImageOS" = ubuntu24.04-arm64-colima
+          test "$ImageVersion" = ubuntu-24.04-arm64-runner-2.336.0-rust-1.97.1-deny-0.20.2
+          test "$(rustc -vV | sed -n 's/^host: //p')" = aarch64-unknown-linux-gnu
+          # Broker-PAT absence only; ordinary GitHub Actions tokens/runtime credentials may exist.
+          test -z "${BOXOLOGY_CI_BROKER_PAT:-}"
+          test -z "${CI_RUNNER_BROKER_PAT:-}"
+          echo "runner image: $ImageOS $ImageVersion ($RUNNER_OS/$RUNNER_ARCH)"
+      - name: Exercise ARM determinism fixture
+        run: cargo test -p xtask determinism_cross::tests::host_fixture_passes_protocol_publishes_and_verifies -- --exact
