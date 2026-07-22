@@ -1,5 +1,5 @@
 use crate::api::{self, Api};
-use crate::state::{self, EventRecord, Paths, ReplyTarget, State};
+use crate::state::{self, ChoiceRecord, EventRecord, Paths, ReplyTarget, State};
 use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -33,7 +33,7 @@ pub(crate) fn poll(input: &[u8]) -> Result<Value, AppError> {
     let current = state::read(&paths)?;
     ensure_pairing(&current)?;
     if let Some(event) = oldest_unhandled(&current) {
-        return Ok(poll_result(Some(event), false, &current));
+        return Ok(poll_result(Some(event), false, &current, false));
     }
     if inbox_full(&current) {
         return Err(AppError::new(
@@ -60,6 +60,10 @@ pub(crate) fn poll(input: &[u8]) -> Result<Value, AppError> {
         None => current.next_offset,
     };
     let before_offset = current.next_offset;
+    let callback_ids: Vec<String> = updates
+        .iter()
+        .filter_map(|update| accepted_callback_id(update, &current))
+        .collect();
     state::update(&paths, |state| {
         if state.next_offset != before_offset {
             return Err(AppError::new(
@@ -83,8 +87,16 @@ pub(crate) fn poll(input: &[u8]) -> Result<Value, AppError> {
         state.last_receive_at = Some(state::now());
         Ok(())
     })?;
+    let callback_warning = callback_ids
+        .iter()
+        .any(|callback_id| api.answer_callback(callback_id).is_err());
     let state = state::read(&paths)?;
-    Ok(poll_result(oldest_unhandled(&state), true, &state))
+    Ok(poll_result(
+        oldest_unhandled(&state),
+        true,
+        &state,
+        callback_warning,
+    ))
 }
 
 pub(crate) fn ack(input: &[u8]) -> Result<Value, AppError> {
@@ -109,7 +121,13 @@ pub(crate) fn ack(input: &[u8]) -> Result<Value, AppError> {
                 AppError::new("unknown_event", "event is not available", ExitClass::Policy)
             })?;
         let already_handled = event.handled;
+        let ask_id = event.ask_id.clone();
         event.handled = true;
+        if let Some(ask_id) = ask_id
+            && let Some(ask) = state.asks.iter_mut().find(|ask| ask.ask_id == ask_id)
+        {
+            ask.state = "answered".into();
+        }
         Ok(
             json!({"event_id": request.event_id, "handled": true, "already_handled": already_handled}),
         )
@@ -117,6 +135,9 @@ pub(crate) fn ack(input: &[u8]) -> Result<Value, AppError> {
 }
 
 fn project(update: &api::Update, state: &State) -> Option<EventRecord> {
+    if let Some(callback) = project_callback(update, state) {
+        return Some(callback);
+    }
     let message = update.message.as_ref()?;
     let user = message.from.as_ref()?;
     if user.is_bot
@@ -134,61 +155,147 @@ fn project(update: &api::Update, state: &State) -> Option<EventRecord> {
         .reply_to_message
         .as_ref()
         .map(|message| message.message_id);
-    let reply_to = match reply_to {
-        Some(message_id)
-            if state
+    let (reply_to, ask_id, lifecycle_key, kind) = match reply_to {
+        Some(message_id) => {
+            let outbound = state
                 .outbound
                 .iter()
-                .any(|outbound| outbound.message_id == Some(message_id)) =>
-        {
-            Some(ReplyTarget {
-                ask_id: None,
-                outbound_message_id: Some(message_id),
-            })
+                .find(|outbound| outbound.message_id == Some(message_id))?;
+            let ask = outbound.ask_id.as_ref().and_then(|ask_id| {
+                state
+                    .asks
+                    .iter()
+                    .find(|ask| &ask.ask_id == ask_id && ask.state == "open")
+            });
+            (
+                Some(ReplyTarget {
+                    ask_id: outbound.ask_id.clone(),
+                    outbound_message_id: Some(message_id),
+                }),
+                ask.map(|ask| ask.ask_id.clone()),
+                ask.map(|ask| ask.lifecycle_key.clone()),
+                if ask.is_some() { "ask_reply" } else { "text" },
+            )
         }
-        Some(_) => return None,
-        None => None,
+        None => (None, None, None, "text"),
     };
     Some(EventRecord {
         event_id: format!("tg:{}:{}", update.update_id, message.message_id),
         update_id: update.update_id,
-        kind: "text".to_string(),
+        kind: kind.to_string(),
         text: text.clone(),
         received_at: state::now(),
         handled: false,
         reply_to,
-        ask_id: None,
-        lifecycle_key: None,
         choice: None,
+        ask_id,
+        lifecycle_key,
     })
+}
+
+fn project_callback(update: &api::Update, state: &State) -> Option<EventRecord> {
+    let callback = update.callback_query.as_ref()?;
+    let message = callback.message.as_ref()?;
+    let user = &callback.from;
+    let data = callback.data.as_deref()?;
+    if user.is_bot
+        || message.chat.kind != "private"
+        || data.len() > 64
+        || state.pairing.as_ref()?.user_id != user.id
+        || state.pairing.as_ref()?.chat_id != message.chat.id
+    {
+        return None;
+    }
+    let ask = state
+        .asks
+        .iter()
+        .find(|ask| ask.message_id == Some(message.message_id) && ask.state == "open")?;
+    let choice = ask
+        .choices
+        .iter()
+        .find(|choice| matches_callback(choice, data))?
+        .clone();
+    Some(EventRecord {
+        event_id: format!("tg:{}:{}", update.update_id, message.message_id),
+        update_id: update.update_id,
+        kind: "ask_choice".into(),
+        text: String::new(),
+        received_at: state::now(),
+        handled: false,
+        reply_to: Some(ReplyTarget {
+            ask_id: Some(ask.ask_id.clone()),
+            outbound_message_id: Some(message.message_id),
+        }),
+        ask_id: Some(ask.ask_id.clone()),
+        lifecycle_key: Some(ask.lifecycle_key.clone()),
+        choice: Some(choice),
+    })
+}
+
+fn accepted_callback_id(update: &api::Update, state: &State) -> Option<String> {
+    project_callback(update, state)?;
+    update
+        .callback_query
+        .as_ref()
+        .map(|callback| callback.id.clone())
+}
+
+fn matches_callback(choice: &ChoiceRecord, data: &str) -> bool {
+    state::decode_hex(&choice.salt)
+        .is_some_and(|salt| state::digest(&salt, data.as_bytes()) == choice.token_digest)
 }
 
 fn oldest_unhandled(state: &State) -> Option<EventRecord> {
     state.events.iter().find(|event| !event.handled).cloned()
 }
 
-fn poll_result(event: Option<EventRecord>, fetched: bool, state: &State) -> Value {
+fn poll_result(
+    event: Option<EventRecord>,
+    fetched: bool,
+    state: &State,
+    callback_warning: bool,
+) -> Value {
     let receipt = json!({
         "fetched": fetched,
         "next_offset": state.next_offset,
         "telegram_confirmed_before": state.confirmed_before
     });
-    match event {
+    let mut result = match event {
         Some(event) => {
             json!({"event": event_value(&event, state), "receipt": {"locally_durable": true, "telegram_confirmed": event.update_id < state.confirmed_before, "fetched": fetched}})
         }
         None => json!({"event": Value::Null, "receipt": receipt}),
+    };
+    if callback_warning {
+        result["warnings"] = json!(["callback was stored but its Telegram UI receipt failed"]);
     }
+    result
 }
 
 fn event_value(event: &EventRecord, _state: &State) -> Value {
-    json!({
+    let mut value = json!({
         "event_id": event.event_id,
         "kind": event.kind,
-        "text": event.text,
         "received_at": event.received_at,
         "reply_to": event.reply_to.as_ref().map(|target| json!({"ask_id": target.ask_id, "outbound_message_id": target.outbound_message_id})).unwrap_or(json!({"ask_id": Value::Null, "outbound_message_id": Value::Null}))
-    })
+    });
+    match event.kind.as_str() {
+        "ask_choice" => {
+            if let Some(choice) = &event.choice {
+                value["ask_id"] = json!(event.ask_id);
+                value["lifecycle_key"] = json!(event.lifecycle_key);
+                value["choice"] = json!({"kind": choice.kind, "key": choice.key});
+            }
+        }
+        _ => {
+            value["text"] = json!(event.text);
+            if event.kind == "ask_reply" {
+                value["ask_id"] = json!(event.ask_id);
+                value["lifecycle_key"] = json!(event.lifecycle_key);
+            }
+        }
+    }
+    value
 }
 
 fn ensure_pairing(state: &State) -> Result<(), AppError> {

@@ -58,6 +58,7 @@ pub(crate) fn send(input: &[u8]) -> Result<Value, AppError> {
         None,
         chat_id,
         None,
+        None,
     )
 }
 
@@ -78,6 +79,7 @@ pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
             AppError::new("unknown_event", "event is not available", ExitClass::Policy)
         })?;
     let message_id = event_message_id(&event)?;
+    let ask_id = event.ask_id.clone();
     let chat_id = state.pairing.ok_or_else(not_paired)?.chat_id;
     deliver(
         &paths,
@@ -88,6 +90,7 @@ pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
         None,
         chat_id,
         Some(event),
+        ask_id.as_deref(),
     )
 }
 
@@ -115,13 +118,20 @@ pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
             ("delivered", Some(message_id)) if message_id > 0 => {
                 record.state = "delivered".into();
                 record.message_id = Some(message_id);
-                if let Some(event_id) = record.event_id.as_deref()
+                let event_id = record.event_id.clone();
+                if let Some(event_id) = event_id.as_deref()
                     && let Some(event) = state
                         .events
                         .iter_mut()
                         .find(|event| event.event_id == event_id)
                 {
+                    let ask_id = event.ask_id.clone();
                     event.handled = true;
+                    if let Some(ask_id) = ask_id
+                        && let Some(ask) = state.asks.iter_mut().find(|ask| ask.ask_id == ask_id)
+                    {
+                        ask.state = "answered".into();
+                    }
                 }
                 Ok(
                     json!({"dedup_key": request.dedup_key, "resolved": "delivered", "message_id": message_id}),
@@ -149,8 +159,9 @@ fn deliver(
     buttons: Option<Value>,
     chat_id: i64,
     event: Option<EventRecord>,
+    ask_id: Option<&str>,
 ) -> Result<Value, AppError> {
-    let payload_hash = payload_hash(kind, dedup_key, text, reply_to);
+    let payload_hash = payload_hash(kind, dedup_key, text, reply_to, buttons.as_ref());
     let start = state::update(paths, |state| {
         if let Some(record) = state
             .outbound
@@ -205,7 +216,7 @@ fn deliver(
             state: "in_flight".into(),
             message_id: None,
             event_id: event.as_ref().map(|event| event.event_id.clone()),
-            ask_id: None,
+            ask_id: ask_id.map(str::to_string),
         });
         Ok(Start::Send {
             deduplicated: false,
@@ -234,6 +245,7 @@ fn deliver(
             return Err(mark_retryable(paths, dedup_key, api_error(error)));
         }
     };
+    let handled_ask_id = event.as_ref().and_then(|event| event.ask_id.clone());
     state::update(paths, |state| {
         let record = state
             .outbound
@@ -256,11 +268,46 @@ fn deliver(
         {
             source.handled = true;
         }
+        if let Some(ask_id) = handled_ask_id.as_deref()
+            && let Some(ask) = state.asks.iter_mut().find(|ask| ask.ask_id == ask_id)
+        {
+            ask.state = "answered".into();
+        }
         Ok(())
     })?;
     Ok(
         json!({"dedup_key": dedup_key, "delivery": "delivered", "message_id": sent.message_id, "deduplicated": matches!(start, Start::Send { deduplicated: true })}),
     )
+}
+
+pub(crate) fn deliver_ask(
+    paths: &Paths,
+    dedup_key: &str,
+    text: &str,
+    buttons: Value,
+    chat_id: i64,
+    ask_id: &str,
+) -> Result<Value, AppError> {
+    let result = deliver(
+        paths,
+        "ask",
+        dedup_key,
+        text,
+        None,
+        Some(buttons),
+        chat_id,
+        None,
+        Some(ask_id),
+    )?;
+    if let Some(message_id) = result.get("message_id").and_then(Value::as_i64) {
+        state::update(paths, |state| {
+            if let Some(ask) = state.asks.iter_mut().find(|ask| ask.ask_id == ask_id) {
+                ask.message_id = Some(message_id);
+            }
+            Ok(())
+        })?;
+    }
+    Ok(result)
 }
 
 fn mark_retryable(paths: &Paths, key: &str, error: AppError) -> AppError {
@@ -295,7 +342,13 @@ fn mark_ambiguous(paths: &Paths, key: &str) -> AppError {
     )
 }
 
-fn payload_hash(kind: &str, dedup_key: &str, text: &str, reply_to: Option<i64>) -> String {
+fn payload_hash(
+    kind: &str,
+    dedup_key: &str,
+    text: &str,
+    reply_to: Option<i64>,
+    buttons: Option<&Value>,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(kind.as_bytes());
     hasher.update([0]);
@@ -304,6 +357,9 @@ fn payload_hash(kind: &str, dedup_key: &str, text: &str, reply_to: Option<i64>) 
     hasher.update(text.as_bytes());
     hasher.update([0]);
     hasher.update(reply_to.unwrap_or_default().to_string().as_bytes());
+    if let Some(buttons) = buttons {
+        hasher.update(serde_json::to_vec(buttons).unwrap_or_default());
+    }
     hasher
         .finalize()
         .iter()
@@ -363,7 +419,7 @@ fn check_schema(schema: u8) -> Result<(), AppError> {
         .ok_or_else(|| AppError::input("unsupported_schema", "unsupported schema"))
 }
 
-fn not_paired() -> AppError {
+pub(crate) fn not_paired() -> AppError {
     AppError::new(
         "not_paired",
         "Telegram pairing is required",

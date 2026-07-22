@@ -4,6 +4,7 @@ use std::env;
 
 #[allow(dead_code)]
 mod api;
+mod ask;
 mod outbound;
 mod pairing;
 mod receive;
@@ -142,6 +143,7 @@ pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
         "send" => outbound::send(input),
         "reply" => outbound::reply(input),
         "resolve-send" => outbound::resolve(input),
+        "ask" => ask::run(input),
         _ => return failure(command, AppError::unsupported()),
     };
     match result {
