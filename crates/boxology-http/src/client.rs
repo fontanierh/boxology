@@ -1,16 +1,112 @@
-use std::{future::Future, time::Instant};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Instant};
 
 use boxology_contract::{
-    CallContext, CapabilityDescriptor, DecodeRole, Detail, ErasedCallError, OpaqueTree, SlotValue,
-    TypeDescriptor, ValueRef,
+    CallContext, CapabilityDescriptor, CapabilityId, DecodeRole, Detail, ErasedCallError,
+    ErasedCallTarget, OpaqueTree, SlotValue, TypeDescriptor, ValueRef,
 };
 use http::{HeaderValue, Method, Request, Uri, Version, header::CONTENT_TYPE, uri::Authority};
 
 use crate::{
+    conformance::conform_capability,
     encoder::{WireCallError, encode_request},
     semantic::decode_tree,
     syntax::{DEFAULT_DEPTH_LIMIT, SyntaxLimits, parse},
 };
+
+/// Configuration for an HTTP typed-call target.
+#[derive(Clone)]
+pub struct HttpClientConfig {
+    origin: ClientOrigin,
+    limits: ResponseLimits,
+}
+
+impl HttpClientConfig {
+    /// Creates configuration for an origin-only HTTP base URL.
+    pub fn new(origin: impl AsRef<str>) -> Result<Self, Detail> {
+        Ok(Self {
+            origin: ClientOrigin::parse(origin.as_ref())?,
+            limits: ResponseLimits::default(),
+        })
+    }
+
+    /// Replaces the inclusive response byte and syntax-depth limits.
+    pub fn with_response_limits(
+        mut self,
+        max_response_bytes: usize,
+        max_decode_depth: usize,
+    ) -> Self {
+        self.limits = ResponseLimits {
+            max_bytes: max_response_bytes,
+            max_depth: max_decode_depth,
+        };
+        self
+    }
+}
+
+/// A reusable HTTP target accepted directly by generated typed handles.
+#[derive(Clone)]
+pub struct HttpClientTarget {
+    origin: ClientOrigin,
+    limits: ResponseLimits,
+    capabilities: Arc<BTreeMap<CapabilityId, &'static CapabilityDescriptor>>,
+    executor: ClientExecutor,
+}
+
+impl HttpClientTarget {
+    /// Selects the exact contract capabilities callable through this target.
+    pub fn new<I>(config: HttpClientConfig, capabilities: I) -> Result<Self, Detail>
+    where
+        I: IntoIterator<Item = &'static CapabilityDescriptor>,
+    {
+        let selected: Vec<_> = capabilities.into_iter().collect();
+        let mut by_id = BTreeMap::new();
+        for descriptor in &selected {
+            if by_id.insert(descriptor.id().clone(), *descriptor).is_some() {
+                return Err(Detail::new("http_duplicate_capability"));
+            }
+        }
+        for descriptor in selected {
+            conform_capability(descriptor)?;
+        }
+        Ok(Self {
+            origin: config.origin,
+            limits: config.limits,
+            capabilities: Arc::new(by_id),
+            executor: ClientExecutor::new()?,
+        })
+    }
+}
+
+impl ErasedCallTarget for HttpClientTarget {
+    fn call<'a>(
+        &'a self,
+        capability: &'a CapabilityId,
+        context: CallContext,
+        input: SlotValue,
+    ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+        let Some(descriptor) = self.capabilities.get(capability).copied() else {
+            return Box::pin(std::future::ready(Err(ErasedCallError::ContractViolation(
+                Detail::new("http_client_capability"),
+            ))));
+        };
+        let request =
+            match prepare_request(&self.origin, descriptor, &context, &input, Instant::now()) {
+                Ok(request) => request,
+                Err(error) => return Box::pin(std::future::ready(Err(error))),
+            };
+        Box::pin(async move {
+            self.executor
+                .execute(
+                    request,
+                    &context,
+                    descriptor.output(),
+                    descriptor.error(),
+                    self.limits,
+                )
+                .await
+        })
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct ClientOrigin(Authority);
@@ -154,6 +250,7 @@ fn request_error(_: impl std::fmt::Debug) -> ErasedCallError {
     ErasedCallError::ContractViolation(Detail::new("http_request"))
 }
 
+#[derive(Clone)]
 struct ClientExecutor {
     client: reqwest::Client,
 }
@@ -400,10 +497,11 @@ mod tests {
     };
 
     use boxology_contract::{
-        BoxId, Caller, CancelToken, CapabilityId, CapabilityName, CapabilityShape, ContractValue,
-        Deadline, ExposureLevel, FieldDescriptor, Idempotency, IdempotencyKey, TraceContext,
-        VariantDescriptor, VariantPayload,
+        BoxId, CallError, Caller, CancelToken, CapabilityId, CapabilityName, CapabilityShape,
+        ContractValue, Deadline, ExposureLevel, FieldDescriptor, Idempotency, IdempotencyKey,
+        TraceContext, VariantDescriptor, VariantPayload,
     };
+    use hello_contract::HelloHandle;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -425,6 +523,34 @@ mod tests {
             Idempotency::None,
             None,
         )
+    }
+
+    fn hello_descriptor() -> &'static CapabilityDescriptor {
+        static HELLO: std::sync::LazyLock<CapabilityDescriptor> = std::sync::LazyLock::new(|| {
+            CapabilityDescriptor::new(
+                CapabilityId::new(
+                    BoxId::new("hello").unwrap(),
+                    CapabilityName::new("greet").unwrap(),
+                ),
+                TypeDescriptor::string(),
+                TypeDescriptor::string(),
+                TypeDescriptor::enumeration([VariantDescriptor::new(
+                    "EmptyName",
+                    VariantPayload::Unit,
+                    None,
+                )])
+                .unwrap(),
+                CapabilityShape::Unary,
+                ExposureLevel::External,
+                Idempotency::None,
+                None,
+            )
+        });
+        &HELLO
+    }
+
+    fn hello_context() -> CallContext {
+        context(None, None, None, None)
     }
     fn context(
         deadline: Option<Deadline>,
@@ -776,6 +902,167 @@ mod tests {
             },
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn public_target_drives_generated_handle_with_exact_contract() {
+        let body = br#"{"result":{"value":"Hello, Ada!"}}"#;
+        let (origin, server) = raw_server(
+            vec![http_response(
+                "200 OK",
+                &format!(
+                    "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                    body.len()
+                ),
+                body,
+            )],
+            false,
+        )
+        .await;
+        let config = HttpClientConfig::new(&origin).unwrap();
+        assert_eq!(config.limits.max_bytes, 8 * 1024 * 1024);
+        assert_eq!(config.limits.max_depth, 128);
+        let target = HttpClientTarget::new(config, [hello_descriptor()]).unwrap();
+        fn assert_public_bounds<T: Clone + Send + Sync + 'static>() {}
+        assert_public_bounds::<HttpClientConfig>();
+        assert_public_bounds::<HttpClientTarget>();
+        let erased: Arc<dyn ErasedCallTarget> = Arc::new(target.clone());
+        let handle = HelloHandle::from_erased(erased);
+        let future = handle.greet(hello_context(), "Ada".into());
+        fn assert_send<T: Send>(_: &T) {}
+        assert_send(&future);
+        assert_eq!(future.await.unwrap(), "Hello, Ada!");
+
+        let (request, _) = server.await.unwrap();
+        let request = String::from_utf8(request).unwrap();
+        let (head, payload) = request.split_once("\r\n\r\n").unwrap();
+        assert_eq!(head.lines().next(), Some("POST /rpc/hello/greet HTTP/1.1"));
+        assert!(
+            head.to_ascii_lowercase()
+                .contains("content-type: application/json")
+        );
+        assert!(head.to_ascii_lowercase().contains("content-length: 5"));
+        assert!(head.to_ascii_lowercase().contains(&format!(
+            "host: {}",
+            origin.strip_prefix("http://").unwrap()
+        )));
+        assert_eq!(payload, "\"Ada\"");
+    }
+
+    #[tokio::test]
+    async fn public_target_rejects_hostile_responses_and_applies_custom_limits() {
+        for (headers, body, bytes, depth, succeeds) in [
+            (
+                "Content-Type: text/plain",
+                br#"SENTINEL-HOSTILE"#.as_slice(),
+                1024,
+                128,
+                false,
+            ),
+            (
+                "Content-Type: application/json",
+                br#"{"SENTINEL-HOSTILE":"wrong-envelope"}"#,
+                1024,
+                128,
+                false,
+            ),
+            (
+                "Content-Type: application/json",
+                br#"{"result":{"value":"Hello, Ada!"}}"#,
+                33,
+                128,
+                false,
+            ),
+            (
+                "Content-Type: application/json",
+                br#"{"result":{"value":"Hello, Ada!"}}"#,
+                1024,
+                1,
+                false,
+            ),
+            (
+                "Content-Type: application/json",
+                br#"{"result":{"value":"Hello, Ada!"}}"#,
+                34,
+                2,
+                true,
+            ),
+        ] {
+            let (origin, server) = raw_server(
+                vec![http_response(
+                    "200 OK",
+                    &format!("{headers}\r\nContent-Length: {}\r\n", body.len()),
+                    body,
+                )],
+                false,
+            )
+            .await;
+            let config = HttpClientConfig::new(origin)
+                .unwrap()
+                .with_response_limits(bytes, depth);
+            let target = HttpClientTarget::new(config, [hello_descriptor()]).unwrap();
+            let result = HelloHandle::from_erased(Arc::new(target))
+                .greet(hello_context(), "Ada".into())
+                .await;
+            if succeeds {
+                assert_eq!(result.unwrap(), "Hello, Ada!");
+            } else {
+                let error = result.unwrap_err();
+                assert!(
+                    matches!(error, CallError::InvalidResponse(ref detail) if detail.code() == "http_response")
+                );
+                assert!(!format!("{error:?}").contains("SENTINEL"));
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn selection_is_safe_exact_and_network_free_on_rejection() {
+        let config = HttpClientConfig::new("http://127.0.0.1:1").unwrap();
+        let duplicate =
+            HttpClientTarget::new(config.clone(), [hello_descriptor(), hello_descriptor()])
+                .err()
+                .unwrap();
+        assert_eq!(duplicate, Detail::new("http_duplicate_capability"));
+
+        let rejected: &'static CapabilityDescriptor =
+            Box::leak(Box::new(CapabilityDescriptor::new(
+                hello_descriptor().id().clone(),
+                TypeDescriptor::tri_state(TypeDescriptor::string()).unwrap(),
+                TypeDescriptor::string(),
+                TypeDescriptor::enumeration([]).unwrap(),
+                CapabilityShape::Unary,
+                ExposureLevel::External,
+                Idempotency::None,
+                None,
+            )));
+        assert_eq!(
+            HttpClientTarget::new(config, [rejected])
+                .err()
+                .unwrap()
+                .code(),
+            "http_top_level_field"
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = HttpClientTarget::new(
+            HttpClientConfig::new(format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+            [],
+        )
+        .unwrap();
+        let error = HelloHandle::from_erased(Arc::new(target))
+            .greet(hello_context(), "Ada".into())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, CallError::ContractViolation(ref detail) if detail.code() == "http_client_capability")
+        );
+        assert!(
+            timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
     }
 
     fn race_context(deadline: Option<Instant>, cancellation: CancelToken) -> CallContext {
