@@ -1,4 +1,4 @@
-use crate::api::{self, Api};
+use crate::api;
 use crate::state::{self, ChoiceRecord, EventRecord, Paths, ReplyTarget, State};
 use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
 use serde::Deserialize;
@@ -19,6 +19,14 @@ struct AckRequest {
 }
 
 pub(crate) fn poll(input: &[u8]) -> Result<Value, AppError> {
+    poll_inner(input, true)
+}
+
+pub(crate) fn poll_locked(input: &[u8]) -> Result<Value, AppError> {
+    poll_inner(input, false)
+}
+
+fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
     let request: PollRequest = parse(input)?;
     check_schema(request.schema)?;
     let timeout = request.timeout_seconds.unwrap_or(30);
@@ -29,7 +37,11 @@ pub(crate) fn poll(input: &[u8]) -> Result<Value, AppError> {
         ));
     }
     let paths = Paths::from_env()?;
-    let _consumer = state::ConsumerLock::acquire(&paths)?;
+    let _consumer = if acquire_consumer {
+        Some(state::ConsumerLock::acquire(&paths)?)
+    } else {
+        None
+    };
     let current = state::read(&paths)?;
     ensure_pairing(&current)?;
     if let Some(event) = oldest_unhandled(&current) {
@@ -43,7 +55,7 @@ pub(crate) fn poll(input: &[u8]) -> Result<Value, AppError> {
         ));
     }
     let token = api::load_token()?;
-    let api = Api::production(token)?;
+    let api = api::for_commands(token)?;
     let updates = api
         .get_updates(current.next_offset, timeout)
         .map_err(api_error)?;
@@ -245,7 +257,7 @@ fn matches_callback(choice: &ChoiceRecord, data: &str) -> bool {
         .is_some_and(|salt| state::digest(&salt, data.as_bytes()) == choice.token_digest)
 }
 
-fn oldest_unhandled(state: &State) -> Option<EventRecord> {
+pub(crate) fn oldest_unhandled(state: &State) -> Option<EventRecord> {
     state.events.iter().find(|event| !event.handled).cloned()
 }
 
@@ -272,7 +284,7 @@ fn poll_result(
     result
 }
 
-fn event_value(event: &EventRecord, _state: &State) -> Value {
+pub(crate) fn event_value(event: &EventRecord, _state: &State) -> Value {
     let mut value = json!({
         "event_id": event.event_id,
         "kind": event.kind,

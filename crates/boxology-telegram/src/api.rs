@@ -108,6 +108,7 @@ impl Api {
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .no_proxy()
+            .https_only(origin == ORIGIN)
             .timeout(Duration::from_secs(60))
             .build()
             .map_err(|_| {
@@ -203,6 +204,28 @@ impl Api {
     }
 }
 
+pub(crate) fn for_commands(token: String) -> Result<Api, AppError> {
+    #[cfg(test)]
+    if let Some(origin) = TEST_ORIGIN
+        .get()
+        .and_then(|value| value.lock().ok())
+        .and_then(|value| value.clone())
+    {
+        return Api::test(token, origin);
+    }
+    Api::production(token)
+}
+
+#[cfg(test)]
+static TEST_ORIGIN: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn set_test_origin(origin: Option<String>) {
+    let lock = TEST_ORIGIN.get_or_init(|| std::sync::Mutex::new(None));
+    *lock.lock().expect("test origin lock") = origin;
+}
+
 pub(crate) fn load_token() -> Result<String, AppError> {
     let file = std::env::var_os("BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE");
     let environment = std::env::var_os("BOXOLOGY_TELEGRAM_BOT_TOKEN");
@@ -246,8 +269,8 @@ fn load_token_file(path: &Path) -> Result<String, AppError> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o777 != 0o600 {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != effective_uid() || metadata.permissions().mode() & 0o777 != 0o600 {
             return Err(AppError::new(
                 "unsafe_token_file",
                 "Telegram token file is unsafe",
@@ -270,6 +293,16 @@ fn load_token_file(path: &Path) -> Result<String, AppError> {
         )
     })?;
     validate_token(token)
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> u32;
+}
+
+#[cfg(unix)]
+fn effective_uid() -> u32 {
+    unsafe { geteuid() }
 }
 
 fn validate_token(mut token: String) -> Result<String, AppError> {

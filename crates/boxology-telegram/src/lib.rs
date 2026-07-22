@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
+use std::io;
 
 #[allow(dead_code)]
 mod api;
 mod ask;
+mod listen;
 mod outbound;
 mod pairing;
 mod receive;
@@ -164,7 +166,34 @@ fn status(input: &[u8]) -> (String, ExitClass) {
         Err(error) => return failure("status", error),
     };
     if request.probe {
-        return failure("status", AppError::unsupported());
+        if !enabled() {
+            return failure("status", AppError::authorization());
+        }
+        let token = match api::load_token() {
+            Ok(token) => token,
+            Err(error) => return failure("status", error),
+        };
+        let api = match api::for_commands(token) {
+            Ok(api) => api,
+            Err(error) => return failure("status", error),
+        };
+        let bot = match api.get_me().map_err(api_error) {
+            Ok(bot) => bot,
+            Err(error) => return failure("status", error),
+        };
+        let webhook = match api.webhook_info().map_err(api_error) {
+            Ok(webhook) => webhook,
+            Err(error) => return failure("status", error),
+        };
+        let local = match state::Paths::from_env().and_then(|paths| state::read(&paths)) {
+            Ok(state) => state,
+            Err(error) => return failure("status", error),
+        };
+        let bot_matches = local.bot.is_some_and(|stored| stored.id == bot.id);
+        return success(
+            "status",
+            serde_json::json!({"probe": true, "api_reachable": true, "bot_matches": bot_matches, "webhook_configured": !webhook.url.is_empty(), "get_updates_compatible": webhook.url.is_empty()}),
+        );
     }
     let state = match state::Paths::from_env().and_then(|paths| state::read(&paths)) {
         Ok(state) => state,
@@ -180,8 +209,14 @@ fn status(input: &[u8]) -> (String, ExitClass) {
     success("status", data)
 }
 
-fn enabled() -> bool {
+pub(crate) fn enabled() -> bool {
     env::var(ENABLED_VARIABLE).is_ok_and(|value| value == "1")
+}
+
+pub fn run_listen(input: &[u8]) -> ExitClass {
+    let stdout = io::stdout();
+    let mut output = io::BufWriter::new(stdout.lock());
+    listen::run(input, &mut output)
 }
 
 pub(crate) fn api_error(error: api::ApiError) -> AppError {
