@@ -3,6 +3,7 @@ use crate::{AppError, ExitClass};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
@@ -262,6 +263,20 @@ fn load_token_file(path: &Path) -> Result<String, AppError> {
             ExitClass::Local,
         )
     })?;
+    let path_metadata = fs::symlink_metadata(path).map_err(|_| {
+        AppError::new(
+            "token_file",
+            "Telegram token file is unavailable",
+            ExitClass::Local,
+        )
+    })?;
+    if !path_metadata.is_file() || path_metadata.file_type().is_symlink() {
+        return Err(AppError::new(
+            "unsafe_token_file",
+            "Telegram token file is unsafe",
+            ExitClass::Local,
+        ));
+    }
     let mut file = state::open_protected(path, true, false, false).map_err(|_| {
         AppError::new(
             "token_file",
