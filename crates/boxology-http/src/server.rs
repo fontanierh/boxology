@@ -5,7 +5,7 @@ use crate::{
 };
 use boxology_contract::{
     BoxId, CapabilityDescriptor, CapabilityName, DecodeRole, ExposureLevel, IdempotencyKey,
-    SlotValue, TypeDescriptor,
+    SlotValue, TraceContext, TypeDescriptor,
 };
 use boxology_runtime::TransportExposure;
 use http::{HeaderMap, HeaderValue};
@@ -13,6 +13,9 @@ use std::time::Duration;
 
 const TIMEOUT_HEADER: &str = "boxology-timeout-ms";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
+const TRACEPARENT_HEADER: &str = "traceparent";
+const TRACESTATE_HEADER: &str = "tracestate";
+const MAX_TRACESTATE_BYTES: usize = 512;
 
 fn decode_request_body(
     body: &[u8],
@@ -77,6 +80,136 @@ fn parse_idempotency_key(headers: &HeaderMap) -> Result<Option<IdempotencyKey>, 
     IdempotencyKey::new(key)
         .map(Some)
         .map_err(|_| WireCallError::InvalidRequest)
+}
+
+fn parse_trace_context(headers: &HeaderMap) -> TraceContext {
+    let mut parents = headers.get_all(TRACEPARENT_HEADER).iter();
+    let Some(parent) = parents.next() else {
+        return TraceContext::empty();
+    };
+    if parents.next().is_some() || !valid_traceparent(parent.as_bytes()) {
+        return TraceContext::empty();
+    }
+    let Ok(parent) = parent.to_str() else {
+        return TraceContext::empty();
+    };
+    let state = parse_tracestate(headers);
+    TraceContext::new(Some(parent.to_owned()), state)
+}
+
+fn valid_traceparent(value: &[u8]) -> bool {
+    if value.len() < 55
+        || value[2] != b'-'
+        || value[35] != b'-'
+        || value[52] != b'-'
+        || !value[..55]
+            .iter()
+            .all(|byte| byte.is_ascii_hexdigit() || *byte == b'-')
+    {
+        return false;
+    }
+    let lowercase_hex = |part: &[u8]| {
+        part.iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    };
+    if !lowercase_hex(&value[..2])
+        || value[..2] == *b"ff"
+        || !lowercase_hex(&value[3..35])
+        || value[3..35].iter().all(|byte| *byte == b'0')
+        || !lowercase_hex(&value[36..52])
+        || value[36..52].iter().all(|byte| *byte == b'0')
+        || !lowercase_hex(&value[53..55])
+    {
+        return false;
+    }
+    if value[..2] == *b"00" {
+        value.len() == 55
+    } else {
+        value.len() == 55 || value[55] == b'-'
+    }
+}
+
+fn parse_tracestate(headers: &HeaderMap) -> Option<String> {
+    let values: Vec<_> = headers.get_all(TRACESTATE_HEADER).iter().collect();
+    if values.is_empty() {
+        return None;
+    }
+    let combined_len = values
+        .iter()
+        .map(|value| value.as_bytes().len())
+        .sum::<usize>()
+        + values.len().saturating_sub(1);
+    if combined_len > MAX_TRACESTATE_BYTES {
+        return None;
+    }
+    let mut combined = String::with_capacity(combined_len);
+    for (index, value) in values.into_iter().enumerate() {
+        if index != 0 {
+            combined.push(',');
+        }
+        combined.push_str(value.to_str().ok()?);
+    }
+    valid_tracestate(&combined).then_some(combined)
+}
+
+fn valid_tracestate(value: &str) -> bool {
+    let mut keys = Vec::new();
+    let members: Vec<_> = value.split(',').collect();
+    if members.len() > 32 {
+        return false;
+    }
+    let last = members.len() - 1;
+    for (index, member) in members.into_iter().enumerate() {
+        let member = member.trim_start_matches([' ', '\t']);
+        let member = if index == last {
+            member
+        } else {
+            member.trim_end_matches([' ', '\t'])
+        };
+        if member.is_empty() {
+            continue;
+        }
+        let Some((key, state)) = member.split_once('=') else {
+            return false;
+        };
+        if !valid_tracestate_key(key)
+            || state.is_empty()
+            || state.len() > 256
+            || state
+                .as_bytes()
+                .iter()
+                .any(|byte| !(0x20..=0x7e).contains(byte) || *byte == b',' || *byte == b'=')
+            || state.ends_with(' ')
+            || keys.contains(&key)
+        {
+            return false;
+        }
+        keys.push(key);
+    }
+    true
+}
+
+fn valid_tracestate_key(key: &str) -> bool {
+    let allowed = |byte: u8| {
+        byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || matches!(byte, b'_' | b'-' | b'*' | b'/')
+    };
+    if let Some((tenant, system)) = key.split_once('@') {
+        !tenant.is_empty()
+            && tenant.len() <= 241
+            && (tenant.as_bytes()[0].is_ascii_lowercase() || tenant.as_bytes()[0].is_ascii_digit())
+            && tenant.bytes().all(allowed)
+            && !system.is_empty()
+            && system.len() <= 14
+            && system.as_bytes()[0].is_ascii_lowercase()
+            && system.bytes().all(allowed)
+    } else {
+        !key.is_empty()
+            && key.len() <= 256
+            && key.as_bytes()[0].is_ascii_lowercase()
+            && key.bytes().all(allowed)
+    }
 }
 
 trait ExposureView {
@@ -628,5 +761,128 @@ mod tests {
             parse_idempotency_key(&duplicate),
             Err(WireCallError::InvalidRequest)
         );
+    }
+
+    const PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    fn trace_headers(parent: Option<&str>, states: &[&str]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(parent) = parent {
+            headers.insert(TRACEPARENT_HEADER, HeaderValue::from_str(parent).unwrap());
+        }
+        for state in states {
+            headers.append(TRACESTATE_HEADER, HeaderValue::from_str(state).unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn traceparent_accepts_level_one_and_future_prefixes_opaquely() {
+        for parent in [
+            PARENT.to_owned(),
+            PARENT.replacen("00-", "01-", 1),
+            format!("{}-future-opaque", PARENT.replacen("00-", "fe-", 1)),
+        ] {
+            let parsed = parse_trace_context(&trace_headers(Some(&parent), &[]));
+            assert_eq!(parsed.traceparent(), Some(parent.as_str()));
+            assert_eq!(parsed.tracestate(), None);
+        }
+    }
+
+    #[test]
+    fn malformed_or_duplicate_traceparent_drops_the_entire_context() {
+        for parent in [
+            "",
+            "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "00-4BF92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00F067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-0A",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736_00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e473-00f067aa0ba902b7-01",
+            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
+            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01x",
+        ] {
+            let parsed = parse_trace_context(&trace_headers(Some(parent), &["vendor=state"]));
+            assert_eq!(parsed.traceparent(), None, "accepted {parent:?}");
+            assert_eq!(parsed.tracestate(), None);
+        }
+
+        let mut duplicate = trace_headers(Some(PARENT), &["vendor=state"]);
+        duplicate.append(TRACEPARENT_HEADER, HeaderValue::from_static(PARENT));
+        let parsed = parse_trace_context(&duplicate);
+        assert_eq!(parsed.traceparent(), None);
+        assert_eq!(parsed.tracestate(), None);
+    }
+
+    #[test]
+    fn tracestate_accepts_level_one_grammar_and_preserves_combined_bytes() {
+        for state in [
+            "vendor=value",
+            "tenant-1@system=value",
+            " ,\t, vendor=value , ",
+            "",
+        ] {
+            let parsed = parse_trace_context(&trace_headers(Some(PARENT), &[state]));
+            assert_eq!(parsed.tracestate(), Some(state));
+        }
+
+        let parsed = parse_trace_context(&trace_headers(Some(PARENT), &["rojo=one", "congo=two"]));
+        assert_eq!(parsed.tracestate(), Some("rojo=one,congo=two"));
+
+        let members = (0..32)
+            .map(|index| format!("k{index}=v"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            parse_trace_context(&trace_headers(Some(PARENT), &[&members])).tracestate(),
+            Some(members.as_str())
+        );
+        let max_value = format!("vendor={}", "v".repeat(256));
+        assert_eq!(
+            parse_trace_context(&trace_headers(Some(PARENT), &[&max_value])).tracestate(),
+            Some(max_value.as_str())
+        );
+        let max_combined = format!("a={},b={}", "v".repeat(256), "w".repeat(251));
+        assert_eq!(max_combined.len(), 512);
+        assert_eq!(
+            parse_trace_context(&trace_headers(Some(PARENT), &[&max_combined])).tracestate(),
+            Some(max_combined.as_str())
+        );
+    }
+
+    #[test]
+    fn invalid_tracestate_drops_only_state() {
+        let too_many = (0..33)
+            .map(|index| format!("k{index}=v"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let too_large = format!("a={},b={}", "v".repeat(256), "w".repeat(252));
+        assert_eq!(too_large.len(), 513);
+        for state in [
+            "Vendor=value",
+            "1vendor=value",
+            "tenant@System=value",
+            "vendor",
+            "vendor=",
+            "vendor=one,vendor=two",
+            "vendor=bad=value",
+            "vendor=bad\tvalue",
+            "vendor=trailing ",
+            too_many.as_str(),
+            too_large.as_str(),
+        ] {
+            let parsed = parse_trace_context(&trace_headers(Some(PARENT), &[state]));
+            assert_eq!(
+                parsed.traceparent(),
+                Some(PARENT),
+                "lost parent for {state:?}"
+            );
+            assert_eq!(parsed.tracestate(), None, "accepted {state:?}");
+        }
+        let orphan = parse_trace_context(&trace_headers(None, &["vendor=value"]));
+        assert_eq!(orphan.traceparent(), None);
+        assert_eq!(orphan.tracestate(), None);
     }
 }
