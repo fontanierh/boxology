@@ -44,10 +44,11 @@ Promised-but-unnamed codes are named; these are wire contract, in the call-error
 
 ### D6 — Header grammars, exactly
 
-- `Boxology-Timeout-Ms`: grammar `0|[1-9][0-9]{0,9}` (≤ ~11.5 days), single occurrence. Duplicate header, sign, whitespace, non-digit, or overflow → `400 invalid_request` — a malformed deadline must not silently become no-deadline. Absent → composition default.
+- `Boxology-Timeout-Ms`: grammar `0|[1-9][0-9]{0,9}` (≤ ~115.7 days), single occurrence. Duplicate header, sign, whitespace, non-digit, or overflow → `400 invalid_request` — a malformed deadline must not silently become no-deadline. Absent → composition default.
 - `Idempotency-Key`: 1–256 bytes of visible ASCII, single occurrence; violations → `400`. Carried into `CallContext`; **transported, never honored** — the suite asserts a repeated key does not dedup.
 - `traceparent`: W3C grammar; invalid or duplicated → **ignored**, fresh trace (observability must not break calls — the deliberate asymmetry with the timeout header, stated). `tracestate` without a valid parent → ignored.
 - Client encoding of remaining budget: milliseconds, rounded **up** (a positive remaining budget never encodes as `0`). The grammar's ten digits bound the value at 9,999,999,999 ms ≈ **115.7 days** (the earlier ~11.5-day figure was arithmetic error, corrected per review).
+- Client overflow policy is saturating: after rounding a positive remaining budget up to milliseconds, clamp it to exactly `9_999_999_999`; the encoded value is therefore never `0`.
 - **Duplicate-occurrence rule for single-occurrence headers**: occurrences are counted by field lines; a comma-joined list within one line is one value that then fails its grammar (no grammar admits commas) → `400`.
 - **`tracestate`**: W3C Trace Context Level 1 pinned; multiple `tracestate` field lines combine per the W3C list algorithm; combined length capped at 512 bytes; an invalid member or over-cap total drops `tracestate` while keeping a valid `traceparent`. `tracestate` without a valid parent is ignored (as before).
 - **`Accept` is ignored** — responses are always `application/json`; no content negotiation in v0. Unlisted request headers are ignored (proxies add headers freely; only the contractual headers have grammar-enforced semantics).
@@ -69,6 +70,8 @@ Resolving issue #85 item 8 and the S1 contradiction:
 ### D8 — Client binding
 
 Feature `client`: a remote `ImportTarget`/handle binding with base URL and the same codec. Sets context headers per D6; performs **no retries** (retry policy belongs to callers under declared idempotency; v0 declares none). **Resource limits**: response byte cap (default 8 MiB) and the codec depth guard apply before decode; bounded error-body reads. **Response classification table** (the first draft's "fails decode" was not a specification): every `(status, envelope, content-type)` combination is classified — `200`+`result` and `422`+`domain` decode strictly *at the envelope*, with the accepted tolerant rules applying inside result/domain payloads via `ConsumerOutput` role; call-error statuses require the matching `call` envelope; any other combination — wrong/missing content type, mismatched envelope, unknown call-error `code`, extra top-level fields, 1xx/204/3xx (redirects are not followed), truncated bodies — is `InvalidResponse` with the observed detail retained. Connect/DNS/refused → `Unavailable`; local deadline/cancellation → `Deadline`/`Cancelled`; races with response completion resolve first-to-complete. Unknown-`code` → `InvalidResponse` is recorded as a v0 posture (client and server ship from one source tree in bootstrap; forward-compat codes are a post-v0 concern).
+
+Client base URLs are origins only: plaintext `http`, a DNS name, IPv4 address, or bracketed IPv6 address, and an optional explicit port. An absent path and `/` are equivalent; userinfo, non-root paths, queries, fragments, and other schemes are rejected. Deploying below an external proxy prefix therefore requires stripping that prefix before configuring the client. Requests use the exact absolute URI `http://{authority}/rpc/{box_id}/{capability_local_name}`; identifier segments are already canonical and are inserted directly without escaping or normalization.
 
 ### D9 — Conformance suite
 
