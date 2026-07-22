@@ -1,3 +1,4 @@
+use crate::state;
 use crate::{AppError, ExitClass};
 use reqwest::blocking::Client;
 use serde::Deserialize;
@@ -255,14 +256,42 @@ fn load_token_file(path: &Path) -> Result<String, AppError> {
             ExitClass::Local,
         ));
     }
-    let metadata = fs::symlink_metadata(path).map_err(|_| {
+    state::validate_ancestors(path).map_err(|_| {
+        AppError::new(
+            "unsafe_token_file",
+            "Telegram token file has an unsafe ancestor",
+            ExitClass::Local,
+        )
+    })?;
+    let path_metadata = fs::symlink_metadata(path).map_err(|_| {
         AppError::new(
             "token_file",
             "Telegram token file is unavailable",
             ExitClass::Local,
         )
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if !path_metadata.is_file() || path_metadata.file_type().is_symlink() {
+        return Err(AppError::new(
+            "unsafe_token_file",
+            "Telegram token file is unsafe",
+            ExitClass::Local,
+        ));
+    }
+    let mut file = state::open_protected(path, true, false, false).map_err(|_| {
+        AppError::new(
+            "token_file",
+            "Telegram token file is unavailable",
+            ExitClass::Local,
+        )
+    })?;
+    let metadata = file.metadata().map_err(|_| {
+        AppError::new(
+            "token_file",
+            "Telegram token file is unavailable",
+            ExitClass::Local,
+        )
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(AppError::new(
             "unsafe_token_file",
             "Telegram token file is unsafe",
@@ -280,7 +309,15 @@ fn load_token_file(path: &Path) -> Result<String, AppError> {
             ));
         }
     }
-    let bytes = fs::read(path).map_err(|_| {
+    if metadata.len() > (MAX_TOKEN + 2) as u64 {
+        return Err(AppError::new(
+            "token_invalid",
+            "Telegram token is invalid",
+            ExitClass::Local,
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes).map_err(|_| {
         AppError::new(
             "token_file",
             "Telegram token file is unavailable",
