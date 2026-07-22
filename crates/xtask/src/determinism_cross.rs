@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const LINUX: &[u8] = b"os=linux\narch=x86_64\n";
+#[cfg(test)]
+const LINUX_ARM64: &[u8] = b"os=linux\narch=aarch64\n";
 const MACOS: &[u8] = b"os=macos\narch=aarch64\n";
 
 fn fixed(out: &Path, value: &str) -> (PathBuf, Vec<OsString>) {
@@ -169,6 +171,7 @@ mod tests {
     fn host() -> (&'static [u8], &'static str) {
         match (std::env::consts::OS, std::env::consts::ARCH) {
             ("linux", "x86_64") => (LINUX, "x86_64-unknown-linux-gnu"),
+            ("linux", "aarch64") => (LINUX_ARM64, "aarch64-unknown-linux-gnu"),
             ("macos", "aarch64") => (MACOS, "aarch64-apple-darwin"),
             pair => panic!("unsupported fixture host: {pair:?}"),
         }

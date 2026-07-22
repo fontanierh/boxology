@@ -115,6 +115,18 @@ Fact, verified during review: on the current private-repository plan, branch-pro
 
 `cargo xtask ci` is **temporary bootstrap orchestration**. When S5 ships `boxology check` and S7 adopts manifests on this repository: platform validation (ownership, edges, regeneration, classification) is delegated to `boxology check` invoked by `xtask ci`; xtask retains only repository-specific checks (links, budget, determinism meta-tests) under clearly separate names; and every bootstrap registry duplicated here — the derived-output exclusion list and the hand-authored formatting package-selection lists (owned and excluded, per D3) — is replaced by manifest-derived data, with the xtask copies deleted. Manifests are authoritative from S7 onward; S0 never becomes a second registry that survives.
 
+### D11 — S0-T8 isolated Linux ARM64 runner contract
+
+S0-T8 is accepted as a two-PR migration. **PR 1** adds the design, image, host supervisor, operational runbook, launchd template, smoke workflow, and ARM64 host-fixture selection. **The existing hosted-x86 D4 contract remains active and unchanged until PR 2**; PR 1 does not edit `pr.yml`, its aggregate, or its comparison fixture.
+
+The accepted replacement is one native ARM64 Colima VM running Docker and one disposable GitHub Actions JIT runner for one job at a time. The supervisor provisions no second runner concurrently, uses no host mounts or host networking, gives each run a fresh named volume and container, and removes both after the job. The image contains no repository source, runs the runner as non-root, and is built from the official Ubuntu 24.04 ARM64 base pinned by OCI digest. It pins actions/runner v2.336.0 and its SHA-256 archive, the repository Rust toolchain, and cargo-deny 0.20.2; runtime self-update is disabled and the image pin is authoritative. A read-only root overlays an immutable runner install with the fresh volume for runner state, checkout, target, and Cargo home; CPU, memory, pids, capabilities, and privilege escalation are bounded. `ImageOS`, `ImageVersion`, architecture, non-root identity, base digest, and runner archive SHA are required evidence; the image labels and the smoke workflow are the evidence contract.
+
+Activation gates are: a private repository with trusted Henry/agent collaborators; an operator-provided dedicated GitHub credential stored only in a macOS Keychain item; a locally built image whose identity and digest are verified; a clean ARM64 smoke dispatch; and health checks showing the single-runner policy. Private forking remains a repository-policy assumption, not a PR-1 blocker, and this work changes no GitHub setting. The supervisor fails closed when a prerequisite, API response, image identity, or lock is invalid and never uses `gh` credentials for unattended provisioning. Rollback is to stop the supervisor, remove its disposable container/volume and Colima profile, and leave the smoke workflow queued; PR 2 is reverted or not activated so the hosted-x86 D4 path remains authoritative.
+
+The broker PAT never enters the container or job environment. Ordinary GitHub Actions read/runtime credentials may be present for actions such as checkout; the smoke workflow keeps `persist-credentials: false` and asserts only broker-PAT absence. The official runner transiently consumes the one-use JIT config through `run.sh --disableupdate --jitconfig`, so the encoded argument is visible to same-user job processes by design. This residual is accepted only under the private trusted-collaborator assumption; if that boundary changes, do not activate the runner.
+
+The authoritative operator procedure is [`ops/ci-runner/README.md`](../ops/ci-runner/README.md). This contract does not alter historical records.
+
 ## Acceptance criteria
 
 1. `cargo xtask ci` passes locally on both supported triples and runs exactly the host-local checks CI runs.
@@ -124,6 +136,7 @@ Fact, verified during review: on the current private-repository plan, branch-pro
 5. The `deny` job fails a PR introducing a disallowed license or non-crates.io source. The advisory path is proven two ways: a deterministic xtask integration test with a mocked advisory database exercising the find-by-title idempotent issue-upsert logic, and a `workflow_dispatch` input (`simulate_advisory=<id>`) on the scheduled workflow for a post-merge smoke run — review established scheduled workflows execute only from the default branch, so a throwaway-branch schedule cannot test this.
 6. The `validation` aggregator fails when any needed job fails or is skipped (verified by a deliberate red run).
 7. Runner image version and target triple appear in determinism evidence for both platforms.
+8. S0-T8 PR 1 passes its runbook, image, supervisor, isolation, broker-PAT-environment, and queued-smoke checks under the private/trusted-collaborator assumption; private forking is neither changed nor a hard activation gate, and the same-user JIT-config residual is documented.
 
 ## Task list
 
@@ -136,6 +149,7 @@ Fact, verified during review: on the current private-repository plan, branch-pro
 | T5 | `deny.toml`, pinned cargo-deny gate job, scheduled advisory workflow | 1 |
 | T6 | Determinism harness core: subject model, per-experiment protocol, manifest format, diagnostics | 2 |
 | T7 | Meta-fixtures + expected-failure lanes (local and cross-platform) + artifact retention and compare job | 2 |
+| T8 | Isolated Linux ARM64 self-hosted runner: PR 1 contract/runbook/image/supervisor/smoke; PR 2 activation in `pr.yml` | 2 |
 
 T1 → T2 strictly; T3–T5 independent after T2; T6 → T7, parallel with T3–T5.
 
@@ -149,4 +163,4 @@ The #17 and #41 reconciliation comments record this spec's narrowings (candidate
 
 - Exact toolchain version, runner-image versions, and pinned cargo-deny version — resolved at implementation time and recorded in the task PRs.
 - Whether macOS validation later narrows to merge-time only — deferred until CI cost is measured against the D4 target.
-- Containerized runners for truly immutable environments — only if hosted-runner drift is ever observed to matter.
+- Hosted Linux runner drift and cost now justify the isolated native ARM64 Colima/Docker JIT runner decision in D11; PR 2 is the activation gate.
