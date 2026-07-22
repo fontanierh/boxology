@@ -7,7 +7,7 @@ publish = false
 [features]
 default = ["server"]
 server = ["dep:boxology-runtime", "dep:http"]
-client = []
+client = ["dep:http"]
 
 [dependencies]
 base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }

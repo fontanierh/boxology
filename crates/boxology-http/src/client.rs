@@ -1,12 +1,158 @@
+use std::time::Instant;
+
 use boxology_contract::{
-    DecodeRole, Detail, ErasedCallError, OpaqueTree, SlotValue, TypeDescriptor, ValueRef,
+    CallContext, CapabilityDescriptor, DecodeRole, Detail, ErasedCallError, OpaqueTree, SlotValue,
+    TypeDescriptor, ValueRef,
 };
+use http::{HeaderValue, Method, Request, Uri, Version, header::CONTENT_TYPE, uri::Authority};
 
 use crate::{
-    encoder::WireCallError,
+    encoder::{WireCallError, encode_request},
     semantic::decode_tree,
     syntax::{DEFAULT_DEPTH_LIMIT, SyntaxLimits, parse},
 };
+
+#[derive(Clone)]
+pub(crate) struct ClientOrigin(Authority);
+
+impl ClientOrigin {
+    pub(crate) fn parse(value: &str) -> Result<Self, Detail> {
+        let invalid = || Detail::new("http_base_url");
+        if value.contains(['@', '?', '#']) {
+            return Err(invalid());
+        }
+        let uri: Uri = value.parse().map_err(|_| invalid())?;
+        if !uri
+            .scheme_str()
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http"))
+            || !matches!(uri.path(), "" | "/")
+        {
+            return Err(invalid());
+        }
+        let authority = uri.authority().cloned().ok_or_else(invalid)?;
+        let text = authority.as_str();
+        let (port, valid_host) = if let Some(bracketed) = text.strip_prefix('[') {
+            let (host, tail) = bracketed.split_once(']').ok_or_else(invalid)?;
+            (
+                tail.strip_prefix(':'),
+                host.parse::<std::net::Ipv6Addr>().is_ok()
+                    && (tail.is_empty() || tail.starts_with(':')),
+            )
+        } else {
+            let (host, port) = text
+                .rsplit_once(':')
+                .map_or((text, None), |(host, port)| (host, Some(port)));
+            (
+                port,
+                host.parse::<std::net::Ipv4Addr>().is_ok() || valid_dns(host),
+            )
+        };
+        if !valid_host
+            || port.is_some_and(|port| {
+                port.is_empty()
+                    || !port.bytes().all(|byte| byte.is_ascii_digit())
+                    || port.parse::<u16>().is_err()
+            })
+            || text.contains(':') && authority.host().contains(':') && !text.starts_with('[')
+        {
+            return Err(invalid());
+        }
+        Ok(Self(authority))
+    }
+}
+
+fn valid_dns(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && host.is_ascii()
+        && host.split('.').all(|label| {
+            let bytes = label.as_bytes();
+            (1..=63).contains(&bytes.len())
+                && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+                && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+                && bytes
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        })
+}
+
+pub(crate) fn prepare_request(
+    origin: &ClientOrigin,
+    capability: &CapabilityDescriptor,
+    context: &CallContext,
+    input: &SlotValue,
+    now: Instant,
+) -> Result<Request<Vec<u8>>, ErasedCallError> {
+    let uri: Uri = format!(
+        "http://{}/rpc/{}/{}",
+        origin.0,
+        capability.id().box_id(),
+        capability.name()
+    )
+    .parse()
+    .map_err(request_error)?;
+
+    let timeout = match context.deadline() {
+        None => None,
+        Some(deadline) => {
+            let remaining = deadline.remaining_at(now);
+            if remaining.is_zero() {
+                return Err(ErasedCallError::Deadline);
+            }
+            let millis = remaining.as_nanos().div_ceil(1_000_000).min(9_999_999_999);
+            Some(HeaderValue::from_str(&millis.to_string()).map_err(request_error)?)
+        }
+    };
+    let idempotency = context
+        .idempotency_key()
+        .map(|key| {
+            let value = key.as_str().as_bytes();
+            if !(1..=256).contains(&value.len())
+                || !value
+                    .iter()
+                    .all(|byte| matches!(byte, 0x21..=0x7e) && *byte != b',')
+            {
+                return Err(ErasedCallError::ContractViolation(Detail::new(
+                    "http_idempotency_key",
+                )));
+            }
+            HeaderValue::from_bytes(value).map_err(request_error)
+        })
+        .transpose()?;
+    let traceparent = context
+        .trace()
+        .traceparent()
+        .and_then(|value| HeaderValue::from_str(value).ok());
+    let tracestate = traceparent.as_ref().and_then(|_| {
+        context
+            .trace()
+            .tracestate()
+            .and_then(|value| HeaderValue::from_str(value).ok())
+    });
+    let body = encode_request(input, capability.input()).map_err(request_error)?;
+    let mut request = Request::new(body);
+    *request.method_mut() = Method::POST;
+    *request.version_mut() = Version::HTTP_11;
+    *request.uri_mut() = uri;
+    request
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    for (name, value) in [
+        ("boxology-timeout-ms", timeout),
+        ("traceparent", traceparent),
+        ("tracestate", tracestate),
+        ("idempotency-key", idempotency),
+    ] {
+        if let Some(value) = value {
+            request.headers_mut().insert(name, value);
+        }
+    }
+    Ok(request)
+}
+
+fn request_error(_: impl std::fmt::Debug) -> ErasedCallError {
+    ErasedCallError::ContractViolation(Detail::new("http_request"))
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct ResponseLimits {
@@ -151,13 +297,245 @@ fn invalid_error() -> ErasedCallError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxology_contract::{FieldDescriptor, VariantDescriptor, VariantPayload};
+    use std::time::Duration;
+
+    use boxology_contract::{
+        BoxId, Caller, CancelToken, CapabilityId, CapabilityName, CapabilityShape, ContractValue,
+        Deadline, ExposureLevel, FieldDescriptor, Idempotency, IdempotencyKey, TraceContext,
+        VariantDescriptor, VariantPayload,
+    };
+
+    fn capability() -> CapabilityDescriptor {
+        CapabilityDescriptor::new(
+            CapabilityId::new(
+                BoxId::new("box-1").unwrap(),
+                CapabilityName::new("cap_name").unwrap(),
+            ),
+            TypeDescriptor::string(),
+            TypeDescriptor::string(),
+            TypeDescriptor::enumeration([]).unwrap(),
+            CapabilityShape::Unary,
+            ExposureLevel::External,
+            Idempotency::None,
+            None,
+        )
+    }
+    fn context(
+        deadline: Option<Deadline>,
+        traceparent: Option<&str>,
+        tracestate: Option<&str>,
+        key: Option<&str>,
+    ) -> CallContext {
+        CallContext::new(
+            Caller::Anonymous,
+            deadline,
+            CancelToken::new(),
+            TraceContext::new(
+                traceparent.map(str::to_owned),
+                tracestate.map(str::to_owned),
+            ),
+            key.map(|value| IdempotencyKey::new(value).unwrap()),
+        )
+    }
+    fn request(context: &CallContext, now: Instant) -> Result<Request<Vec<u8>>, ErasedCallError> {
+        prepare_request(
+            &ClientOrigin::parse("http://example.com").unwrap(),
+            &capability(),
+            context,
+            &SlotValue::Value(ContractValue::string("hello")),
+            now,
+        )
+    }
 
     fn limits(body: &[u8]) -> ResponseLimits {
         ResponseLimits {
             max_bytes: body.len(),
             max_depth: 128,
         }
+    }
+
+    #[test]
+    fn origins_accept_and_normalize_only_http_origins() {
+        for accepted in [
+            "http://example.com",
+            "http://example.com/",
+            "http://localhost",
+            "HTTP://example.com:0",
+            "http://127.0.0.1:65535",
+            "http://[::1]",
+            "http://[2001:db8::1]:8080/",
+        ] {
+            assert!(ClientOrigin::parse(accepted).is_ok(), "{accepted}");
+        }
+        for rejected in [
+            "https://example.com",
+            "ftp://example.com",
+            "example.com",
+            "//example.com",
+            "http://",
+            "http://user@example.com",
+            "http://user:pass@example.com",
+            "http://example.com/prefix",
+            "http://example.com/api/",
+            "http://example.com?",
+            "http://example.com#",
+            "http://example.com:65536",
+            "http://example.com:",
+            "http://example.com:+80",
+            "http://example.com:-80",
+            "http://2001:db8::1",
+            "http://[not-ip]",
+            "http://[gggg::1]",
+            "http://[::1]evil",
+            "http://exa!mple.com",
+            "http://foo_bar",
+            "http://-",
+            "http://-example.com",
+            "http://example-.com",
+            "http://example..com",
+        ] {
+            let error = ClientOrigin::parse(rejected)
+                .err()
+                .unwrap_or_else(|| panic!("accepted {rejected}"));
+            assert_eq!(error, Detail::new("http_base_url"), "{rejected}");
+            assert!(!format!("{error:?}").contains(rejected));
+        }
+        assert!(ClientOrigin::parse(&format!("http://{}.com", "a".repeat(63))).is_ok());
+        assert!(ClientOrigin::parse(&format!("http://{}.com", "a".repeat(64))).is_err());
+    }
+
+    #[test]
+    fn request_line_headers_and_body_are_exact() {
+        let now = Instant::now();
+        let request = prepare_request(
+            &ClientOrigin::parse("http://example.com:8042/").unwrap(),
+            &capability(),
+            &context(None, None, Some("orphan=state"), None),
+            &SlotValue::Value(ContractValue::string("hello")),
+            now,
+        )
+        .unwrap();
+        assert_eq!(request.method(), Method::POST);
+        assert_eq!(request.version(), Version::HTTP_11);
+        assert_eq!(request.uri(), "http://example.com:8042/rpc/box-1/cap_name");
+        assert_eq!(request.headers().len(), 1);
+        assert_eq!(request.headers()[CONTENT_TYPE], "application/json");
+        assert_eq!(request.body(), br#""hello""#);
+        assert_eq!(request.uri().path(), "/rpc/box-1/cap_name");
+        assert_eq!(request.uri().query(), None);
+    }
+
+    #[test]
+    fn deadlines_are_ceiled_nonzero_and_clamped() {
+        let now = Instant::now();
+        assert!(
+            request(&context(None, None, None, None), now)
+                .unwrap()
+                .headers()
+                .get("boxology-timeout-ms")
+                .is_none()
+        );
+        assert!(matches!(
+            request(&context(Some(Deadline::at(now)), None, None, None), now),
+            Err(ErasedCallError::Deadline)
+        ));
+        for (nanos, expected) in [
+            (1, "1"),
+            (999_999, "1"),
+            (1_000_000, "1"),
+            (1_000_001, "2"),
+            (9_999_999_999_000_000, "9999999999"),
+            (9_999_999_999_000_001, "9999999999"),
+            (31_536_000_000_000_000, "9999999999"),
+        ] {
+            let ctx = context(
+                Some(Deadline::at(now + Duration::from_nanos(nanos))),
+                None,
+                None,
+                None,
+            );
+            let value = request(&ctx, now).unwrap().headers()["boxology-timeout-ms"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(value, expected);
+            assert_ne!(value, "0");
+            assert!(!value.starts_with('0'));
+        }
+    }
+
+    #[test]
+    fn tracing_is_best_effort_and_parent_gates_state() {
+        let now = Instant::now();
+        for (parent, state, expected_parent, expected_state) in [
+            (None, None, None, None),
+            (None, Some("state=x"), None, None),
+            (Some("opaque-parent"), None, Some("opaque-parent"), None),
+            (
+                Some("opaque-parent"),
+                Some("state=x"),
+                Some("opaque-parent"),
+                Some("state=x"),
+            ),
+            (Some("bad\nparent"), Some("state=x"), None, None),
+            (
+                Some("opaque-parent"),
+                Some("bad\nstate"),
+                Some("opaque-parent"),
+                None,
+            ),
+        ] {
+            let request = request(&context(None, parent, state, None), now).unwrap();
+            assert_eq!(
+                request
+                    .headers()
+                    .get("traceparent")
+                    .and_then(|v| v.to_str().ok()),
+                expected_parent
+            );
+            assert_eq!(
+                request
+                    .headers()
+                    .get("tracestate")
+                    .and_then(|v| v.to_str().ok()),
+                expected_state
+            );
+        }
+    }
+
+    #[test]
+    fn idempotency_and_encoding_failures_are_redacted_contract_errors() {
+        let now = Instant::now();
+        assert!(IdempotencyKey::new("").is_err());
+        for valid in ["!", &"x".repeat(256)] {
+            let request = request(&context(None, None, None, Some(valid)), now).unwrap();
+            assert_eq!(request.headers()["idempotency-key"], valid);
+        }
+        for invalid in [
+            "x".repeat(257),
+            "has space".into(),
+            "control\n".into(),
+            "has,comma".into(),
+            "nonascii-é".into(),
+        ] {
+            let error = request(&context(None, None, None, Some(&invalid)), now).unwrap_err();
+            assert!(
+                matches!(error, ErasedCallError::ContractViolation(ref detail) if detail.code() == "http_idempotency_key")
+            );
+            assert!(!format!("{error:?}").contains(&invalid));
+        }
+        let error = prepare_request(
+            &ClientOrigin::parse("http://example.com").unwrap(),
+            &capability(),
+            &context(None, None, None, None),
+            &SlotValue::Missing,
+            now,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ErasedCallError::ContractViolation(ref detail) if detail == &Detail::new("http_request"))
+        );
+        assert!(!format!("{error:?}").contains("missing"));
     }
     fn classify(status: u16, body: &[u8]) -> Result<SlotValue, ErasedCallError> {
         classify_response(
