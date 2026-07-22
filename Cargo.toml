@@ -3,6 +3,8 @@ resolver = "3"
 members = [
     "crates/boxology-contract",
     "crates/boxology-contract-syntax",
+    "crates/boxology",
+    "crates/boxology-macros",
     "crates/boxology-generator",
     "crates/boxology-generator-model",
     "crates/boxology-http",

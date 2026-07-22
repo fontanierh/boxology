@@ -22,6 +22,8 @@ mod records;
 const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-contract",
     "boxology-contract-syntax",
+    "boxology",
+    "boxology-macros",
     "boxology-fixture-tests",
     "boxology-generator-model",
     "boxology-generator",
