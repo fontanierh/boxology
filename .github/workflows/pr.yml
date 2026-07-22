@@ -52,7 +52,6 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            ~/.cargo/git/db
             ~/.cargo/bin/cargo-deny
             target
           key: cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
@@ -72,6 +71,12 @@ jobs:
       - name: cargo xtask ci (main push)
         if: github.event_name == 'push'
         run: cargo xtask ci --no-budget
+      - name: Upload xtask-linux-x86_64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xtask-linux-x86_64
+          path: target/debug/xtask
+          if-no-files-found: error
       - name: Produce determinism artifacts
         run: |
           rm -rf target/determinism-linux target/determinism-linux-meta
@@ -116,7 +121,6 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            ~/.cargo/git/db
             target
           key: cargo-checks-macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
@@ -185,29 +189,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Install pinned toolchain
-        run: |
-          rustup toolchain install
-          rustup show active-toolchain
       - name: Record runner evidence
         run: |
           echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          rustc --version --verbose
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "x86_64-unknown-linux-gnu"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          test "$(uname -m)" = "x86_64"
+      - name: Download xtask-linux-x86_64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin/cargo-deny
-            target
-          key: cargo-compare-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-          restore-keys: |
-            cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
+          name: xtask-linux-x86_64
+          path: xtask-linux-x86_64
+      - name: Make xtask executable
+        run: chmod +x xtask-linux-x86_64/xtask
       - name: Download determinism-linux
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -225,39 +219,29 @@ jobs:
           tar -xf incoming/macos/determinism-macos.tar -C macos
       - name: Verify determinism artifacts
         run: |
-          cargo xtask determinism-verify linux --target x86_64-unknown-linux-gnu --require-image
-          cargo xtask determinism-verify macos --target aarch64-apple-darwin --require-image
+          ./xtask-linux-x86_64/xtask determinism-verify linux --target x86_64-unknown-linux-gnu --require-image
+          ./xtask-linux-x86_64/xtask determinism-verify macos --target aarch64-apple-darwin --require-image
       - name: Compare determinism artifacts
-        run: cargo xtask determinism-compare linux macos
+        run: ./xtask-linux-x86_64/xtask determinism-compare linux macos
 
   determinism-meta-cross:
     needs: [checks-linux, checks-macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Install pinned toolchain
-        run: |
-          rustup toolchain install
-          rustup show active-toolchain
       - name: Record runner evidence
         run: |
           echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          rustc --version --verbose
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "x86_64-unknown-linux-gnu"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          test "$(uname -m)" = "x86_64"
+      - name: Download xtask-linux-x86_64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin/cargo-deny
-            target
-          key: cargo-meta-cross-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-          restore-keys: |
-            cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
+          name: xtask-linux-x86_64
+          path: xtask-linux-x86_64
+      - name: Make xtask executable
+        run: chmod +x xtask-linux-x86_64/xtask
       - name: Download determinism-linux-meta
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -275,10 +259,10 @@ jobs:
           tar -xf incoming/macos-meta/determinism-macos-meta.tar -C macos-meta
       - name: Verify meta-cross artifacts
         run: |
-          cargo xtask determinism-verify linux-meta --target x86_64-unknown-linux-gnu --require-image
-          cargo xtask determinism-verify macos-meta --target aarch64-apple-darwin --require-image
+          ./xtask-linux-x86_64/xtask determinism-verify linux-meta --target x86_64-unknown-linux-gnu --require-image
+          ./xtask-linux-x86_64/xtask determinism-verify macos-meta --target aarch64-apple-darwin --require-image
       - name: Require expected cross-platform mismatch
-        run: cargo xtask determinism-meta-cross linux-meta macos-meta
+        run: ./xtask-linux-x86_64/xtask determinism-meta-cross linux-meta macos-meta
 
   validation:
     needs: [checks-linux, checks-macos, deny, determinism-compare, determinism-meta-cross]

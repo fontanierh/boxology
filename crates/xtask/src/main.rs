@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Instant;
 
 mod advisories;
 mod budget;
@@ -80,7 +81,7 @@ fn main() -> ExitCode {
             })
         }
         [command, rest @ ..] if command == "determinism-meta-cross" => {
-            determinism_cross::from_args(&root(), rest).unwrap_or_else(|| {
+            determinism_cross::from_args(rest).unwrap_or_else(|| {
                 usage();
                 2
             })
@@ -138,7 +139,8 @@ fn root() -> PathBuf {
 }
 
 fn run_ci(base: Option<&str>) -> u8 {
-    if let Err(error) = check_toolchain() {
+    let toolchain = timed("toolchain", check_toolchain);
+    if let Err(error) = toolchain {
         eprintln!("toolchain: FAIL: {error}");
         eprintln!("summary: FAIL (toolchain)");
         return 1;
@@ -146,36 +148,46 @@ fn run_ci(base: Option<&str>) -> u8 {
     println!("toolchain: PASS");
 
     let mut checks = vec![
-        ("fmt", run_fmt()),
+        ("fmt", timed("fmt", run_fmt)),
         (
             "clippy",
-            run_cargo(&[
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--all-features",
-                "--",
-                "-D",
-                "warnings",
-            ]),
+            timed("clippy", || {
+                run_cargo(&[
+                    "clippy",
+                    "--workspace",
+                    "--all-targets",
+                    "--all-features",
+                    "--",
+                    "-D",
+                    "warnings",
+                ])
+            }),
         ),
         (
             "test",
-            run_cargo(&["test", "--workspace", "--all-features"]),
+            timed("test", || {
+                run_cargo(&["test", "--workspace", "--all-features"])
+            }),
         ),
-        ("doc", run_doc()),
-        ("whitespace", check_tracked_whitespace()),
-        ("links", links::check(&root())),
-        ("records", records::run(&root(), base) == 0),
-        ("deny", deny::run(&root()) == 0),
-        ("determinism", determinism_run::local(&root()) == 0),
+        ("doc", timed("doc", run_doc)),
+        ("whitespace", timed("whitespace", check_tracked_whitespace)),
+        ("links", timed("links", || links::check(&root()))),
+        (
+            "records",
+            timed("records", || records::run(&root(), base) == 0),
+        ),
+        ("deny", timed("deny", || deny::run(&root()) == 0)),
+        (
+            "determinism",
+            timed("determinism", || determinism_run::local(&root()) == 0),
+        ),
     ];
     for &(name, passed) in &checks {
         println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
     }
     match base {
         Some(base) => {
-            let code = budget::run(&root(), base);
+            let code = timed("budget", || budget::run(&root(), base));
             checks.push(("budget", code == 0));
         }
         None => println!("budget: SKIPPED (--no-budget)"),
@@ -191,6 +203,13 @@ fn run_ci(base: Option<&str>) -> u8 {
         eprintln!("summary: FAIL ({})", failed.join(", "));
         1
     }
+}
+
+fn timed<T>(name: &str, check: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    let result = check();
+    println!("{name}: elapsed_ms={}", started.elapsed().as_millis());
+    result
 }
 
 fn run_links() -> u8 {
