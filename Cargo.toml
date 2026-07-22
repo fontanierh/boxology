@@ -9,6 +9,7 @@ members = [
     "crates/boxology-generator-model",
     "crates/boxology-http",
     "crates/boxology-runtime",
+    "crates/boxology-telegram",
     "crates/fixtures/fixture-tests",
     "crates/fixtures/generated-style-fmt",
     "crates/fixtures/hello/generated/contract",
