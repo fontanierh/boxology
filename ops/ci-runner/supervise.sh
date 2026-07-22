@@ -140,7 +140,8 @@ token="$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SER
 [[ "$token" =~ ^[A-Za-z0-9_]+$ ]] || exit 77
 
 api() {
-  local method=$1 path=$2 payload=${3-} url="https://api.github.com/repos/$REPOSITORY$path"
+  local method=$1 path=$2 payload=${3-}
+  local url="https://api.github.com/repos/$REPOSITORY$path"
   if [[ -n "$payload" ]]; then
     printf '%s' "$payload" | curl -q --silent --fail --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 30 \
       --config <(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\nheader = "X-GitHub-Api-Version: 2022-11-28"\n' "$token") --request "$method" --header 'Content-Type: application/json' \
