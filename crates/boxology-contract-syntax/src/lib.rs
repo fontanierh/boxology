@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use proc_macro2::TokenStream;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use syn::{
     Attribute, Expr, FnArg, ItemEnum, Lit, Meta, ReturnType, Token, Type, parse::Parse,
@@ -56,6 +57,74 @@ pub struct CapabilityDeclaration {
     pub exposure: &'static str,
     /// Declared idempotency, defaulting to none.
     pub idempotency: &'static str,
+}
+/// Version of the generation-consistency semantic encoding.
+pub const SEMANTIC_ENCODING_VERSION: u32 = 1;
+
+/// Encodes one controlled contract into the versioned canonical semantic format.
+pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
+    let mut out = b"boxology.contract-semantics\0".to_vec();
+    out.extend_from_slice(&SEMANTIC_ENCODING_VERSION.to_be_bytes());
+    count(&mut out, 2);
+    out.push(1);
+    encode_metadata(&mut out, &contract.error.docs, &contract.error.deprecation);
+    string(&mut out, &contract.error.name);
+    count(&mut out, contract.error.variants.len());
+    for variant in &contract.error.variants {
+        out.push(0);
+        encode_metadata(&mut out, &variant.docs, &variant.deprecation);
+        string(&mut out, &variant.name);
+    }
+    let capability = &contract.capability;
+    out.push(2);
+    encode_metadata(&mut out, &capability.docs, &capability.deprecation);
+    for value in [
+        capability.name.as_str(),
+        capability.input_name.as_str(),
+        "String",
+        "String",
+        capability.error.as_str(),
+        capability.exposure,
+        capability.idempotency,
+    ] {
+        string(&mut out, value);
+    }
+    out
+}
+
+/// Returns the SHA-256 generation-consistency digest of one controlled contract.
+pub fn semantic_digest(contract: &Contract) -> [u8; 32] {
+    semantic_artifacts(contract).1
+}
+
+/// Computes canonical bytes and their SHA-256 digest together.
+pub fn semantic_artifacts(contract: &Contract) -> (Vec<u8>, [u8; 32]) {
+    let bytes = canonical_semantic_bytes(contract);
+    let digest = Sha256::digest(&bytes).into();
+    (bytes, digest)
+}
+
+fn encode_metadata(out: &mut Vec<u8>, docs: &[String], deprecation: &Option<String>) {
+    count(out, docs.len());
+    for doc in docs {
+        string(out, doc);
+    }
+    match deprecation {
+        None => out.push(0),
+        Some(note) => {
+            out.push(1);
+            string(out, note);
+        }
+    }
+}
+
+fn string(out: &mut Vec<u8>, value: &str) {
+    count(out, value.len());
+    out.extend_from_slice(value.as_bytes());
+}
+
+fn count(out: &mut Vec<u8>, value: usize) {
+    out.extend_from_slice(&(value as u64).to_be_bytes());
 }
 /// Parses exact tokens from a direct `boxology::contract!` invocation.
 ///
@@ -314,6 +383,7 @@ mod tests {
 
     const ERROR: &str = "#[error] pub enum GreetError { EmptyName }";
     const CAP: &str = "#[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>;";
+    const HELLO_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000201000000000000000000000000000000000a47726565744572726f720000000000000001000000000000000000000000000000000009456d7074794e616d65020000000000000000000000000000000005677265657400000000000000046e616d650000000000000006537472696e670000000000000006537472696e67000000000000000a47726565744572726f72000000000000000865787465726e616c00000000000000046e6f6e65";
     #[test]
     fn hello_parses_to_owned_semantics() {
         fn traits<T: Send + Sync + 'static>() {}
@@ -372,5 +442,49 @@ mod tests {
         ] {
             assert!(parse(source.parse().unwrap()).is_err(), "{source}");
         }
+    }
+    #[test]
+    fn semantic_encoding_is_pinned_and_ignores_only_non_semantic_spelling() {
+        let hello = parse(format!("{ERROR} {CAP}").parse().unwrap()).unwrap();
+        let bytes = canonical_semantic_bytes(&hello);
+        assert_eq!(hex(&bytes), HELLO_BYTES);
+        assert_eq!(
+            hex(&semantic_digest(&hello)),
+            "545f142b0ced7670e3f9efc7bcaaf3b7a2a0b2b790e5b48acaa85e4901c89b18"
+        );
+        let respelled = parse(format!("/*x*/{ERROR}//x\n{CAP}").parse().unwrap()).unwrap();
+        assert_eq!(semantic_digest(&hello), semantic_digest(&respelled));
+        let mutations: &[fn(&mut Contract)] = &[
+            |c| c.error.name = "OtherError".into(),
+            |c| c.error.docs.push("docs".into()),
+            |c| c.error.deprecation = Some(String::new()),
+            |c| c.error.variants.push(c.error.variants[0].clone()),
+            |c| c.error.variants[0].docs.push("docs".into()),
+            |c| c.error.variants[0].deprecation = Some(String::new()),
+            |c| c.error.variants[0].name = "Other".into(),
+            |c| c.capability.docs.push("docs".into()),
+            |c| c.capability.deprecation = Some(String::new()),
+            |c| c.capability.name = "other".into(),
+            |c| c.capability.input_name = "other".into(),
+            |c| c.capability.error = "OtherError".into(),
+        ];
+        for mutate in mutations {
+            let mut changed = hello.clone();
+            mutate(&mut changed);
+            assert_ne!(semantic_digest(&hello), semantic_digest(&changed));
+        }
+        let mut ordered = hello.clone();
+        ordered
+            .error
+            .variants
+            .push(ordered.error.variants[0].clone());
+        ordered.error.variants[1].name = "Other".into();
+        let mut reversed = ordered.clone();
+        reversed.error.variants.swap(0, 1);
+        assert_ne!(semantic_digest(&ordered), semantic_digest(&reversed));
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 }
