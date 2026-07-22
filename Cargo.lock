@@ -48,6 +48,7 @@ version = "0.0.0"
 dependencies = [
  "base64",
  "boxology-contract",
+ "boxology-runtime",
  "ryu",
  "serde_json",
 ]
