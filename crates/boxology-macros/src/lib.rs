@@ -3,8 +3,9 @@
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span};
+use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::quote;
+use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Type, visit::Visit};
 
 /// Validates a controlled contract and exposes its generated public error type.
 #[proc_macro]
@@ -27,4 +28,103 @@ pub fn contract(input: TokenStream) -> TokenStream {
         };
     }
     .into()
+}
+
+/// Preserves one ordinary inherent implementation and asks generated glue to check its contract.
+#[proc_macro_attribute]
+pub fn implementation(arguments: TokenStream, input: TokenStream) -> TokenStream {
+    let original = TokenStream2::from(input.clone());
+    if !arguments.is_empty() {
+        return append_error(
+            original,
+            syn::Error::new(Span::call_site(), "implementation accepts no arguments"),
+        );
+    }
+    let item = match syn::parse2::<ItemImpl>(original.clone()) {
+        Ok(item) => item,
+        Err(error) => return append_error(original, error),
+    };
+    let error = if item.trait_.is_some() {
+        Some(syn::Error::new_spanned(
+            &item.self_ty,
+            "implementation requires an inherent impl",
+        ))
+    } else if !item.generics.params.is_empty() {
+        Some(syn::Error::new_spanned(
+            &item.generics,
+            "implementation impl cannot be generic",
+        ))
+    } else if item.generics.where_clause.is_some() {
+        Some(syn::Error::new_spanned(
+            &item.generics,
+            "implementation impl cannot have a where clause",
+        ))
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        return append_error(original, error);
+    }
+    let receiver = &item.self_ty;
+    let methods = item.items.iter().filter_map(|member| {
+        let ImplItem::Fn(method) = member else {
+            return None;
+        };
+        let name = &method.sig.ident;
+        let validity = Ident::new(
+            if valid_signature(method) {
+                "valid"
+            } else {
+                "invalid"
+            },
+            name.span(),
+        );
+        Some(quote!(#name #validity;))
+    });
+    quote! {
+        #original
+        ::boxology_generated_contract::__boxology_check_implementation!(#receiver; #(#methods)*);
+    }
+    .into()
+}
+
+fn append_error(original: TokenStream2, error: syn::Error) -> TokenStream {
+    let error = error.into_compile_error();
+    quote!(#original #error).into()
+}
+
+fn valid_signature(method: &syn::ImplItemFn) -> bool {
+    let signature = &method.sig;
+    let inputs = signature.inputs.iter().collect::<Vec<_>>();
+    let receiver = matches!(inputs.first(), Some(FnArg::Receiver(receiver))
+        if receiver.mutability.is_none()
+            && matches!(receiver.kind, syn::ReceiverKind::Reference(_, None, None)));
+    let typed_tail = inputs[1.min(inputs.len())..]
+        .iter()
+        .all(|input| matches!(input, FnArg::Typed(_)));
+    let mut finder = ImplTraitFinder(false);
+    finder.visit_signature(signature);
+    signature.asyncness.is_some()
+        && signature.constness.is_none()
+        && !matches!(signature.safety, syn::Safety::Unsafe(_))
+        && signature.abi.is_none()
+        && signature.variadic.is_none()
+        && signature.generics.params.is_empty()
+        && signature.generics.where_clause.is_none()
+        && inputs.len() == 3
+        && receiver
+        && typed_tail
+        && matches!(signature.output, ReturnType::Type(..))
+        && !finder.0
+}
+
+struct ImplTraitFinder(bool);
+
+impl<'ast> Visit<'ast> for ImplTraitFinder {
+    fn visit_type(&mut self, node: &'ast Type) {
+        if matches!(node, Type::ImplTrait(_)) {
+            self.0 = true;
+        }
+        syn::visit::visit_type(self, node);
+    }
 }

@@ -108,6 +108,7 @@ dependencies = [
  "boxology-contract-syntax",
  "proc-macro2",
  "quote",
+ "syn 3.0.0",
 ]
 
 [[package]]
