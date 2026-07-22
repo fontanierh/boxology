@@ -1,13 +1,17 @@
 # Boxology Mac-hosted CI runners
 
-This is the authoritative runbook for S0-T8. It provisions two disposable GitHub
-Actions JIT runners on the MacBook: Linux jobs run in the native ARM64 Colima VM,
-and macOS jobs run on the native Apple-silicon host. Every enabled workflow uses
-one of these labels; no enabled workflow targets a GitHub-hosted runner.
+This is the authoritative runbook for S0-T8. It provisions ten disposable GitHub
+Actions JIT slots for each active label on the MacBook: Linux jobs run in the
+native ARM64 Colima VM, and macOS jobs run on the native Apple-silicon host.
+Every enabled workflow uses one of these labels; no enabled workflow targets a
+GitHub-hosted runner.
 
-The Linux and native-macOS supervisors each allow one job at a time. Concurrent
-Linux jobs queue behind the single container runner, while a Linux job and a
-macOS job may use the two host lanes concurrently.
+Each label has one base supervisor plus nine slot supervisors. A slot owns one
+JIT runner, one disposable workspace, and one cache root, so independent PRs can
+run concurrently without sharing checkout state. Slot workers use bounded
+per-job defaults (`CARGO_BUILD_JOBS=2`, `RUST_TEST_THREADS=2`; extra Linux
+containers are capped at one CPU and 2 GiB) to keep bursts fast without turning
+the Mac into an OOM storm.
 
 ## Pinned inputs
 
@@ -98,7 +102,9 @@ Verify architecture, the pinned base digest, the runner SHA-256 label, and
 the supervisor. A missing or changed identity is a fail-closed condition.
 At runtime the image root is read-only; the unique named volume mounted at
 `/runner` holds the copied runner state, checkout, target, and Cargo home. The
-supervisor bounds each container to 4 CPUs, 8 GiB RAM without swap, and 512 pids.
+base supervisor bounds its container to 4 CPUs and 8 GiB RAM without swap; slot
+containers use the slot plist's 1-CPU/2-GiB bounds. All containers are capped at
+512 pids.
 It sets `TMPDIR` to the executable `_work/_temp` volume path so nested Cargo
 tests can run temporary binaries while `/tmp` remains `noexec`.
 
@@ -134,6 +140,17 @@ runner logs because job output can contain secrets. The native runner is not
 container-isolated: it is accepted only for this private repository and trusted
 Henry/agent collaborators.
 
+Activate the additional nine native Mac slots alongside the base supervisor:
+
+```sh
+install -m 700 ops/ci-runner/supervise-slots.sh "$HOME/.crab/ci-runner/supervise-slots.sh"
+install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots.plist \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
+plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
+```
+
 ## JIT lifecycle and smoke test
 
 Install the reviewed `supervise.sh` outside this mutable checkout, make it
@@ -149,7 +166,7 @@ The broker PAT never enters the container or job environment; ordinary GitHub Ac
 read/runtime credentials may be present for checkout.
 The smoke workflow keeps `persist-credentials: false` and asserts only broker-PAT absence. The official runner transiently consumes `run.sh --disableupdate --jitconfig`; runtime self-update is disabled and the image pin is authoritative.
 That argument is visible to same-user job processes by design. This residual is accepted only for trusted private collaborators; do not activate if that boundary changes.
-The supervisor waits for one job, emits sanitized state-only diagnostics, then removes failed JIT registrations, the container, and the unique volume. Failed cleanup retains owned handles/lock and backs off; a lock refuses a concurrent supervisor.
+Each slot supervisor waits for one job, emits sanitized state-only diagnostics, then removes failed JIT registrations, the container, and the unique volume. Failed cleanup retains owned handles/lock and backs off; a lock refuses a concurrent supervisor.
 
 Only after a successful Linux smoke run, replace every placeholder in the plist,
 copy it and the reviewed supervisor to paths outside the checkout, then validate
@@ -159,6 +176,17 @@ and load it in the user launchd domain:
 plutil -lint /PATH/TO/com.fontanierh.boxology-ci-runner.plist
 launchctl bootstrap "gui/$(id -u)" /PATH/TO/com.fontanierh.boxology-ci-runner.plist
 launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-runner"
+```
+
+Activate the additional nine Linux slots alongside the base supervisor:
+
+```sh
+install -m 700 ops/ci-runner/supervise-slots.sh "$HOME/.crab/ci-runner/supervise-slots.sh"
+install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-runner-slots.plist \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
+plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
 ```
 
 The Linux workflow is manual-only and remains the operator's end-to-end health check. Dispatch
@@ -183,7 +211,7 @@ workflow job runs through this MacBook and uses no GitHub-hosted Actions minutes
 ## Health, cleanup, and rollback
 
 Check `colima status --profile boxology-ci-arm64`, `DOCKER_CONTEXT=colima-boxology-ci-arm64`,
-the image architecture/identity/SHA labels, both launchd jobs, and the GitHub
+the image architecture/identity/SHA labels, all base and slot launchd jobs, and the GitHub
 runner labels. Inspect the current Linux container only for fixed state fields
 and mounts; the sole mount must be the fresh named runner volume. Never collect
 raw runner logs because job output can contain secrets.
@@ -200,6 +228,6 @@ Safety boundaries: no repository checkout in the image, read-only root, bounded
 CPU/memory, no host path mounts/socket/host networking, no privileged container,
 no persistent runner registration, no broker PAT in repo/plist/env/command line,
 GitHub API writes are limited to JIT registration/deletion lifecycle operations, and one
-runner per lane. The Linux JIT argument's same-user
+runner per slot. The Linux JIT argument's same-user
 visibility is the documented residual; API, image, Keychain, lock, context, and
 architecture failures stop or back off rather than weakening isolation.
