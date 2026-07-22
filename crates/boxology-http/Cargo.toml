@@ -7,7 +7,7 @@ publish = false
 [features]
 default = ["server"]
 server = ["dep:boxology-runtime", "dep:http"]
-client = ["dep:http", "dep:reqwest", "dep:tokio"]
+client = ["dep:boxology-runtime", "dep:http", "dep:reqwest", "dep:tokio"]
 
 [dependencies]
 base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
