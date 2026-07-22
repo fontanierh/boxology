@@ -200,7 +200,9 @@ run_once() {
   RUNNER_ID="$(jq -er '.runner.id | numbers' <<<"$response")" || { reconcile_jit_runner; return 1; }
   jit="$(jq -er '.encoded_jit_config' <<<"$response")" || { reconcile_jit_runner; return 1; }
   run_dir="$(mktemp -d "$RUNNER_ROOT/runs/run.XXXXXX")" || { delete_jit_runner; return 1; }
-  cp -a "$RUNNER_BASE/." "$run_dir/"
+  # The pinned runner base is about 435 MB. APFS clones keep each JIT runner
+  # isolated while avoiding a byte-for-byte copy on every job.
+  cp -ac "$RUNNER_BASE/." "$run_dir/"
   mkdir -p "$run_dir/_work/_temp" "$run_dir/_work/_tool" "$CACHE_ROOT/home/.cargo"
   status=0
   (

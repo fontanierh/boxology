@@ -56,7 +56,8 @@ runs on the MacBook: each active label exposes twenty disposable slots. Linux jo
 `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` runner supplied by S0-T8,
 while native macOS jobs use `[self-hosted, macOS, ARM64, boxology-macos-pr]`.
 Each lane has one base supervisor plus nineteen slot supervisors, with bounded
-per-slot build/test parallelism, private native Mac target caches, and Linux container resources. The x86 audit workflow is removed for
+per-slot build/test parallelism, APFS-cloned native Mac runner directories,
+private native Mac target caches, and Linux container resources. The x86 audit workflow is removed for
 this emergency migration and is a deferred follow-up.
 
 | Job | Command | Runner |
