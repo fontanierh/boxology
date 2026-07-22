@@ -37,6 +37,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-contract-syntax"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "syn 3.0.0",
+]
+
+[[package]]
 name = "boxology-fixture-tests"
 version = "0.0.0"
 dependencies = [

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/boxology-contract",
+    "crates/boxology-contract-syntax",
     "crates/boxology-generator-model",
     "crates/boxology-http",
     "crates/boxology-runtime",
