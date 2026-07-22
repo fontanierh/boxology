@@ -210,6 +210,7 @@ run_once() {
       --env ImageOS=ubuntu24.04-arm64-colima \
       --env ImageVersion="$IMAGE_VERSION" --env HOME=/runner/home --env CARGO_HOME=/runner/_work/.cargo \
       --env RUNNER_TEMP=/runner/_work/_temp \
+      --env TMPDIR=/runner/_work/_temp \
       "$CI_RUNNER_IMAGE" >/dev/null 2>/dev/null &
   docker_pid=$!
   if wait "$docker_pid"; then

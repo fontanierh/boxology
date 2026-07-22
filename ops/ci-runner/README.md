@@ -89,6 +89,8 @@ the supervisor. A missing or changed identity is a fail-closed condition.
 At runtime the image root is read-only; the unique named volume mounted at
 `/runner` holds the copied runner state, checkout, target, and Cargo home. The
 supervisor bounds each container to 4 CPUs, 8 GiB RAM without swap, and 512 pids.
+It sets `TMPDIR` to the executable `_work/_temp` volume path so nested Cargo
+tests can run temporary binaries while `/tmp` remains `noexec`.
 
 ## JIT lifecycle and smoke test
 
