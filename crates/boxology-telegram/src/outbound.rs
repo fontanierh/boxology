@@ -42,6 +42,17 @@ enum Start {
     Existing { message_id: i64 },
 }
 
+struct Delivery<'a> {
+    kind: &'a str,
+    dedup_key: &'a str,
+    text: &'a str,
+    reply_to: Option<i64>,
+    buttons: Option<Value>,
+    chat_id: i64,
+    event: Option<EventRecord>,
+    ask_id: Option<&'a str>,
+}
+
 pub(crate) fn send(input: &[u8]) -> Result<Value, AppError> {
     let request: SendRequest = parse(input)?;
     check_schema(request.schema)?;
@@ -51,14 +62,16 @@ pub(crate) fn send(input: &[u8]) -> Result<Value, AppError> {
     let chat_id = state::read(&paths)?.pairing.ok_or_else(not_paired)?.chat_id;
     deliver(
         &paths,
-        "send",
-        &request.dedup_key,
-        &request.text,
-        None,
-        None,
-        chat_id,
-        None,
-        None,
+        Delivery {
+            kind: "send",
+            dedup_key: &request.dedup_key,
+            text: &request.text,
+            reply_to: None,
+            buttons: None,
+            chat_id,
+            event: None,
+            ask_id: None,
+        },
     )
 }
 
@@ -83,14 +96,16 @@ pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
     let chat_id = state.pairing.ok_or_else(not_paired)?.chat_id;
     deliver(
         &paths,
-        "reply",
-        &request.dedup_key,
-        &request.text,
-        Some(message_id),
-        None,
-        chat_id,
-        Some(event),
-        ask_id.as_deref(),
+        Delivery {
+            kind: "reply",
+            dedup_key: &request.dedup_key,
+            text: &request.text,
+            reply_to: Some(message_id),
+            buttons: None,
+            chat_id,
+            event: Some(event),
+            ask_id: ask_id.as_deref(),
+        },
     )
 }
 
@@ -149,20 +164,20 @@ pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn deliver(
-    paths: &Paths,
-    kind: &str,
-    dedup_key: &str,
-    text: &str,
-    reply_to: Option<i64>,
-    buttons: Option<Value>,
-    chat_id: i64,
-    event: Option<EventRecord>,
-    ask_id: Option<&str>,
-) -> Result<Value, AppError> {
+fn deliver(paths: &Paths, delivery: Delivery<'_>) -> Result<Value, AppError> {
+    let Delivery {
+        kind,
+        dedup_key,
+        text,
+        reply_to,
+        buttons,
+        chat_id,
+        event,
+        ask_id,
+    } = delivery;
     let payload_hash = payload_hash(kind, dedup_key, text, reply_to, buttons.as_ref());
     let start = state::update(paths, |state| {
+        state.prune_completed();
         if let Some(record) = state
             .outbound
             .iter_mut()
@@ -290,14 +305,16 @@ pub(crate) fn deliver_ask(
 ) -> Result<Value, AppError> {
     let result = deliver(
         paths,
-        "ask",
-        dedup_key,
-        text,
-        None,
-        Some(buttons),
-        chat_id,
-        None,
-        Some(ask_id),
+        Delivery {
+            kind: "ask",
+            dedup_key,
+            text,
+            reply_to: None,
+            buttons: Some(buttons),
+            chat_id,
+            event: None,
+            ask_id: Some(ask_id),
+        },
     )?;
     if let Some(message_id) = result.get("message_id").and_then(Value::as_i64) {
         state::update(paths, |state| {

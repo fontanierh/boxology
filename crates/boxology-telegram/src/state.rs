@@ -114,6 +114,40 @@ pub(crate) struct OutboundRecord {
 }
 
 impl State {
+    pub(crate) fn prune_completed(&mut self) {
+        while self.asks.len() >= 256 {
+            let Some(index) = self.asks.iter().position(|ask| {
+                ask.state != "open"
+                    && !self.events.iter().any(|event| {
+                        !event.handled && event.ask_id.as_deref() == Some(ask.ask_id.as_str())
+                    })
+                    && !self.outbound.iter().any(|outbound| {
+                        outbound.ask_id.as_deref() == Some(ask.ask_id.as_str())
+                            && matches!(outbound.state.as_str(), "in_flight" | "ambiguous")
+                    })
+            }) else {
+                break;
+            };
+            self.asks.remove(index);
+        }
+        while self.outbound.len() >= 1_024 {
+            let Some(index) = self.outbound.iter().position(|outbound| {
+                outbound.state == "delivered"
+                    && !self.events.iter().any(|event| {
+                        !event.handled
+                            && outbound.event_id.as_deref() == Some(event.event_id.as_str())
+                    })
+                    && !self.asks.iter().any(|ask| {
+                        ask.state == "open"
+                            && outbound.ask_id.as_deref() == Some(ask.ask_id.as_str())
+                    })
+            }) else {
+                break;
+            };
+            self.outbound.remove(index);
+        }
+    }
+
     pub(crate) fn prune_handled(&mut self) {
         while self.events.len() >= 1_000
             || serde_json::to_vec(&self.events).is_ok_and(|bytes| bytes.len() >= 8 * 1024 * 1024)

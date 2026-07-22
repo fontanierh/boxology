@@ -156,7 +156,7 @@ fn complete(input: &[u8]) -> Result<Value, AppError> {
     let updates = api
         .get_updates(before.next_offset, timeout)
         .map_err(api_error)?;
-    validate_update_order(&updates)?;
+    validate_update_order(&updates, before.next_offset)?;
     let max_id = updates.last().map(|update| update.update_id);
     let selected = updates
         .iter()
@@ -245,14 +245,17 @@ fn pairing_candidate(update: &api::Update, pending: &PendingPair) -> Option<(i64
         .then_some((user.id, message.chat.id))
 }
 
-fn validate_update_order(updates: &[api::Update]) -> Result<(), AppError> {
+fn validate_update_order(updates: &[api::Update], requested_offset: i64) -> Result<(), AppError> {
     if updates
-        .windows(2)
-        .any(|pair| pair[0].update_id >= pair[1].update_id)
+        .iter()
+        .any(|update| update.update_id < requested_offset)
+        || updates
+            .windows(2)
+            .any(|pair| pair[0].update_id >= pair[1].update_id)
     {
         return Err(AppError::new(
             "update_order",
-            "Telegram returned unordered updates",
+            "Telegram returned invalid update offsets",
             ExitClass::Transient,
         ));
     }

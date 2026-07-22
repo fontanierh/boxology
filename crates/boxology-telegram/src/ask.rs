@@ -96,6 +96,7 @@ pub(crate) fn run(input: &[u8]) -> Result<Value, AppError> {
         ));
     }
     state::update(&paths, |state| {
+        state.prune_completed();
         if state.asks.iter().all(|ask| ask.ask_id != ask_id) {
             if state.asks.len() >= 256 {
                 return Err(AppError::new(

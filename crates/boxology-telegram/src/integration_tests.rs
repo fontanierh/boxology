@@ -1,5 +1,5 @@
 use super::api;
-use super::state::{self, BotFingerprint, Pairing, Paths};
+use super::state::{self, BotFingerprint, EventRecord, Pairing, Paths};
 use super::{ENABLED_VARIABLE, ExitClass, SCHEMA, test_guard};
 use serde_json::{Value, json};
 use std::fs;
@@ -430,6 +430,62 @@ fn malformed_receive_does_not_advance_offset_and_webhooks_are_refused() {
 }
 
 #[test]
+fn stale_update_offsets_cannot_regress_or_replay_state() {
+    let mut context = Context::new(vec![
+        response(&json!({"id": 7, "is_bot": true, "username": "fake_bot"})),
+        response(&json!({"url": ""})),
+    ]);
+    let (begin, exit) = run(&["pair", "begin"], json!({"schema": SCHEMA}));
+    assert_eq!(exit, ExitClass::Success, "{begin}");
+    let payload = ok(&begin)["deep_link"]
+        .as_str()
+        .unwrap()
+        .rsplit("?start=")
+        .next()
+        .unwrap()
+        .to_string();
+    let paths = Paths::from_env().unwrap();
+    state::update(&paths, |state| {
+        state.next_offset = 10;
+        Ok(())
+    })
+    .unwrap();
+    context.replace_fake(vec![response(&json!([{
+        "update_id": 9,
+        "message": {"message_id": 1, "from": {"id": 42, "is_bot": false}, "chat": {"id": 42, "type": "private"}, "text": format!("/start {payload}")}
+    }]))]);
+    let (_, exit) = run(
+        &["pair", "complete"],
+        json!({"schema": SCHEMA, "timeout_seconds": 0}),
+    );
+    assert_eq!(exit, ExitClass::Transient);
+    let state = state::read(&paths).unwrap();
+    assert_eq!(state.next_offset, 10);
+    assert!(state.pairing.is_none());
+    assert!(state.pending_pair.is_some());
+    drop(context);
+
+    let mut context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    state::update(&paths, |state| {
+        state.next_offset = 10;
+        Ok(())
+    })
+    .unwrap();
+    context.replace_fake(vec![response(&json!([{
+        "update_id": 9,
+        "message": {"message_id": 2, "from": {"id": 42, "is_bot": false}, "chat": {"id": 42, "type": "private"}, "text": "replayed"}
+    }]))]);
+    let (output, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
+    assert_eq!(exit, ExitClass::Transient);
+    assert!(!output.contains("replayed"));
+    let state = state::read(&paths).unwrap();
+    assert_eq!(state.next_offset, 10);
+    assert!(state.events.is_empty());
+}
+
+#[test]
 fn listener_emits_startup_error_and_stopped_without_leaking_token() {
     let context = Context::new(vec![]);
     let paths = Paths::from_env().unwrap();
@@ -486,4 +542,77 @@ fn strict_input_and_private_token_file_checks_fail_closed() {
         std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE");
     }
     drop(context);
+}
+
+#[test]
+fn pairing_revocation_is_explicit_and_local() {
+    let context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    state::update(&paths, |state| {
+        state.events.push(EventRecord {
+            event_id: "tg:1:1".into(),
+            update_id: 1,
+            kind: "text".into(),
+            text: "private".into(),
+            received_at: 1,
+            handled: false,
+            reply_to: None,
+            ask_id: None,
+            lifecycle_key: None,
+            choice: None,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let (revoked, exit) = run(&["pair", "revoke"], json!({"schema": SCHEMA}));
+    assert_eq!(exit, ExitClass::Success, "{revoked}");
+    let state = state::read(&paths).unwrap();
+    assert!(state.pairing.is_none());
+    assert!(state.events.is_empty());
+    assert_eq!(context.fake.request_count(), 0);
+}
+
+#[test]
+fn remote_polling_conflict_is_not_retried_as_a_write() {
+    let mut context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    context.replace_fake(vec![raw(
+        r#"{"ok":false,"error_code":409,"description":"secret conflict"}"#,
+    )]);
+    let (output, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
+    assert_eq!(exit, ExitClass::Conflict);
+    assert!(!output.contains("secret conflict"));
+    assert_eq!(context.fake.request_count(), 1);
+}
+
+#[test]
+fn acknowledged_full_inbox_is_pruned_before_fetching_more() {
+    let mut context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    state::update(&paths, |state| {
+        state.events = (0..1_000)
+            .map(|index| EventRecord {
+                event_id: format!("tg:{index}:1"),
+                update_id: index,
+                kind: "text".into(),
+                text: "done".into(),
+                received_at: 1,
+                handled: true,
+                reply_to: None,
+                ask_id: None,
+                lifecycle_key: None,
+                choice: None,
+            })
+            .collect();
+        Ok(())
+    })
+    .unwrap();
+    context.replace_fake(vec![response(&json!([]))]);
+    let (output, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
+    assert_eq!(exit, ExitClass::Success, "{output}");
+    assert!(ok(&output)["event"].is_null());
+    assert!(state::read(&paths).unwrap().events.len() < 1_000);
 }
