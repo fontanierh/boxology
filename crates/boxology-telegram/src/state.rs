@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_STATE: u64 = 8 * 1024 * 1024;
 const MODE_PRIVATE: u32 = 0o600;
@@ -403,6 +404,13 @@ fn local_io(_: std::io::Error) -> AppError {
         "local state is unavailable",
         ExitClass::Local,
     )
+}
+
+#[allow(dead_code)]
+pub(crate) fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |value| value.as_secs() as i64)
 }
 
 #[cfg(test)]

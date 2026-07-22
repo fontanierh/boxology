@@ -4,6 +4,7 @@ use std::env;
 
 #[allow(dead_code)]
 mod api;
+mod pairing;
 mod state;
 
 pub const SCHEMA: u8 = 1;
@@ -30,6 +31,7 @@ pub struct AppError {
     pub message: &'static str,
     pub retryable: bool,
     pub exit: ExitClass,
+    pub retry_after: Option<u64>,
 }
 
 impl AppError {
@@ -39,6 +41,7 @@ impl AppError {
             message,
             retryable: false,
             exit,
+            retry_after: None,
         }
     }
 
@@ -48,6 +51,7 @@ impl AppError {
             message,
             retryable: false,
             exit: ExitClass::Input,
+            retry_after: None,
         }
     }
 
@@ -57,6 +61,7 @@ impl AppError {
             message: "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1",
             retryable: false,
             exit: ExitClass::Authorization,
+            retry_after: None,
         }
     }
 
@@ -66,6 +71,7 @@ impl AppError {
             message: "operation is not available",
             retryable: false,
             exit: ExitClass::Policy,
+            retry_after: None,
         }
     }
 }
@@ -93,6 +99,8 @@ struct ErrorBody<'a> {
     code: &'a str,
     message: &'a str,
     retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_seconds: Option<u64>,
 }
 
 pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
@@ -112,7 +120,20 @@ pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
     if !enabled() {
         return failure(command, AppError::authorization());
     }
-    let _ = subcommand;
+    if command == "pair" {
+        return match subcommand {
+            Some("begin") | Some("complete") | Some("revoke") => {
+                match pairing::run(subcommand.expect("pair subcommand"), input) {
+                    Ok(data) => success("pair", data),
+                    Err(error) => failure("pair", error),
+                }
+            }
+            _ => failure(
+                "pair",
+                AppError::input("invalid_subcommand", "invalid pair operation"),
+            ),
+        };
+    }
     failure(command, AppError::unsupported())
 }
 
@@ -148,7 +169,7 @@ fn enabled() -> bool {
     env::var(ENABLED_VARIABLE).is_ok_and(|value| value == "1")
 }
 
-fn parse<T: for<'de> Deserialize<'de>>(input: &[u8]) -> Result<T, AppError> {
+pub(crate) fn parse<T: for<'de> Deserialize<'de>>(input: &[u8]) -> Result<T, AppError> {
     if input.len() > MAX_INPUT {
         return Err(AppError::input(
             "input_too_large",
@@ -159,7 +180,7 @@ fn parse<T: for<'de> Deserialize<'de>>(input: &[u8]) -> Result<T, AppError> {
         .map_err(|_| AppError::input("invalid_json", "request must be one valid JSON object"))
 }
 
-fn success(command: &str, data: Value) -> (String, ExitClass) {
+pub(crate) fn success(command: &str, data: Value) -> (String, ExitClass) {
     let envelope = Envelope {
         schema: SCHEMA,
         ok: true,
@@ -173,7 +194,7 @@ fn success(command: &str, data: Value) -> (String, ExitClass) {
     )
 }
 
-fn failure(command: &str, error: AppError) -> (String, ExitClass) {
+pub(crate) fn failure(command: &str, error: AppError) -> (String, ExitClass) {
     let envelope = Envelope {
         schema: SCHEMA,
         ok: false,
@@ -183,6 +204,7 @@ fn failure(command: &str, error: AppError) -> (String, ExitClass) {
             code: error.code,
             message: error.message,
             retryable: error.retryable,
+            retry_after_seconds: error.retry_after,
         }),
     };
     (
