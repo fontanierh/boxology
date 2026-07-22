@@ -157,6 +157,9 @@ fn project(update: &api::Update, state: &State) -> Option<EventRecord> {
         received_at: state::now(),
         handled: false,
         reply_to,
+        ask_id: None,
+        lifecycle_key: None,
+        choice: None,
     })
 }
 

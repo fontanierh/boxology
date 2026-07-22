@@ -205,6 +205,7 @@ fn deliver(
             state: "in_flight".into(),
             message_id: None,
             event_id: event.as_ref().map(|event| event.event_id.clone()),
+            ask_id: None,
         });
         Ok(Start::Send {
             deduplicated: false,
