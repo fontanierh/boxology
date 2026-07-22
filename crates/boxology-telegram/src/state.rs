@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_STATE: u64 = 8 * 1024 * 1024;
@@ -205,6 +205,13 @@ impl State {
                 ExitClass::Invariant,
             ));
         }
+        if self.confirmed_before > self.next_offset {
+            return Err(AppError::new(
+                "corrupt_state",
+                "local state has invalid receipt offsets",
+                ExitClass::Invariant,
+            ));
+        }
         if self.events.len() > 1_000 || self.asks.len() > 256 || self.outbound.len() > 1_024 {
             return Err(AppError::new(
                 "state_limit",
@@ -281,14 +288,64 @@ pub(crate) fn read(paths: &Paths) -> Result<State, AppError> {
     state
 }
 
-#[allow(dead_code)]
+pub(crate) fn open_protected(
+    path: &Path,
+    read: bool,
+    write: bool,
+    create: bool,
+) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(read).write(write);
+    if create {
+        options.create(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(NO_FOLLOW);
+    }
+    options.open(path)
+}
+
+pub(crate) fn validate_ancestors(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let mut current = PathBuf::new();
+    for component in parent.components() {
+        match component {
+            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::RootDir => current.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "parent path component",
+                ));
+            }
+            Component::Normal(part) => current.push(part),
+        }
+        if current == Path::new("/") || current.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "unsafe path ancestor",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn consumer_locked(paths: &Paths) -> Result<bool, AppError> {
     paths.prepare()?;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&paths.consumer_lock)
-        .map_err(local_io)?;
+    let file = open_protected(&paths.consumer_lock, true, true, false).map_err(local_io)?;
     match file.try_lock() {
         Ok(()) => {
             let _ = file.unlock();
@@ -318,11 +375,7 @@ pub(crate) struct ConsumerLock(File);
 impl ConsumerLock {
     pub(crate) fn acquire(paths: &Paths) -> Result<Self, AppError> {
         paths.prepare()?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&paths.consumer_lock)
-            .map_err(local_io)?;
+        let file = open_protected(&paths.consumer_lock, true, true, false).map_err(local_io)?;
         file.try_lock().map_err(|error| match error {
             std::fs::TryLockError::WouldBlock => AppError::new(
                 "consumer_locked",
@@ -345,11 +398,7 @@ struct StateLock(File);
 
 impl StateLock {
     fn acquire(path: &Path) -> Result<Self, AppError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(local_io)?;
+        let file = open_protected(path, true, true, false).map_err(local_io)?;
         file.lock().map_err(local_io)?;
         Ok(Self(file))
     }
@@ -362,12 +411,22 @@ impl Drop for StateLock {
 }
 
 fn read_unlocked(path: &Path) -> Result<State, AppError> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(State::default()),
+    validate_ancestors(path).map_err(|_| {
+        AppError::new(
+            "unsafe_state_file",
+            "state path has an unsafe ancestor",
+            ExitClass::Local,
+        )
+    })?;
+    let mut file = match open_protected(path, true, false, false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(State::default());
+        }
         Err(error) => return Err(local_io(error)),
     };
-    validate_file(path, &metadata)?;
+    let metadata = file.metadata().map_err(local_io)?;
+    validate_file(&metadata)?;
     if metadata.len() > MAX_STATE {
         return Err(AppError::new(
             "state_too_large",
@@ -375,7 +434,6 @@ fn read_unlocked(path: &Path) -> Result<State, AppError> {
             ExitClass::Local,
         ));
     }
-    let mut file = File::open(path).map_err(local_io)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.read_to_end(&mut bytes).map_err(local_io)?;
     let state: State = serde_json::from_slice(&bytes).map_err(|_| {
@@ -406,11 +464,14 @@ fn write_unlocked(root: &Path, path: &Path, state: &State) -> Result<(), AppErro
         ));
     }
     let temp = root.join(format!("state.json.{}.tmp", unique_suffix()?));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .map_err(local_io)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(NO_FOLLOW);
+    }
+    let mut file = options.open(&temp).map_err(local_io)?;
     set_private(&file)?;
     file.write_all(&bytes).map_err(local_io)?;
     file.sync_all().map_err(local_io)?;
@@ -422,13 +483,28 @@ fn write_unlocked(root: &Path, path: &Path, state: &State) -> Result<(), AppErro
 }
 
 fn ensure_home(path: &Path) -> Result<(), AppError> {
-    if !path.exists() {
+    validate_ancestors(path).map_err(|_| {
+        AppError::new(
+            "unsafe_state_home",
+            "state home has an unsafe ancestor",
+            ExitClass::Local,
+        )
+    })?;
+    let existing = fs::symlink_metadata(path);
+    if matches!(&existing, Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
         fs::create_dir_all(path).map_err(local_io)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(path, fs::Permissions::from_mode(MODE_HOME)).map_err(local_io)?;
         }
+        validate_ancestors(path).map_err(|_| {
+            AppError::new(
+                "unsafe_state_home",
+                "state home has an unsafe ancestor",
+                ExitClass::Local,
+            )
+        })?;
     }
     let metadata = fs::symlink_metadata(path).map_err(local_io)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -442,20 +518,31 @@ fn ensure_home(path: &Path) -> Result<(), AppError> {
 }
 
 fn ensure_lock_file(path: &Path) -> Result<(), AppError> {
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        validate_file(path, &metadata)?;
+    validate_ancestors(path).map_err(|_| {
+        AppError::new(
+            "unsafe_state_file",
+            "lock path has an unsafe ancestor",
+            ExitClass::Local,
+        )
+    })?;
+    let existed = match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            validate_file(&metadata)?;
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(local_io(error)),
+    };
+    let file = open_protected(path, true, true, true).map_err(local_io)?;
+    if !existed {
+        set_private(&file)?;
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .map_err(local_io)?;
-    set_private(&file)
+    let metadata = file.metadata().map_err(local_io)?;
+    validate_file(&metadata)?;
+    Ok(())
 }
 
-fn validate_file(_path: &Path, metadata: &fs::Metadata) -> Result<(), AppError> {
+fn validate_file(metadata: &fs::Metadata) -> Result<(), AppError> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(AppError::new(
             "unsafe_state_file",
@@ -561,6 +648,15 @@ fn effective_uid() -> u32 {
     unsafe { geteuid() }
 }
 
+#[cfg(target_os = "linux")]
+const NO_FOLLOW: i32 = 0o400000;
+
+#[cfg(target_os = "macos")]
+const NO_FOLLOW: i32 = 0x0100;
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+const NO_FOLLOW: i32 = 0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,7 +667,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock is after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("boxology-telegram-state-{nonce}"))
+        fs::canonicalize(std::env::temp_dir())
+            .expect("canonical temp directory")
+            .join(format!("boxology-telegram-state-{nonce}"))
     }
 
     #[test]
