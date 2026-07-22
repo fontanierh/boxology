@@ -230,6 +230,28 @@ impl GenerationRequest {
         #[doc = "Returns declared imports in caller-provided order."] imports: &[DeclaredImport] = imports;
         #[doc = "Returns declared outputs in caller-provided order."] outputs: &[RelativePath] = outputs;
     }
+
+    /// Requires the declared outputs to equal one generator's complete output set.
+    pub fn require_exact_outputs(&self, expected: &[&str]) -> Result<(), Diagnostics> {
+        let mut actual = self
+            .outputs
+            .iter()
+            .map(RelativePath::as_str)
+            .collect::<Vec<_>>();
+        let mut expected = expected.to_vec();
+        actual.sort_unstable_by_key(|path| path.as_bytes());
+        expected.sort_unstable_by_key(|path| path.as_bytes());
+        let has_duplicates = |paths: &[&str]| paths.windows(2).any(|pair| pair[0] == pair[1]);
+        if actual == expected && !has_duplicates(&actual) && !has_duplicates(&expected) {
+            return Ok(());
+        }
+        Err(Diagnostics(vec![request_diagnostic(
+            request_path(),
+            "BXG0039",
+            format!("declared outputs {actual:?}"),
+            "declared outputs must equal the generator's complete output set without duplicates",
+        )]))
+    }
 }
 /// A source coordinate with one-based line and character-column units.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

@@ -54,6 +54,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-generator"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "boxology-generator-model",
+ "prettyplease",
+ "syn 3.0.0",
+]
+
+[[package]]
 name = "boxology-generator-model"
 version = "0.0.0"
 dependencies = [
@@ -535,6 +545,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0103b1cef7ec0cf76490e969665504990193874ea05c85ff9bab8b911d0a0564"
 dependencies = [
  "zerovec",
+]
+
+[[package]]
+name = "prettyplease"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bfe0f4c752e450fc2faf62654f1c134747922825d5b04ca717b8874f41a40c0"
+dependencies = [
+ "proc-macro2",
+ "syn 3.0.0",
 ]
 
 [[package]]
@@ -1027,6 +1047,7 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "boxology-contract",
+ "boxology-generator",
  "boxology-generator-model",
  "serde_json",
  "sha2",

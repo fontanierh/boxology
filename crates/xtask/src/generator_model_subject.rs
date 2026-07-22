@@ -1,4 +1,5 @@
 use boxology_contract::BoxId;
+use boxology_generator::generate;
 use boxology_generator_model::{
     ContractDeclaration, ContractDeclarationShape, ContractDeclarationSyntax, ContractFields,
     GenerationRequest, Manifest, ParsedRustInputs,
@@ -599,6 +600,46 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         vec![],
     )
     .expect_err("fixed invalid request must fail");
+
+    let cold_request = GenerationRequest::new(
+        BoxId::new("hello").expect("fixed id is valid"),
+        "src/lib.rs".into(),
+        vec![
+            input("boxology.toml", b"schema = 1\nid = \"hello\"\nkind = \"box\"\n"),
+            input("src/lib.rs", b"boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; }"),
+        ],
+        vec![],
+        vec![
+            "generated/contract/src/lib.rs".into(),
+            "generated/contract/Cargo.toml".into(),
+        ],
+    )
+    .map_err(|error| format!("fixed cold request failed: {error}"))?;
+    let cold_contract = ParsedRustInputs::parse(&cold_request)
+        .and_then(|parsed| parsed.controlled_contract())
+        .map_err(|error| format!("fixed cold contract failed: {error}"))?;
+    fs::create_dir_all(out.join("cold-model"))
+        .map_err(|error| format!("create cold-model: {error}"))?;
+    fs::write(
+        out.join("cold-model/semantic.bin"),
+        cold_contract.canonical_semantic_bytes(),
+    )
+    .map_err(|error| format!("write cold semantic model: {error}"))?;
+    fs::write(
+        out.join("cold-model/digest.bin"),
+        cold_contract.semantic_digest(),
+    )
+    .map_err(|error| format!("write cold semantic digest: {error}"))?;
+    for file in generate(&cold_request)
+        .map_err(|error| format!("fixed cold generation failed: {error}"))?
+        .files()
+    {
+        let destination = out.join("cold-output").join(file.path());
+        fs::create_dir_all(destination.parent().expect("generated file has parent"))
+            .map_err(|error| format!("create cold output parent: {error}"))?;
+        fs::write(&destination, file.bytes())
+            .map_err(|error| format!("write {}: {error}", destination.display()))?;
+    }
 
     let summary = format!(
         "box_id={}\ncrate_root={}\ninputs={}\nimports={}\noutputs={}\n",
