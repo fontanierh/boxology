@@ -52,17 +52,17 @@ Exact stable pin in `rust-toolchain.toml` (latest stable at T1 time, recorded th
 ### D4 — PR validation workflow
 
 `pr.yml` runs on pull requests and pushes to `main`. Every enabled workflow job
-runs on the MacBook: each active label exposes ten disposable slots. Linux jobs use the disposable
+runs on the MacBook: each active label exposes twenty disposable slots. Linux jobs use the disposable
 `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` runner supplied by S0-T8,
 while native macOS jobs use `[self-hosted, macOS, ARM64, boxology-macos-pr]`.
-Each lane has one base supervisor plus nine slot supervisors, with bounded
-per-slot build/test parallelism and Linux container resources. The x86 audit workflow is removed for
+Each lane has one base supervisor plus nineteen slot supervisors, with bounded
+per-slot build/test parallelism, private native Mac target caches, and Linux container resources. The x86 audit workflow is removed for
 this emergency migration and is a deferred follow-up.
 
 | Job | Command | Runner |
 | --- | --- | --- |
 | checks-linux | `cargo xtask ci --base <event base SHA>` (fmt-by-selection, clippy, test, doc, whitespace, links, budget, deny, determinism local); produce normal/meta roots with `determinism-manifest --out linux/` and `--out linux-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both; evidence target `aarch64-unknown-linux-gnu` | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
-| checks-macos | `cargo xtask test` + `cargo xtask determinism`; produce normal/meta roots with `determinism-manifest --out macos/` and `--out macos-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both; evidence target `aarch64-apple-darwin` | `[self-hosted, macOS, ARM64, boxology-macos-pr]` |
+| checks-macos | `cargo xtask determinism` as the native platform gate; produce normal/meta roots with `determinism-manifest --out macos/` and `--out macos-meta/ --meta-cross`, pack each complete root as an uncompressed tar, and upload both; evidence target `aarch64-apple-darwin` | `[self-hosted, macOS, ARM64, boxology-macos-pr]` |
 | deny | `cargo xtask deny` (pinned `cargo-deny check bans licenses sources`) | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 | determinism-compare | download/unpack normal roots; verify `linux/` as `aarch64-unknown-linux-gnu` and `macos/` as `aarch64-apple-darwin` with `determinism-verify --require-image`; `cargo xtask determinism-compare linux/ macos/` | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
 | determinism-meta-cross | download/unpack meta roots; verify the same exact targets with `determinism-verify --require-image`; `cargo xtask determinism-meta-cross linux-meta/ macos-meta/` succeeds only for the exact expected comparator finding | `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` |
@@ -144,7 +144,7 @@ capability, and privilege bounds. Native macOS is trusted host execution and
 has no container boundary; its archive checksum, host OS version, architecture,
 and target triple are required evidence.
 
-Activation gates are: a private repository with trusted Henry/agent collaborators; an operator-provided dedicated GitHub credential stored only in a macOS Keychain item; verified Linux image and native runner archive; clean Linux and macOS smoke dispatches; and health checks showing ten configured slots per lane. The supervisors fail closed when a prerequisite, API response, identity, or lock is invalid and never use `gh` credentials for unattended provisioning. Rollback is to unload the base and slot supervisors, remove only their owned run state, stop the dedicated Colima profile, and revert workflow routing. The hosted x86 lane is not restored by rollback.
+Activation gates are: a private repository with trusted Henry/agent collaborators; an operator-provided dedicated GitHub credential stored only in a macOS Keychain item; verified Linux image and native runner archive; clean Linux and macOS smoke dispatches; and health checks showing twenty configured slots per lane. The supervisors fail closed when a prerequisite, API response, identity, or lock is invalid and never use `gh` credentials for unattended provisioning. Rollback is to unload the base, slot, and expansion supervisors, remove only their owned run state, stop the dedicated Colima profile, and revert workflow routing. The hosted x86 lane is not restored by rollback.
 
 The broker PAT never enters either runner job environment. Ordinary GitHub Actions
 read/runtime credentials may be present for checkout; smoke workflows keep
