@@ -234,6 +234,9 @@ fn pairing_candidate(update: &api::Update, pending: &PendingPair) -> Option<(i64
     let message = update.message.as_ref()?;
     let user = message.from.as_ref()?;
     if user.is_bot
+        || user.id <= 0
+        || message.chat.id <= 0
+        || message.chat.id != user.id
         || message.chat.kind != "private"
         || message.text.as_deref()?.split_once(' ').is_none()
     {
