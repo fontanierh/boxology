@@ -9,10 +9,10 @@ const REVISION_VERSION: u32 = 1;
 pub(super) fn document(
     box_id: &str,
     contract: &Contract,
+    revision: &[u8; 32],
     semantic_digest: &[u8; 32],
     generator_version: &str,
 ) -> Vec<u8> {
-    let revision = revision(box_id, contract);
     let capability = &contract.capability;
     let root = object([
         ("box_id", json!(box_id)),
@@ -45,13 +45,86 @@ pub(super) fn document(
                 ("semantic_digest", json!(hash_spelling(semantic_digest))),
             ]),
         ),
-        ("revision", json!(hash_spelling(&revision))),
+        ("revision", json!(hash_spelling(revision))),
         ("schema_format", json!(1)),
         ("types", json!([error_type(&contract.error)])),
     ]);
     let mut bytes = serde_json::to_vec_pretty(&root).expect("schema values are serializable");
     bytes.push(b'\n');
     bytes
+}
+
+pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u8; 32]) -> String {
+    let error = &contract.error;
+    let variants = error
+        .variants
+        .iter()
+        .map(|variant| {
+            format!(
+                "::boxology_contract::VariantDescriptor::new({name:?}, ::boxology_contract::VariantPayload::Unit, {deprecation}),",
+                name = variant.name,
+                deprecation = rust_deprecation(&variant.deprecation),
+            )
+        })
+        .collect::<String>();
+    let capability = &contract.capability;
+    let capability_deprecation = rust_deprecation(&capability.deprecation);
+    let revision = hash_spelling(revision);
+    format!(
+        r#"
+        #[doc(hidden)]
+        static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<::boxology_contract::ContractDescriptor> = ::std::sync::LazyLock::new(|| {{
+            let box_id = ::boxology_contract::BoxId::new({box_id:?})
+                .expect("generated box identity is valid");
+            let error = ::boxology_contract::TypeDescriptor::enumeration([
+                {variants}
+            ])
+            .expect("generated error descriptor is valid");
+            let capability = ::boxology_contract::CapabilityDescriptor::new(
+                ::boxology_contract::CapabilityId::new(
+                    box_id.clone(),
+                    ::boxology_contract::CapabilityName::new({capability_name:?})
+                        .expect("generated capability name is valid"),
+                ),
+                ::boxology_contract::TypeDescriptor::string(),
+                ::boxology_contract::TypeDescriptor::string(),
+                error,
+                ::boxology_contract::CapabilityShape::Unary,
+                ::boxology_contract::ExposureLevel::External,
+                ::boxology_contract::Idempotency::None,
+                {capability_deprecation},
+            );
+            ::boxology_contract::ContractDescriptor::new(
+                box_id,
+                [capability],
+                ::boxology_contract::ContractRevision::new({revision:?})
+                    .expect("generated contract revision is non-empty"),
+            )
+            .expect("generated contract descriptor is valid")
+        }});
+
+        /// Returns the canonical generated contract descriptor.
+        pub fn contract_descriptor() -> &'static ::boxology_contract::ContractDescriptor {{
+            &*__BOXOLOGY_CONTRACT_DESCRIPTOR
+        }}
+        "#,
+        box_id = box_id,
+        variants = variants,
+        capability_name = capability.name,
+        capability_deprecation = capability_deprecation,
+        revision = revision,
+    )
+}
+
+fn rust_deprecation(note: &Option<String>) -> String {
+    match note {
+        None => "None".into(),
+        Some(note) if note.is_empty() => "Some(::boxology_contract::Deprecation::new(None))".into(),
+        Some(note) => format!(
+            "Some(::boxology_contract::Deprecation::new(Some({note:?}.into())))",
+            note = note,
+        ),
+    }
 }
 
 fn error_type(error: &ErrorDeclaration) -> Value {
@@ -140,7 +213,7 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
     out
 }
 
-fn revision(box_id: &str, contract: &Contract) -> [u8; 32] {
+pub(super) fn revision(box_id: &str, contract: &Contract) -> [u8; 32] {
     Sha256::digest(projection(box_id, contract)).into()
 }
 
