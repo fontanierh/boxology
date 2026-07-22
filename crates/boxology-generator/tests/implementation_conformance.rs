@@ -13,9 +13,10 @@ const CONTRACT: &str = r#"boxology::contract! {
     #[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, GreetError>;
 }
 "#;
-const OUTPUTS: [&str; 2] = [
+const OUTPUTS: [&str; 3] = [
     "generated/contract/Cargo.toml",
     "generated/contract/src/lib.rs",
+    "generated/schema.json",
 ];
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
