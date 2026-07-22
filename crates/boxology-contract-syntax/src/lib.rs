@@ -185,6 +185,16 @@ fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclara
     if variants.iter().any(|variant| !names.insert(&variant.name)) {
         return Err(error(item, "error variant names must be unique"));
     }
+    if let Some(variant) = item
+        .variants
+        .iter()
+        .find(|variant| variant.ident == "Unknown")
+    {
+        return Err(error(
+            &variant.ident,
+            "error variant name `Unknown` is reserved",
+        ));
+    }
     Ok(ErrorDeclaration {
         docs,
         deprecation,
@@ -442,6 +452,15 @@ mod tests {
         ] {
             assert!(parse(source.parse().unwrap()).is_err(), "{source}");
         }
+    }
+    #[test]
+    fn reserved_unknown_error_variant_has_a_stable_diagnostic() {
+        let source = format!("#[error] pub enum GreetError{{Unknown}} {CAP}");
+        let diagnostic = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(
+            diagnostic.to_string(),
+            "error variant name `Unknown` is reserved"
+        );
     }
     #[test]
     fn semantic_encoding_is_pinned_and_ignores_only_non_semantic_spelling() {
