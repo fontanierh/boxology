@@ -9,8 +9,9 @@ use boxology_contract::{
     TypeDescriptor,
 };
 use boxology_runtime::{TransportExposure, TransportTaskTracker};
-use http::{HeaderMap, HeaderValue, Method};
+use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use http_body::Body;
+use http_body_util::Full;
 use mediatype::{MediaTypeList, names};
 use std::{
     collections::BTreeMap,
@@ -157,6 +158,29 @@ enum DispatchOutcome {
     Abandoned,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RequestAbandoned;
+
+struct CancelOnDrop(Option<CancelToken>);
+
+impl CancelOnDrop {
+    fn new(cancellation: CancelToken) -> Self {
+        Self(Some(cancellation))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.0.take() {
+            cancellation.cancel();
+        }
+    }
+}
+
 async fn dispatch_request(
     tasks: &DispatchTasks,
     exposure: TransportExposure,
@@ -268,6 +292,110 @@ fn response_error(error: WireCallError) -> DispatchOutcome {
         status: encoded.status(),
         body: encoded.body().to_vec(),
     })
+}
+
+async fn handle_request<B>(
+    request: Request<B>,
+    head_received: Instant,
+    exposures: &[TransportExposure],
+    tasks: &DispatchTasks,
+    default_timeout: Duration,
+    limits: SyntaxLimits,
+) -> Result<Response<Full<bytes::Bytes>>, RequestAbandoned>
+where
+    B: Body<Data = bytes::Bytes> + Unpin + Send + 'static,
+{
+    handle_request_with(
+        request,
+        head_received,
+        exposures,
+        default_timeout,
+        limits,
+        |exposure, context, input| dispatch_request(tasks, exposure, context, input),
+    )
+    .await
+}
+
+async fn handle_request_with<B, E, F, Fut>(
+    request: Request<B>,
+    head_received: Instant,
+    exposures: &[E],
+    default_timeout: Duration,
+    limits: SyntaxLimits,
+    dispatch: F,
+) -> Result<Response<Full<bytes::Bytes>>, RequestAbandoned>
+where
+    B: Body<Data = bytes::Bytes> + Unpin,
+    E: ExposureView + Clone,
+    F: FnOnce(E, CallContext, SlotValue) -> Fut,
+    Fut: Future<Output = DispatchOutcome>,
+{
+    let (head, body) = request.into_parts();
+    let admitted = match admit_request_head(
+        head.uri.path(),
+        head.uri.query().is_some(),
+        &head.method,
+        &head.headers,
+        exposures,
+    ) {
+        Ok(admitted) => admitted,
+        Err(error) => return Ok(http_error(error)),
+    };
+    let exposure = admitted.exposure.clone();
+    let context = match prepare_call_context(
+        head_received,
+        admitted.timeout,
+        default_timeout,
+        admitted.trace_context,
+        admitted.idempotency_key,
+    ) {
+        Ok(context) => context,
+        Err(error) => return Ok(http_error(error)),
+    };
+    let Some(deadline) = context.deadline() else {
+        return Ok(http_error(WireCallError::Internal));
+    };
+    let input = match collect_and_decode_request_body(
+        body,
+        exposure.descriptor().input(),
+        limits,
+        deadline,
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(error) => return Ok(http_error(error)),
+    };
+    let mut cancel_on_drop = CancelOnDrop::new(context.cancellation().clone());
+    let outcome = dispatch(exposure, context, input).await;
+    cancel_on_drop.disarm();
+    match outcome {
+        DispatchOutcome::Response(response) => Ok(http_response(response)),
+        DispatchOutcome::Abandoned => Err(RequestAbandoned),
+    }
+}
+
+fn http_error(error: WireCallError) -> Response<Full<bytes::Bytes>> {
+    let DispatchOutcome::Response(response) = response_error(error) else {
+        unreachable!()
+    };
+    http_response(response)
+}
+
+fn http_response(encoded: EncodedResponse) -> Response<Full<bytes::Bytes>> {
+    let mut response = Response::new(Full::new(bytes::Bytes::from(encoded.body)));
+    *response.status_mut() =
+        StatusCode::from_u16(encoded.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    if response.status() == StatusCode::METHOD_NOT_ALLOWED {
+        response
+            .headers_mut()
+            .insert(header::ALLOW, HeaderValue::from_static("POST"));
+    }
+    response
 }
 
 fn decode_request_body(
@@ -668,7 +796,7 @@ mod tests {
         task::{Context, Poll, Waker},
     };
 
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     struct Exposure {
         descriptor: CapabilityDescriptor,
         level: ExposureLevel,
@@ -1178,6 +1306,217 @@ mod tests {
 
     fn data(value: &'static [u8]) -> Result<Frame<bytes::Bytes>, BodyFailure> {
         Ok(Frame::data(bytes::Bytes::from_static(value)))
+    }
+
+    fn rpc_request(body: TestBody) -> Request<TestBody> {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/rpc/box/call")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .unwrap()
+    }
+
+    async fn response_parts(
+        response: Response<Full<bytes::Bytes>>,
+    ) -> (StatusCode, HeaderMap, bytes::Bytes) {
+        use http_body_util::BodyExt;
+
+        let (parts, body) = response.into_parts();
+        (
+            parts.status,
+            parts.headers,
+            body.collect().await.unwrap().to_bytes(),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn request_orchestration_preserves_selection_input_context_and_response() {
+        let exposures = [
+            exposure("other", "call", ExposureLevel::External),
+            exposure("box", "call", ExposureLevel::External),
+        ];
+        let received = tokio::time::Instant::now().into_std();
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/rpc/box/call")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(TIMEOUT_HEADER, "2500")
+            .header(IDEMPOTENCY_HEADER, "same-request")
+            .header(
+                TRACEPARENT_HEADER,
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            )
+            .header(TRACESTATE_HEADER, "vendor=value")
+            .body(TestBody::new([data(b"\"hello\"")]))
+            .unwrap();
+        let cancellation = Arc::new(Mutex::new(None));
+        let observed = cancellation.clone();
+        let response = handle_request_with(
+            request,
+            received,
+            &exposures,
+            Duration::from_secs(9),
+            body_limits(64),
+            move |selected, context, input| async move {
+                assert_eq!(selected.descriptor.id().to_string(), "box.call");
+                assert_eq!(input, SlotValue::Value(ContractValue::string("hello")));
+                assert_eq!(
+                    context.deadline().unwrap().instant(),
+                    received + Duration::from_millis(2500)
+                );
+                assert_eq!(
+                    context.trace(),
+                    &TraceContext::new(
+                        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into()),
+                        Some("vendor=value".into())
+                    )
+                );
+                assert_eq!(context.idempotency_key().unwrap().as_str(), "same-request");
+                *observed.lock().unwrap() = Some(context.cancellation().clone());
+                DispatchOutcome::Response(EncodedResponse {
+                    status: 200,
+                    body: br#"{"result":{"value":"hello"}}"#.to_vec(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+        let (status, headers, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+        assert!(!headers.contains_key(header::ALLOW));
+        assert_eq!(body, br#"{"result":{"value":"hello"}}"#.as_slice());
+        assert!(
+            !cancellation
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .is_cancelled()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn head_and_body_failures_return_exact_http_without_dispatch() {
+        let exposures = [exposure("box", "call", ExposureLevel::External)];
+        let calls = Arc::new(AtomicUsize::new(0));
+        let assert_never_called = |calls: Arc<AtomicUsize>| {
+            move |_: Exposure, _: CallContext, _: SlotValue| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                std::future::ready(DispatchOutcome::Abandoned)
+            }
+        };
+
+        let body = TestBody::new([data(b"\"ignored\"")]);
+        let polls = body.polls.clone();
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/rpc/box/call")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .unwrap();
+        let response = handle_request_with(
+            request,
+            tokio::time::Instant::now().into_std(),
+            &exposures,
+            Duration::from_secs(1),
+            body_limits(64),
+            assert_never_called(calls.clone()),
+        )
+        .await
+        .unwrap();
+        let (status, headers, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(headers[header::ALLOW], "POST");
+        assert_eq!(body, WireCallError::MethodNotAllowed.encode().body());
+        assert_eq!(polls.load(Ordering::Relaxed), 0);
+
+        let mut request =
+            rpc_request(TestBody::new([data(b"\"late\"")]).delayed(Duration::from_millis(2)));
+        request
+            .headers_mut()
+            .insert(TIMEOUT_HEADER, HeaderValue::from_static("1"));
+        let response = handle_request_with(
+            request,
+            tokio::time::Instant::now().into_std(),
+            &exposures,
+            Duration::from_secs(1),
+            body_limits(64),
+            assert_never_called(calls.clone()),
+        )
+        .await
+        .unwrap();
+        let (status, headers, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert!(!headers.contains_key(header::ALLOW));
+        assert_eq!(body, WireCallError::DeadlineExceeded.encode().body());
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn request_drop_and_explicit_cancel_preserve_owned_dispatch_until_cleanup() {
+        for drop_request in [true, false] {
+            let tracker = TransportTaskTracker::new();
+            let tasks = DispatchTasks::new(tracker.clone());
+            let exposures = vec![exposure("box", "call", ExposureLevel::External)];
+            let descriptor = string_dispatch_descriptor();
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let completed = Arc::new(AtomicUsize::new(0));
+            let token = Arc::new(Mutex::new(None));
+            let owned_tasks = tasks.clone();
+            let seen_token = token.clone();
+            let handler_entered = entered.clone();
+            let handler_release = release.clone();
+            let handler_completed = completed.clone();
+            let request = tokio::spawn(async move {
+                handle_request_with(
+                    rpc_request(TestBody::new([data(b"\"work\"")])),
+                    tokio::time::Instant::now().into_std(),
+                    &exposures,
+                    Duration::from_secs(10),
+                    body_limits(64),
+                    move |_, context, input| {
+                        *seen_token.lock().unwrap() = Some(context.cancellation().clone());
+                        async move {
+                            dispatch_request_with(
+                                &owned_tasks,
+                                descriptor,
+                                context,
+                                input,
+                                move |context, _| async move {
+                                    handler_entered.notify_one();
+                                    handler_release.notified().await;
+                                    assert!(context.cancellation().is_cancelled());
+                                    handler_completed.fetch_add(1, Ordering::Relaxed);
+                                    Ok(SlotValue::Value(ContractValue::string("late")))
+                                },
+                            )
+                            .await
+                        }
+                    },
+                )
+                .await
+            });
+            entered.notified().await;
+            assert_eq!((tasks.len(), tracker.len()), (1, 1));
+            let cancellation = token.lock().unwrap().clone().unwrap();
+            if drop_request {
+                request.abort();
+                assert!(request.await.unwrap_err().is_cancelled());
+                tokio::task::yield_now().await;
+            } else {
+                cancellation.cancel();
+                assert!(matches!(request.await.unwrap(), Err(RequestAbandoned)));
+            }
+            assert!(cancellation.is_cancelled());
+            assert_eq!((tasks.len(), tracker.len()), (1, 1));
+            release.notify_one();
+            tasks.wait_empty().await;
+            assert_eq!((tasks.len(), tracker.len()), (0, 0));
+            assert_eq!(completed.load(Ordering::Relaxed), 1);
+        }
     }
 
     async fn collect(
