@@ -169,8 +169,20 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     .replace("__ERROR__", &error.name);
     let descriptor =
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
+    let dispatch = dispatch_source(
+        request.box_id().as_str(),
+        &contract.model().capability.name,
+        &contract.model().capability.input_name,
+        &contract.model().error.name,
+        contract
+            .model()
+            .error
+            .variants
+            .iter()
+            .map(|variant| (variant.name.as_str(), variant.deprecation.as_deref())),
+    );
     let syntax = syn::parse_file(&format!(
-        "{descriptor} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
+        "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
         error.name
     ))
     .expect("validated names and fixed generator template must parse");
@@ -196,6 +208,113 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     Ok(GeneratedTree(files))
+}
+
+fn dispatch_source<'a>(
+    box_id: &str,
+    capability_name: &str,
+    input_name: &str,
+    error_name: &str,
+    variants: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> String {
+    let variants = variants
+        .into_iter()
+        .map(|(name, deprecation)| {
+            format!(
+                "::boxology_contract::VariantDescriptor::new({name:?}, ::boxology_contract::VariantPayload::Unit, {}),",
+                rust_deprecation(deprecation),
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::{{Arc, LazyLock}};
+        use ::boxology_contract::{{
+            BoxId, CallContext, CallError, CapabilityId, CapabilityName, ContractType,
+            DecodeRole, Detail, ErasedCallTarget, TypeDescriptor,
+        }};
+
+        pub trait HelloDispatch: Send + Sync + 'static {{
+            fn {capability_name}<'a>(
+                &'a self,
+                context: CallContext,
+                {input_name}: String,
+            ) -> Pin<Box<dyn Future<Output = Result<String, {error_name}>> + Send + 'a>>;
+        }}
+
+        #[derive(Clone)]
+        pub struct HelloHandle {{
+            target: Arc<dyn ErasedCallTarget>,
+        }}
+
+        impl HelloHandle {{
+            #[doc(hidden)]
+            pub fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {{
+                Self {{ target }}
+            }}
+
+            pub async fn {capability_name}(
+                &self,
+                context: CallContext,
+                {input_name}: String,
+            ) -> Result<String, CallError<{error_name}>> {{
+                let input = {input_name}
+                    .encode()
+                    .map_err(|error| conversion_detail("input_encode", error))
+                    .map_err(CallError::ContractViolation)?;
+                let output = self
+                    .target
+                    .call(&HELLO_GREET, context, input)
+                    .await
+                    .map_err(|error| error.into_typed::<{error_name}>(&GREET_ERROR_DESCRIPTOR))?;
+                let output = TypeDescriptor::string()
+                    .conform(DecodeRole::ConsumerOutput, output)
+                    .map_err(|error| conversion_detail("output_decode", error))
+                    .map_err(CallError::InvalidResponse)?;
+                String::decode(&output)
+                    .map_err(|error| conversion_detail("output_decode", error))
+                    .map_err(CallError::InvalidResponse)
+            }}
+        }}
+
+        static HELLO_GREET: LazyLock<CapabilityId> = LazyLock::new(|| {{
+            CapabilityId::new(
+                BoxId::new({box_id:?}).expect("generated box identity is valid"),
+                CapabilityName::new({capability_name:?})
+                    .expect("generated capability name is valid"),
+            )
+        }});
+
+        static GREET_ERROR_DESCRIPTOR: LazyLock<TypeDescriptor> = LazyLock::new(|| {{
+            TypeDescriptor::enumeration([
+                {variants}
+            ])
+            .expect("generated greet error descriptor is valid")
+        }});
+
+        fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detail {{
+            Detail::new(code).with_message(error.to_string())
+        }}
+        "#,
+        box_id = box_id,
+        capability_name = capability_name,
+        input_name = input_name,
+        error_name = error_name,
+        variants = variants,
+    )
+}
+
+fn rust_deprecation(note: Option<&str>) -> String {
+    match note {
+        None => "None".into(),
+        Some("") => "Some(::boxology_contract::Deprecation::new(None))".into(),
+        Some(note) => format!(
+            "Some(::boxology_contract::Deprecation::new(Some({note:?}.into())))",
+            note = note,
+        ),
+    }
 }
 
 fn attributes(docs: &[String], deprecation: &Option<String>) -> String {
@@ -820,6 +939,132 @@ macro_rules! __boxology_check_implementation {
                 .status
                 .success()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_dispatch_handle_compiles_and_routes_typed_calls() {
+        use std::{fs, process::Command};
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "boxology-dispatch-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for file in tree(CONTRACT, false).files() {
+            let path = root.join(file.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, file.bytes()).unwrap();
+        }
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.0.0\",path={:?}}}\n",
+                workspace.join("boxology-contract")
+            ),
+        )
+        .unwrap();
+        let consumer = root.join("consumer");
+        fs::create_dir_all(consumer.join("src")).unwrap();
+        fs::write(
+            consumer.join("Cargo.toml"),
+            "[package]\nname=\"consumer\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology-contract={workspace=true}\nhello-contract={package=\"hello-contract\",path=\"../generated/contract\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            consumer.join("src/main.rs"),
+            r#"
+use std::future::{ready, Future};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll, Waker};
+use boxology_contract::{CallContext, CallError, Caller, CancelToken, CapabilityId, ContractValue, Deadline, Detail, ErasedCallError, ErasedCallTarget, IdempotencyKey, OpaqueTree, SlotValue, TraceContext};
+use hello_contract::{GreetError, HelloDispatch, HelloHandle};
+
+struct Target { response: Result<SlotValue, ErasedCallError>, expected: CallContext }
+impl ErasedCallTarget for Target {
+    fn call<'a>(&'a self, capability: &'a CapabilityId, context: CallContext, input: SlotValue) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+        assert_eq!(capability.to_string(), "hello.greet");
+        assert_eq!(input, SlotValue::Value(ContractValue::string("Ada")));
+        assert_eq!(context.caller(), self.expected.caller());
+        assert_eq!(context.deadline(), self.expected.deadline());
+        assert_eq!(context.cancellation().is_cancelled(), self.expected.cancellation().is_cancelled());
+        assert_eq!(context.trace(), self.expected.trace());
+        assert_eq!(context.idempotency_key(), self.expected.idempotency_key());
+        Box::pin(ready(self.response.clone()))
+    }
+}
+
+struct Probe;
+impl HelloDispatch for Probe {
+    fn greet<'a>(&'a self, _context: CallContext, name: String) -> Pin<Box<dyn Future<Output = Result<String, GreetError>> + Send + 'a>> {
+        Box::pin(async move { Ok(format!("Hello, {name}!")) })
+    }
+}
+
+fn context() -> CallContext {
+    let token = CancelToken::new();
+    token.cancel();
+    CallContext::new(Caller::System("generator-test"), Some(Deadline::at(std::time::Instant::now())), token, TraceContext::new(Some("parent".into()), Some("state".into())), Some(IdempotencyKey::new("id-1").unwrap()))
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop { if let Poll::Ready(output) = future.as_mut().poll(&mut TaskContext::from_waker(Waker::noop())) { return output; } }
+}
+
+fn invoke(response: Result<SlotValue, ErasedCallError>) -> Result<String, CallError<GreetError>> {
+    let expected = context();
+    let target: Arc<dyn ErasedCallTarget> = Arc::new(Target { response, expected: expected.clone() });
+    block_on(HelloHandle::from_erased(target).greet(expected, "Ada".into()))
+}
+
+fn main() {
+    fn bounds<T: Send + Sync + 'static>() {}
+    fn send<T: Send>(value: T) -> T { value }
+    bounds::<HelloHandle>();
+    bounds::<Arc<dyn HelloDispatch>>();
+    let dispatch: Arc<dyn HelloDispatch> = Arc::new(Probe);
+    assert_eq!(block_on(send(dispatch.greet(context(), "Ada".into()))), Ok("Hello, Ada!".into()));
+
+    assert_eq!(invoke(Ok(SlotValue::Value(ContractValue::string("Hello, Ada!")))), Ok("Hello, Ada!".into()));
+    assert_eq!(invoke(Err(ErasedCallError::Domain { error_tag: "EmptyName".into(), payload: SlotValue::Null })), Err(CallError::Domain(GreetError::EmptyName)));
+    let raw = ContractValue::object([("secret".into(), ContractValue::string("opaque-secret"))]).unwrap();
+    let error = invoke(Err(ErasedCallError::Domain { error_tag: "Future".into(), payload: SlotValue::Value(raw) })).unwrap_err();
+    let CallError::Domain(GreetError::Unknown { tag, payload }) = &error else { panic!("unknown domain error was not preserved") };
+    assert_eq!(tag, "Future");
+    assert_eq!(payload.forward().reveal(), &OpaqueTree::Object(vec![("secret".into(), OpaqueTree::String("opaque-secret".into()))]));
+    assert!(!format!("{error:?}").contains("opaque-secret"));
+    for output in [SlotValue::Null, SlotValue::Value(ContractValue::u64(7))] {
+        let Err(CallError::InvalidResponse(detail)) = invoke(Ok(output)) else { panic!("malformed output accepted") };
+        assert_eq!(detail.code(), "output_decode");
+    }
+    let Err(CallError::InvalidResponse(detail)) = invoke(Err(ErasedCallError::Domain { error_tag: "EmptyName".into(), payload: SlotValue::Value(ContractValue::string("wrong")) })) else { panic!("malformed domain error accepted") };
+    assert_eq!(detail.code(), "domain_error_decode");
+    let detail = Detail::new("preserved");
+    for (erased, expected) in [
+        (ErasedCallError::Deadline, CallError::Deadline),
+        (ErasedCallError::Cancelled, CallError::Cancelled),
+        (ErasedCallError::Unavailable(detail.clone()), CallError::Unavailable(detail.clone())),
+        (ErasedCallError::ContractViolation(detail.clone()), CallError::ContractViolation(detail.clone())),
+        (ErasedCallError::InvalidResponse(detail.clone()), CallError::InvalidResponse(detail.clone())),
+        (ErasedCallError::Internal(detail.clone()), CallError::Internal(detail.clone())),
+    ] { assert_eq!(invoke(Err(erased)), Err(expected)); }
+}
+"#,
+        )
+        .unwrap();
+        let status = Command::new("cargo")
+            .args(["run", "--offline", "--manifest-path"])
+            .arg(consumer.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .status()
+            .unwrap();
+        assert!(status.success());
         fs::remove_dir_all(root).unwrap();
     }
 
