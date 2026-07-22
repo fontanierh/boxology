@@ -1,5 +1,7 @@
 use crate::{AppError, ExitClass, SCHEMA};
+use getrandom::fill;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -64,6 +66,12 @@ pub(crate) struct EventRecord {
     pub handled: bool,
     #[serde(default)]
     pub reply_to: Option<ReplyTarget>,
+    #[serde(default)]
+    pub ask_id: Option<String>,
+    #[serde(default)]
+    pub lifecycle_key: Option<String>,
+    #[serde(default)]
+    pub choice: Option<ChoiceRecord>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -73,12 +81,23 @@ pub(crate) struct ReplyTarget {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct ChoiceRecord {
+    pub kind: String,
+    #[serde(default)]
+    pub key: Option<String>,
+    pub token_digest: String,
+    pub salt: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AskRecord {
     pub ask_id: String,
     pub lifecycle_key: String,
     pub dedup_key: String,
     pub message_id: Option<i64>,
     pub state: String,
+    #[serde(default)]
+    pub choices: Vec<ChoiceRecord>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -90,6 +109,8 @@ pub(crate) struct OutboundRecord {
     pub message_id: Option<i64>,
     #[serde(default)]
     pub event_id: Option<String>,
+    #[serde(default)]
+    pub ask_id: Option<String>,
 }
 
 impl Default for State {
@@ -411,6 +432,45 @@ pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |value| value.as_secs() as i64)
+}
+
+#[allow(dead_code)]
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], AppError> {
+    let mut bytes = [0_u8; N];
+    fill(&mut bytes).map_err(|_| {
+        AppError::new(
+            "entropy",
+            "secure randomness is unavailable",
+            ExitClass::Local,
+        )
+    })?;
+    Ok(bytes)
+}
+
+#[allow(dead_code)]
+pub(crate) fn digest(salt: &[u8], value: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(salt);
+    hasher.update(value);
+    hex(&hasher.finalize())
+}
+
+#[allow(dead_code)]
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[allow(dead_code)]
+pub(crate) fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    text.len()
+        .is_multiple_of(2)
+        .then(|| {
+            text.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+                .collect::<Option<Vec<_>>>()
+        })
+        .flatten()
 }
 
 #[cfg(test)]
