@@ -154,6 +154,7 @@ pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
             }
             ("not_delivered", None) => {
                 record.state = "retryable".into();
+                record.message_id = None;
                 Ok(json!({"dedup_key": request.dedup_key, "resolved": "not_delivered"}))
             }
             _ => Err(AppError::input(
