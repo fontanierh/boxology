@@ -70,7 +70,9 @@ impl Context {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("boxology-telegram-test-{suffix}"));
+        let root = fs::canonicalize(std::env::temp_dir())
+            .expect("canonical temp directory")
+            .join(format!("boxology-telegram-test-{suffix}"));
         fs::create_dir(&root).expect("test state home");
         #[cfg(unix)]
         {
@@ -194,6 +196,42 @@ fn pairing_is_explicit_private_and_durable() {
     let state = state::read(&paths).expect("state");
     assert_eq!(state.pairing.map(|pair| pair.user_id), Some(42));
     assert_eq!(state.next_offset, 11);
+}
+
+#[test]
+fn pairing_rejects_invalid_private_user_chat_ids() {
+    let mut context = Context::new(vec![
+        response(&json!({"id": 7, "is_bot": true, "username": "fake_bot"})),
+        response(&json!({"url": ""})),
+    ]);
+    let (begin, exit) = run(&["pair", "begin"], json!({"schema": SCHEMA}));
+    assert_eq!(exit, ExitClass::Success, "{begin}");
+    let payload = ok(&begin)["deep_link"]
+        .as_str()
+        .unwrap()
+        .rsplit("?start=")
+        .next()
+        .unwrap()
+        .to_string();
+    context.replace_fake(vec![
+        response(&json!([
+            {"update_id": 10, "message": {"message_id": 1, "from": {"id": 0, "is_bot": false}, "chat": {"id": 0, "type": "private"}, "text": format!("/start {payload}")}},
+            {"update_id": 11, "message": {"message_id": 2, "from": {"id": 42, "is_bot": false}, "chat": {"id": 99, "type": "private"}, "text": format!("/start {payload}")}},
+            {"update_id": 12, "message": {"message_id": 3, "from": {"id": 42, "is_bot": false}, "chat": {"id": 42, "type": "private"}, "text": format!("/start {payload}")}}
+        ])),
+        response(&json!({"message_id": 4})),
+    ]);
+    let (complete, exit) = run(
+        &["pair", "complete"],
+        json!({"schema": SCHEMA, "timeout_seconds": 0}),
+    );
+    assert_eq!(exit, ExitClass::Success, "{complete}");
+    let state = state::read(&Paths::from_env().unwrap()).unwrap();
+    assert_eq!(
+        state.pairing.map(|pair| (pair.user_id, pair.chat_id)),
+        Some((42, 42))
+    );
+    assert_eq!(state.next_offset, 13);
 }
 
 #[test]
@@ -542,6 +580,50 @@ fn strict_input_and_private_token_file_checks_fail_closed() {
         std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE");
     }
     drop(context);
+}
+
+#[cfg(unix)]
+#[test]
+fn protected_state_and_token_paths_reject_symlink_components() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let context = Context::new(vec![]);
+    let real_state = context.root.join("real-state");
+    fs::create_dir(&real_state).unwrap();
+    fs::set_permissions(&real_state, fs::Permissions::from_mode(0o700)).unwrap();
+    let state_alias = context.root.join("state-alias");
+    symlink(&real_state, &state_alias).unwrap();
+    unsafe {
+        std::env::set_var(
+            "BOXOLOGY_TELEGRAM_HOME",
+            state_alias.join("telegram-coordinator"),
+        );
+    }
+    let paths = Paths::from_env().unwrap();
+    assert_eq!(state::read(&paths).unwrap_err().code, "unsafe_state_home");
+
+    let real_token_dir = context.root.join("real-token-dir");
+    fs::create_dir(&real_token_dir).unwrap();
+    let real_token = real_token_dir.join("token");
+    fs::write(&real_token, b"999:file-token\n").unwrap();
+    fs::set_permissions(&real_token, fs::Permissions::from_mode(0o600)).unwrap();
+    let token_alias = context.root.join("token-alias");
+    symlink(&real_token_dir, &token_alias).unwrap();
+    unsafe {
+        std::env::set_var(
+            "BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE",
+            token_alias.join("token"),
+        );
+        std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN");
+    }
+    assert_eq!(api::load_token().unwrap_err().code, "unsafe_token_file");
+
+    let final_alias = context.root.join("token-final-alias");
+    symlink(&real_token, &final_alias).unwrap();
+    unsafe {
+        std::env::set_var("BOXOLOGY_TELEGRAM_BOT_TOKEN_FILE", &final_alias);
+    }
+    assert!(api::load_token().is_err());
 }
 
 #[test]
