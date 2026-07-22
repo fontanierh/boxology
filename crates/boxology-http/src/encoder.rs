@@ -136,6 +136,28 @@ pub(crate) fn encode_result(
         return failure(EncodeErrorCategory::UnsupportedDescriptor);
     }
     let mut output = br#"{"result":{"value":"#.to_vec();
+    encode_slot(&mut output, slot, descriptor)?;
+    output.extend_from_slice(b"}}");
+    Ok(output)
+}
+
+pub(crate) fn encode_request(
+    slot: &SlotValue,
+    descriptor: &TypeDescriptor,
+) -> Result<Vec<u8>, EncodeError> {
+    if !is_supported(descriptor) {
+        return failure(EncodeErrorCategory::UnsupportedDescriptor);
+    }
+    let mut output = Vec::new();
+    encode_slot(&mut output, slot, descriptor)?;
+    Ok(output)
+}
+
+fn encode_slot(
+    output: &mut Vec<u8>,
+    slot: &SlotValue,
+    descriptor: &TypeDescriptor,
+) -> Result<(), EncodeError> {
     match slot {
         SlotValue::Missing => return failure(EncodeErrorCategory::MissingValue),
         SlotValue::Null
@@ -147,10 +169,9 @@ pub(crate) fn encode_result(
             output.extend_from_slice(b"null")
         }
         SlotValue::Null => return failure(EncodeErrorCategory::NullConformance),
-        SlotValue::Value(value) => encode_value(&mut output, value.view(), descriptor)?,
+        SlotValue::Value(value) => encode_value(output, value.view(), descriptor)?,
     }
-    output.extend_from_slice(b"}}");
-    Ok(output)
+    Ok(())
 }
 
 pub(crate) fn encode_domain(
@@ -568,6 +589,23 @@ mod tests {
         assert_eq!(encoded(decoded, descriptor), first);
     }
 
+    fn canonical_request(slot: SlotValue, descriptor: &D, token: &str) {
+        let bare = encode_request(&slot, descriptor).unwrap();
+        assert_eq!(bare, token.as_bytes());
+        assert_eq!(
+            encode_result(&slot, descriptor).unwrap(),
+            [PREFIX, bare.as_slice(), b"}}"].concat()
+        );
+        let tree = crate::syntax::parse(
+            &bare,
+            crate::syntax::SyntaxLimits(bare.len(), crate::syntax::DEFAULT_DEPTH_LIMIT),
+        )
+        .unwrap();
+        let decoded =
+            crate::semantic::decode_tree(tree, descriptor, DecodeRole::ProviderInput).unwrap();
+        assert_eq!(encode_request(&decoded, descriptor).unwrap(), bare);
+    }
+
     #[test]
     fn every_call_error_has_one_exact_status_code_message_and_body() {
         let cases = [
@@ -820,6 +858,72 @@ mod tests {
             encoded(value(Value::string("Hello, Ada!")), &D::string()),
             br#"{"result":{"value":"Hello, Ada!"}}"#,
         );
+    }
+
+    #[test]
+    fn requests_are_bare_canonical_values_and_replay_as_provider_input() {
+        canonical_request(value(Value::i64(-7)), &D::i64(), r#""-7""#);
+        canonical_request(
+            value(object([
+                ("a", Value::string("x")),
+                ("z", Value::bool(true)),
+            ])),
+            &D::structure([field("z", D::bool()), field("a", D::string())]).unwrap(),
+            r#"{"z":true,"a":"x"}"#,
+        );
+        canonical_request(
+            value(object([
+                ("é", Value::bool(true)),
+                ("aa", Value::bool(false)),
+                ("a", Value::bool(true)),
+            ])),
+            &D::map(D::bool()).unwrap(),
+            r#"{"a":true,"aa":false,"é":true}"#,
+        );
+        canonical_request(
+            enum_slot("some", value(Value::string("payload"))),
+            &enum_descriptor([
+                variant("none", VariantPayload::Unit),
+                variant("some", VariantPayload::Value(D::string())),
+            ]),
+            r#"{"tag":"some","payload":"payload"}"#,
+        );
+        canonical_request(
+            value(Value::bytes([0, 255, 16])),
+            &D::blob(),
+            r#"{"base64":"AP8Q"}"#,
+        );
+        canonical_request(SlotValue::Null, &D::optional(D::string()).unwrap(), "null");
+    }
+
+    #[test]
+    fn request_failures_preserve_closed_categories_and_redaction() {
+        let cases = [
+            (SlotValue::Missing, D::bool(), C::MissingValue),
+            (SlotValue::Null, D::bool(), C::NullConformance),
+            (
+                value(Value::string("DO_NOT_LEAK_SENTINEL")),
+                D::bool(),
+                C::RepresentationMismatch,
+            ),
+            (
+                value(Value::i64(i8::MAX as i64 + 1)),
+                D::i8(),
+                C::IntegerRange,
+            ),
+            (
+                value(Value::string("DO_NOT_LEAK_SENTINEL")),
+                D::secret(D::string()).unwrap(),
+                C::UnsupportedDescriptor,
+            ),
+        ];
+        for (slot, descriptor, expected) in cases {
+            let error = encode_request(&slot, &descriptor).unwrap_err();
+            assert_eq!(error.category(), expected);
+            let rendered = format!("{error:?}{error}");
+            assert!(!rendered.contains("DO_NOT_LEAK_SENTINEL"));
+            assert!(error.source().is_none());
+        }
     }
 
     fn category(slot: SlotValue, descriptor: D, expected: C) {
