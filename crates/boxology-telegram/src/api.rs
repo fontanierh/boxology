@@ -353,10 +353,12 @@ impl ApiError {
 
     fn telegram(code: u16, parameters: Option<ApiParameters>, _write: bool) -> Self {
         let retry_after = parameters.and_then(|parameters| parameters.retry_after);
-        let exit = match code {
-            429 => ExitClass::Transient,
-            409 => ExitClass::Conflict,
-            _ => ExitClass::Permanent,
+        let exit = if code == 429 {
+            ExitClass::Transient
+        } else if code == 409 {
+            ExitClass::Conflict
+        } else {
+            ExitClass::Permanent
         };
         Self {
             code: if code == 429 {

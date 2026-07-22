@@ -66,7 +66,7 @@ fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
     let updates = api
         .get_updates(current.next_offset, timeout)
         .map_err(api_error)?;
-    validate_update_order(&updates)?;
+    validate_update_order(&updates, current.next_offset)?;
     let max_id = updates.last().map(|update| update.update_id);
     let next_offset = match max_id {
         Some(id) => id.checked_add(1).ok_or_else(|| {
@@ -219,7 +219,8 @@ fn project_callback(update: &api::Update, state: &State) -> Option<EventRecord> 
     let message = callback.message.as_ref()?;
     let user = &callback.from;
     let data = callback.data.as_deref()?;
-    if user.is_bot
+    if callback.id.len() > 256
+        || user.is_bot
         || message.chat.kind != "private"
         || data.len() > 64
         || state.pairing.as_ref()?.user_id != user.id
@@ -334,15 +335,17 @@ fn inbox_full(state: &State) -> bool {
         || serde_json::to_vec(&state.events).is_ok_and(|bytes| bytes.len() >= 8 * 1024 * 1024)
 }
 
-fn validate_update_order(updates: &[api::Update]) -> Result<(), AppError> {
-    if updates.iter().any(|update| update.update_id < 0)
+fn validate_update_order(updates: &[api::Update], requested_offset: i64) -> Result<(), AppError> {
+    if updates
+        .iter()
+        .any(|update| update.update_id < requested_offset)
         || updates
             .windows(2)
             .any(|pair| pair[0].update_id >= pair[1].update_id)
     {
         return Err(AppError::new(
             "update_order",
-            "Telegram returned unordered updates",
+            "Telegram returned invalid update offsets",
             ExitClass::Transient,
         ));
     }

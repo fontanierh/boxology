@@ -159,7 +159,17 @@ fn emit(output: &mut dyn Write, data: Value) -> std::io::Result<()> {
 }
 
 fn emit_failure(output: &mut dyn Write, error: AppError) -> ExitClass {
-    if serde_json::to_writer(&mut *output, &json!({"schema": SCHEMA, "ok": false, "command": "listen", "error": {"code": error.code, "message": error.message, "retryable": error.retryable, "retry_after_seconds": error.retry_after}})).is_ok() {
+    let mut body =
+        json!({"code": error.code, "message": error.message, "retryable": error.retryable});
+    if let Some(retry_after) = error.retry_after {
+        body["retry_after_seconds"] = json!(retry_after);
+    }
+    if serde_json::to_writer(
+        &mut *output,
+        &json!({"schema": SCHEMA, "ok": false, "command": "listen", "error": body}),
+    )
+    .is_ok()
+    {
         let _ = output.write_all(b"\n");
     }
     error.exit
