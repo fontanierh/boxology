@@ -11,7 +11,8 @@ the original nine-slot manager and a ten-slot expansion manager. A slot owns one
 JIT runner, one disposable workspace, and one cache root, so independent PRs can
 run concurrently without sharing checkout state. Native Mac slots keep a private
 per-slot Cargo target directory between jobs and use `CARGO_BUILD_JOBS=4` and
-`RUST_TEST_THREADS=4`; extra Linux containers remain capped at one CPU and 2 GiB.
+`RUST_TEST_THREADS=4`; runner installations use APFS copy-on-write clones, and
+extra Linux containers remain capped at one CPU and 2 GiB.
 
 ## Pinned inputs
 
@@ -134,10 +135,11 @@ launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-macos-runner"
 
 The native supervisor uses the same Keychain item as the Linux supervisor,
 provisions one JIT runner with `[self-hosted, macOS, ARM64, boxology-macos-pr]`,
-copies the verified runner into a fresh per-job directory, and removes that
+APFS-clones the verified runner into a fresh per-job directory, and removes that
 directory after completion. Its private per-slot Cargo target directory is kept
 outside the checkout so Cargo can reuse fingerprints without sharing workspaces
-between slots. It emits only state diagnostics; never collect raw
+between slots. The clone keeps jobs isolated without copying the 435 MB runner
+base for every job. It emits only state diagnostics; never collect raw
 runner logs because job output can contain secrets. The native runner is not
 container-isolated: it is accepted only for this private repository and trusted
 Henry/agent collaborators.
