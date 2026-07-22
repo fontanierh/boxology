@@ -154,6 +154,63 @@ fn request_error(_: impl std::fmt::Debug) -> ErasedCallError {
     ErasedCallError::ContractViolation(Detail::new("http_request"))
 }
 
+struct ClientExecutor {
+    client: reqwest::Client,
+}
+
+impl ClientExecutor {
+    fn new() -> Result<Self, Detail> {
+        reqwest::Client::builder()
+            .http1_only()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()
+            .map(|client| Self { client })
+            .map_err(|_| Detail::new("http_client"))
+    }
+
+    async fn execute(
+        &self,
+        request: Request<Vec<u8>>,
+        output: &TypeDescriptor,
+        domain_error: &TypeDescriptor,
+        limits: ResponseLimits,
+    ) -> Result<SlotValue, ErasedCallError> {
+        let (parts, body) = request.into_parts();
+        let url = reqwest::Url::parse(&parts.uri.to_string()).map_err(request_error)?;
+        let mut request = reqwest::Request::new(parts.method, url);
+        *request.version_mut() = parts.version;
+        *request.headers_mut() = parts.headers;
+        *request.body_mut() = Some(body.into());
+
+        let mut response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(|_| ErasedCallError::Unavailable(Detail::new("http_transport")))?;
+        let status = response.status().as_u16();
+        let content_types: Vec<Vec<u8>> = response
+            .headers()
+            .get_all(CONTENT_TYPE)
+            .iter()
+            .map(|value| value.as_bytes().to_vec())
+            .collect();
+        let cap = u64::try_from(limits.max_bytes).unwrap_or(u64::MAX);
+        if response.content_length().is_some_and(|length| length > cap) {
+            return invalid();
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| invalid_error())? {
+            if chunk.len() > limits.max_bytes - body.len() {
+                return invalid();
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let content_types: Vec<&[u8]> = content_types.iter().map(Vec::as_slice).collect();
+        classify_response(status, &content_types, &body, output, domain_error, limits)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ResponseLimits {
     pub(crate) max_bytes: usize,
@@ -303,6 +360,12 @@ mod tests {
         BoxId, Caller, CancelToken, CapabilityId, CapabilityName, CapabilityShape, ContractValue,
         Deadline, ExposureLevel, FieldDescriptor, Idempotency, IdempotencyKey, TraceContext,
         VariantDescriptor, VariantPayload,
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        task::JoinHandle,
+        time::timeout,
     };
 
     fn capability() -> CapabilityDescriptor {
@@ -585,6 +648,96 @@ mod tests {
         ));
     }
 
+    async fn raw_server(
+        fragments: Vec<Vec<u8>>,
+        watch_second: bool,
+    ) -> (String, JoinHandle<(Vec<u8>, bool)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .expect("client did not connect")
+                .unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut block = [0; 1024];
+                let read = timeout(Duration::from_secs(5), stream.read(&mut block))
+                    .await
+                    .expect("client request stalled")
+                    .unwrap();
+                assert_ne!(read, 0, "client closed before completing request");
+                request.extend_from_slice(&block[..read]);
+                let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                    continue;
+                };
+                let head = std::str::from_utf8(&request[..end]).unwrap();
+                let length = head.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                });
+                if request.len() >= end + 4 + length.unwrap_or(0) {
+                    break;
+                }
+            }
+            for fragment in fragments {
+                stream.write_all(&fragment).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+            stream.shutdown().await.unwrap();
+            let second = watch_second
+                && timeout(Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_ok();
+            (request, second)
+        });
+        (format!("http://{address}"), task)
+    }
+
+    async fn bounded_execute(
+        executor: &ClientExecutor,
+        request: Request<Vec<u8>>,
+        limits: ResponseLimits,
+    ) -> Result<SlotValue, ErasedCallError> {
+        timeout(
+            Duration::from_secs(5),
+            executor.execute(request, &output(), &domain(), limits),
+        )
+        .await
+        .expect("client operation stalled")
+    }
+
+    async fn direct(
+        base: &str,
+        path: &str,
+        body: &[u8],
+        max_bytes: usize,
+    ) -> Result<SlotValue, ErasedCallError> {
+        let request = Request::builder()
+            .method(Method::POST)
+            .version(Version::HTTP_11)
+            .uri(format!("{base}{path}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.to_vec())
+            .unwrap();
+        bounded_execute(
+            &ClientExecutor::new().unwrap(),
+            request,
+            ResponseLimits {
+                max_bytes,
+                max_depth: 128,
+            },
+        )
+        .await
+    }
+
+    fn http_response(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut response = format!("HTTP/1.1 {status}\r\n{headers}\r\n").into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
     #[test]
     fn result_and_domain_payloads_are_consumer_tolerant() {
         let result = classify(
@@ -748,5 +901,233 @@ mod tests {
             ),
             "invalid"
         );
+    }
+
+    #[tokio::test]
+    async fn executor_sends_prepared_http1_request_once_and_accepts_fragmented_exact_cap() {
+        let body = br#"{"result":{"value":{"known":"x"}}}"#;
+        let (base, server) = raw_server(
+            vec![
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 34\r\n\r\n{\"result\":".to_vec(),
+                b"{\"value\":{\"known\":\"x\"}}}".to_vec(),
+            ],
+            true,
+        )
+        .await;
+        let now = Instant::now();
+        let request = prepare_request(
+            &ClientOrigin::parse(&base).unwrap(),
+            &capability(),
+            &context(
+                Some(Deadline::at(now + Duration::from_millis(1234))),
+                Some("trace-parent"),
+                Some("trace-state"),
+                Some("idempotency-key"),
+            ),
+            &SlotValue::Value(ContractValue::string("hello")),
+            now,
+        )
+        .unwrap();
+        let result = bounded_execute(&ClientExecutor::new().unwrap(), request, limits(body))
+            .await
+            .unwrap();
+        assert!(matches!(result, SlotValue::Value(_)));
+        let (request, second) = server.await.unwrap();
+        let request = String::from_utf8(request).unwrap();
+        let (head, payload) = request.split_once("\r\n\r\n").unwrap();
+        let mut lines = head.lines();
+        assert_eq!(lines.next(), Some("POST /rpc/box-1/cap_name HTTP/1.1"));
+        assert_eq!(payload, "\"hello\"");
+        let mut headers: Vec<_> = lines
+            .map(|line| {
+                let (name, value) = line.split_once(':').unwrap();
+                format!("{}:{}", name.to_ascii_lowercase(), value.trim())
+            })
+            .collect();
+        headers.sort();
+        let mut expected = vec![
+            "accept:*/*".to_owned(),
+            "boxology-timeout-ms:1234".to_owned(),
+            "content-length:7".to_owned(),
+            "content-type:application/json".to_owned(),
+            format!("host:{}", base.strip_prefix("http://").unwrap()),
+            "idempotency-key:idempotency-key".to_owned(),
+            "traceparent:trace-parent".to_owned(),
+            "tracestate:trace-state".to_owned(),
+        ];
+        expected.sort();
+        assert_eq!(headers, expected);
+        assert!(!second);
+    }
+
+    #[tokio::test]
+    async fn executor_never_follows_redirects_or_retries_transport_failures() {
+        let (base, server) = raw_server(
+            vec![http_response(
+                "302 Found",
+                "Location: /sentinel-redirect\r\nContent-Length: 0\r\nConnection: close\r\n",
+                b"",
+            )],
+            true,
+        )
+        .await;
+        assert!(matches!(
+            direct(&base, "/rpc", b"", 34).await,
+            Err(ErasedCallError::InvalidResponse(ref detail)) if detail.code() == "http_response"
+        ));
+        assert!(!server.await.unwrap().1);
+
+        let (base, server) = raw_server(Vec::new(), true).await;
+        let error = direct(&base, "/SENTINEL-URL", b"SENTINEL-BODY", 34)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ErasedCallError::Unavailable(ref detail) if detail.code() == "http_transport"
+        ));
+        let diagnostic = format!("{error:?}");
+        assert!(!diagnostic.contains("SENTINEL"));
+        assert!(!server.await.unwrap().1);
+    }
+
+    #[tokio::test]
+    async fn executor_enforces_declared_and_streamed_caps_for_every_status() {
+        let success = br#"{"result":{"value":{"known":"x"}}}"#;
+        for status in ["200 OK", "500 Internal Server Error"] {
+            let (base, server) = raw_server(
+                vec![
+                    http_response(
+                        status,
+                        "Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n",
+                        b"20\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n",
+                    ),
+                    b"3\r\nbbb\r\n0\r\n\r\n".to_vec(),
+                ],
+                false,
+            )
+            .await;
+            assert!(matches!(
+                direct(&base, "/rpc", b"", 34).await,
+                Err(ErasedCallError::InvalidResponse(ref detail)) if detail.code() == "http_response"
+            ));
+            server.await.unwrap();
+        }
+        let (base, server) = raw_server(
+            vec![http_response(
+                "200 OK",
+                "Content-Type: application/json\r\nContent-Length: 35\r\n",
+                b"",
+            )],
+            false,
+        )
+        .await;
+        assert!(matches!(
+            direct(&base, "/rpc", b"", 34).await,
+            Err(ErasedCallError::InvalidResponse(_))
+        ));
+        server.await.unwrap();
+
+        let (base, server) = raw_server(
+            vec![http_response(
+                "200 OK",
+                "Content-Type: application/json\r\nContent-Length: 34\r\n",
+                success,
+            )],
+            false,
+        )
+        .await;
+        assert!(direct(&base, "/rpc", b"", 34).await.is_ok());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn executor_maps_truncation_wire_errors_and_raw_content_type_lines() {
+        let unavailable = call("unavailable", "service unavailable");
+        let cases = [
+            (
+                "503 Service Unavailable",
+                "Content-Type: application/json\r\nContent-Length: 78\r\n",
+                unavailable.as_slice(),
+                "unavailable",
+            ),
+            (
+                "200 OK",
+                "Content-Type: application/json\r\nContent-Type: application/json\r\nContent-Length: 34\r\n",
+                br#"{"result":{"value":{"known":"x"}}}"#,
+                "invalid",
+            ),
+            (
+                "200 OK",
+                "Content-Length: 34\r\n",
+                br#"{"result":{"value":{"known":"x"}}}"#,
+                "invalid",
+            ),
+        ];
+        for (status, headers, body, expected) in cases {
+            let (base, server) =
+                raw_server(vec![http_response(status, headers, body)], false).await;
+            assert_eq!(
+                category(direct(&base, "/rpc", b"", body.len()).await.unwrap_err()),
+                expected
+            );
+            server.await.unwrap();
+        }
+
+        let (base, server) = raw_server(
+            vec![http_response(
+                "200 OK",
+                "Content-Type: application/json\r\nContent-Length: 14\r\n",
+                b"SENTINEL-BODY",
+            )],
+            false,
+        )
+        .await;
+        let error = direct(&base, "/SENTINEL-URL", b"", 14).await.unwrap_err();
+        assert!(matches!(
+            error,
+            ErasedCallError::InvalidResponse(ref detail) if detail.code() == "http_response"
+        ));
+        assert!(!format!("{error:?}").contains("SENTINEL"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn executor_is_reusable_and_redacts_request_conversion_failures() {
+        let executor = ClientExecutor::new().unwrap();
+        let relative = Request::builder()
+            .uri("/SENTINEL-PATH")
+            .body(b"SENTINEL-BODY".to_vec())
+            .unwrap();
+        let error = bounded_execute(&executor, relative, ResponseLimits::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ErasedCallError::ContractViolation(ref detail) if detail.code() == "http_request"
+        ));
+        assert!(!format!("{error:?}").contains("SENTINEL"));
+
+        for _ in 0..2 {
+            let body = br#"{"result":{"value":{"known":"x"}}}"#;
+            let (base, server) = raw_server(
+                vec![http_response(
+                    "200 OK",
+                    "Content-Type: application/json\r\nContent-Length: 34\r\n",
+                    body,
+                )],
+                false,
+            )
+            .await;
+            let request = Request::builder()
+                .uri(format!("{base}/rpc"))
+                .body(Vec::new())
+                .unwrap();
+            assert!(
+                bounded_execute(&executor, request, limits(body))
+                    .await
+                    .is_ok()
+            );
+            server.await.unwrap();
+        }
     }
 }
