@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{future::Future, time::Instant};
 
 use boxology_contract::{
     CallContext, CapabilityDescriptor, DecodeRole, Detail, ErasedCallError, OpaqueTree, SlotValue,
@@ -172,6 +172,21 @@ impl ClientExecutor {
     async fn execute(
         &self,
         request: Request<Vec<u8>>,
+        context: &CallContext,
+        output: &TypeDescriptor,
+        domain_error: &TypeDescriptor,
+        limits: ResponseLimits,
+    ) -> Result<SlotValue, ErasedCallError> {
+        race_operation(
+            self.execute_operation(request, output, domain_error, limits),
+            context,
+        )
+        .await
+    }
+
+    async fn execute_operation(
+        &self,
+        request: Request<Vec<u8>>,
         output: &TypeDescriptor,
         domain_error: &TypeDescriptor,
         limits: ResponseLimits,
@@ -208,6 +223,28 @@ impl ClientExecutor {
         }
         let content_types: Vec<&[u8]> = content_types.iter().map(Vec::as_slice).collect();
         classify_response(status, &content_types, &body, output, domain_error, limits)
+    }
+}
+
+async fn race_operation<F>(
+    operation: F,
+    context: &CallContext,
+) -> Result<SlotValue, ErasedCallError>
+where
+    F: Future<Output = Result<SlotValue, ErasedCallError>>,
+{
+    let deadline = async {
+        match context.deadline() {
+            Some(deadline) => tokio::time::sleep_until(deadline.instant().into()).await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::pin!(operation, deadline);
+    tokio::select! {
+        biased;
+        result = &mut operation => result,
+        () = &mut deadline => Err(ErasedCallError::Deadline),
+        () = context.cancellation().cancelled() => Err(ErasedCallError::Cancelled),
     }
 }
 
@@ -354,7 +391,13 @@ fn invalid_error() -> ErasedCallError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
     use boxology_contract::{
         BoxId, Caller, CancelToken, CapabilityId, CapabilityName, CapabilityShape, ContractValue,
@@ -698,11 +741,12 @@ mod tests {
     async fn bounded_execute(
         executor: &ClientExecutor,
         request: Request<Vec<u8>>,
+        context: &CallContext,
         limits: ResponseLimits,
     ) -> Result<SlotValue, ErasedCallError> {
         timeout(
             Duration::from_secs(5),
-            executor.execute(request, &output(), &domain(), limits),
+            executor.execute(request, context, &output(), &domain(), limits),
         )
         .await
         .expect("client operation stalled")
@@ -721,9 +765,11 @@ mod tests {
             .header(CONTENT_TYPE, "application/json")
             .body(body.to_vec())
             .unwrap();
+        let context = context(None, None, None, None);
         bounded_execute(
             &ClientExecutor::new().unwrap(),
             request,
+            &context,
             ResponseLimits {
                 max_bytes,
                 max_depth: 128,
@@ -732,10 +778,191 @@ mod tests {
         .await
     }
 
+    fn race_context(deadline: Option<Instant>, cancellation: CancelToken) -> CallContext {
+        CallContext::new(
+            Caller::Anonymous,
+            deadline.map(Deadline::at),
+            cancellation,
+            TraceContext::empty(),
+            None,
+        )
+    }
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
     fn http_response(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
         let mut response = format!("HTTP/1.1 {status}\r\n{headers}\r\n").into_bytes();
         response.extend_from_slice(body);
         response
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn race_preserves_results_and_polls_operation_first() {
+        let cancellation = CancelToken::new();
+        cancellation.cancel();
+        let context = race_context(Some(tokio::time::Instant::now().into_std()), cancellation);
+        let value = SlotValue::Value(ContractValue::string("done"));
+        assert_eq!(
+            race_operation(std::future::ready(Ok(value.clone())), &context).await,
+            Ok(value)
+        );
+        let expected = ErasedCallError::Unavailable(Detail::new("http_transport"));
+        assert_eq!(
+            race_operation(std::future::ready(Err(expected.clone())), &context).await,
+            Err(expected)
+        );
+
+        let context = race_context(
+            Some(tokio::time::Instant::now().into_std()),
+            CancelToken::new(),
+        );
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = DropFlag(dropped.clone());
+        let pending = async move {
+            let _guard = guard;
+            std::future::pending().await
+        };
+        assert_eq!(
+            race_operation(pending, &context).await,
+            Err(ErasedCallError::Deadline)
+        );
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn race_deadline_precedes_cancellation_and_newly_ready_operation_wins() {
+        let cancellation = CancelToken::new();
+        cancellation.cancel();
+        let context = race_context(Some(tokio::time::Instant::now().into_std()), cancellation);
+        assert_eq!(
+            race_operation(std::future::pending(), &context).await,
+            Err(ErasedCallError::Deadline)
+        );
+
+        let (first_poll_sent, first_poll_seen) = tokio::sync::oneshot::channel();
+        let deadline = tokio::time::Instant::now().into_std() + Duration::from_secs(1);
+        let task = tokio::spawn(async move {
+            let context = race_context(Some(deadline), CancelToken::new());
+            let mut first = Some(first_poll_sent);
+            let operation = std::future::poll_fn(move |_| {
+                if let Some(sent) = first.take() {
+                    sent.send(()).unwrap();
+                    std::task::Poll::Pending
+                } else {
+                    std::task::Poll::Ready(Ok(SlotValue::Value(ContractValue::string("same-turn"))))
+                }
+            });
+            race_operation(operation, &context).await
+        });
+        timeout(Duration::from_secs(1), first_poll_seen)
+            .await
+            .expect("operation was not first-polled")
+            .unwrap();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(task.await.unwrap(), Ok(SlotValue::Value(_))));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn race_observes_later_deadline_and_cancellation_and_drops_operations() {
+        let deadline = tokio::time::Instant::now().into_std() + Duration::from_secs(5);
+        let deadline_task = tokio::spawn(async move {
+            let context = race_context(Some(deadline), CancelToken::new());
+            race_operation(std::future::pending(), &context).await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert_eq!(deadline_task.await.unwrap(), Err(ErasedCallError::Deadline));
+
+        let cancellation = CancelToken::new();
+        let trigger = cancellation.clone();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let observed = dropped.clone();
+        let cancel_task = tokio::spawn(async move {
+            let context = race_context(None, cancellation);
+            let guard = DropFlag(observed);
+            race_operation(
+                async move {
+                    let _guard = guard;
+                    std::future::pending().await
+                },
+                &context,
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        trigger.cancel();
+        assert_eq!(cancel_task.await.unwrap(), Err(ErasedCallError::Cancelled));
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn stalled_real_response_is_cancelled_promptly_without_diagnostics() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (head_sent, head_seen) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let mut block = [0; 1024];
+                let read = stream.read(&mut block).await.unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&block[..read]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+            head_sent.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        let cancellation = CancelToken::new();
+        let context = race_context(None, cancellation.clone());
+        let request = Request::builder()
+            .uri(format!("http://{address}/SENTINEL-PATH"))
+            .body(b"SENTINEL-BODY".to_vec())
+            .unwrap();
+        let executor = ClientExecutor::new().unwrap();
+        let output = output();
+        let domain = domain();
+        let operation = executor.execute(
+            request,
+            &context,
+            &output,
+            &domain,
+            ResponseLimits::default(),
+        );
+        tokio::pin!(operation);
+        timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                result = &mut operation => panic!("completed before stall: {result:?}"),
+                result = head_seen => result.unwrap(),
+            }
+        })
+        .await
+        .expect("server did not flush the response head");
+        tokio::task::yield_now().await;
+        std::future::poll_fn(|cx| match operation.as_mut().poll(cx) {
+            std::task::Poll::Ready(result) => panic!("body did not stall: {result:?}"),
+            std::task::Poll::Pending => std::task::Poll::Ready(()),
+        })
+        .await;
+        cancellation.cancel();
+        let error = timeout(Duration::from_secs(1), operation)
+            .await
+            .expect("cancellation did not return promptly")
+            .unwrap_err();
+        assert_eq!(error, ErasedCallError::Cancelled);
+        assert!(!format!("{error:?}").contains("SENTINEL"));
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 
     #[test]
@@ -915,22 +1142,28 @@ mod tests {
         )
         .await;
         let now = Instant::now();
+        let context = context(
+            Some(Deadline::at(now + Duration::from_millis(1234))),
+            Some("trace-parent"),
+            Some("trace-state"),
+            Some("idempotency-key"),
+        );
         let request = prepare_request(
             &ClientOrigin::parse(&base).unwrap(),
             &capability(),
-            &context(
-                Some(Deadline::at(now + Duration::from_millis(1234))),
-                Some("trace-parent"),
-                Some("trace-state"),
-                Some("idempotency-key"),
-            ),
+            &context,
             &SlotValue::Value(ContractValue::string("hello")),
             now,
         )
         .unwrap();
-        let result = bounded_execute(&ClientExecutor::new().unwrap(), request, limits(body))
-            .await
-            .unwrap();
+        let result = bounded_execute(
+            &ClientExecutor::new().unwrap(),
+            request,
+            &context,
+            limits(body),
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, SlotValue::Value(_)));
         let (request, second) = server.await.unwrap();
         let request = String::from_utf8(request).unwrap();
@@ -1098,7 +1331,8 @@ mod tests {
             .uri("/SENTINEL-PATH")
             .body(b"SENTINEL-BODY".to_vec())
             .unwrap();
-        let error = bounded_execute(&executor, relative, ResponseLimits::default())
+        let context = context(None, None, None, None);
+        let error = bounded_execute(&executor, relative, &context, ResponseLimits::default())
             .await
             .unwrap_err();
         assert!(matches!(
@@ -1123,7 +1357,7 @@ mod tests {
                 .body(Vec::new())
                 .unwrap();
             assert!(
-                bounded_execute(&executor, request, limits(body))
+                bounded_execute(&executor, request, &context, limits(body))
                     .await
                     .is_ok()
             );
