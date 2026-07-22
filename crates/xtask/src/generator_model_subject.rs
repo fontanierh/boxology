@@ -612,6 +612,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         vec![
             "generated/contract/src/lib.rs".into(),
             "generated/contract/Cargo.toml".into(),
+            "generated/schema.json".into(),
         ],
     )
     .map_err(|error| format!("fixed cold request failed: {error}"))?;
