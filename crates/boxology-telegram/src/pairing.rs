@@ -1,6 +1,6 @@
-use crate::api::{self, Api, ApiError};
+use crate::api::{self, Api};
 use crate::state::{self, BotFingerprint, Pairing, Paths, PendingPair};
-use crate::{AppError, ExitClass, SCHEMA, parse};
+use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
 use getrandom::fill;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -263,21 +263,6 @@ fn check_schema(schema: u8) -> Result<(), AppError> {
     (schema == SCHEMA)
         .then_some(())
         .ok_or_else(|| AppError::input("unsupported_schema", "unsupported schema"))
-}
-
-fn api_error(error: ApiError) -> AppError {
-    AppError {
-        code: error.code,
-        message: match error.exit {
-            ExitClass::Conflict => "Telegram polling is unavailable",
-            ExitClass::Permanent => "Telegram rejected the request",
-            ExitClass::Ambiguous => "Telegram delivery is ambiguous",
-            _ => "Telegram is temporarily unavailable",
-        },
-        retryable: matches!(error.exit, ExitClass::Transient),
-        exit: error.exit,
-        retry_after: error.retry_after,
-    }
 }
 
 fn valid_username(username: &str) -> bool {
