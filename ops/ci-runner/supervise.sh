@@ -203,7 +203,7 @@ run_once() {
   if docker volume inspect "$candidate_volume" >/dev/null 2>&1 || docker container inspect "$candidate_container" >/dev/null 2>&1; then delete_jit_runner; return 1; fi
   volume="$candidate_volume"; if ! docker volume create "$volume" >/dev/null; then delete_jit_runner; return 1; fi; container="$candidate_container"
   status=0
-  printf '%s' "$jit" | docker run --name "$container" --network bridge --user runner --init \
+  printf '%s' "$jit" | docker run --interactive --name "$container" --network bridge --user runner --init \
       --read-only --cpus 4 --memory 8g --memory-swap 8g --cap-drop=ALL --security-opt no-new-privileges:true --pids-limit 512 \
       --tmpfs /tmp:rw,noexec,nosuid,size=256m --tmpfs /run:rw,noexec,nosuid,size=16m \
       --mount "type=volume,source=$volume,target=/runner" \
