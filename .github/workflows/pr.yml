@@ -131,13 +131,13 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            target
-          key: cargo-checks-macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
-            cargo-checks-macos-${{ runner.os }}-${{ runner.arch }}-
-      - name: cargo xtask test
-        run: cargo xtask test
-      - name: cargo xtask determinism
+            cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-
+      # Linux runs the full workspace test suite. Native macOS keeps the
+      # platform-specific gate and avoids rebuilding the entire workspace a
+      # second time for every PR.
+      - name: cargo xtask determinism (native macOS gate)
         run: cargo xtask determinism
       - name: Produce determinism artifacts
         env:

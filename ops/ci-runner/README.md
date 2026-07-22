@@ -1,17 +1,17 @@
 # Boxology Mac-hosted CI runners
 
-This is the authoritative runbook for S0-T8. It provisions ten disposable GitHub
-Actions JIT slots for each active label on the MacBook: Linux jobs run in the
+This is the authoritative runbook for S0-T8. It provisions twenty disposable
+GitHub Actions JIT slots for each active label on the MacBook: Linux jobs run in the
 native ARM64 Colima VM, and macOS jobs run on the native Apple-silicon host.
 Every enabled workflow uses one of these labels; no enabled workflow targets a
 GitHub-hosted runner.
 
-Each label has one base supervisor plus nine slot supervisors. A slot owns one
+Each label has one base supervisor plus nineteen slot supervisors, split between
+the original nine-slot manager and a ten-slot expansion manager. A slot owns one
 JIT runner, one disposable workspace, and one cache root, so independent PRs can
-run concurrently without sharing checkout state. Slot workers use bounded
-per-job defaults (`CARGO_BUILD_JOBS=2`, `RUST_TEST_THREADS=2`; extra Linux
-containers are capped at one CPU and 2 GiB) to keep bursts fast without turning
-the Mac into an OOM storm.
+run concurrently without sharing checkout state. Native Mac slots keep a private
+per-slot Cargo target directory between jobs and use `CARGO_BUILD_JOBS=4` and
+`RUST_TEST_THREADS=4`; extra Linux containers remain capped at one CPU and 2 GiB.
 
 ## Pinned inputs
 
@@ -135,12 +135,14 @@ launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-macos-runner"
 The native supervisor uses the same Keychain item as the Linux supervisor,
 provisions one JIT runner with `[self-hosted, macOS, ARM64, boxology-macos-pr]`,
 copies the verified runner into a fresh per-job directory, and removes that
-directory after completion. It emits only state diagnostics; never collect raw
+directory after completion. Its private per-slot Cargo target directory is kept
+outside the checkout so Cargo can reuse fingerprints without sharing workspaces
+between slots. It emits only state diagnostics; never collect raw
 runner logs because job output can contain secrets. The native runner is not
 container-isolated: it is accepted only for this private repository and trusted
 Henry/agent collaborators.
 
-Activate the additional nine native Mac slots alongside the base supervisor:
+Activate the nineteen native Mac slots alongside the base supervisor:
 
 ```sh
 install -m 700 ops/ci-runner/supervise-slots.sh "$HOME/.crab/ci-runner/supervise-slots.sh"
@@ -149,6 +151,11 @@ install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots.plist
 plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
 launchctl bootstrap "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
+install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist"
+plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist"
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist"
 ```
 
 ## JIT lifecycle and smoke test
@@ -178,7 +185,7 @@ launchctl bootstrap "gui/$(id -u)" /PATH/TO/com.fontanierh.boxology-ci-runner.pl
 launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-runner"
 ```
 
-Activate the additional nine Linux slots alongside the base supervisor:
+Activate the nineteen Linux slots alongside the base supervisor:
 
 ```sh
 install -m 700 ops/ci-runner/supervise-slots.sh "$HOME/.crab/ci-runner/supervise-slots.sh"
@@ -187,6 +194,11 @@ install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-runner-slots.plist \
 plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
 launchctl bootstrap "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
+install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-runner-slots-extra.plist \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots-extra.plist"
+plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots-extra.plist"
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots-extra.plist"
 ```
 
 The Linux workflow is manual-only and remains the operator's end-to-end health check. Dispatch
@@ -202,16 +214,19 @@ native determinism fixture.
 The activated `pr.yml` Linux lane assigns `checks-linux`, `deny`, both determinism
 consumers, and `validation` to `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]`.
 The Linux evidence and determinism verification target is `aarch64-unknown-linux-gnu`;
-the `checks-macos` job and scheduled advisory workflow use
+the `checks-macos` native determinism gate and scheduled advisory workflow use
 `[self-hosted, macOS, ARM64, boxology-macos-pr]`. The x86 audit workflow is
 intentionally removed for this emergency migration; x86 coverage is a deferred
 follow-up and is not part of the active CI contract. Consequently every enabled
 workflow job runs through this MacBook and uses no GitHub-hosted Actions minutes.
+The full workspace test suite runs once in `checks-linux`; the native Mac gate
+reuses the per-slot Cargo target and checks platform-specific determinism without
+rebuilding the entire workspace a second time.
 
 ## Health, cleanup, and rollback
 
 Check `colima status --profile boxology-ci-arm64`, `DOCKER_CONTEXT=colima-boxology-ci-arm64`,
-the image architecture/identity/SHA labels, all base and slot launchd jobs, and the GitHub
+the image architecture/identity/SHA labels, all base, slot, and expansion launchd jobs, and the GitHub
 runner labels. Inspect the current Linux container only for fixed state fields
 and mounts; the sole mount must be the fresh named runner volume. Never collect
 raw runner logs because job output can contain secrets.

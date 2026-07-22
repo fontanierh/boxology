@@ -6,7 +6,7 @@ umask 077
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-com.fontanierh.boxology-ci-runner}"
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-$(/usr/bin/id -un)}"
 RUNNER_GROUP_ID="${RUNNER_GROUP_ID:-1}"
-MAX_RUNNERS="${MAX_RUNNERS:-10}"
+MAX_RUNNERS="${MAX_RUNNERS:-20}"
 DOCKER_CONTEXT=colima-boxology-ci-arm64
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/boxology-ci-runner}"
 LOCK="$RUNTIME_DIR/supervisor.lock"

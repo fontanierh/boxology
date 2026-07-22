@@ -8,7 +8,7 @@ RUNNER_ROOT="${RUNNER_ROOT:-/Users/jim/.crab/ci-runner/macos-runner}"
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-com.fontanierh.boxology-ci-runner}"
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-$(/usr/bin/id -un)}"
 RUNNER_GROUP_ID="${RUNNER_GROUP_ID:-1}"
-MAX_RUNNERS="${MAX_RUNNERS:-10}"
+MAX_RUNNERS="${MAX_RUNNERS:-20}"
 RUNNER_VERSION=2.336.0
 RUNNER_SHA256=8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079
 RUST_VERSION=1.97.1
@@ -21,6 +21,7 @@ IMAGE_VERSION="macOS-${MACOS_VERSION}-arm64-runner-${RUNNER_VERSION}-rust-${RUST
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/boxology-ci-macos-runner}"
 LOCK="$RUNTIME_DIR/supervisor.lock"
 CACHE_ROOT="$RUNNER_ROOT/cache"
+TARGET_ROOT="$CACHE_ROOT/target"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
 RUNNER_NAME= RUNNER_ID= runner_pid= run_dir= token=
@@ -31,8 +32,8 @@ RUNNER_NAME= RUNNER_ID= runner_pid= run_dir= token=
 [[ "$(uname -m)" = arm64 ]] || exit 69
 for tool in curl jq security uuidgen shasum sw_vers; do command -v "$tool" >/dev/null || exit 69; done
 [[ -x "$RUNNER_BASE/run.sh" && -x "$RUNNER_BASE/bin/Runner.Listener" ]] || exit 69
-mkdir -p "$RUNTIME_DIR" "$RUNNER_ROOT/runs" "$CACHE_ROOT/home"
-chmod 700 "$RUNTIME_DIR" "$RUNNER_ROOT" "$RUNNER_ROOT/runs" "$CACHE_ROOT" "$CACHE_ROOT/home"
+mkdir -p "$RUNTIME_DIR" "$RUNNER_ROOT/runs" "$CACHE_ROOT/home" "$TARGET_ROOT"
+chmod 700 "$RUNTIME_DIR" "$RUNNER_ROOT" "$RUNNER_ROOT/runs" "$CACHE_ROOT" "$CACHE_ROOT/home" "$TARGET_ROOT"
 mkdir "$LOCK" 2>/dev/null || { printf '%s\n' 'runner: macOS supervisor already running' >&2; exit 75; }
 
 validate_runner_list() {
@@ -204,7 +205,7 @@ run_once() {
   status=0
   (
     cd "$run_dir"
-    export HOME="$CACHE_ROOT/home" CARGO_HOME="$CACHE_ROOT/home/.cargo" RUSTUP_HOME=/Users/jim/.rustup \
+    export HOME="$CACHE_ROOT/home" CARGO_HOME="$CACHE_ROOT/home/.cargo" CARGO_TARGET_DIR="$TARGET_ROOT" RUSTUP_HOME=/Users/jim/.rustup \
       RUNNER_TEMP="$run_dir/_work/_temp" TMPDIR="$run_dir/_work/_temp" RUNNER_TOOL_CACHE="$run_dir/_work/_tool" \
       ImageOS="$IMAGE_OS" ImageVersion="$IMAGE_VERSION" \
       CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" RUST_TEST_THREADS="$RUST_TEST_THREADS" \
