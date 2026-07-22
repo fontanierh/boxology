@@ -284,6 +284,7 @@ mod tests {
 
     #[test]
     fn status_is_local_and_reports_the_exact_lease() {
+        let _guard = test_guard();
         unsafe { env::remove_var(ENABLED_VARIABLE) };
         let (output, exit) = execute(&["status".into()], br#"{"schema":1,"probe":false}"#);
         assert_eq!(exit, ExitClass::Success);
@@ -296,8 +297,20 @@ mod tests {
 
     #[test]
     fn network_commands_fail_closed_without_lease() {
+        let _guard = test_guard();
         unsafe { env::remove_var(ENABLED_VARIABLE) };
         let (_, exit) = execute(&["send".into()], br#"{"schema":1}"#);
         assert_eq!(exit, ExitClass::Authorization);
     }
+}
+
+#[cfg(test)]
+mod integration_tests;
+
+#[cfg(test)]
+pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
