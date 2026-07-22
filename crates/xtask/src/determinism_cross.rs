@@ -6,9 +6,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const LINUX: &[u8] = b"os=linux\narch=x86_64\n";
+const LINUX: &[u8] = b"os=linux\narch=aarch64\n";
 #[cfg(test)]
-const LINUX_ARM64: &[u8] = b"os=linux\narch=aarch64\n";
+const LINUX_X86_64: &[u8] = b"os=linux\narch=x86_64\n";
 const MACOS: &[u8] = b"os=macos\narch=aarch64\n";
 
 fn fixed(out: &Path, value: &str) -> (PathBuf, Vec<OsString>) {
@@ -170,8 +170,8 @@ mod tests {
 
     fn host() -> (&'static [u8], &'static str) {
         match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("linux", "x86_64") => (LINUX, "x86_64-unknown-linux-gnu"),
-            ("linux", "aarch64") => (LINUX_ARM64, "aarch64-unknown-linux-gnu"),
+            ("linux", "x86_64") => (LINUX_X86_64, "x86_64-unknown-linux-gnu"),
+            ("linux", "aarch64") => (LINUX, "aarch64-unknown-linux-gnu"),
             ("macos", "aarch64") => (MACOS, "aarch64-apple-darwin"),
             pair => panic!("unsupported fixture host: {pair:?}"),
         }
@@ -239,7 +239,7 @@ mod tests {
     fn expected_finding_is_frozen() {
         assert_eq!(
             expected_finding(),
-            "cross-platform mismatch subject=meta-platform experiment=baseline first=meta-platform/platform.txt left=21:43a0205f7d464fbe right=22:dcd00cef10fb8eac offset=3 left_window=6c696e75780a617263683d7838365f36 right_window=6d61636f730a617263683d6161726368 left_len=21 right_len=22 differing=1"
+            "cross-platform mismatch subject=meta-platform experiment=baseline first=meta-platform/platform.txt left=22:223ad4017c303e41 right=22:dcd00cef10fb8eac offset=3 left_window=6c696e75780a617263683d6161726368 right_window=6d61636f730a617263683d6161726368 left_len=22 right_len=22 differing=1"
         );
     }
 
