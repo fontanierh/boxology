@@ -43,13 +43,21 @@ fn request(source: &str) -> GenerationRequest {
 fn check(root: &Path, name: &str, implementation: &str) -> std::process::Output {
     let case = root.join(name);
     let program = source(implementation);
-    for file in generate(&request(&program)).unwrap().files() {
+    let generated = generate(&request(&program)).unwrap();
+    for file in generated.files() {
         let path = case.join(file.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, file.bytes()).unwrap();
     }
     fs::create_dir_all(case.join("consumer/src")).unwrap();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    fs::write(
+        case.join("Cargo.toml"),
+        format!(
+            "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.0.0\",path={:?}}}\n",
+            workspace.join("boxology-contract")
+        ),
+    ).unwrap();
     fs::write(
         case.join("consumer/Cargo.toml"),
         format!(
