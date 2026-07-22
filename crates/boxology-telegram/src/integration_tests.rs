@@ -627,11 +627,45 @@ fn protected_state_and_token_paths_reject_symlink_components() {
 }
 
 #[test]
+fn corrupt_state_relationships_and_enums_fail_closed() {
+    let context = Context::new(vec![]);
+    let duplicate_event = json!({
+        "event_id": "tg:1:1",
+        "update_id": 1,
+        "kind": "text",
+        "text": "message",
+        "received_at": 1,
+        "handled": false
+    });
+    let cases = vec![
+        json!({"schema": SCHEMA, "next_offset": 1, "confirmed_before": 2}),
+        json!({"schema": SCHEMA, "next_offset": 2, "events": [{"event_id": "tg:1:1", "update_id": 1, "kind": "unknown", "text": "", "received_at": 1, "handled": false}]}),
+        json!({"schema": SCHEMA, "next_offset": 2, "events": [duplicate_event.clone(), duplicate_event]}),
+        json!({"schema": SCHEMA, "asks": [{"ask_id": format!("ask:{}", "0".repeat(32)), "lifecycle_key": "life", "dedup_key": "dedup", "message_id": null, "state": "closed", "choices": []}]}),
+        json!({"schema": SCHEMA, "outbound": [{"dedup_key": "dedup", "kind": "reply", "payload_hash": "0".repeat(64), "state": "in_flight", "message_id": null, "event_id": "tg:1:1", "ask_id": null}]}),
+    ];
+    for value in cases {
+        let path = context.root.join("state.json");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_eq!(
+            state::read(&Paths::from_env().unwrap()).unwrap_err().code,
+            "corrupt_state"
+        );
+    }
+}
+
+#[test]
 fn pairing_revocation_is_explicit_and_local() {
     let context = Context::new(vec![]);
     let paths = Paths::from_env().unwrap();
     paired_state(&paths);
     state::update(&paths, |state| {
+        state.next_offset = 2;
         state.events.push(EventRecord {
             event_id: "tg:1:1".into(),
             update_id: 1,
@@ -675,6 +709,7 @@ fn acknowledged_full_inbox_is_pruned_before_fetching_more() {
     let paths = Paths::from_env().unwrap();
     paired_state(&paths);
     state::update(&paths, |state| {
+        state.next_offset = 1_000;
         state.events = (0..1_000)
             .map(|index| EventRecord {
                 event_id: format!("tg:{index}:1"),
