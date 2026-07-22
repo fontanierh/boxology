@@ -709,7 +709,7 @@ macro_rules! __boxology_check_implementation {
             let descriptor = boxology_generated_contract::contract_descriptor();
             assert!(std::ptr::eq(descriptor, boxology_generated_contract::contract_descriptor()));
             assert_eq!(descriptor.box_id().as_str(), "hello");
-            assert_eq!(descriptor.revision().as_str(), "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176");
+            assert_eq!(descriptor.revision().as_str(), __BASE_REVISION__);
             assert_eq!(descriptor.capabilities().len(), 1);
             let capability = &descriptor.capabilities()[0];
             assert_eq!(capability.id().box_id().as_str(), "hello");
@@ -743,10 +743,11 @@ macro_rules! __boxology_check_implementation {
             assert_eq!(unknown.error_tag(), "Future");
             assert!(!format!("{unknown:?}").contains("secret"));
             let _: boxology_generated_contract::GreetError = known;
-        "#;
+        "#
+        .replace("__BASE_REVISION__", &format!("{:?}", revision(CONTRACT)));
         fs::write(
             consumer.join("src/main.rs"),
-            source("GreetError", "EmptyName", abi),
+            source("GreetError", "EmptyName", abi.clone()),
         )
         .unwrap();
         let cargo = |verb, manifest: &std::path::Path, target: &str| {
@@ -773,7 +774,7 @@ macro_rules! __boxology_check_implementation {
             source(
                 "GreetError",
                 "MissingName",
-                "let _ = GreetError::EmptyName;",
+                "let _ = GreetError::EmptyName;".into(),
             ),
         )
         .unwrap();
@@ -798,7 +799,7 @@ macro_rules! __boxology_check_implementation {
         );
         fs::write(
             consumer.join("src/main.rs"),
-            source("HelloFailure", "EmptyName, Busy", &renamed_body),
+            source("HelloFailure", "EmptyName, Busy", renamed_body),
         )
         .unwrap();
         assert!(cargo("run", &manifest, "consumer-target").status.success());
