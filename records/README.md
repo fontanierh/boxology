@@ -12,6 +12,7 @@ The strategy review of 2026-07-18 predates this directory and remains at [`boxol
 
 ## Index
 
+- [2026-07-22 — Morning v0 situation report and coordinator course correction](2026-07-22-morning-coordinator-course-correction.md)
 - [2026-07-22 — Late-night v0 situation report](2026-07-22-late-night-v0-sitrep.md)
 - [2026-07-21 — Generated-box critical-path review](2026-07-21-generated-box-critical-path.md)
 - [2026-07-21 — Overnight v0 situation report](2026-07-21-overnight-v0-sitrep.md)
