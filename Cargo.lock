@@ -65,6 +65,7 @@ dependencies = [
  "hello-contract",
  "http",
  "http-body",
+ "http-body-util",
  "mediatype",
  "reqwest",
  "ryu",
