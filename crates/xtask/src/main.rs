@@ -24,6 +24,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-contract-syntax",
     "boxology-fixture-tests",
     "boxology-generator-model",
+    "boxology-generator",
     "boxology-http",
     "boxology-runtime",
     "hello-implementation",
