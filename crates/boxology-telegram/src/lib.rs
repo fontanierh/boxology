@@ -4,6 +4,7 @@ use std::env;
 
 #[allow(dead_code)]
 mod api;
+mod outbound;
 mod pairing;
 mod receive;
 mod state;
@@ -138,6 +139,9 @@ pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
     let result = match command {
         "poll" => receive::poll(input),
         "ack" => receive::ack(input),
+        "send" => outbound::send(input),
+        "reply" => outbound::reply(input),
+        "resolve-send" => outbound::resolve(input),
         _ => return failure(command, AppError::unsupported()),
     };
     match result {
