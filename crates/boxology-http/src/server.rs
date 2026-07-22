@@ -1,9 +1,66 @@
 use crate::encoder::WireCallError;
 use boxology_contract::{
     BoxId, CapabilityDescriptor, CapabilityName, CapabilityShape, DescriptorRef, Detail,
-    ExposureLevel, TypeDescriptor, VariantPayload,
+    ExposureLevel, IdempotencyKey, TypeDescriptor, VariantPayload,
 };
 use boxology_runtime::TransportExposure;
+use http::{HeaderMap, HeaderValue};
+use std::time::Duration;
+
+const TIMEOUT_HEADER: &str = "boxology-timeout-ms";
+const IDEMPOTENCY_HEADER: &str = "idempotency-key";
+
+fn one_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<Option<&'a HeaderValue>, WireCallError> {
+    let mut values = headers.get_all(name).iter();
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(WireCallError::InvalidRequest);
+    }
+    Ok(first)
+}
+
+fn parse_timeout(headers: &HeaderMap) -> Result<Option<Duration>, WireCallError> {
+    let Some(value) = one_header(headers, TIMEOUT_HEADER)? else {
+        return Ok(None);
+    };
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 10
+        || (bytes.len() > 1 && bytes[0] == b'0')
+        || bytes.iter().any(|byte| !byte.is_ascii_digit())
+    {
+        return Err(WireCallError::InvalidRequest);
+    }
+    let millis = bytes
+        .iter()
+        .fold(0_u64, |value, byte| value * 10 + u64::from(byte - b'0'));
+    if millis > 9_999_999_999 {
+        return Err(WireCallError::InvalidRequest);
+    }
+    Ok(Some(Duration::from_millis(millis)))
+}
+
+fn parse_idempotency_key(headers: &HeaderMap) -> Result<Option<IdempotencyKey>, WireCallError> {
+    let Some(value) = one_header(headers, IDEMPOTENCY_HEADER)? else {
+        return Ok(None);
+    };
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 256
+        || bytes
+            .iter()
+            .any(|byte| !(0x21..=0x7e).contains(byte) || *byte == b',')
+    {
+        return Err(WireCallError::InvalidRequest);
+    }
+    let key = std::str::from_utf8(bytes).map_err(|_| WireCallError::InvalidRequest)?;
+    IdempotencyKey::new(key)
+        .map(Some)
+        .map_err(|_| WireCallError::InvalidRequest)
+}
 
 trait ExposureView {
     fn descriptor(&self) -> &CapabilityDescriptor;
@@ -103,6 +160,7 @@ fn secret_contains_presence(descriptor: &TypeDescriptor, inside_secret: bool) ->
 mod tests {
     use super::*;
     use boxology_contract::{CapabilityId, FieldDescriptor, Idempotency, VariantDescriptor};
+    use http::{HeaderValue, header::ACCEPT};
 
     #[derive(Debug, PartialEq, Eq)]
     struct Exposure {
@@ -368,5 +426,97 @@ mod tests {
             ))
             .unwrap();
         }
+    }
+
+    fn headers(name: &'static str, value: &[u8]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(name, HeaderValue::from_bytes(value).unwrap());
+        headers
+    }
+
+    #[test]
+    fn timeout_header_accepts_exact_grammar_and_ignores_unrelated_headers() {
+        assert_eq!(parse_timeout(&HeaderMap::new()), Ok(None));
+        for (raw, millis) in [
+            (b"0".as_slice(), 0),
+            (b"1", 1),
+            (b"9999999999", 9_999_999_999),
+        ] {
+            assert_eq!(
+                parse_timeout(&headers(TIMEOUT_HEADER, raw)),
+                Ok(Some(Duration::from_millis(millis)))
+            );
+        }
+        let mut mixed = headers("BoXoLoGy-TiMeOuT-Ms", b"7");
+        mixed.insert(ACCEPT, HeaderValue::from_static("text/plain"));
+        mixed.insert("x-proxy-note", HeaderValue::from_static("ignored"));
+        assert_eq!(parse_timeout(&mixed), Ok(Some(Duration::from_millis(7))));
+    }
+
+    #[test]
+    fn timeout_header_rejects_every_malformed_or_duplicate_form() {
+        for raw in [
+            b"".as_slice(),
+            b"00",
+            b"01",
+            b"+1",
+            b"-1",
+            b" 1",
+            b"1 ",
+            b"10000000000",
+            b"one",
+            b"1,2",
+            &[0x80],
+        ] {
+            assert_eq!(
+                parse_timeout(&headers(TIMEOUT_HEADER, raw)),
+                Err(WireCallError::InvalidRequest)
+            );
+        }
+        for duplicate in [b"1".as_slice(), b"2"] {
+            let mut values = headers(TIMEOUT_HEADER, b"1");
+            values.append(TIMEOUT_HEADER, HeaderValue::from_bytes(duplicate).unwrap());
+            assert_eq!(parse_timeout(&values), Err(WireCallError::InvalidRequest));
+        }
+    }
+
+    #[test]
+    fn idempotency_header_accepts_boundaries_and_preserves_only_the_key() {
+        assert_eq!(parse_idempotency_key(&HeaderMap::new()), Ok(None));
+        let boundary = vec![b'x'; 256];
+        for raw in [b"!".as_slice(), b"~", boundary.as_slice()] {
+            let parsed = parse_idempotency_key(&headers("IdEmPoTeNcY-KeY", raw))
+                .unwrap()
+                .unwrap();
+            assert_eq!(parsed.as_str().as_bytes(), raw);
+        }
+    }
+
+    #[test]
+    fn idempotency_header_rejects_every_malformed_or_duplicate_form() {
+        let too_long = vec![b'x'; 257];
+        for raw in [
+            b"".as_slice(),
+            too_long.as_slice(),
+            b"a b",
+            b"a\tb",
+            &[0x80],
+            b"a,b",
+        ] {
+            assert_eq!(
+                parse_idempotency_key(&headers(IDEMPOTENCY_HEADER, raw)),
+                Err(WireCallError::InvalidRequest)
+            );
+        }
+        // `http` refuses these before a `HeaderMap` can carry them. The parser's
+        // visible-ASCII check independently excludes the same byte ranges.
+        assert!(HeaderValue::from_bytes(&[0x1f]).is_err());
+        assert!(HeaderValue::from_bytes(&[0x7f]).is_err());
+        let mut duplicate = headers(IDEMPOTENCY_HEADER, b"same");
+        duplicate.append(IDEMPOTENCY_HEADER, HeaderValue::from_static("same"));
+        assert_eq!(
+            parse_idempotency_key(&duplicate),
+            Err(WireCallError::InvalidRequest)
+        );
     }
 }

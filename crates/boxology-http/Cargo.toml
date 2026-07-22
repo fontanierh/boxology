@@ -6,12 +6,13 @@ publish = false
 
 [features]
 default = ["server"]
-server = ["dep:boxology-runtime"]
+server = ["dep:boxology-runtime", "dep:http"]
 client = []
 
 [dependencies]
 base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime", optional = true }
+http = { version = "=1.4.2", optional = true }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 ryu = "=1.0.23"
