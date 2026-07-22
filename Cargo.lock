@@ -30,6 +30,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "boxology-macros",
+]
+
+[[package]]
 name = "boxology-contract"
 version = "0.0.0"
 dependencies = [
@@ -91,6 +99,15 @@ dependencies = [
  "ryu",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "boxology-macros"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract-syntax",
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
