@@ -208,19 +208,85 @@ jobs:
           test "$RUNNER_OS" = "Linux"
           test "$RUNNER_ARCH" = "ARM64"
           test "$(uname -m)" = "aarch64"
-      - name: Download xtask-linux-arm64
+      - name: Download xtask-linux-arm64 (attempt 1)
+        id: dlc_xtask_1
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: xtask-linux-arm64
+          path: xtask-linux-arm64
+      - name: Backoff before xtask-linux-arm64 attempt 2
+        if: steps.dlc_xtask_1.outcome == 'failure'
+        run: sleep 15
+      - name: Download xtask-linux-arm64 (attempt 2)
+        id: dlc_xtask_2
+        if: steps.dlc_xtask_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: xtask-linux-arm64
+          path: xtask-linux-arm64
+      - name: Backoff before xtask-linux-arm64 attempt 3
+        if: steps.dlc_xtask_1.outcome == 'failure' && steps.dlc_xtask_2.outcome == 'failure'
+        run: sleep 30
+      - name: Download xtask-linux-arm64 (attempt 3)
+        if: steps.dlc_xtask_1.outcome == 'failure' && steps.dlc_xtask_2.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: xtask-linux-arm64
           path: xtask-linux-arm64
       - name: Make xtask executable
         run: chmod +x xtask-linux-arm64/xtask
-      - name: Download determinism-linux
+      - name: Download determinism-linux (attempt 1)
+        id: dlc_lin_1
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: determinism-linux-arm64
           path: incoming/linux-arm64
-      - name: Download determinism-macos
+      - name: Backoff before determinism-linux attempt 2
+        if: steps.dlc_lin_1.outcome == 'failure'
+        run: sleep 15
+      - name: Download determinism-linux (attempt 2)
+        id: dlc_lin_2
+        if: steps.dlc_lin_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-linux-arm64
+          path: incoming/linux-arm64
+      - name: Backoff before determinism-linux attempt 3
+        if: steps.dlc_lin_1.outcome == 'failure' && steps.dlc_lin_2.outcome == 'failure'
+        run: sleep 30
+      - name: Download determinism-linux (attempt 3)
+        if: steps.dlc_lin_1.outcome == 'failure' && steps.dlc_lin_2.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-linux-arm64
+          path: incoming/linux-arm64
+      - name: Download determinism-macos (attempt 1)
+        id: dlc_mac_1
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-macos
+          path: incoming/macos
+      - name: Backoff before determinism-macos attempt 2
+        if: steps.dlc_mac_1.outcome == 'failure'
+        run: sleep 15
+      - name: Download determinism-macos (attempt 2)
+        id: dlc_mac_2
+        if: steps.dlc_mac_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-macos
+          path: incoming/macos
+      - name: Backoff before determinism-macos attempt 3
+        if: steps.dlc_mac_1.outcome == 'failure' && steps.dlc_mac_2.outcome == 'failure'
+        run: sleep 30
+      - name: Download determinism-macos (attempt 3)
+        if: steps.dlc_mac_1.outcome == 'failure' && steps.dlc_mac_2.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: determinism-macos
@@ -248,19 +314,85 @@ jobs:
           test "$RUNNER_OS" = "Linux"
           test "$RUNNER_ARCH" = "ARM64"
           test "$(uname -m)" = "aarch64"
-      - name: Download xtask-linux-arm64
+      - name: Download xtask-linux-arm64 (attempt 1)
+        id: dlm_xtask_1
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: xtask-linux-arm64
+          path: xtask-linux-arm64
+      - name: Backoff before xtask-linux-arm64 attempt 2
+        if: steps.dlm_xtask_1.outcome == 'failure'
+        run: sleep 15
+      - name: Download xtask-linux-arm64 (attempt 2)
+        id: dlm_xtask_2
+        if: steps.dlm_xtask_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: xtask-linux-arm64
+          path: xtask-linux-arm64
+      - name: Backoff before xtask-linux-arm64 attempt 3
+        if: steps.dlm_xtask_1.outcome == 'failure' && steps.dlm_xtask_2.outcome == 'failure'
+        run: sleep 30
+      - name: Download xtask-linux-arm64 (attempt 3)
+        if: steps.dlm_xtask_1.outcome == 'failure' && steps.dlm_xtask_2.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: xtask-linux-arm64
           path: xtask-linux-arm64
       - name: Make xtask executable
         run: chmod +x xtask-linux-arm64/xtask
-      - name: Download determinism-linux-meta
+      - name: Download determinism-linux-meta (attempt 1)
+        id: dlm_lin_1
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: determinism-linux-meta-arm64
           path: incoming/linux-meta-arm64
-      - name: Download determinism-macos-meta
+      - name: Backoff before determinism-linux-meta attempt 2
+        if: steps.dlm_lin_1.outcome == 'failure'
+        run: sleep 15
+      - name: Download determinism-linux-meta (attempt 2)
+        id: dlm_lin_2
+        if: steps.dlm_lin_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-linux-meta-arm64
+          path: incoming/linux-meta-arm64
+      - name: Backoff before determinism-linux-meta attempt 3
+        if: steps.dlm_lin_1.outcome == 'failure' && steps.dlm_lin_2.outcome == 'failure'
+        run: sleep 30
+      - name: Download determinism-linux-meta (attempt 3)
+        if: steps.dlm_lin_1.outcome == 'failure' && steps.dlm_lin_2.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-linux-meta-arm64
+          path: incoming/linux-meta-arm64
+      - name: Download determinism-macos-meta (attempt 1)
+        id: dlm_mac_1
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-macos-meta
+          path: incoming/macos-meta
+      - name: Backoff before determinism-macos-meta attempt 2
+        if: steps.dlm_mac_1.outcome == 'failure'
+        run: sleep 15
+      - name: Download determinism-macos-meta (attempt 2)
+        id: dlm_mac_2
+        if: steps.dlm_mac_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: determinism-macos-meta
+          path: incoming/macos-meta
+      - name: Backoff before determinism-macos-meta attempt 3
+        if: steps.dlm_mac_1.outcome == 'failure' && steps.dlm_mac_2.outcome == 'failure'
+        run: sleep 30
+      - name: Download determinism-macos-meta (attempt 3)
+        if: steps.dlm_mac_1.outcome == 'failure' && steps.dlm_mac_2.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: determinism-macos-meta
