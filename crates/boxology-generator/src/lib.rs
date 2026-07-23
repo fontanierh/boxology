@@ -1151,6 +1151,68 @@ macro_rules! __boxology_check_implementation {
     }
 
     #[test]
+    fn multi_capability_document_lists_all_in_source_order() {
+        // Two capabilities share one error enum; the schema document must list them in
+        // source-declaration order with per-capability boundary shapes. Exercised directly
+        // because generate() still fails closed (BXG0041) on more than one capability.
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
+        );
+        let model = contract.model();
+        let document: Value = serde_json::from_slice(&schema::document(
+            "store",
+            model,
+            &schema::revision("store", model),
+            &[0u8; 32],
+            "0.0.0",
+        ))
+        .unwrap();
+        let capabilities = document["capabilities"].as_array().unwrap();
+        assert_eq!(capabilities.len(), 2);
+        assert_eq!(capabilities[0]["name"], "get");
+        assert_eq!(
+            capabilities[0]["input"],
+            json!({"name": "key", "type": "u64"})
+        );
+        assert_eq!(capabilities[0]["error"], "StoreError");
+        assert_eq!(capabilities[1]["name"], "put");
+        assert_eq!(capabilities[1]["output"], json!({"type": "bool"}));
+        assert_eq!(capabilities[1]["error"], "StoreError");
+        assert!(capabilities[0]["id"].as_str().unwrap().ends_with(".get"));
+        assert!(capabilities[1]["id"].as_str().unwrap().ends_with(".put"));
+    }
+
+    #[test]
+    fn multi_capability_projection_is_deterministic_and_order_sensitive() {
+        // The frozen fingerprint must be deterministic yet order-sensitive: swapping the
+        // source declaration order of two capabilities under the same error must move the
+        // revision, and the capability-count field must encode the total capability count.
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
+        );
+        let model = contract.model();
+        assert_eq!(
+            schema::projection("store", model),
+            schema::projection("store", model)
+        );
+        let swapped = scalar_model(
+            "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; }",
+        );
+        assert_ne!(
+            schema::revision("store", model),
+            schema::revision("store", swapped.model())
+        );
+        let projection = schema::projection("store", model);
+        let capability_count = b"\x00\x00\x00\x00\x00\x00\x00\x02".as_slice();
+        assert!(
+            projection
+                .windows(capability_count.len())
+                .any(|bytes| bytes == capability_count),
+            "projection missing two-capability count field"
+        );
+    }
+
+    #[test]
     fn scalar_adapter_source_is_type_parameterized() {
         // The generated numeric adapter is the same substitution path as the String
         // adapter that generated_adapter_registers_and_dispatches_through_stub_transport
