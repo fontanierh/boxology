@@ -35,6 +35,14 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "xtask",
 ];
 const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt", "hello-contract"];
+const EDITOR_FIXTURE: &str = "crates/fixtures/hello/implementation";
+const EDITOR_CHECK_ARGS: &[&str] = &[
+    "analysis-stats",
+    "--disable-build-scripts",
+    "--disable-proc-macros",
+    "--no-test",
+    EDITOR_FIXTURE,
+];
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -149,6 +157,7 @@ fn run_ci(base: Option<&str>) -> u8 {
 
     let mut checks = vec![
         ("fmt", timed("fmt", run_fmt)),
+        ("editor", timed("editor", run_editor)),
         (
             "clippy",
             timed("clippy", || {
@@ -269,6 +278,26 @@ fn run_fmt() -> bool {
         debug_assert!(!FMT_EXCLUDED_PACKAGES.contains(package));
         run_cargo(&["fmt", "--check", "-p", package])
     })
+}
+
+fn run_editor() -> bool {
+    match Command::new("rust-analyzer")
+        .args(EDITOR_CHECK_ARGS)
+        .current_dir(root())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!("rust-analyzer analysis-stats exited with {status}");
+            false
+        }
+        Err(error) => {
+            eprintln!("cannot run pinned rust-analyzer component: {error}");
+            false
+        }
+    }
 }
 
 fn run_test() -> u8 {
@@ -410,6 +439,24 @@ mod tests {
         assert!(compare_rustc_version("1.97.1", "not rustc").is_err());
         assert!(parse_channel("channel = 1.97.1").is_err());
         assert!(parse_channel("[toolchain]").is_err());
+    }
+
+    #[test]
+    fn editor_check_is_a_fixed_reproducible_batch_probe() {
+        assert_eq!(
+            EDITOR_CHECK_ARGS,
+            &[
+                "analysis-stats",
+                "--disable-build-scripts",
+                "--disable-proc-macros",
+                "--no-test",
+                EDITOR_FIXTURE,
+            ]
+        );
+        assert!(!EDITOR_CHECK_ARGS.contains(&"--randomize"));
+        assert!(!EDITOR_CHECK_ARGS.contains(&"--parallel"));
+        assert!(!EDITOR_CHECK_ARGS.contains(&"--with-deps"));
+        assert!(root().join(EDITOR_FIXTURE).join("Cargo.toml").is_file());
     }
 
     #[test]
