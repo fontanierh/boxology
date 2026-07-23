@@ -54,6 +54,9 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let parsed = ParsedRustInputs::parse(request)?;
     let contract = parsed.controlled_contract()?;
     contract.require_v0_emittable()?;
+    // `require_v0_emittable` fails closed unless there is exactly one capability, so binding the
+    // sole capability once here makes the single-capability emission invariant explicit.
+    let capability = &contract.model().capabilities[0];
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
         "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",
@@ -187,19 +190,18 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
             };
         }
     "#
-    .replace("__CAPABILITY__", &contract.model().capability.name)
+    .replace("__CAPABILITY__", &capability.name)
     .replace("__ERROR__", &error.name)
     .replace(
         "__INPUT_TY__",
-        rust_value_type(contract.model().capability.input_type, true),
+        rust_value_type(capability.input_type, true),
     )
     .replace(
         "__OUTPUT_TY__",
-        rust_value_type(contract.model().capability.output_type, true),
+        rust_value_type(capability.output_type, true),
     );
     let descriptor =
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
-    let capability = &contract.model().capability;
     let dispatch = dispatch_source(
         request.box_id().as_str(),
         &capability.name,
@@ -1823,6 +1825,20 @@ fn main() {
             assert_eq!(diagnostics.as_slice()[0].code(), "BXG0040");
             assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
         }
+    }
+
+    #[test]
+    fn multiple_capabilities_fail_closed_with_bxg0041() {
+        let source = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; #[capability(exposure=external)] pub async fn shout(name:String)->Result<String,GreetError>; }";
+        let request = request(source, false, OUTPUTS.to_vec());
+        let expected_span = ParsedRustInputs::parse(&request)
+            .and_then(|parsed| parsed.controlled_contract())
+            .unwrap()
+            .span();
+        let diagnostics = generate(&request).unwrap_err();
+        assert_eq!(diagnostics.as_slice().len(), 1);
+        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0041");
+        assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
     }
 
     #[test]
