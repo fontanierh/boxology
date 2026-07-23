@@ -2,20 +2,20 @@ schema = 1
 
 [roles.spec]
 [[roles.spec.candidates]]
-harness = "codex"
-model = "gpt-5.6-sol"
-effort = "xhigh"
+harness = "claude"
+model = "claude-opus-4-8"
+effort = "max"
 
 [roles.implement]
 [[roles.implement.candidates]]
-harness = "codex"
-model = "gpt-5.6-luna"
-effort = "xhigh"
+harness = "claude"
+model = "claude-opus-4-8"
+effort = "medium"
 
 [roles.review]
 [[roles.review.candidates]]
-harness = "codex"
-model = "gpt-5.6-sol"
+harness = "claude"
+model = "claude-opus-4-8"
 effort = "medium"
 
 [roles.repair]
