@@ -53,7 +53,7 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let contract = parsed.controlled_contract()?;
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
-        "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",
+        "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",
         request.box_id().as_str()
     );
     let error = &contract.model().error;
@@ -181,8 +181,9 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
             .iter()
             .map(|variant| (variant.name.as_str(), variant.deprecation.as_deref())),
     );
+    let test_support = test_support_source(&error.name);
     let syntax = syn::parse_file(&format!(
-        "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
+        "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
         error.name
     ))
     .expect("validated names and fixed generator template must parse");
@@ -208,6 +209,104 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     Ok(GeneratedTree(files))
+}
+
+fn test_support_source(error_name: &str) -> String {
+    format!(
+        r#"
+        #[cfg(feature = "test-support")]
+        pub mod test_support {{
+            use std::future::{{Future, ready}};
+            use std::pin::Pin;
+            use std::sync::Arc;
+
+            use ::boxology_contract::{{
+                CallContext, CapabilityId, ContractType, DecodeRole, Detail, ErasedCallError,
+                ErasedCallTarget, SlotValue, TypeDescriptor,
+            }};
+
+            use super::{{{error_name}, HELLO_GREET, HelloHandle, conversion_detail}};
+
+            type GreetFuture =
+                Pin<Box<dyn Future<Output = Result<String, {error_name}>> + Send + 'static>>;
+            type GreetResponder =
+                dyn Fn(CallContext, String) -> GreetFuture + Send + Sync + 'static;
+
+            #[derive(Clone, Default)]
+            pub struct HelloFake {{
+                greet: Option<Arc<GreetResponder>>,
+            }}
+
+            impl HelloFake {{
+                pub fn new() -> Self {{
+                    Self::default()
+                }}
+
+                pub fn with_greet<F, Fut>(mut self, responder: F) -> Self
+                where
+                    F: Fn(CallContext, String) -> Fut + Send + Sync + 'static,
+                    Fut: Future<Output = Result<String, {error_name}>> + Send + 'static,
+                {{
+                    self.greet = Some(Arc::new(move |context, name| {{
+                        Box::pin(responder(context, name))
+                    }}));
+                    self
+                }}
+
+                pub fn handle(&self) -> HelloHandle {{
+                    HelloHandle::from_erased(Arc::new(self.clone()))
+                }}
+            }}
+
+            impl ErasedCallTarget for HelloFake {{
+                fn call<'a>(
+                    &'a self,
+                    capability: &'a CapabilityId,
+                    context: CallContext,
+                    input: SlotValue,
+                ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>
+                {{
+                    if capability != &*HELLO_GREET {{
+                        return Box::pin(ready(Err(unprogrammed())));
+                    }}
+                    let Some(responder) = self.greet.clone() else {{
+                        return Box::pin(ready(Err(unprogrammed())));
+                    }};
+                    Box::pin(async move {{
+                        let input = TypeDescriptor::string()
+                            .conform(DecodeRole::ProviderInput, input)
+                            .map_err(|error| {{
+                                ErasedCallError::ContractViolation(conversion_detail(
+                                    "input_decode",
+                                    error,
+                                ))
+                            }})?;
+                        let name = String::decode(&input).map_err(|error| {{
+                            ErasedCallError::ContractViolation(conversion_detail(
+                                "input_decode",
+                                error,
+                            ))
+                        }})?;
+                        match responder(context, name).await {{
+                            Ok(output) => output.encode().map_err(|error| {{
+                                ErasedCallError::InvalidResponse(conversion_detail(
+                                    "output_encode",
+                                    error,
+                                ))
+                            }}),
+                            Err(error) => Err(ErasedCallError::from_domain(&error)),
+                        }}
+                    }})
+                }}
+            }}
+
+            fn unprogrammed() -> ErasedCallError {{
+                ErasedCallError::Internal(Detail::new("unprogrammed_capability"))
+            }}
+        }}
+        "#,
+        error_name = error_name,
+    )
 }
 
 fn dispatch_source<'a>(
@@ -341,7 +440,7 @@ mod tests {
 
     const MANIFEST: &[u8] = b"schema = 1\nid = \"hello\"\nkind = \"box\"\n";
     const CONTRACT: &str = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; }";
-    const CARGO: &[u8] = b"[package]\nname = \"hello-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nboxology-contract = { workspace = true }\n";
+    const CARGO: &[u8] = b"[package]\nname = \"hello-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = { workspace = true }\n";
     const RUST: &[u8] = br#"// Generated by boxology-generator 0.0.0
 #[derive(Debug, Clone, PartialEq)]
 pub enum GreetError {
@@ -437,6 +536,93 @@ impl ::boxology_contract::ContractError for GreetError {
             Self::EmptyName => "EmptyName",
             Self::Unknown { tag, .. } => tag,
         }
+    }
+}
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::future::{Future, ready};
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use ::boxology_contract::{
+        CallContext, CapabilityId, ContractType, DecodeRole, Detail, ErasedCallError,
+        ErasedCallTarget, SlotValue, TypeDescriptor,
+    };
+    use super::{GreetError, HELLO_GREET, HelloHandle, conversion_detail};
+    type GreetFuture = Pin<
+        Box<dyn Future<Output = Result<String, GreetError>> + Send + 'static>,
+    >;
+    type GreetResponder = dyn Fn(
+        CallContext,
+        String,
+    ) -> GreetFuture + Send + Sync + 'static;
+    #[derive(Clone, Default)]
+    pub struct HelloFake {
+        greet: Option<Arc<GreetResponder>>,
+    }
+    impl HelloFake {
+        pub fn new() -> Self {
+            Self::default()
+        }
+        pub fn with_greet<F, Fut>(mut self, responder: F) -> Self
+        where
+            F: Fn(CallContext, String) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<String, GreetError>> + Send + 'static,
+        {
+            self.greet = Some(
+                Arc::new(move |context, name| { Box::pin(responder(context, name)) }),
+            );
+            self
+        }
+        pub fn handle(&self) -> HelloHandle {
+            HelloHandle::from_erased(Arc::new(self.clone()))
+        }
+    }
+    impl ErasedCallTarget for HelloFake {
+        fn call<'a>(
+            &'a self,
+            capability: &'a CapabilityId,
+            context: CallContext,
+            input: SlotValue,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>,
+        > {
+            if capability != &*HELLO_GREET {
+                return Box::pin(ready(Err(unprogrammed())));
+            }
+            let Some(responder) = self.greet.clone() else {
+                return Box::pin(ready(Err(unprogrammed())));
+            };
+            Box::pin(async move {
+                let input = TypeDescriptor::string()
+                    .conform(DecodeRole::ProviderInput, input)
+                    .map_err(|error| {
+                        ErasedCallError::ContractViolation(
+                            conversion_detail("input_decode", error),
+                        )
+                    })?;
+                let name = String::decode(&input)
+                    .map_err(|error| {
+                        ErasedCallError::ContractViolation(
+                            conversion_detail("input_decode", error),
+                        )
+                    })?;
+                match responder(context, name).await {
+                    Ok(output) => {
+                        output
+                            .encode()
+                            .map_err(|error| {
+                                ErasedCallError::InvalidResponse(
+                                    conversion_detail("output_encode", error),
+                                )
+                            })
+                    }
+                    Err(error) => Err(ErasedCallError::from_domain(&error)),
+                }
+            })
+        }
+    }
+    fn unprogrammed() -> ErasedCallError {
+        ErasedCallError::Internal(Detail::new("unprogrammed_capability"))
     }
 }
 #[doc(hidden)]
@@ -972,7 +1158,7 @@ macro_rules! __boxology_check_implementation {
         fs::create_dir_all(consumer.join("src")).unwrap();
         fs::write(
             consumer.join("Cargo.toml"),
-            "[package]\nname=\"consumer\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology-contract={workspace=true}\nhello-contract={package=\"hello-contract\",path=\"../generated/contract\"}\n",
+            "[package]\nname=\"consumer\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology-contract={workspace=true}\nhello-contract={package=\"hello-contract\",path=\"../generated/contract\",features=[\"test-support\"]}\n",
         )
         .unwrap();
         fs::write(
@@ -983,7 +1169,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll, Waker};
 use boxology_contract::{CallContext, CallError, Caller, CancelToken, CapabilityId, ContractValue, Deadline, Detail, ErasedCallError, ErasedCallTarget, IdempotencyKey, OpaqueTree, SlotValue, TraceContext};
-use hello_contract::{GreetError, HelloDispatch, HelloHandle};
+use hello_contract::{test_support::HelloFake, GreetError, HelloDispatch, HelloHandle};
 
 struct Target { response: Result<SlotValue, ErasedCallError>, expected: CallContext }
 impl ErasedCallTarget for Target {
@@ -1025,11 +1211,36 @@ fn invoke(response: Result<SlotValue, ErasedCallError>) -> Result<String, CallEr
 
 fn main() {
     fn bounds<T: Send + Sync + 'static>() {}
+    fn clone_default<T: Clone + Default>() {}
     fn send<T: Send>(value: T) -> T { value }
     bounds::<HelloHandle>();
+    bounds::<HelloFake>();
+    clone_default::<HelloFake>();
     bounds::<Arc<dyn HelloDispatch>>();
     let dispatch: Arc<dyn HelloDispatch> = Arc::new(Probe);
     assert_eq!(block_on(send(dispatch.greet(context(), "Ada".into()))), Ok("Hello, Ada!".into()));
+
+    let expected = context();
+    let fake = HelloFake::new().with_greet({
+        let expected = expected.clone();
+        move |actual, name| {
+            let expected = expected.clone();
+            async move {
+                assert_eq!(actual.caller(), expected.caller());
+                assert_eq!(actual.deadline(), expected.deadline());
+                assert_eq!(actual.cancellation().is_cancelled(), expected.cancellation().is_cancelled());
+                assert_eq!(actual.trace(), expected.trace());
+                assert_eq!(actual.idempotency_key(), expected.idempotency_key());
+                Ok(format!("Hello, {name}!"))
+            }
+        }
+    });
+    let fake_handle = fake.handle();
+    assert_eq!(block_on(send(fake_handle.greet(expected, "Ada".into()))), Ok("Hello, Ada!".into()));
+    let domain_fake = HelloFake::new().with_greet(|_, _| async { Err(GreetError::EmptyName) });
+    assert_eq!(block_on(domain_fake.handle().greet(context(), "Ada".into())), Err(CallError::Domain(GreetError::EmptyName)));
+    let Err(CallError::Internal(detail)) = block_on(HelloFake::new().handle().greet(context(), "Ada".into())) else { panic!("unprogrammed fake did not return an internal call error") };
+    assert_eq!(detail.code(), "unprogrammed_capability");
 
     assert_eq!(invoke(Ok(SlotValue::Value(ContractValue::string("Hello, Ada!")))), Ok("Hello, Ada!".into()));
     assert_eq!(invoke(Err(ErasedCallError::Domain { error_tag: "EmptyName".into(), payload: SlotValue::Null })), Err(CallError::Domain(GreetError::EmptyName)));
@@ -1058,6 +1269,13 @@ fn main() {
 "#,
         )
         .unwrap();
+        let default_status = Command::new("cargo")
+            .args(["check", "--offline", "--manifest-path"])
+            .arg(root.join("generated/contract/Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("default-target"))
+            .status()
+            .unwrap();
+        assert!(default_status.success());
         let status = Command::new("cargo")
             .args(["run", "--offline", "--manifest-path"])
             .arg(consumer.join("Cargo.toml"))
