@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use boxology_contract_syntax::CanonicalType;
 use boxology_generator_model::{Diagnostics, GenerationRequest, ParsedRustInputs};
 
 mod schema;
@@ -149,8 +150,8 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
             (@find $receiver:ty; __CAPABILITY__ valid; $($rest:tt)*) => {
                 const _: () = {
                     fn require_service<T: ::core::marker::Send + ::core::marker::Sync + 'static>() {}
-                    fn require_future<F: ::core::future::Future<Output = ::core::result::Result<::std::string::String, $crate::__ERROR__>> + ::core::marker::Send>(_: F) {}
-                    fn check(receiver: &$receiver, context: ::boxology::CallContext, input: ::std::string::String) {
+                    fn require_future<F: ::core::future::Future<Output = ::core::result::Result<__OUTPUT_TY__, $crate::__ERROR__>> + ::core::marker::Send>(_: F) {}
+                    fn check(receiver: &$receiver, context: ::boxology::CallContext, input: __INPUT_TY__) {
                         require_service::<$receiver>();
                         require_future(receiver.__CAPABILITY__(context, input));
                     }
@@ -159,12 +160,12 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
                     fn __CAPABILITY__<'a>(
                         &'a self,
                         context: ::boxology::CallContext,
-                        input: ::std::string::String,
+                        input: __INPUT_TY__,
                     ) -> ::std::pin::Pin<
                         ::std::boxed::Box<
                             dyn ::core::future::Future<
                                     Output = ::core::result::Result<
-                                        ::std::string::String,
+                                        __OUTPUT_TY__,
                                         $crate::__ERROR__,
                                     >,
                                 > + ::core::marker::Send
@@ -187,14 +188,25 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
         }
     "#
     .replace("__CAPABILITY__", &contract.model().capability.name)
-    .replace("__ERROR__", &error.name);
+    .replace("__ERROR__", &error.name)
+    .replace(
+        "__INPUT_TY__",
+        rust_value_type(contract.model().capability.input_type, true),
+    )
+    .replace(
+        "__OUTPUT_TY__",
+        rust_value_type(contract.model().capability.output_type, true),
+    );
     let descriptor =
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
+    let capability = &contract.model().capability;
     let dispatch = dispatch_source(
         request.box_id().as_str(),
-        &contract.model().capability.name,
-        &contract.model().capability.input_name,
+        &capability.name,
+        &capability.input_name,
         &contract.model().error.name,
+        capability.input_type,
+        capability.output_type,
         contract
             .model()
             .error
@@ -202,8 +214,9 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
             .iter()
             .map(|variant| (variant.name.as_str(), variant.deprecation.as_deref())),
     );
-    let test_support = test_support_source(&error.name);
-    let adapter = adapter_source(&contract.model().capability.name);
+    let test_support =
+        test_support_source(&error.name, capability.input_type, capability.output_type);
+    let adapter = adapter_source(&capability.name, capability.input_type);
     let syntax = syn::parse_file(&format!(
         "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
         error.name
@@ -245,7 +258,14 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     Ok(GeneratedTree(files))
 }
 
-fn test_support_source(error_name: &str) -> String {
+fn test_support_source(
+    error_name: &str,
+    input_type: CanonicalType,
+    output_type: CanonicalType,
+) -> String {
+    let input_bare = rust_value_type(input_type, false);
+    let output_bare = rust_value_type(output_type, false);
+    let input_constructor = schema::descriptor_constructor(input_type);
     format!(
         r#"
         #[cfg(feature = "test-support")]
@@ -262,9 +282,9 @@ fn test_support_source(error_name: &str) -> String {
             use super::{{{error_name}, HELLO_GREET, HelloHandle, conversion_detail}};
 
             type GreetFuture =
-                Pin<Box<dyn Future<Output = Result<String, {error_name}>> + Send + 'static>>;
+                Pin<Box<dyn Future<Output = Result<{output_bare}, {error_name}>> + Send + 'static>>;
             type GreetResponder =
-                dyn Fn(CallContext, String) -> GreetFuture + Send + Sync + 'static;
+                dyn Fn(CallContext, {input_bare}) -> GreetFuture + Send + Sync + 'static;
 
             #[derive(Clone, Default)]
             pub struct HelloFake {{
@@ -278,8 +298,8 @@ fn test_support_source(error_name: &str) -> String {
 
                 pub fn with_greet<F, Fut>(mut self, responder: F) -> Self
                 where
-                    F: Fn(CallContext, String) -> Fut + Send + Sync + 'static,
-                    Fut: Future<Output = Result<String, {error_name}>> + Send + 'static,
+                    F: Fn(CallContext, {input_bare}) -> Fut + Send + Sync + 'static,
+                    Fut: Future<Output = Result<{output_bare}, {error_name}>> + Send + 'static,
                 {{
                     self.greet = Some(Arc::new(move |context, name| {{
                         Box::pin(responder(context, name))
@@ -307,7 +327,7 @@ fn test_support_source(error_name: &str) -> String {
                         return Box::pin(ready(Err(unprogrammed())));
                     }};
                     Box::pin(async move {{
-                        let input = TypeDescriptor::string()
+                        let input = TypeDescriptor::{input_constructor}()
                             .conform(DecodeRole::ProviderInput, input)
                             .map_err(|error| {{
                                 ErasedCallError::ContractViolation(conversion_detail(
@@ -315,7 +335,7 @@ fn test_support_source(error_name: &str) -> String {
                                     error,
                                 ))
                             }})?;
-                        let name = String::decode(&input).map_err(|error| {{
+                        let name = {input_bare}::decode(&input).map_err(|error| {{
                             ErasedCallError::ContractViolation(conversion_detail(
                                 "input_decode",
                                 error,
@@ -340,10 +360,15 @@ fn test_support_source(error_name: &str) -> String {
         }}
         "#,
         error_name = error_name,
+        input_bare = input_bare,
+        output_bare = output_bare,
+        input_constructor = input_constructor,
     )
 }
 
-fn adapter_source(capability_name: &str) -> String {
+fn adapter_source(capability_name: &str, input_type: CanonicalType) -> String {
+    let input_constructor = schema::descriptor_constructor(input_type);
+    let input_qualified = rust_value_type(input_type, true);
     format!(
         r#"
         use ::boxology_contract::ContractType;
@@ -406,7 +431,7 @@ fn adapter_source(capability_name: &str) -> String {
                     return Box::pin(::std::future::ready(Err(unknown_capability())));
                 }}
                 Box::pin(async move {{
-                    let input = ::boxology_contract::TypeDescriptor::string()
+                    let input = ::boxology_contract::TypeDescriptor::{input_constructor}()
                         .conform(
                             ::boxology_contract::DecodeRole::ProviderInput,
                             input,
@@ -416,7 +441,7 @@ fn adapter_source(capability_name: &str) -> String {
                                 conversion_detail("input_decode", error),
                             )
                         }})?;
-                    let input = ::std::string::String::decode(&input).map_err(|error| {{
+                    let input = {input_qualified}::decode(&input).map_err(|error| {{
                         ::boxology_contract::ErasedCallError::ContractViolation(
                             conversion_detail("input_decode", error),
                         )
@@ -455,6 +480,8 @@ fn adapter_source(capability_name: &str) -> String {
         }}
         "#,
         capability_name = capability_name,
+        input_constructor = input_constructor,
+        input_qualified = input_qualified,
     )
 }
 
@@ -463,8 +490,13 @@ fn dispatch_source<'a>(
     capability_name: &str,
     input_name: &str,
     error_name: &str,
+    input_type: CanonicalType,
+    output_type: CanonicalType,
     variants: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
 ) -> String {
+    let input_bare = rust_value_type(input_type, false);
+    let output_bare = rust_value_type(output_type, false);
+    let output_constructor = schema::descriptor_constructor(output_type);
     let variants = variants
         .into_iter()
         .map(|(name, deprecation)| {
@@ -488,8 +520,8 @@ fn dispatch_source<'a>(
             fn {capability_name}<'a>(
                 &'a self,
                 context: CallContext,
-                {input_name}: String,
-            ) -> Pin<Box<dyn Future<Output = Result<String, {error_name}>> + Send + 'a>>;
+                {input_name}: {input_bare},
+            ) -> Pin<Box<dyn Future<Output = Result<{output_bare}, {error_name}>> + Send + 'a>>;
         }}
 
         #[derive(Clone)]
@@ -506,8 +538,8 @@ fn dispatch_source<'a>(
             pub async fn {capability_name}(
                 &self,
                 context: CallContext,
-                {input_name}: String,
-            ) -> Result<String, CallError<{error_name}>> {{
+                {input_name}: {input_bare},
+            ) -> Result<{output_bare}, CallError<{error_name}>> {{
                 let input = {input_name}
                     .encode()
                     .map_err(|error| conversion_detail("input_encode", error))
@@ -517,11 +549,11 @@ fn dispatch_source<'a>(
                     .call(&HELLO_GREET, context, input)
                     .await
                     .map_err(|error| error.into_typed::<{error_name}>(&GREET_ERROR_DESCRIPTOR))?;
-                let output = TypeDescriptor::string()
+                let output = TypeDescriptor::{output_constructor}()
                     .conform(DecodeRole::ConsumerOutput, output)
                     .map_err(|error| conversion_detail("output_decode", error))
                     .map_err(CallError::InvalidResponse)?;
-                String::decode(&output)
+                {output_bare}::decode(&output)
                     .map_err(|error| conversion_detail("output_decode", error))
                     .map_err(CallError::InvalidResponse)
             }}
@@ -550,8 +582,26 @@ fn dispatch_source<'a>(
         capability_name = capability_name,
         input_name = input_name,
         error_name = error_name,
+        input_bare = input_bare,
+        output_bare = output_bare,
+        output_constructor = output_constructor,
         variants = variants,
     )
+}
+
+/// Spells a canonical boundary leaf as a Rust value type for a runtime template site.
+///
+/// Every scalar leaf spells identically bare and qualified (`u32` -> `u32`); only `String` differs
+/// (`String` bare, `::std::string::String` qualified). `Blob` never reaches emission because
+/// `require_v0_emittable` fails it closed, but a spelling is provided for completeness.
+fn rust_value_type(leaf: CanonicalType, qualified: bool) -> &'static str {
+    match leaf {
+        CanonicalType::String if qualified => "::std::string::String",
+        CanonicalType::String => "String",
+        CanonicalType::Blob if qualified => "::boxology_contract::Blob",
+        CanonicalType::Blob => "Blob",
+        scalar => scalar.canonical_name(),
+    }
 }
 
 fn rust_deprecation(note: Option<&str>) -> String {
@@ -1096,6 +1146,18 @@ macro_rules! __boxology_check_implementation {
             schema::descriptor_source("hello", model, &schema::revision("hello", model));
         assert!(descriptor.contains("::boxology_contract::TypeDescriptor::blob()"));
         assert!(!descriptor.contains("::boxology_contract::TypeDescriptor::Blob()"));
+    }
+
+    #[test]
+    fn scalar_adapter_source_is_type_parameterized() {
+        // The generated numeric adapter is the same substitution path as the String
+        // adapter that generated_adapter_registers_and_dispatches_through_stub_transport
+        // compiles; this guards its input-type parameterization against regression.
+        let adapter = adapter_source("greet", CanonicalType::U32);
+        assert!(adapter.contains("::boxology_contract::TypeDescriptor::u32()"));
+        assert!(adapter.contains("u32::decode(&input)"));
+        assert!(!adapter.contains("::std::string::String::decode"));
+        assert!(!adapter.contains("::boxology_contract::TypeDescriptor::string()"));
     }
 
     #[test]
@@ -1739,10 +1801,17 @@ fn main() {
     }
 
     #[test]
-    fn non_string_boundary_fails_closed_before_emission() {
+    fn scalar_boundary_emits_and_only_blob_fails_closed() {
         for source in [
             CONTRACT.replace("name:String", "name:u32"),
             CONTRACT.replace("Result<String", "Result<bool"),
+        ] {
+            generate(&request(&source, false, OUTPUTS.to_vec()))
+                .expect("scalar boundary leaves now generate end-to-end");
+        }
+        for source in [
+            CONTRACT.replace("name:String", "name:Blob"),
+            CONTRACT.replace("Result<String", "Result<Blob"),
         ] {
             let request = request(&source, false, OUTPUTS.to_vec());
             let expected_span = ParsedRustInputs::parse(&request)
@@ -1754,5 +1823,91 @@ fn main() {
             assert_eq!(diagnostics.as_slice()[0].code(), "BXG0040");
             assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
         }
+    }
+
+    #[test]
+    fn generated_numeric_boundary_compiles_and_routes_typed_values() {
+        use std::{fs, process::Command};
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let source = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:u32)->Result<bool,GreetError>; }";
+        let root = std::env::temp_dir().join(format!(
+            "boxology-numeric-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for file in tree(source, false).files() {
+            let path = root.join(file.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, file.bytes()).unwrap();
+        }
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.0.0\",path={:?}}}\n",
+                workspace.join("boxology-contract")
+            ),
+        )
+        .unwrap();
+        let consumer = root.join("consumer");
+        fs::create_dir_all(consumer.join("src")).unwrap();
+        fs::write(
+            consumer.join("Cargo.toml"),
+            "[package]\nname=\"consumer\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology-contract={workspace=true}\nhello-contract={package=\"hello-contract\",path=\"../generated/contract\",features=[\"test-support\"]}\n",
+        )
+        .unwrap();
+        fs::write(
+            consumer.join("src/main.rs"),
+            r#"
+use std::future::{ready, Future};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll, Waker};
+use boxology_contract::{CallContext, Caller, CancelToken, CapabilityId, ContractValue, DescriptorRef, ErasedCallError, ErasedCallTarget, SlotValue, TraceContext};
+use hello_contract::{test_support::HelloFake, contract_descriptor, HelloHandle};
+
+struct Echo;
+impl ErasedCallTarget for Echo {
+    fn call<'a>(&'a self, capability: &'a CapabilityId, _context: CallContext, input: SlotValue) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+        assert_eq!(capability.to_string(), "hello.greet");
+        assert_eq!(input, SlotValue::Value(ContractValue::u64(41)));
+        Box::pin(ready(Ok(SlotValue::Value(ContractValue::bool(true)))))
+    }
+}
+
+fn context() -> CallContext {
+    CallContext::new(Caller::Anonymous, None, CancelToken::new(), TraceContext::empty(), None)
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop { if let Poll::Ready(output) = future.as_mut().poll(&mut TaskContext::from_waker(Waker::noop())) { return output; } }
+}
+
+fn main() {
+    let capability = &contract_descriptor().capabilities()[0];
+    assert!(matches!(capability.input().view(), DescriptorRef::U32));
+    assert!(matches!(capability.output().view(), DescriptorRef::Bool));
+
+    let handle = HelloHandle::from_erased(Arc::new(Echo));
+    assert_eq!(block_on(handle.greet(context(), 41u32)), Ok(true));
+
+    let fake = HelloFake::new().with_greet(|_, count: u32| async move { Ok(count == 41) });
+    assert_eq!(block_on(fake.handle().greet(context(), 41u32)), Ok(true));
+}
+"#,
+        )
+        .unwrap();
+        let status = Command::new("cargo")
+            .args(["run", "--offline", "--manifest-path"])
+            .arg(consumer.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
     }
 }

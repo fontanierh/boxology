@@ -115,6 +115,10 @@ impl CanonicalType {
     pub fn is_string(&self) -> bool {
         matches!(self, Self::String)
     }
+    /// Returns whether the leaf is the `Blob` boundary type.
+    pub fn is_blob(&self) -> bool {
+        matches!(self, Self::Blob)
+    }
 }
 /// Version of the generation-consistency semantic encoding.
 pub const SEMANTIC_ENCODING_VERSION: u32 = 1;
