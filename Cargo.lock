@@ -58,7 +58,11 @@ name = "boxology-fixture-tests"
 version = "0.0.0"
 dependencies = [
  "boxology-contract",
+ "boxology-generator",
+ "boxology-generator-model",
  "hello-contract",
+ "hello-implementation",
+ "serde_json",
 ]
 
 [[package]]
@@ -373,7 +377,9 @@ dependencies = [
 name = "hello-implementation"
 version = "0.0.0"
 dependencies = [
+ "boxology",
  "boxology-contract",
+ "boxology-runtime",
  "hello-contract",
 ]
 

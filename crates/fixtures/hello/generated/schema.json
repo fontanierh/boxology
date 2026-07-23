@@ -1,0 +1,41 @@
+{
+  "box_id": "hello",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "GreetError",
+      "id": "hello.greet",
+      "idempotency": "none",
+      "input": {
+        "name": "name",
+        "type": "String"
+      },
+      "max_exposure": "external",
+      "name": "greet",
+      "output": {
+        "type": "String"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": "@PROVENANCE@",
+  "revision": "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "GreetError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "EmptyName",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}

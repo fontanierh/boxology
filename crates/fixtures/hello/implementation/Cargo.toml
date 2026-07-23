@@ -5,5 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-boxology-contract = { version = "=0.0.0", path = "../../../boxology-contract" }
-hello-contract = { version = "=0.0.0", path = "../generated/contract" }
+boxology = { workspace = true }
+boxology-contract = { workspace = true }
+boxology-runtime = { workspace = true, features = ["test-support"] }
+boxology_generated_contract = { package = "hello-contract", version = "=0.0.0", path = "../generated/contract" }
