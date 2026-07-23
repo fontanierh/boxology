@@ -81,6 +81,13 @@ docker run --rm --platform linux/arm64 --network none --read-only --user runner 
   test "$(uname -m)" = aarch64
   test "$(id -u)" -ne 0
   rustc --version | grep -F 1.97.1
+  test "$RUSTUP_HOME" = /opt/rustup
+  rustup component list --toolchain 1.97.1 | grep -F 'rustfmt-' | grep -F installed
+  rustup component list --toolchain 1.97.1 | grep -F 'clippy-' | grep -F installed
+  rustup component list --toolchain 1.97.1 | grep -F 'rust-analyzer-' | grep -F installed
+  mkdir -p /tmp/toolchain-probe
+  printf '[toolchain]\nchannel = "1.97.1"\ncomponents = ["rustfmt", "clippy", "rust-analyzer"]\nprofile = "minimal"\n' > /tmp/toolchain-probe/rust-toolchain.toml
+  (cd /tmp/toolchain-probe && rustup toolchain install && rustup show active-toolchain)
   cargo deny --version | grep -F 0.20.2
   cp -a /opt/actions-runner/. /tmp/runner
   /tmp/runner/run.sh --help >/dev/null
@@ -102,7 +109,14 @@ Verify architecture, the pinned base digest, the runner SHA-256 label, and
 `org.boxology.ci.image-id`/`org.boxology.ci.image-version` labels before starting
 the supervisor. A missing or changed identity is a fail-closed condition.
 At runtime the image root is read-only; the unique named volume mounted at
-`/runner` holds the copied runner state, checkout, target, and Cargo home. The
+`/runner` holds only the copied runner state, checkout, target, and Cargo home.
+The pinned 1.97.1 toolchain — including `rustfmt`, `clippy`, and `rust-analyzer`
+— is preinstalled into the read-only `/opt/rustup` image layer and shared by
+every runner, so the workflow's `rustup toolchain install` finds the toolchain
+and all repository-requested components already present and completes without
+writing to `RUSTUP_HOME`. Because no toolchain is copied per job, the `/runner`
+volume stays small and each job starts fast; the entrypoint still rejects any
+`/runner` volume that is not empty as reused runner state.
 base supervisor bounds its container to 4 CPUs and 8 GiB RAM without swap; slot
 containers use the slot plist's 1-CPU/2-GiB bounds. All containers are capped at
 512 pids.

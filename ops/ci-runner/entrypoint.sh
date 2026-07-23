@@ -16,7 +16,7 @@ if [[ -z "$jit_config" || "$jit_config" =~ [^A-Za-z0-9+/=_-] ]]; then
   exit 64
 fi
 export ImageOS=ubuntu24.04-arm64-colima
-export ImageVersion=ubuntu-24.04-arm64-runner-2.336.0-rust-1.97.1-deny-0.20.2
+export ImageVersion=ubuntu-24.04-arm64-runner-2.336.0-rust-1.97.1-rust-analyzer-deny-0.20.2
 unset GITHUB_TOKEN GH_TOKEN RUNNER_TOKEN ACTIONS_RUNTIME_TOKEN \
   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AZURE_CLIENT_SECRET
 
