@@ -47,6 +47,8 @@ const CONTROLLED_SITE_RULE: &str =
     "exact boxology::contract! invocations must appear once at reachable module scope";
 const CONTROLLED_PARSE_RULE: &str = "contract tokens must satisfy the controlled v0 grammar";
 const CONTROLLED_PARSE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
+const EMITTABLE_RULE: &str = "capability input and output boundary types beyond `String` are parsed and modelled but v0 end-to-end generation of them is not yet implemented (deferred to S2-T2/T3).";
+const EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3,D5";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -126,6 +128,28 @@ impl ControlledContract {
         canonical_semantic_bytes: &[u8] = &self.canonical_semantic_bytes;
         #[doc = "Returns the SHA-256 generation-consistency digest computed after parsing."]
         semantic_digest: &[u8; 32] = &self.semantic_digest;
+    }
+
+    /// Fails closed when a boundary type beyond `String` is parsed and modelled but not yet emittable in v0.
+    ///
+    /// The plain parse path still returns the full non-`String` model so later tasks can consume it;
+    /// this guard exists so that honest parsing does not silently emit a wrong `String` artifact.
+    ///
+    /// # Errors
+    /// Returns `BXG0040` at the contract-invocation span when either boundary leaf is not `String`.
+    pub fn require_v0_emittable(&self) -> Result<(), Diagnostics> {
+        let capability = &self.model.capability;
+        if capability.input_type.is_string() && capability.output_type.is_string() {
+            return Ok(());
+        }
+        Err(Diagnostics(vec![Diagnostic {
+            path: self.source.clone(),
+            span: self.span,
+            code: "BXG0040",
+            offending: "capability boundary type not yet emittable in v0".into(),
+            rule: EMITTABLE_RULE,
+            rule_source: EMITTABLE_RULE_SOURCE,
+        }]))
     }
 }
 impl<'ast> CapabilityDeclaration<'ast> {

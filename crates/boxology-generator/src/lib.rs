@@ -52,6 +52,7 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     request.require_exact_outputs(&OUTPUTS)?;
     let parsed = ParsedRustInputs::parse(request)?;
     let contract = parsed.controlled_contract()?;
+    contract.require_v0_emittable()?;
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
         "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",
@@ -1628,5 +1629,23 @@ fn main() {
             .require_exact_outputs(&[OUTPUTS[0], OUTPUTS[1], OUTPUTS[3], OUTPUTS[3]])
             .unwrap_err();
         assert_eq!(diagnostics.as_slice()[0].code(), "BXG0039");
+    }
+
+    #[test]
+    fn non_string_boundary_fails_closed_before_emission() {
+        for source in [
+            CONTRACT.replace("name:String", "name:u32"),
+            CONTRACT.replace("Result<String", "Result<bool"),
+        ] {
+            let request = request(&source, false, OUTPUTS.to_vec());
+            let expected_span = ParsedRustInputs::parse(&request)
+                .and_then(|parsed| parsed.controlled_contract())
+                .unwrap()
+                .span();
+            let diagnostics = generate(&request).unwrap_err();
+            assert_eq!(diagnostics.as_slice().len(), 1);
+            assert_eq!(diagnostics.as_slice()[0].code(), "BXG0040");
+            assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
+        }
     }
 }

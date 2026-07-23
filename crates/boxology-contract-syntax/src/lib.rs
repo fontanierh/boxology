@@ -51,12 +51,70 @@ pub struct CapabilityDeclaration {
     pub name: String,
     /// Input name.
     pub input_name: String,
+    /// Canonical scalar leaf accepted as the single input.
+    pub input_type: CanonicalType,
+    /// Canonical scalar leaf produced on success.
+    pub output_type: CanonicalType,
     /// Directly named in-block error type.
     pub error: String,
     /// Declared maximum exposure.
     pub exposure: &'static str,
     /// Declared idempotency, defaulting to none.
     pub idempotency: &'static str,
+}
+/// One canonical scalar leaf permitted as a capability input or output boundary type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalType {
+    /// The `bool` leaf.
+    Bool,
+    /// The `u8` leaf.
+    U8,
+    /// The `u16` leaf.
+    U16,
+    /// The `u32` leaf.
+    U32,
+    /// The `u64` leaf.
+    U64,
+    /// The `i8` leaf.
+    I8,
+    /// The `i16` leaf.
+    I16,
+    /// The `i32` leaf.
+    I32,
+    /// The `i64` leaf.
+    I64,
+    /// The `f32` leaf.
+    F32,
+    /// The `f64` leaf.
+    F64,
+    /// The `String` leaf.
+    String,
+    /// The `Blob` leaf.
+    Blob,
+}
+impl CanonicalType {
+    /// Returns the exact Rust identifier naming the leaf.
+    pub fn canonical_name(&self) -> &'static str {
+        match self {
+            Self::Bool => "bool",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::String => "String",
+            Self::Blob => "Blob",
+        }
+    }
+    /// Returns whether the leaf is the `String` boundary type.
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String)
+    }
 }
 /// Version of the generation-consistency semantic encoding.
 pub const SEMANTIC_ENCODING_VERSION: u32 = 1;
@@ -81,8 +139,8 @@ pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
     for value in [
         capability.name.as_str(),
         capability.input_name.as_str(),
-        "String",
-        "String",
+        capability.input_type.canonical_name(),
+        capability.output_type.canonical_name(),
         capability.error.as_str(),
         capability.exposure,
         capability.idempotency,
@@ -242,13 +300,13 @@ fn parse_capability(
     {
         return Err(error(&arg.pat, "input must be an undecorated identifier"));
     }
-    if !is_ident(&arg.ty, "String") {
-        return Err(error(&arg.ty, "input type must be String"));
-    }
-    let Some(error_name) = result_error(&output) else {
+    let Some(input_type) = leaf(&arg.ty) else {
+        return Err(error(&arg.ty, "input type must be a canonical scalar leaf"));
+    };
+    let Some((output_type, error_name)) = result_error(&output) else {
         return Err(error(
             &output,
-            "output must be unqualified Result<String, Error>",
+            "output must be unqualified Result<Leaf, Error>",
         ));
     };
     Ok(CapabilityDeclaration {
@@ -256,6 +314,8 @@ fn parse_capability(
         deprecation,
         name,
         input_name: identifier(&input_ident.ident)?,
+        input_type,
+        output_type,
         error: error_name,
         exposure: "external",
         idempotency: "none",
@@ -339,10 +399,37 @@ impl<T: Parse> Parse for Pair<T> {
         })
     }
 }
-fn is_ident(ty: &Type, name: &str) -> bool {
-    matches!(ty, Type::Path(path) if path.qself.is_none() && path.path.get_ident().is_some_and(|id| id==name))
+/// Classifies a single-segment, non-raw, unqualified path type as one canonical scalar leaf.
+fn leaf(ty: &Type) -> Option<CanonicalType> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    if path.qself.is_some() {
+        return None;
+    }
+    let ident = path.path.get_ident()?;
+    let name = ident.to_string();
+    if name.starts_with("r#") {
+        return None;
+    }
+    Some(match name.as_str() {
+        "bool" => CanonicalType::Bool,
+        "u8" => CanonicalType::U8,
+        "u16" => CanonicalType::U16,
+        "u32" => CanonicalType::U32,
+        "u64" => CanonicalType::U64,
+        "i8" => CanonicalType::I8,
+        "i16" => CanonicalType::I16,
+        "i32" => CanonicalType::I32,
+        "i64" => CanonicalType::I64,
+        "f32" => CanonicalType::F32,
+        "f64" => CanonicalType::F64,
+        "String" => CanonicalType::String,
+        "Blob" => CanonicalType::Blob,
+        _ => return None,
+    })
 }
-fn result_error(ty: &Type) -> Option<String> {
+fn result_error(ty: &Type) -> Option<(CanonicalType, String)> {
     let Type::Path(result) = ty else {
         return None;
     };
@@ -367,9 +454,11 @@ fn result_error(ty: &Type) -> Option<String> {
         return None;
     };
     let name = error.path.get_ident()?;
-    (error.qself.is_none() && is_ident(ok, "String"))
+    let output_type = leaf(ok)?;
+    (error.qself.is_none())
         .then(|| identifier(name).ok())
         .flatten()
+        .map(|name| (output_type, name))
 }
 fn error(node: &impl Spanned, message: &str) -> syn::Error {
     syn::Error::new(node.span(), message)
@@ -452,6 +541,100 @@ mod tests {
         ] {
             assert!(parse(source.parse().unwrap()).is_err(), "{source}");
         }
+        for boundary in [
+            "Vec<u8>",
+            "Option<u8>",
+            "BTreeMap<String,u8>",
+            "Field<u8>",
+            "Secret<u8>",
+            "crate::u32",
+            "&str",
+            "[u8;4]",
+            "(u8,u8)",
+            "u128",
+            "usize",
+            "isize",
+            "char",
+            "str",
+            "r#u32",
+            "GreetError",
+        ] {
+            let input = format!(
+                "{ERROR} {}",
+                CAP.replace("name:String", &format!("name:{boundary}"))
+            );
+            let output = format!(
+                "{ERROR} {}",
+                CAP.replace("Result<String", &format!("Result<{boundary}"))
+            );
+            assert!(parse(input.parse().unwrap()).is_err(), "input {boundary}");
+            assert!(parse(output.parse().unwrap()).is_err(), "output {boundary}");
+        }
+    }
+    #[test]
+    fn non_leaf_input_type_has_a_stable_diagnostic() {
+        let source = format!("{ERROR} {}", CAP.replace("name:String", "name:Vec<u8>"));
+        let diagnostic = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(
+            diagnostic.to_string(),
+            "input type must be a canonical scalar leaf"
+        );
+    }
+    #[test]
+    fn non_leaf_output_type_has_a_stable_diagnostic() {
+        let source = format!("{ERROR} {}", CAP.replace("Result<String", "Result<Vec<u8>"));
+        let diagnostic = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(
+            diagnostic.to_string(),
+            "output must be unqualified Result<Leaf, Error>"
+        );
+    }
+    #[test]
+    fn every_canonical_leaf_is_accepted_at_input_and_output() {
+        let leaves = [
+            "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "String",
+            "Blob",
+        ];
+        for name in leaves {
+            let input = parse(
+                format!(
+                    "{ERROR} {}",
+                    CAP.replace("name:String", &format!("name:{name}"))
+                )
+                .parse()
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(input.capability.input_type.canonical_name(), name);
+            assert_eq!(input.capability.output_type.canonical_name(), "String");
+            let output = parse(
+                format!(
+                    "{ERROR} {}",
+                    CAP.replace("Result<String", &format!("Result<{name}"))
+                )
+                .parse()
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(output.capability.output_type.canonical_name(), name);
+            assert_eq!(output.capability.input_type.canonical_name(), "String");
+        }
+    }
+    #[test]
+    fn non_string_boundary_semantic_encoding_is_pinned() {
+        const NON_STRING_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000201000000000000000000000000000000000a47726565744572726f720000000000000001000000000000000000000000000000000009456d7074794e616d65020000000000000000000000000000000005677265657400000000000000046e616d6500000000000000037533320000000000000004626f6f6c000000000000000a47726565744572726f72000000000000000865787465726e616c00000000000000046e6f6e65";
+        const NON_STRING_DIGEST: &str =
+            "18c8df53ed2aecbb124a34889d88997ae28a01f7ce72904fc719c8b991635532";
+        let source = format!(
+            "{ERROR} {}",
+            CAP.replace("name:String", "name:u32")
+                .replace("Result<String", "Result<bool")
+        );
+        let contract = parse(source.parse().unwrap()).unwrap();
+        assert_eq!(contract.capability.input_type, CanonicalType::U32);
+        assert_eq!(contract.capability.output_type, CanonicalType::Bool);
+        assert_eq!(hex(&canonical_semantic_bytes(&contract)), NON_STRING_BYTES);
+        assert_eq!(hex(&semantic_digest(&contract)), NON_STRING_DIGEST);
     }
     #[test]
     fn reserved_unknown_error_variant_has_a_stable_diagnostic() {
