@@ -25,7 +25,7 @@ pub(super) fn document(
     semantic_digest: &[u8; 32],
     generator_version: &str,
 ) -> Vec<u8> {
-    let capability = &contract.capability;
+    let capability = &contract.capabilities[0];
     let root = object([
         ("box_id", json!(box_id)),
         (
@@ -82,7 +82,7 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
             )
         })
         .collect::<String>();
-    let capability = &contract.capability;
+    let capability = &contract.capabilities[0];
     let capability_deprecation = rust_deprecation(&capability.deprecation);
     let input_constructor = descriptor_constructor(capability.input_type);
     let output_constructor = descriptor_constructor(capability.output_type);
@@ -210,7 +210,7 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
         out.push(0); // unit payload
     }
     count(&mut out, 1);
-    let capability = &contract.capability;
+    let capability = &contract.capabilities[0];
     for value in [
         format!("{box_id}.{}", capability.name),
         capability.name.clone(),

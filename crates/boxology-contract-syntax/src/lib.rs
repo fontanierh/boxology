@@ -14,8 +14,8 @@ use syn::{
 pub struct Contract {
     /// The domain-error declaration.
     pub error: ErrorDeclaration,
-    /// The exported capability declaration.
-    pub capability: CapabilityDeclaration,
+    /// The exported capability declarations in source order; always at least one.
+    pub capabilities: Vec<CapabilityDeclaration>,
 }
 /// A controlled domain-error enum. Raw identifiers are rejected.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,7 +127,7 @@ pub const SEMANTIC_ENCODING_VERSION: u32 = 1;
 pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
     let mut out = b"boxology.contract-semantics\0".to_vec();
     out.extend_from_slice(&SEMANTIC_ENCODING_VERSION.to_be_bytes());
-    count(&mut out, 2);
+    count(&mut out, 1 + contract.capabilities.len());
     out.push(1);
     encode_metadata(&mut out, &contract.error.docs, &contract.error.deprecation);
     string(&mut out, &contract.error.name);
@@ -137,19 +137,20 @@ pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
         encode_metadata(&mut out, &variant.docs, &variant.deprecation);
         string(&mut out, &variant.name);
     }
-    let capability = &contract.capability;
-    out.push(2);
-    encode_metadata(&mut out, &capability.docs, &capability.deprecation);
-    for value in [
-        capability.name.as_str(),
-        capability.input_name.as_str(),
-        capability.input_type.canonical_name(),
-        capability.output_type.canonical_name(),
-        capability.error.as_str(),
-        capability.exposure,
-        capability.idempotency,
-    ] {
-        string(&mut out, value);
+    for capability in &contract.capabilities {
+        out.push(2);
+        encode_metadata(&mut out, &capability.docs, &capability.deprecation);
+        for value in [
+            capability.name.as_str(),
+            capability.input_name.as_str(),
+            capability.input_type.canonical_name(),
+            capability.output_type.canonical_name(),
+            capability.error.as_str(),
+            capability.exposure,
+            capability.idempotency,
+        ] {
+            string(&mut out, value);
+        }
     }
     out
 }
@@ -200,17 +201,30 @@ impl Parse for Contract {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let attrs = Attribute::parse_outer(input)?;
         let error = parse_error(&attrs, &input.parse()?)?;
-        let attrs = Attribute::parse_outer(input)?;
-        let capability = parse_capability(&attrs, input)?;
-        if !input.is_empty() {
-            return Err(input.error("a contract supports exactly two declarations"));
+        let mut capabilities = Vec::new();
+        let mut names = BTreeSet::new();
+        while !input.is_empty() {
+            let attrs = Attribute::parse_outer(input)?;
+            let capability = parse_capability(&attrs, input)?;
+            if capability.error != error.name {
+                return Err(
+                    input.error("capability error must directly name an in-block #[error] enum")
+                );
+            }
+            if !names.insert(capability.name.clone()) {
+                return Err(input.error("capability names must be unique"));
+            }
+            capabilities.push(capability);
         }
-        if capability.error != error.name {
+        if capabilities.is_empty() {
             return Err(
-                input.error("capability error must directly name an in-block #[error] enum")
+                input.error("a contract requires one #[error] enum and at least one capability")
             );
         }
-        Ok(Self { error, capability })
+        Ok(Self {
+            error,
+            capabilities,
+        })
     }
 }
 
@@ -494,11 +508,12 @@ mod tests {
         let contract = parse(format!("{ERROR} {CAP}").parse().unwrap()).unwrap();
         assert_eq!(contract.error.name, "GreetError");
         assert_eq!(contract.error.variants[0].name, "EmptyName");
-        assert_eq!(contract.capability.name, "greet");
-        assert_eq!(contract.capability.input_name, "name");
-        assert_eq!(contract.capability.error, "GreetError");
-        assert_eq!(contract.capability.exposure, "external");
-        assert_eq!(contract.capability.idempotency, "none");
+        assert_eq!(contract.capabilities.len(), 1);
+        assert_eq!(contract.capabilities[0].name, "greet");
+        assert_eq!(contract.capabilities[0].input_name, "name");
+        assert_eq!(contract.capabilities[0].error, "GreetError");
+        assert_eq!(contract.capabilities[0].exposure, "external");
+        assert_eq!(contract.capabilities[0].idempotency, "none");
         let metadata = parse(
             format!("#[doc=\"greet\"] #[deprecated] {ERROR} {CAP}")
                 .parse()
@@ -609,8 +624,8 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert_eq!(input.capability.input_type.canonical_name(), name);
-            assert_eq!(input.capability.output_type.canonical_name(), "String");
+            assert_eq!(input.capabilities[0].input_type.canonical_name(), name);
+            assert_eq!(input.capabilities[0].output_type.canonical_name(), "String");
             let output = parse(
                 format!(
                     "{ERROR} {}",
@@ -620,8 +635,8 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert_eq!(output.capability.output_type.canonical_name(), name);
-            assert_eq!(output.capability.input_type.canonical_name(), "String");
+            assert_eq!(output.capabilities[0].output_type.canonical_name(), name);
+            assert_eq!(output.capabilities[0].input_type.canonical_name(), "String");
         }
     }
     #[test]
@@ -635,10 +650,44 @@ mod tests {
                 .replace("Result<String", "Result<bool")
         );
         let contract = parse(source.parse().unwrap()).unwrap();
-        assert_eq!(contract.capability.input_type, CanonicalType::U32);
-        assert_eq!(contract.capability.output_type, CanonicalType::Bool);
+        assert_eq!(contract.capabilities[0].input_type, CanonicalType::U32);
+        assert_eq!(contract.capabilities[0].output_type, CanonicalType::Bool);
         assert_eq!(hex(&canonical_semantic_bytes(&contract)), NON_STRING_BYTES);
         assert_eq!(hex(&semantic_digest(&contract)), NON_STRING_DIGEST);
+    }
+    const STORE_ERROR: &str = "#[error] pub enum StoreError { Missing }";
+    const GET: &str =
+        "#[capability(exposure=external)] pub async fn get(key:String)->Result<String,StoreError>;";
+    const PUT: &str =
+        "#[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>;";
+    #[test]
+    fn multiple_capabilities_under_one_error_parse_in_order_and_pin() {
+        const MULTI_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000301000000000000000000000000000000000a53746f72654572726f7200000000000000010000000000000000000000000000000000074d697373696e6702000000000000000000000000000000000367657400000000000000036b65790000000000000006537472696e670000000000000006537472696e67000000000000000a53746f72654572726f72000000000000000865787465726e616c00000000000000046e6f6e65020000000000000000000000000000000003707574000000000000000576616c75650000000000000006537472696e670000000000000004626f6f6c000000000000000a53746f72654572726f72000000000000000865787465726e616c00000000000000046e6f6e65";
+        const MULTI_DIGEST: &str =
+            "58aaace524b71255be6b3a0c007fc79d2a989d22c85a061cba9403e8eab9249d";
+        let contract = parse(format!("{STORE_ERROR} {GET} {PUT}").parse().unwrap()).unwrap();
+        assert_eq!(contract.error.name, "StoreError");
+        assert_eq!(contract.capabilities.len(), 2);
+        assert_eq!(contract.capabilities[0].name, "get");
+        assert_eq!(contract.capabilities[1].name, "put");
+        assert_eq!(contract.capabilities[0].output_type, CanonicalType::String);
+        assert_eq!(contract.capabilities[1].output_type, CanonicalType::Bool);
+        assert_eq!(hex(&canonical_semantic_bytes(&contract)), MULTI_BYTES);
+        assert_eq!(hex(&semantic_digest(&contract)), MULTI_DIGEST);
+        let swapped = parse(format!("{STORE_ERROR} {PUT} {GET}").parse().unwrap()).unwrap();
+        assert_eq!(swapped.capabilities[0].name, "put");
+        assert_eq!(swapped.capabilities[1].name, "get");
+        assert_ne!(semantic_digest(&contract), semantic_digest(&swapped));
+    }
+    #[test]
+    fn capability_error_mismatch_and_duplicate_names_fail_closed() {
+        let mismatch = format!(
+            "{STORE_ERROR} {}",
+            GET.replace("StoreError>", "OtherError>")
+        );
+        assert!(parse(mismatch.parse().unwrap()).is_err(), "{mismatch}");
+        let duplicate = format!("{STORE_ERROR} {GET} {GET}");
+        assert!(parse(duplicate.parse().unwrap()).is_err(), "{duplicate}");
     }
     #[test]
     fn reserved_unknown_error_variant_has_a_stable_diagnostic() {
@@ -668,11 +717,11 @@ mod tests {
             |c| c.error.variants[0].docs.push("docs".into()),
             |c| c.error.variants[0].deprecation = Some(String::new()),
             |c| c.error.variants[0].name = "Other".into(),
-            |c| c.capability.docs.push("docs".into()),
-            |c| c.capability.deprecation = Some(String::new()),
-            |c| c.capability.name = "other".into(),
-            |c| c.capability.input_name = "other".into(),
-            |c| c.capability.error = "OtherError".into(),
+            |c| c.capabilities[0].docs.push("docs".into()),
+            |c| c.capabilities[0].deprecation = Some(String::new()),
+            |c| c.capabilities[0].name = "other".into(),
+            |c| c.capabilities[0].input_name = "other".into(),
+            |c| c.capabilities[0].error = "OtherError".into(),
         ];
         for mutate in mutations {
             let mut changed = hello.clone();
