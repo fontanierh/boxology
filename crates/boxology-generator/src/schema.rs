@@ -1,4 +1,6 @@
-use boxology_contract_syntax::{CanonicalType, Contract, ErrorDeclaration, ErrorVariant};
+use boxology_contract_syntax::{
+    CanonicalType, CapabilityDeclaration, Contract, ErrorDeclaration, ErrorVariant,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -25,32 +27,17 @@ pub(super) fn document(
     semantic_digest: &[u8; 32],
     generator_version: &str,
 ) -> Vec<u8> {
-    let capability = &contract.capabilities[0];
     let root = object([
         ("box_id", json!(box_id)),
         (
             "capabilities",
-            json!([object([
-                ("deprecation", deprecation(&capability.deprecation)),
-                ("docs", json!(capability.docs)),
-                ("error", json!(capability.error)),
-                ("id", json!(format!("{box_id}.{}", capability.name))),
-                ("idempotency", json!("none")),
-                (
-                    "input",
-                    object([
-                        ("name", json!(capability.input_name)),
-                        ("type", json!(capability.input_type.canonical_name()))
-                    ]),
-                ),
-                ("max_exposure", json!("external")),
-                ("name", json!(capability.name)),
-                (
-                    "output",
-                    object([("type", json!(capability.output_type.canonical_name()))]),
-                ),
-                ("shape", json!("unary")),
-            ])]),
+            Value::Array(
+                contract
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability_object(box_id, capability))
+                    .collect(),
+            ),
         ),
         (
             "provenance",
@@ -67,6 +54,30 @@ pub(super) fn document(
     let mut bytes = serde_json::to_vec_pretty(&root).expect("schema values are serializable");
     bytes.push(b'\n');
     bytes
+}
+
+fn capability_object(box_id: &str, capability: &CapabilityDeclaration) -> Value {
+    object([
+        ("deprecation", deprecation(&capability.deprecation)),
+        ("docs", json!(capability.docs)),
+        ("error", json!(capability.error)),
+        ("id", json!(format!("{box_id}.{}", capability.name))),
+        ("idempotency", json!("none")),
+        (
+            "input",
+            object([
+                ("name", json!(capability.input_name)),
+                ("type", json!(capability.input_type.canonical_name())),
+            ]),
+        ),
+        ("max_exposure", json!("external")),
+        ("name", json!(capability.name)),
+        (
+            "output",
+            object([("type", json!(capability.output_type.canonical_name()))]),
+        ),
+        ("shape", json!("unary")),
+    ])
 }
 
 pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u8; 32]) -> String {
@@ -209,25 +220,26 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
         metadata(&mut out, &variant.docs, &variant.deprecation);
         out.push(0); // unit payload
     }
-    count(&mut out, 1);
-    let capability = &contract.capabilities[0];
-    for value in [
-        format!("{box_id}.{}", capability.name),
-        capability.name.clone(),
-    ] {
-        string(&mut out, &value);
-    }
-    metadata(&mut out, &capability.docs, &capability.deprecation);
-    for value in [
-        capability.input_name.as_str(),
-        capability.input_type.canonical_name(),
-        capability.output_type.canonical_name(),
-        &capability.error,
-        "unary",
-        "external",
-        "none",
-    ] {
-        string(&mut out, value);
+    count(&mut out, contract.capabilities.len());
+    for capability in &contract.capabilities {
+        for value in [
+            format!("{box_id}.{}", capability.name),
+            capability.name.clone(),
+        ] {
+            string(&mut out, &value);
+        }
+        metadata(&mut out, &capability.docs, &capability.deprecation);
+        for value in [
+            capability.input_name.as_str(),
+            capability.input_type.canonical_name(),
+            capability.output_type.canonical_name(),
+            &capability.error,
+            "unary",
+            "external",
+            "none",
+        ] {
+            string(&mut out, value);
+        }
     }
     out
 }
