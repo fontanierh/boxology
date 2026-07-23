@@ -612,6 +612,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         vec![
             "generated/contract/src/lib.rs".into(),
             "generated/contract/Cargo.toml".into(),
+            "generated/adapter/adapter.rs".into(),
             "generated/schema.json".into(),
         ],
     )
