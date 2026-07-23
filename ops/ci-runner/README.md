@@ -81,14 +81,31 @@ docker run --rm --platform linux/arm64 --network none --read-only --user runner 
   test "$(uname -m)" = aarch64
   test "$(id -u)" -ne 0
   rustc --version | grep -F 1.97.1
+  test "$RUSTUP_HOME" = /runner/_work/.rustup
+  rustup component list --toolchain 1.97.1 | grep -F 'rustfmt-' | grep -F installed
+  rustup component list --toolchain 1.97.1 | grep -F 'clippy-' | grep -F installed
   cargo deny --version | grep -F 0.20.2
   cp -a /opt/actions-runner/. /tmp/runner
   /tmp/runner/run.sh --help >/dev/null
 '
+toolchain_volume="boxology-local-toolchain-smoke-$(uuidgen | tr '[:upper:]' '[:lower:]')"
 volume="boxology-local-smoke-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+docker volume create "$toolchain_volume" >/dev/null
 docker volume create "$volume" >/dev/null
-cleanup() { docker volume rm "$volume" >/dev/null 2>&1 || true; }
+cleanup() {
+  docker volume rm "$toolchain_volume" "$volume" >/dev/null 2>&1 || true
+}
 trap cleanup EXIT INT TERM
+docker run --rm --platform linux/arm64 --network none --read-only --user runner \
+  --mount "type=volume,source=$toolchain_volume,target=/runner" --tmpfs /tmp:rw,noexec,nosuid,size=256m,mode=1777 \
+  --entrypoint /bin/bash "$image" -ceu '
+  test "$RUSTUP_HOME" = /runner/_work/.rustup
+  test -w "$RUSTUP_HOME"
+  touch "$RUSTUP_HOME/tmp/boxology-rustup-writable"
+  rm "$RUSTUP_HOME/tmp/boxology-rustup-writable"
+  rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+  rustup show active-toolchain
+'
 set +e
 docker run --rm --platform linux/arm64 --network none --read-only --user runner \
   --mount "type=volume,source=$volume,target=/runner" --tmpfs /tmp:rw,noexec,nosuid,size=256m,mode=1777 \
@@ -102,7 +119,13 @@ Verify architecture, the pinned base digest, the runner SHA-256 label, and
 `org.boxology.ci.image-id`/`org.boxology.ci.image-version` labels before starting
 the supervisor. A missing or changed identity is a fail-closed condition.
 At runtime the image root is read-only; the unique named volume mounted at
-`/runner` holds the copied runner state, checkout, target, and Cargo home. The
+`/runner` holds the copied runner state, checkout, target, Cargo home, and
+Rustup home at `/runner/_work/.rustup`. Docker copies the image's preinstalled
+1.97.1 toolchain into that fresh volume, so `rustup toolchain install` can
+validate the pin and add repository-requested components such as
+`rust-analyzer` without writing to the read-only image layer. The
+image-seed marker is consumed on first boot; a volume that does not carry that
+marker is still rejected as reused runner state.
 base supervisor bounds its container to 4 CPUs and 8 GiB RAM without swap; slot
 containers use the slot plist's 1-CPU/2-GiB bounds. All containers are capped at
 512 pids.

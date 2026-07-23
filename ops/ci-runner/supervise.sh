@@ -15,7 +15,7 @@ CONTAINER_MEMORY="${CONTAINER_MEMORY:-8g}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
 IMAGE_ID=boxology-linux-arm64-pr
-IMAGE_VERSION=ubuntu-24.04-arm64-runner-2.336.0-rust-1.97.1-deny-0.20.2
+IMAGE_VERSION=ubuntu-24.04-arm64-runner-2.336.0-rust-1.97.1-deny-0.20.2-rustup-volume-1
 BASE_DIGEST=sha256:7f622ca8766bccb22f04242ecb6f19f770b2f08827dc4b8c707de5e78a6da7ab
 RUNNER_SHA256=58b758e420b87093fbd4bfddd368074960053e2f1388f01848c82624b90f27d1
 RUNNER_NAME= RUNNER_ID=
@@ -216,6 +216,7 @@ run_once() {
       --mount "type=volume,source=$volume,target=/runner" \
       --env ImageOS=ubuntu24.04-arm64-colima \
       --env ImageVersion="$IMAGE_VERSION" --env HOME=/runner/home --env CARGO_HOME=/runner/_work/.cargo \
+      --env RUSTUP_HOME=/runner/_work/.rustup \
       --env CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" --env RUST_TEST_THREADS="$RUST_TEST_THREADS" \
       --env RUNNER_TEMP=/runner/_work/_temp \
       --env TMPDIR=/runner/_work/_temp \
