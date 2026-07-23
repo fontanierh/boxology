@@ -333,10 +333,7 @@ fn generated_contract_has_no_runtime_or_http_dependency() {
         .expect("generated contract must declare dependencies")
         .1
         .trim();
-    assert_eq!(
-        dependencies,
-        "boxology-contract = { version = \"=0.0.0\", path = \"../../../../boxology-contract\" }"
-    );
+    assert_eq!(dependencies, "boxology-contract = { workspace = true }");
     assert!(!dependencies.contains("runtime"));
     assert!(!dependencies.contains("http"));
 }

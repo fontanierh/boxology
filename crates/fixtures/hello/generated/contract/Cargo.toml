@@ -1,7 +1,7 @@
 [package]
 name = "hello-contract"
 version = "0.0.0"
-edition.workspace = true
+edition = "2024"
 publish = false
 
 [features]
@@ -9,4 +9,4 @@ default = []
 test-support = []
 
 [dependencies]
-boxology-contract = { version = "=0.0.0", path = "../../../../boxology-contract" }
+boxology-contract = { workspace = true }

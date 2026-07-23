@@ -105,7 +105,7 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
 
         /// Returns the canonical generated contract descriptor.
         pub fn contract_descriptor() -> &'static ::boxology_contract::ContractDescriptor {{
-            &*__BOXOLOGY_CONTRACT_DESCRIPTOR
+            &__BOXOLOGY_CONTRACT_DESCRIPTOR
         }}
         "#,
         box_id = box_id,

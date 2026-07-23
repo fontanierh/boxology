@@ -19,3 +19,8 @@ members = [
 
 [workspace.package]
 edition = "2024"
+
+[workspace.dependencies]
+boxology = { version = "=0.0.0", path = "crates/boxology" }
+boxology-contract = { version = "=0.0.0", path = "crates/boxology-contract" }
+boxology-runtime = { version = "=0.0.0", path = "crates/boxology-runtime" }
