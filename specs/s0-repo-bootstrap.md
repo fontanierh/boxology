@@ -140,9 +140,11 @@ macOS runner copied into a fresh per-job directory. The Linux image contains no
 repository source, runs the runner as non-root, and is built from the official
 Ubuntu 24.04 ARM64 base pinned by OCI digest. Both lanes pin actions/runner
 v2.336.0, the repository Rust toolchain, and cargo-deny 0.20.2; runtime
-self-update is disabled. Linux keeps Rustup under the writable per-runner
-`/runner/_work/.rustup` volume while the image root remains read-only. Linux has
-read-only-root, volume, CPU, memory, pids,
+self-update is disabled. Linux preinstalls the pinned toolchain and its
+repository-required components (`rustfmt`, `clippy`, `rust-analyzer`) into the
+read-only `/opt/rustup` image layer, so per-job `rustup toolchain install`
+completes without writing and no toolchain is copied into the per-runner volume.
+Linux has read-only-root, volume, CPU, memory, pids,
 capability, and privilege bounds. Native macOS is trusted host execution and
 has no container boundary; its archive checksum, host OS version, architecture,
 and target triple are required evidence.
