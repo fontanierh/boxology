@@ -77,12 +77,39 @@ jobs:
       - name: cargo xtask ci (main push)
         if: github.event_name == 'push'
         run: cargo xtask ci --no-budget
-      - name: Upload xtask-linux-arm64
+      - name: Upload xtask-linux-arm64 (attempt 1)
+        id: ulx_bin_1
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: xtask-linux-arm64
           path: target/debug/xtask
           if-no-files-found: error
+          overwrite: true
+      - name: Backoff before xtask-linux-arm64 upload attempt 2
+        if: steps.ulx_bin_1.outcome == 'failure'
+        run: sleep 15
+      - name: Upload xtask-linux-arm64 (attempt 2)
+        id: ulx_bin_2
+        if: steps.ulx_bin_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xtask-linux-arm64
+          path: target/debug/xtask
+          if-no-files-found: error
+          overwrite: true
+      - name: Backoff before xtask-linux-arm64 upload attempt 3
+        if: steps.ulx_bin_1.outcome == 'failure' && steps.ulx_bin_2.outcome == 'failure'
+        run: sleep 30
+      - name: Upload xtask-linux-arm64 (attempt 3)
+        if: steps.ulx_bin_1.outcome == 'failure' && steps.ulx_bin_2.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xtask-linux-arm64
+          path: target/debug/xtask
+          if-no-files-found: error
+          overwrite: true
       - name: Produce determinism artifacts
         run: |
           rm -rf target/determinism-linux target/determinism-linux-meta
@@ -91,14 +118,66 @@ jobs:
           cargo xtask determinism-manifest --out target/determinism-linux-meta --meta-cross
           tar -cf target/determinism-linux.tar -C target/determinism-linux .
           tar -cf target/determinism-linux-meta.tar -C target/determinism-linux-meta .
-      - name: Upload determinism-linux
+      - name: Upload determinism-linux (attempt 1)
+        id: ulx_lin_1
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: determinism-linux-arm64
           path: target/determinism-linux.tar
           if-no-files-found: error
           overwrite: true
-      - name: Upload determinism-linux-meta
+      - name: Backoff before determinism-linux upload attempt 2
+        if: steps.ulx_lin_1.outcome == 'failure'
+        run: sleep 15
+      - name: Upload determinism-linux (attempt 2)
+        id: ulx_lin_2
+        if: steps.ulx_lin_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-linux-arm64
+          path: target/determinism-linux.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Backoff before determinism-linux upload attempt 3
+        if: steps.ulx_lin_1.outcome == 'failure' && steps.ulx_lin_2.outcome == 'failure'
+        run: sleep 30
+      - name: Upload determinism-linux (attempt 3)
+        if: steps.ulx_lin_1.outcome == 'failure' && steps.ulx_lin_2.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-linux-arm64
+          path: target/determinism-linux.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload determinism-linux-meta (attempt 1)
+        id: ulx_linmeta_1
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-linux-meta-arm64
+          path: target/determinism-linux-meta.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Backoff before determinism-linux-meta upload attempt 2
+        if: steps.ulx_linmeta_1.outcome == 'failure'
+        run: sleep 15
+      - name: Upload determinism-linux-meta (attempt 2)
+        id: ulx_linmeta_2
+        if: steps.ulx_linmeta_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-linux-meta-arm64
+          path: target/determinism-linux-meta.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Backoff before determinism-linux-meta upload attempt 3
+        if: steps.ulx_linmeta_1.outcome == 'failure' && steps.ulx_linmeta_2.outcome == 'failure'
+        run: sleep 30
+      - name: Upload determinism-linux-meta (attempt 3)
+        if: steps.ulx_linmeta_1.outcome == 'failure' && steps.ulx_linmeta_2.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: determinism-linux-meta-arm64
@@ -149,14 +228,66 @@ jobs:
           cargo xtask determinism-manifest --out target/determinism-macos-meta --meta-cross
           tar -cf target/determinism-macos.tar -C target/determinism-macos .
           tar -cf target/determinism-macos-meta.tar -C target/determinism-macos-meta .
-      - name: Upload determinism-macos
+      - name: Upload determinism-macos (attempt 1)
+        id: ulm_mac_1
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: determinism-macos
           path: target/determinism-macos.tar
           if-no-files-found: error
           overwrite: true
-      - name: Upload determinism-macos-meta
+      - name: Backoff before determinism-macos upload attempt 2
+        if: steps.ulm_mac_1.outcome == 'failure'
+        run: sleep 15
+      - name: Upload determinism-macos (attempt 2)
+        id: ulm_mac_2
+        if: steps.ulm_mac_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-macos
+          path: target/determinism-macos.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Backoff before determinism-macos upload attempt 3
+        if: steps.ulm_mac_1.outcome == 'failure' && steps.ulm_mac_2.outcome == 'failure'
+        run: sleep 30
+      - name: Upload determinism-macos (attempt 3)
+        if: steps.ulm_mac_1.outcome == 'failure' && steps.ulm_mac_2.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-macos
+          path: target/determinism-macos.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload determinism-macos-meta (attempt 1)
+        id: ulm_macmeta_1
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-macos-meta
+          path: target/determinism-macos-meta.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Backoff before determinism-macos-meta upload attempt 2
+        if: steps.ulm_macmeta_1.outcome == 'failure'
+        run: sleep 15
+      - name: Upload determinism-macos-meta (attempt 2)
+        id: ulm_macmeta_2
+        if: steps.ulm_macmeta_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: determinism-macos-meta
+          path: target/determinism-macos-meta.tar
+          if-no-files-found: error
+          overwrite: true
+      - name: Backoff before determinism-macos-meta upload attempt 3
+        if: steps.ulm_macmeta_1.outcome == 'failure' && steps.ulm_macmeta_2.outcome == 'failure'
+        run: sleep 30
+      - name: Upload determinism-macos-meta (attempt 3)
+        if: steps.ulm_macmeta_1.outcome == 'failure' && steps.ulm_macmeta_2.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: determinism-macos-meta
