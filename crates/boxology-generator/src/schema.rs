@@ -1,10 +1,22 @@
-use boxology_contract_syntax::{Contract, ErrorDeclaration, ErrorVariant};
+use boxology_contract_syntax::{CanonicalType, Contract, ErrorDeclaration, ErrorVariant};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 const REVISION_DOMAIN: &[u8] = b"boxology.public-contract-revision\0";
 const REVISION_VERSION: u32 = 1;
+
+/// Maps a canonical boundary leaf to its `TypeDescriptor` constructor name.
+///
+/// `String` and `Blob` use the lowercase runtime constructors `string`/`blob`; every scalar
+/// leaf already spells its lowercase constructor via `canonical_name()` (e.g. `u32`, `bool`).
+pub(super) fn descriptor_constructor(leaf: CanonicalType) -> &'static str {
+    match leaf {
+        CanonicalType::String => "string",
+        CanonicalType::Blob => "blob",
+        other => other.canonical_name(),
+    }
+}
 
 pub(super) fn document(
     box_id: &str,
@@ -28,12 +40,15 @@ pub(super) fn document(
                     "input",
                     object([
                         ("name", json!(capability.input_name)),
-                        ("type", json!("String"))
+                        ("type", json!(capability.input_type.canonical_name()))
                     ]),
                 ),
                 ("max_exposure", json!("external")),
                 ("name", json!(capability.name)),
-                ("output", object([("type", json!("String"))])),
+                (
+                    "output",
+                    object([("type", json!(capability.output_type.canonical_name()))]),
+                ),
                 ("shape", json!("unary")),
             ])]),
         ),
@@ -69,6 +84,8 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
         .collect::<String>();
     let capability = &contract.capability;
     let capability_deprecation = rust_deprecation(&capability.deprecation);
+    let input_constructor = descriptor_constructor(capability.input_type);
+    let output_constructor = descriptor_constructor(capability.output_type);
     let revision = hash_spelling(revision);
     format!(
         r#"
@@ -86,8 +103,8 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
                     ::boxology_contract::CapabilityName::new({capability_name:?})
                         .expect("generated capability name is valid"),
                 ),
-                ::boxology_contract::TypeDescriptor::string(),
-                ::boxology_contract::TypeDescriptor::string(),
+                ::boxology_contract::TypeDescriptor::{input_constructor}(),
+                ::boxology_contract::TypeDescriptor::{output_constructor}(),
                 error,
                 ::boxology_contract::CapabilityShape::Unary,
                 ::boxology_contract::ExposureLevel::External,
@@ -112,6 +129,8 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
         variants = variants,
         capability_name = capability.name,
         capability_deprecation = capability_deprecation,
+        input_constructor = input_constructor,
+        output_constructor = output_constructor,
         revision = revision,
     )
 }
@@ -201,8 +220,8 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
     metadata(&mut out, &capability.docs, &capability.deprecation);
     for value in [
         capability.input_name.as_str(),
-        "String",
-        "String",
+        capability.input_type.canonical_name(),
+        capability.output_type.canonical_name(),
         &capability.error,
         "unary",
         "external",

@@ -991,6 +991,113 @@ macro_rules! __boxology_check_implementation {
         }
     }
 
+    fn scalar_model(source: &str) -> boxology_generator_model::ControlledContract {
+        ParsedRustInputs::parse(&request(source, false, OUTPUTS.to_vec()))
+            .and_then(|parsed| parsed.controlled_contract())
+            .unwrap()
+    }
+
+    #[test]
+    fn scalar_boundary_document_projection_and_descriptor_are_type_aware() {
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:u32)->Result<bool,GreetError>; }",
+        );
+        let model = contract.model();
+        let document: Value = serde_json::from_slice(&schema::document(
+            "hello",
+            model,
+            &schema::revision("hello", model),
+            &[0u8; 32],
+            "0.0.0",
+        ))
+        .unwrap();
+        assert_eq!(
+            document["capabilities"][0]["input"],
+            json!({"name": "count", "type": "u32"})
+        );
+        assert_eq!(
+            document["capabilities"][0]["output"],
+            json!({"type": "bool"})
+        );
+        let projection = schema::projection("hello", model);
+        for slot in [
+            b"\0\0\0\0\0\0\0\x03u32".as_slice(),
+            b"\0\0\0\0\0\0\0\x04bool".as_slice(),
+        ] {
+            assert!(
+                projection.windows(slot.len()).any(|bytes| bytes == slot),
+                "projection missing scalar type slot"
+            );
+        }
+        let descriptor =
+            schema::descriptor_source("hello", model, &schema::revision("hello", model));
+        assert!(descriptor.contains("::boxology_contract::TypeDescriptor::u32()"));
+        assert!(descriptor.contains("::boxology_contract::TypeDescriptor::bool()"));
+    }
+
+    #[test]
+    fn scalar_matrix_i64_input_f64_output_emits_matching_descriptors() {
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:i64)->Result<f64,GreetError>; }",
+        );
+        let model = contract.model();
+        let document: Value = serde_json::from_slice(&schema::document(
+            "hello",
+            model,
+            &schema::revision("hello", model),
+            &[0u8; 32],
+            "0.0.0",
+        ))
+        .unwrap();
+        assert_eq!(document["capabilities"][0]["input"]["type"], "i64");
+        assert_eq!(document["capabilities"][0]["output"]["type"], "f64");
+        let projection = schema::projection("hello", model);
+        for slot in [
+            b"\0\0\0\0\0\0\0\x03i64".as_slice(),
+            b"\0\0\0\0\0\0\0\x03f64".as_slice(),
+        ] {
+            assert!(
+                projection.windows(slot.len()).any(|bytes| bytes == slot),
+                "projection missing scalar type slot"
+            );
+        }
+        let descriptor =
+            schema::descriptor_source("hello", model, &schema::revision("hello", model));
+        assert!(descriptor.contains("::boxology_contract::TypeDescriptor::i64()"));
+        assert!(descriptor.contains("::boxology_contract::TypeDescriptor::f64()"));
+    }
+
+    #[test]
+    fn blob_boundary_maps_to_the_lowercase_blob_descriptor_constructor() {
+        // Guards the special-cased `Blob => "blob"` arm: without it, canonical_name()
+        // would yield "Blob" and emit a non-existent TypeDescriptor::Blob(). Blob is
+        // still fail-closed inside generate(); the emitters are exercised directly here.
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:Blob)->Result<Blob,GreetError>; }",
+        );
+        let model = contract.model();
+        let document: Value = serde_json::from_slice(&schema::document(
+            "hello",
+            model,
+            &schema::revision("hello", model),
+            &[0u8; 32],
+            "0.0.0",
+        ))
+        .unwrap();
+        assert_eq!(document["capabilities"][0]["input"]["type"], "Blob");
+        assert_eq!(document["capabilities"][0]["output"]["type"], "Blob");
+        let projection = schema::projection("hello", model);
+        let slot = b"\0\0\0\0\0\0\0\x04Blob".as_slice();
+        assert!(
+            projection.windows(slot.len()).any(|bytes| bytes == slot),
+            "projection missing Blob type slot"
+        );
+        let descriptor =
+            schema::descriptor_source("hello", model, &schema::revision("hello", model));
+        assert!(descriptor.contains("::boxology_contract::TypeDescriptor::blob()"));
+        assert!(!descriptor.contains("::boxology_contract::TypeDescriptor::Blob()"));
+    }
+
     #[test]
     fn public_revision_tracks_every_public_semantic_and_only_public_semantics() {
         let base = revision(CONTRACT);
