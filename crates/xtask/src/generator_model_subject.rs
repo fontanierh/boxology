@@ -6,6 +6,10 @@ use boxology_generator_model::{
 };
 use std::{fs, path::Path};
 
+fn rust_string_literal(path: &Path) -> String {
+    format!("{:?}", path.to_string_lossy())
+}
+
 fn field_projection(fields: &ContractFields<'_>) -> String {
     let fields = match fields {
         ContractFields::Named(fields) | ContractFields::Unnamed(fields) => fields,
@@ -601,22 +605,49 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     )
     .expect_err("fixed invalid request must fail");
 
-    let cold_hostile_source = r#"boxology::contract! {
-    #[error] pub enum GreetError { EmptyName }
+    let marker_root = out
+        .canonicalize()
+        .map_err(|error| format!("canonicalize cold output: {error}"))?
+        .join("cold-markers");
+    let body_marker = marker_root.join("implementation-body");
+    let initializer_marker = marker_root.join("static-initializer");
+    let build_marker = marker_root.join("build-rs");
+    let proc_macro_marker = marker_root.join("proc-macro");
+    let marker_paths = [
+        &body_marker,
+        &initializer_marker,
+        &build_marker,
+        &proc_macro_marker,
+    ];
+    fs::create_dir_all(&marker_root)
+        .map_err(|error| format!("create cold marker directory: {error}"))?;
+    for marker in marker_paths {
+        if marker.exists() {
+            return Err(format!(
+                "fixed cold marker was present before generation: {}",
+                marker.display()
+            ));
+        }
+    }
+    let cold_hostile_source = format!(
+        r#"boxology::contract! {{
+    #[error] pub enum GreetError {{ EmptyName }}
     #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>;
-}
+}}
 
 pub struct HelloService;
-static BOXOLOGY_INITIALIZER: &str = include_str!("BOXOLOGY_INITIALIZER_SENTINEL");
-impl HelloService {
+static BOXOLOGY_INITIALIZER: &str = include_str!({initializer_marker});
+impl HelloService {{
     #[sentinel_proc_macro::attribute]
-    async fn greet(&self, name: String) -> Result<String, GreetError> {
-        let _ = std::fs::write("BOXOLOGY_BODY_MARKER", b"BOXOLOGY_BODY_SENTINEL");
+    async fn greet(&self, name: String) -> Result<String, GreetError> {{
+        let _ = std::fs::write({body_marker}, b"BOXOLOGY_BODY_SENTINEL");
         panic!("BOXOLOGY_BODY_SENTINEL");
-    }
-}
-"#
-    .to_string();
+    }}
+}}
+"#,
+        initializer_marker = rust_string_literal(&initializer_marker),
+        body_marker = rust_string_literal(&body_marker),
+    );
     let cold_request = GenerationRequest::new(
         BoxId::new("hello").expect("fixed id is valid"),
         "src/lib.rs".into(),
@@ -629,11 +660,19 @@ impl HelloService {
             ),
             input(
                 "build.rs",
-                b"fn main() { let _ = std::fs::write(\"BOXOLOGY_BUILD_MARKER\", b\"BOXOLOGY_BUILD_SENTINEL\"); panic!(\"BOXOLOGY_BUILD_SENTINEL\"); compile_error!(\"BOXOLOGY_BUILD_SENTINEL\"); }",
+                format!(
+                    "fn main() {{ let _ = std::fs::write({build_marker}, b\"BOXOLOGY_BUILD_SENTINEL\"); panic!(\"BOXOLOGY_BUILD_SENTINEL\"); compile_error!(\"BOXOLOGY_BUILD_SENTINEL\"); }}",
+                    build_marker = rust_string_literal(&build_marker),
+                )
+                .as_bytes(),
             ),
             input(
                 "proc-macro.rs",
-                b"extern crate proc_macro; #[proc_macro::proc_macro] pub fn hostile(_: proc_macro::TokenStream) -> proc_macro::TokenStream { let _ = std::fs::write(\"BOXOLOGY_PROC_MACRO_MARKER\", b\"BOXOLOGY_PROC_MACRO_SENTINEL\"); panic!(\"BOXOLOGY_PROC_MACRO_SENTINEL\"); compile_error!(\"BOXOLOGY_PROC_MACRO_SENTINEL\"); }",
+                format!(
+                    "extern crate proc_macro; #[proc_macro::proc_macro] pub fn hostile(_: proc_macro::TokenStream) -> proc_macro::TokenStream {{ let _ = std::fs::write({proc_macro_marker}, b\"BOXOLOGY_PROC_MACRO_SENTINEL\"); panic!(\"BOXOLOGY_PROC_MACRO_SENTINEL\"); compile_error!(\"BOXOLOGY_PROC_MACRO_SENTINEL\"); }}",
+                    proc_macro_marker = rust_string_literal(&proc_macro_marker),
+                )
+                .as_bytes(),
             ),
         ],
         vec![],
@@ -668,13 +707,33 @@ impl HelloService {
         "BOXOLOGY_BUILD_SENTINEL",
         "BOXOLOGY_PROC_MACRO_SENTINEL",
     ];
+    for marker in marker_paths {
+        if marker.exists() {
+            return Err(format!(
+                "fixed cold generation executed a hostile marker: {}",
+                marker.display()
+            ));
+        }
+    }
+    fs::remove_dir(&marker_root)
+        .map_err(|error| format!("remove cold marker directory: {error}"))?;
+    let marker_texts = marker_paths
+        .into_iter()
+        .flat_map(|marker| {
+            [
+                marker.to_string_lossy().into_owned(),
+                rust_string_literal(marker),
+            ]
+        })
+        .collect::<Vec<_>>();
     if cold_output.files().iter().any(|file| {
         let bytes = String::from_utf8_lossy(file.bytes());
         hostile_sentinels
             .iter()
             .any(|sentinel| bytes.contains(sentinel))
+            || marker_texts.iter().any(|marker| bytes.contains(marker))
     }) {
-        return Err("fixed cold generation leaked a hostile sentinel".into());
+        return Err("fixed cold generation leaked a hostile sentinel or marker path".into());
     }
     for file in cold_output.files() {
         let destination = out.join("cold-output").join(file.path());
@@ -685,7 +744,7 @@ impl HelloService {
     }
     fs::write(
         out.join("cold-purity.txt"),
-        "inputs=implementation-body,static-initializer,build-script,proc-macro\noutput=exact-four-generated-files-without-hostile-sentinels\nexecution=generator-observed-no-body-build-or-proc-macro-effects\n",
+        "inputs=implementation-body,static-initializer,build-script,proc-macro\noutput=exact-four-generated-files-without-hostile-sentinels\nexecution=generator-observed-no-body-build-or-proc-macro-effects\nmarker-absence=subject-asserted\n",
     )
     .map_err(|error| format!("write cold-purity.txt: {error}"))?;
 
