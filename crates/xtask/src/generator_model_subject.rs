@@ -601,12 +601,40 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
     )
     .expect_err("fixed invalid request must fail");
 
+    let cold_hostile_source = r#"boxology::contract! {
+    #[error] pub enum GreetError { EmptyName }
+    #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>;
+}
+
+pub struct HelloService;
+static BOXOLOGY_INITIALIZER: &str = include_str!("BOXOLOGY_INITIALIZER_SENTINEL");
+impl HelloService {
+    #[sentinel_proc_macro::attribute]
+    async fn greet(&self, name: String) -> Result<String, GreetError> {
+        let _ = std::fs::write("BOXOLOGY_BODY_MARKER", b"BOXOLOGY_BODY_SENTINEL");
+        panic!("BOXOLOGY_BODY_SENTINEL");
+    }
+}
+"#
+    .to_string();
     let cold_request = GenerationRequest::new(
         BoxId::new("hello").expect("fixed id is valid"),
         "src/lib.rs".into(),
         vec![
             input("boxology.toml", b"schema = 1\nid = \"hello\"\nkind = \"box\"\n"),
-            input("src/lib.rs", b"boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; }"),
+            input("src/lib.rs", cold_hostile_source.as_bytes()),
+            input(
+                "Cargo.toml",
+                b"[package]\nname=\"hostile\"\nversion=\"0.0.0\"\nbuild=\"build.rs\"\n",
+            ),
+            input(
+                "build.rs",
+                b"fn main() { let _ = std::fs::write(\"BOXOLOGY_BUILD_MARKER\", b\"BOXOLOGY_BUILD_SENTINEL\"); panic!(\"BOXOLOGY_BUILD_SENTINEL\"); compile_error!(\"BOXOLOGY_BUILD_SENTINEL\"); }",
+            ),
+            input(
+                "proc-macro.rs",
+                b"extern crate proc_macro; #[proc_macro::proc_macro] pub fn hostile(_: proc_macro::TokenStream) -> proc_macro::TokenStream { let _ = std::fs::write(\"BOXOLOGY_PROC_MACRO_MARKER\", b\"BOXOLOGY_PROC_MACRO_SENTINEL\"); panic!(\"BOXOLOGY_PROC_MACRO_SENTINEL\"); compile_error!(\"BOXOLOGY_PROC_MACRO_SENTINEL\"); }",
+            ),
         ],
         vec![],
         vec![
@@ -632,16 +660,34 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         cold_contract.semantic_digest(),
     )
     .map_err(|error| format!("write cold semantic digest: {error}"))?;
-    for file in generate(&cold_request)
-        .map_err(|error| format!("fixed cold generation failed: {error}"))?
-        .files()
-    {
+    let cold_output = generate(&cold_request)
+        .map_err(|error| format!("fixed cold generation failed: {error}"))?;
+    let hostile_sentinels = [
+        "BOXOLOGY_BODY_SENTINEL",
+        "BOXOLOGY_INITIALIZER_SENTINEL",
+        "BOXOLOGY_BUILD_SENTINEL",
+        "BOXOLOGY_PROC_MACRO_SENTINEL",
+    ];
+    if cold_output.files().iter().any(|file| {
+        let bytes = String::from_utf8_lossy(file.bytes());
+        hostile_sentinels
+            .iter()
+            .any(|sentinel| bytes.contains(sentinel))
+    }) {
+        return Err("fixed cold generation leaked a hostile sentinel".into());
+    }
+    for file in cold_output.files() {
         let destination = out.join("cold-output").join(file.path());
         fs::create_dir_all(destination.parent().expect("generated file has parent"))
             .map_err(|error| format!("create cold output parent: {error}"))?;
         fs::write(&destination, file.bytes())
             .map_err(|error| format!("write {}: {error}", destination.display()))?;
     }
+    fs::write(
+        out.join("cold-purity.txt"),
+        "inputs=implementation-body,static-initializer,build-script,proc-macro\noutput=exact-four-generated-files-without-hostile-sentinels\nexecution=generator-observed-no-body-build-or-proc-macro-effects\n",
+    )
+    .map_err(|error| format!("write cold-purity.txt: {error}"))?;
 
     let summary = format!(
         "box_id={}\ncrate_root={}\ninputs={}\nimports={}\noutputs={}\n",
