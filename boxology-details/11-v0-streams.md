@@ -28,7 +28,7 @@ The compatibility authority as its own deliverable: consuming S2's schemas, diff
 
 ## S5 — Manifest and validation tooling
 
-`boxology.toml` parsing and workspace discovery, ownership and path classification, crate-role mapping against Cargo metadata, the Cargo-edge policy checker, shared-lockfile rules, and the `boxology generate` / `boxology check` commands with their exit codes, diagnostics, JSON output, and the emitted GitHub Actions workflow. Normative inputs: [Packages](02-packages.md), [Rust Build Topology](08-rust-build-topology.md). Depends on S2 for regeneration checks and S4 for classification; the manifest/ownership half is parallelizable from the start.
+`boxology.toml` parsing and workspace discovery, ownership and path classification, crate-role mapping against Cargo metadata, the Cargo-edge policy checker, shared-lockfile rules, and the `boxology generate` / `boxology check` commands with their exit codes, diagnostics, JSON output, and the emitted GitHub Actions workflow. Normative inputs: [Packages](02-packages.md), [Rust Build Topology](08-rust-build-topology.md). Depends on S2 for regeneration checks and S4 for classification; the manifest/ownership half is parallelizable from the start. Spec: [S5 — Manifest and Validation Tooling](../specs/s5-manifest-and-validation.md).
 
 ## S6 — Installer and generated project
 
