@@ -9,13 +9,13 @@ effort = "high"
 [roles.implement]
 [[roles.implement.candidates]]
 harness = "claude"
-model = "claude-opus-4-8"
+model = "claude-opus-5"
 effort = "medium"
 
 [roles.review]
 [[roles.review.candidates]]
 harness = "claude"
-model = "claude-opus-4-8"
+model = "claude-opus-5"
 effort = "medium"
 
 [roles.repair]
