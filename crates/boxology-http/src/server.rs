@@ -52,7 +52,7 @@ fn prepare_call_context(
 }
 
 #[derive(Clone)]
-struct DispatchTasks(Arc<DispatchTasksInner>);
+pub(crate) struct DispatchTasks(Arc<DispatchTasksInner>);
 
 struct DispatchTasksInner {
     tracker: TransportTaskTracker,
@@ -81,7 +81,7 @@ impl Drop for RemoveTask {
 }
 
 impl DispatchTasks {
-    fn new(tracker: TransportTaskTracker) -> Self {
+    pub(crate) fn new(tracker: TransportTaskTracker) -> Self {
         Self(Arc::new(DispatchTasksInner {
             tracker,
             next_id: AtomicU64::new(0),
@@ -117,19 +117,19 @@ impl DispatchTasks {
         task
     }
 
-    fn cancel_all(&self) {
+    pub(crate) fn cancel_all(&self) {
         for task in self.0.tasks.lock().unwrap().values() {
             task.cancellation.cancel();
         }
     }
 
-    fn abort_all(&self) {
+    pub(crate) fn abort_all(&self) {
         for task in self.0.tasks.lock().unwrap().values() {
             task.abort.abort();
         }
     }
 
-    async fn wait_empty(&self) {
+    pub(crate) async fn wait_empty(&self) {
         loop {
             let empty = self.0.empty.notified();
             tokio::pin!(empty);
@@ -159,7 +159,7 @@ enum DispatchOutcome {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct RequestAbandoned;
+pub(crate) struct RequestAbandoned;
 
 struct CancelOnDrop(Option<CancelToken>);
 
@@ -294,7 +294,7 @@ fn response_error(error: WireCallError) -> DispatchOutcome {
     })
 }
 
-async fn handle_request<B>(
+pub(crate) async fn handle_request<B>(
     request: Request<B>,
     head_received: Instant,
     exposures: &[TransportExposure],
