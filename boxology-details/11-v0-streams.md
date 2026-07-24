@@ -24,7 +24,7 @@ The v1 HTTP transport, implemented against S1's assembly API: `POST /rpc/{box_id
 
 ## S4 — Contract-change classification
 
-The compatibility authority as its own deliverable: consuming S2's schemas, diffing a submitted revision against a base revision, and classifying every change under the compatibility taxonomy — additive, compatible-with-conditions, incompatible tightening or removal — with precise diagnostics. The taxonomy details left open by the capability-contract design are resolved by this stream's spec. Classification output is consumed by S5's `check` and reported even when harness policy later authorizes an incompatible change. This is the most thesis-critical single component: it is what makes "mechanical compatibility check" a fact rather than a promise. Depends on S2's schema format.
+The compatibility authority as its own deliverable: consuming S2's schemas, diffing a submitted revision against a base revision, and classifying every change under the compatibility taxonomy — additive, compatible-with-conditions, incompatible tightening or removal — with precise diagnostics. The taxonomy details left open by the capability-contract design are resolved by this stream's spec. Classification output is consumed by S5's `check` and reported even when harness policy later authorizes an incompatible change. This is the most thesis-critical single component: it is what makes "mechanical compatibility check" a fact rather than a promise. Depends on S2's schema format. Spec: [S4 — Contract-Change Classification](../specs/s4-contract-change-classification.md).
 
 ## S5 — Manifest and validation tooling
 
