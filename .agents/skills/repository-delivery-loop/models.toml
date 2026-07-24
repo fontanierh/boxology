@@ -3,8 +3,8 @@ schema = 1
 [roles.spec]
 [[roles.spec.candidates]]
 harness = "claude"
-model = "claude-opus-4-8"
-effort = "max"
+model = "claude-fable-5"
+effort = "high"
 
 [roles.implement]
 [[roles.implement.candidates]]
