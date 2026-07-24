@@ -372,4 +372,126 @@ mod tests {
         let line = "BXG0047 imports/hello.json:1:1-1:1 offending=\"import hello capability shape\" rule=\"each imported capability must declare a unique valid name, its box-qualified id, a unary shape, and known boundary leaves\" source=\"specs/s2-contract-generator.md D4\"";
         assert_line("greeter", &schema, "BXG0047", line);
     }
+
+    /// Wraps `caps` as a `hello` schema's `capabilities` value, keeping the other fields valid.
+    fn schema_with_capabilities(caps: &str) -> String {
+        format!(
+            "{{ \"box_id\": \"hello\", \"capabilities\": {caps}, \"revision\": \"{REVISION}\", \
+             \"schema_format\": 1 }}"
+        )
+    }
+
+    /// Spells one otherwise-valid `hello.{name}` capability entry as its JSON object.
+    fn valid_capability(name: &str) -> String {
+        format!(
+            "{{ \"id\": \"hello.{name}\", \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \
+             \"name\": \"{name}\", \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }}"
+        )
+    }
+
+    /// Parses a single-import `hello` schema and asserts its one BXG0047 carries `detail`.
+    fn assert_bxg0047(schema: &str, detail: &str) {
+        let request = request("greeter", &[("hello", "imports/hello.json", schema)]);
+        let diagnostics = ImportModel::parse_all(&request).unwrap_err();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(diagnostic.code(), "BXG0047");
+        assert_eq!(
+            diagnostic.offending_construct(),
+            format!("import hello {detail}")
+        );
+    }
+
+    #[test]
+    fn empty_capabilities_array_is_bxg0047() {
+        assert_bxg0047(&schema_with_capabilities("[]"), "capabilities");
+    }
+
+    #[test]
+    fn non_object_capability_entry_is_bxg0047() {
+        assert_bxg0047(&schema_with_capabilities("[ 1 ]"), "capability entry");
+    }
+
+    #[test]
+    fn missing_capability_name_is_bxg0047() {
+        let entry = valid_capability("greet").replace(" \"name\": \"greet\",", "");
+        assert_bxg0047(
+            &schema_with_capabilities(&format!("[ {entry} ]")),
+            "capability name",
+        );
+    }
+
+    #[test]
+    fn duplicate_capability_name_is_bxg0047() {
+        let caps = format!(
+            "[ {}, {} ]",
+            valid_capability("greet"),
+            valid_capability("greet")
+        );
+        assert_bxg0047(&schema_with_capabilities(&caps), "duplicate name");
+    }
+
+    #[test]
+    fn mismatched_capability_id_is_bxg0047() {
+        let entry = valid_capability("greet").replace("\"hello.greet\"", "\"hello.wrong\"");
+        assert_bxg0047(
+            &schema_with_capabilities(&format!("[ {entry} ]")),
+            "capability id",
+        );
+    }
+
+    #[test]
+    fn unknown_input_leaf_is_bxg0047() {
+        let entry = valid_capability("greet").replace(
+            "\"name\": \"name\", \"type\": \"String\"",
+            "\"name\": \"name\", \"type\": \"u128\"",
+        );
+        assert_bxg0047(
+            &schema_with_capabilities(&format!("[ {entry} ]")),
+            "input type",
+        );
+    }
+
+    #[test]
+    fn unknown_output_leaf_is_bxg0047() {
+        let entry = valid_capability("greet").replace(
+            "\"output\": { \"type\": \"String\" }",
+            "\"output\": { \"type\": \"usize\" }",
+        );
+        assert_bxg0047(
+            &schema_with_capabilities(&format!("[ {entry} ]")),
+            "output type",
+        );
+    }
+
+    #[test]
+    fn full_emitter_schema_with_provenance_and_types_hydrates() {
+        // The full emitter schema carries provenance, a types map, and the complete per-capability
+        // field set (deprecation/docs/error/idempotency/max_exposure) the parser ignores. It must
+        // still hydrate exactly one model, proving the parser stays emitter-compatible.
+        let schema = format!(
+            "{{ \"box_id\": \"hello\", \"capabilities\": [ {{ \"deprecation\": null, \
+             \"docs\": [], \"error\": \"GreetError\", \"id\": \"hello.greet\", \
+             \"idempotency\": \"none\", \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \
+             \"max_exposure\": \"external\", \"name\": \"greet\", \
+             \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }} ], \
+             \"provenance\": {{ \"generator\": \"boxology-generator\", \
+             \"generator_version\": \"0.0.0\", \"semantic_digest\": \"sha256:00\" }}, \
+             \"revision\": \"{REVISION}\", \"schema_format\": 1, \
+             \"types\": {{ \"GreetError\": {{ \"kind\": \"error\" }} }} }}"
+        );
+        let request = request("greeter", &[("hello", "imports/hello.json", &schema)]);
+        let models = ImportModel::parse_all(&request).unwrap();
+        let [model] = models.as_slice() else {
+            panic!("expected one model, got {models:?}");
+        };
+        assert_eq!(model.package().as_str(), "hello");
+        let [capability] = model.capabilities() else {
+            panic!("expected one capability");
+        };
+        assert_eq!(capability.name(), "greet");
+        assert_eq!(capability.input_type(), CanonicalType::String);
+        assert_eq!(capability.output_type(), CanonicalType::String);
+    }
 }
