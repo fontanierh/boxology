@@ -2,7 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_contract_syntax::{CanonicalType, Contract};
+use boxology_contract_syntax::{CanonicalType, CapabilityDeclaration, Contract};
 use boxology_generator_model::{Diagnostics, GenerationRequest, ParsedRustInputs};
 
 mod schema;
@@ -205,8 +205,7 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let descriptor =
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
     let dispatch = dispatch_source(request.box_id().as_str(), contract.model());
-    let test_support =
-        test_support_source(&error.name, capability.input_type, capability.output_type);
+    let test_support = test_support_source(request.box_id().as_str(), contract.model());
     let adapter = adapter_source(&capability.name, capability.input_type);
     let syntax = syn::parse_file(&format!(
         "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
@@ -249,14 +248,130 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     Ok(GeneratedTree(files))
 }
 
-fn test_support_source(
-    error_name: &str,
-    input_type: CanonicalType,
-    output_type: CanonicalType,
-) -> String {
-    let input_bare = rust_value_type(input_type, false);
-    let output_bare = rust_value_type(output_type, false);
-    let input_constructor = schema::descriptor_constructor(input_type);
+fn test_support_source(box_id: &str, contract: &Contract) -> String {
+    let error_name = &contract.error.name;
+    let routing_statics_csv = contract
+        .capabilities
+        .iter()
+        .map(|capability| capability_static_name(box_id, &capability.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let type_aliases = contract
+        .capabilities
+        .iter()
+        .map(|capability| {
+            format!(
+                r#"            type {pascal}Future =
+                Pin<Box<dyn Future<Output = Result<{output_bare}, {error_name}>> + Send + 'static>>;
+            type {pascal}Responder =
+                dyn Fn(CallContext, {input_bare}) -> {pascal}Future + Send + Sync + 'static;
+"#,
+                pascal = pascal_case(&capability.name),
+                output_bare = rust_value_type(capability.output_type, false),
+                error_name = error_name,
+                input_bare = rust_value_type(capability.input_type, false),
+            )
+        })
+        .collect::<String>();
+    let struct_fields = contract
+        .capabilities
+        .iter()
+        .map(|capability| {
+            format!(
+                "                {name}: Option<Arc<{pascal}Responder>>,\n",
+                name = capability.name,
+                pascal = pascal_case(&capability.name),
+            )
+        })
+        .collect::<String>();
+    let builders = contract
+        .capabilities
+        .iter()
+        .map(|capability| {
+            format!(
+                r#"                pub fn with_{name}<F, Fut>(mut self, responder: F) -> Self
+                where
+                    F: Fn(CallContext, {input_bare}) -> Fut + Send + Sync + 'static,
+                    Fut: Future<Output = Result<{output_bare}, {error_name}>> + Send + 'static,
+                {{
+                    self.{name} = Some(Arc::new(move |context, {input_name}| {{
+                        Box::pin(responder(context, {input_name}))
+                    }}));
+                    self
+                }}
+
+"#,
+                name = capability.name,
+                input_bare = rust_value_type(capability.input_type, false),
+                output_bare = rust_value_type(capability.output_type, false),
+                error_name = error_name,
+                input_name = capability.input_name,
+            )
+        })
+        .collect::<String>();
+    // The per-capability decode/dispatch/encode body is identical between the single- and
+    // multi-capability `call` shapes; only the routing envelope around it differs.
+    let async_body = |capability: &CapabilityDeclaration| -> String {
+        format!(
+            r#"Box::pin(async move {{
+                let input = TypeDescriptor::{input_constructor}()
+                    .conform(DecodeRole::ProviderInput, input)
+                    .map_err(|error| {{
+                        ErasedCallError::ContractViolation(conversion_detail("input_decode", error))
+                    }})?;
+                let {input_name} = {input_bare}::decode(&input).map_err(|error| {{
+                    ErasedCallError::ContractViolation(conversion_detail("input_decode", error))
+                }})?;
+                match responder(context, {input_name}).await {{
+                    Ok(output) => output.encode().map_err(|error| {{
+                        ErasedCallError::InvalidResponse(conversion_detail("output_encode", error))
+                    }}),
+                    Err(error) => Err(ErasedCallError::from_domain(&error)),
+                }}
+            }})"#,
+            input_constructor = schema::descriptor_constructor(capability.input_type),
+            input_name = capability.input_name,
+            input_bare = rust_value_type(capability.input_type, false),
+        )
+    };
+    // At a single capability the fake keeps today's exact routing so the Hello golden stays
+    // byte-identical; beyond one it matches each capability's routing static in source order and
+    // falls through to `unprogrammed`.
+    let call_body = if contract.capabilities.len() == 1 {
+        let capability = &contract.capabilities[0];
+        format!(
+            r#"if capability != &*{static_name} {{
+                    return Box::pin(ready(Err(unprogrammed())));
+                }}
+                let Some(responder) = self.{name}.clone() else {{
+                    return Box::pin(ready(Err(unprogrammed())));
+                }};
+                {async_body}"#,
+            static_name = capability_static_name(box_id, &capability.name),
+            name = capability.name,
+            async_body = async_body(capability),
+        )
+    } else {
+        let branches = contract
+            .capabilities
+            .iter()
+            .map(|capability| {
+                format!(
+                    r#"if capability == &*{static_name} {{
+                    let Some(responder) = self.{name}.clone() else {{
+                        return Box::pin(ready(Err(unprogrammed())));
+                    }};
+                    return {async_body};
+                }}
+                "#,
+                    static_name = capability_static_name(box_id, &capability.name),
+                    name = capability.name,
+                    async_body = async_body(capability),
+                )
+            })
+            .collect::<String>();
+        format!("{branches}Box::pin(ready(Err(unprogrammed())))")
+    };
     format!(
         r#"
         #[cfg(feature = "test-support")]
@@ -270,35 +385,19 @@ fn test_support_source(
                 ErasedCallTarget, SlotValue, TypeDescriptor,
             }};
 
-            use super::{{{error_name}, HELLO_GREET, HelloHandle, conversion_detail}};
+            use super::{{{error_name}, {routing_statics_csv}, HelloHandle, conversion_detail}};
 
-            type GreetFuture =
-                Pin<Box<dyn Future<Output = Result<{output_bare}, {error_name}>> + Send + 'static>>;
-            type GreetResponder =
-                dyn Fn(CallContext, {input_bare}) -> GreetFuture + Send + Sync + 'static;
-
+{type_aliases}
             #[derive(Clone, Default)]
             pub struct HelloFake {{
-                greet: Option<Arc<GreetResponder>>,
-            }}
+{struct_fields}            }}
 
             impl HelloFake {{
                 pub fn new() -> Self {{
                     Self::default()
                 }}
 
-                pub fn with_greet<F, Fut>(mut self, responder: F) -> Self
-                where
-                    F: Fn(CallContext, {input_bare}) -> Fut + Send + Sync + 'static,
-                    Fut: Future<Output = Result<{output_bare}, {error_name}>> + Send + 'static,
-                {{
-                    self.greet = Some(Arc::new(move |context, name| {{
-                        Box::pin(responder(context, name))
-                    }}));
-                    self
-                }}
-
-                pub fn handle(&self) -> HelloHandle {{
+{builders}                pub fn handle(&self) -> HelloHandle {{
                     HelloHandle::from_erased(Arc::new(self.clone()))
                 }}
             }}
@@ -311,37 +410,7 @@ fn test_support_source(
                     input: SlotValue,
                 ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>
                 {{
-                    if capability != &*HELLO_GREET {{
-                        return Box::pin(ready(Err(unprogrammed())));
-                    }}
-                    let Some(responder) = self.greet.clone() else {{
-                        return Box::pin(ready(Err(unprogrammed())));
-                    }};
-                    Box::pin(async move {{
-                        let input = TypeDescriptor::{input_constructor}()
-                            .conform(DecodeRole::ProviderInput, input)
-                            .map_err(|error| {{
-                                ErasedCallError::ContractViolation(conversion_detail(
-                                    "input_decode",
-                                    error,
-                                ))
-                            }})?;
-                        let name = {input_bare}::decode(&input).map_err(|error| {{
-                            ErasedCallError::ContractViolation(conversion_detail(
-                                "input_decode",
-                                error,
-                            ))
-                        }})?;
-                        match responder(context, name).await {{
-                            Ok(output) => output.encode().map_err(|error| {{
-                                ErasedCallError::InvalidResponse(conversion_detail(
-                                    "output_encode",
-                                    error,
-                                ))
-                            }}),
-                            Err(error) => Err(ErasedCallError::from_domain(&error)),
-                        }}
-                    }})
+                    {call_body}
                 }}
             }}
 
@@ -351,9 +420,11 @@ fn test_support_source(
         }}
         "#,
         error_name = error_name,
-        input_bare = input_bare,
-        output_bare = output_bare,
-        input_constructor = input_constructor,
+        routing_statics_csv = routing_statics_csv,
+        type_aliases = type_aliases,
+        struct_fields = struct_fields,
+        builders = builders,
+        call_body = call_body,
     )
 }
 
@@ -632,6 +703,22 @@ fn capability_static_name(box_id: &str, cap_name: &str) -> String {
         box_id.to_uppercase().replace('-', "_"),
         cap_name.to_uppercase()
     )
+}
+
+/// Converts a snake_case capability name to PascalCase for a generated type-alias prefix.
+///
+/// Each `_`-separated segment has its first character uppercased and the rest kept verbatim, so
+/// `greet` -> `Greet`, `get` -> `Get`, and `get_item` -> `GetItem`.
+fn pascal_case(name: &str) -> String {
+    name.split('_')
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+            }
+        })
+        .collect()
 }
 
 /// Converts a PascalCase identifier to SCREAMING_SNAKE_CASE (e.g. `GreetError` -> `GREET_ERROR`).
@@ -1333,6 +1420,46 @@ macro_rules! __boxology_check_implementation {
         let put_section = &dispatch[put_handle..];
         assert!(put_section.contains("String"), "put input spells String");
         assert!(put_section.contains("bool"), "put output spells bool");
+    }
+
+    #[test]
+    fn multi_capability_test_support_source_programs_each_capability() {
+        // Two capabilities share one error enum; the generated test-support fake must expose one
+        // responder alias, struct field, and builder per capability and route the erased `call`
+        // through each capability's own routing static in source order, decoding that capability's
+        // own input type. Exercised directly because generate() still fails closed (BXG0041) on
+        // more than one capability.
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
+        );
+        let model = contract.model();
+        let fake = test_support_source("store", model);
+        syn::parse_file(&fake).expect("multi-capability test-support source must parse");
+        assert!(fake.contains("with_get"));
+        assert!(fake.contains("with_put"));
+        assert!(fake.contains("get: Option<Arc<GetResponder>>"));
+        assert!(fake.contains("put: Option<Arc<PutResponder>>"));
+        assert!(fake.contains("type GetFuture"));
+        assert!(fake.contains("type GetResponder"));
+        assert!(fake.contains("type PutFuture"));
+        assert!(fake.contains("type PutResponder"));
+        assert!(fake.contains(
+            "use super::{StoreError, STORE_GET, STORE_PUT, HelloHandle, conversion_detail}"
+        ));
+        let get_branch = fake
+            .find("if capability == &*STORE_GET")
+            .expect("routes the STORE_GET branch");
+        let put_branch = fake
+            .find("if capability == &*STORE_PUT")
+            .expect("routes the STORE_PUT branch");
+        assert!(
+            get_branch < put_branch,
+            "capability branches out of source order"
+        );
+        // get's input is u64, put's input is String.
+        assert!(fake[get_branch..put_branch].contains("TypeDescriptor::u64()"));
+        assert!(fake[put_branch..].contains("TypeDescriptor::string()"));
+        assert!(fake.contains("unprogrammed_capability"));
     }
 
     #[test]
