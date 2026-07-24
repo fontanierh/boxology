@@ -6,9 +6,11 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod imports;
 mod manifest;
 mod rust;
 
+pub use imports::{ImportModel, ImportedCapability};
 pub use manifest::Manifest;
 pub use rust::{
     CapabilityDeclaration, CapabilityMarkerMetadata, ContractDeclaration, ContractDeclarationRole,
