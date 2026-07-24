@@ -194,8 +194,8 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
 /// macro byte-for-byte so the Hello golden stays pinned. Beyond one capability it emits one disjoint
 /// `@find_{capability}` recursion per capability plus a single combined `impl HelloDispatch` — N
 /// separate impls of the same trait for the same receiver would be a coherence conflict (E0119).
-/// The multi-capability shape is exercised only by a direct unit test; `generate()` still fails
-/// closed (`BXG0041`) on more than one capability.
+/// The multi-capability shape is exercised both directly and end-to-end through `generate()`, which
+/// now emits contracts holding any number of capabilities.
 fn checker_source(box_id: &str, contract: &Contract) -> String {
     let prefix = pascal_case(box_id);
     let error = &contract.error;
@@ -847,10 +847,11 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
 ///
 /// A routing static name can in principle collide with the shared error-descriptor static
 /// (`{ERROR}_DESCRIPTOR`) for adversarial identifiers — e.g. box `error`, capability `descriptor`,
-/// error enum `Error`. Such a collision is fail-closed: it emits two statics of the same name and
-/// the generated crate fails to compile; it never silently misroutes. It is unreachable through the
-/// current single-`hello`-box pipeline; a generator diagnostic will reject it when the multi-box /
-/// multi-capability emission guard (`BXG0041`) is lifted.
+/// error enum `Error`. The accepted decision is that such an adversarial-identifier collision fails
+/// closed as a duplicate-definition rustc error in the generated crate — two statics of the same
+/// name never compile, so misrouting is impossible and the failure is loud, not silent. A
+/// generator-side diagnostic that rejects the collision before emission is deferred as a future
+/// hardening; it is not required now.
 fn capability_static_name(box_id: &str, cap_name: &str) -> String {
     format!(
         "{}_{}",
@@ -1175,6 +1176,21 @@ macro_rules! __boxology_check_implementation {
         .unwrap()
     }
 
+    fn request_for(box_id: &str, source: &str) -> GenerationRequest {
+        let manifest = format!("schema = 1\nid = \"{box_id}\"\nkind = \"box\"\n");
+        GenerationRequest::new(
+            BoxId::new(box_id).unwrap(),
+            "src/lib.rs".into(),
+            vec![
+                ("boxology.toml".into(), manifest.into_bytes()),
+                ("src/lib.rs".into(), source.as_bytes().to_vec()),
+            ],
+            vec![],
+            OUTPUTS.iter().map(|output| (*output).to_owned()).collect(),
+        )
+        .unwrap()
+    }
+
     fn tree(source: &str, reverse: bool) -> GeneratedTree {
         generate(&request(source, reverse, OUTPUTS.to_vec())).unwrap()
     }
@@ -1456,7 +1472,7 @@ macro_rules! __boxology_check_implementation {
     fn multi_capability_document_lists_all_in_source_order() {
         // Two capabilities share one error enum; the schema document must list them in
         // source-declaration order with per-capability boundary shapes. Exercised directly
-        // because generate() still fails closed (BXG0041) on more than one capability.
+        // against the schema emitter.
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
@@ -1488,8 +1504,7 @@ macro_rules! __boxology_check_implementation {
     fn multi_capability_descriptor_source_lists_all_in_source_order() {
         // Two capabilities share one error enum; the Rust descriptor emitter must emit one
         // CapabilityDescriptor per capability in source order, each with its own boundary types,
-        // over a single shared error descriptor. Exercised directly because generate() still
-        // fails closed (BXG0041) on more than one capability.
+        // over a single shared error descriptor. Exercised directly against the descriptor emitter.
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
@@ -1537,8 +1552,7 @@ macro_rules! __boxology_check_implementation {
     fn multi_capability_dispatch_source_lists_all_in_source_order() {
         // Two capabilities share one error enum; the dispatch trait and typed handle must emit one
         // method per capability in source order, each routed through its own capability-id static,
-        // over a single shared error descriptor. Exercised directly because generate() still fails
-        // closed (BXG0041) on more than one capability.
+        // over a single shared error descriptor. Exercised directly against the dispatch emitter.
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
@@ -1583,8 +1597,7 @@ macro_rules! __boxology_check_implementation {
         // Two capabilities share one error enum; the generated test-support fake must expose one
         // responder alias, struct field, and builder per capability and route the erased `call`
         // through each capability's own routing static in source order, decoding that capability's
-        // own input type. Exercised directly because generate() still fails closed (BXG0041) on
-        // more than one capability.
+        // own input type. Exercised directly against the test-support emitter.
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
@@ -1667,7 +1680,7 @@ macro_rules! __boxology_check_implementation {
     fn multi_capability_adapter_source_routes_each_capability() {
         // Two capabilities share one error enum; the adapter routes each by its descriptor id in
         // source order with per-capability decode, then falls through to unknown_capability.
-        // Exercised directly because generate() still fails closed (BXG0041) beyond one capability.
+        // Exercised directly against the adapter emitter.
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
@@ -1703,7 +1716,7 @@ macro_rules! __boxology_check_implementation {
         // disjoint `@find_{capability}` recursion per capability (each with valid/invalid/recurse/
         // missing arms) plus exactly one combined `impl HelloDispatch` bridging both, so N separate
         // impls of the same trait for the same receiver never collide (E0119). Exercised directly
-        // because generate() still fails closed (BXG0041) on more than one capability.
+        // against the checker emitter.
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
@@ -2406,20 +2419,33 @@ fn main() {
             assert_eq!(diagnostics.as_slice()[0].code(), "BXG0040");
             assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
         }
-    }
-
-    #[test]
-    fn multiple_capabilities_fail_closed_with_bxg0041() {
-        let source = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; #[capability(exposure=external)] pub async fn shout(name:String)->Result<String,GreetError>; }";
-        let request = request(source, false, OUTPUTS.to_vec());
+        // The guard loops over EVERY capability: a two-capability box whose SECOND capability
+        // carries a Blob boundary leaf still fails closed with BXG0040, not just the first.
+        let second_cap_blob = "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:Blob)->Result<bool,StoreError>; }";
+        let request = request_for("store", second_cap_blob);
         let expected_span = ParsedRustInputs::parse(&request)
             .and_then(|parsed| parsed.controlled_contract())
             .unwrap()
             .span();
         let diagnostics = generate(&request).unwrap_err();
         assert_eq!(diagnostics.as_slice().len(), 1);
-        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0041");
+        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0040");
         assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
+    }
+
+    #[test]
+    fn multi_capability_box_generates() {
+        // The BXG0041 single-capability guard is lifted: the same two-capability store box that
+        // used to fail closed now generates end-to-end through generate() with the full output set.
+        let source = "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }";
+        let tree = generate(&request_for("store", source))
+            .expect("a two-capability box generates now that the guard is lifted");
+        for path in OUTPUTS {
+            assert!(
+                tree.files().iter().any(|file| file.path() == path),
+                "generated tree missing {path}"
+            );
+        }
     }
 
     #[test]
@@ -2498,6 +2524,122 @@ fn main() {
 "#,
         )
         .unwrap();
+        let status = Command::new("cargo")
+            .args(["run", "--offline", "--manifest-path"])
+            .arg(consumer.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_multi_capability_box_compiles_and_routes_both_capabilities() {
+        use std::{fs, process::Command};
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let source = "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }";
+        let root = std::env::temp_dir().join(format!(
+            "boxology-multi-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for file in generate(&request_for("store", source)).unwrap().files() {
+            let path = root.join(file.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, file.bytes()).unwrap();
+        }
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.0.0\",path={:?}}}\n",
+                workspace.join("boxology-contract")
+            ),
+        )
+        .unwrap();
+        let consumer = root.join("consumer");
+        fs::create_dir_all(consumer.join("src")).unwrap();
+        fs::write(
+            consumer.join("Cargo.toml"),
+            "[package]\nname=\"consumer\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology-contract={workspace=true}\nstore-contract={package=\"store-contract\",path=\"../generated/contract\",features=[\"test-support\"]}\n",
+        )
+        .unwrap();
+        fs::write(
+            consumer.join("src/main.rs"),
+            r#"
+use std::future::{ready, Future};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll, Waker};
+use boxology_contract::{CallContext, CallError, Caller, CancelToken, CapabilityId, ContractValue, ErasedCallError, ErasedCallTarget, SlotValue, TraceContext};
+use store_contract::{test_support::StoreFake, contract_descriptor, StoreError, StoreHandle};
+
+struct Stub;
+impl ErasedCallTarget for Stub {
+    fn call<'a>(&'a self, capability: &'a CapabilityId, _context: CallContext, input: SlotValue) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+        let output = match capability.to_string().as_str() {
+            "store.get" => {
+                assert_eq!(input, SlotValue::Value(ContractValue::u64(7)));
+                SlotValue::Value(ContractValue::string("seven"))
+            }
+            "store.put" => {
+                assert_eq!(input, SlotValue::Value(ContractValue::string("seven")));
+                SlotValue::Value(ContractValue::bool(true))
+            }
+            other => panic!("unexpected capability {other}"),
+        };
+        Box::pin(ready(Ok(output)))
+    }
+}
+
+fn context() -> CallContext {
+    CallContext::new(Caller::Anonymous, None, CancelToken::new(), TraceContext::empty(), None)
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop { if let Poll::Ready(output) = future.as_mut().poll(&mut TaskContext::from_waker(Waker::noop())) { return output; } }
+}
+
+fn main() {
+    let capabilities = contract_descriptor().capabilities();
+    assert_eq!(capabilities.len(), 2);
+    assert_eq!(capabilities[0].id().to_string(), "store.get");
+    assert_eq!(capabilities[1].id().to_string(), "store.put");
+
+    let handle = StoreHandle::from_erased(Arc::new(Stub));
+    assert_eq!(block_on(handle.get(context(), 7u64)), Ok("seven".into()));
+    assert_eq!(block_on(handle.put(context(), "seven".into())), Ok(true));
+
+    let fake = StoreFake::new()
+        .with_get(|_, key: u64| async move { assert_eq!(key, 7); Ok("seven".to_string()) })
+        .with_put(|_, value: String| async move { assert_eq!(value, "seven"); Ok(true) });
+    assert_eq!(block_on(fake.handle().get(context(), 7u64)), Ok("seven".into()));
+    assert_eq!(block_on(fake.handle().put(context(), "seven".into())), Ok(true));
+
+    let put_only = StoreFake::new().with_put(|_, _| async { Ok(true) });
+    let Err(CallError::Internal(detail)) = block_on(put_only.handle().get(context(), 7u64)) else {
+        panic!("unprogrammed get did not fail closed")
+    };
+    assert_eq!(detail.code(), "unprogrammed_capability");
+
+    let domain = StoreFake::new().with_get(|_, _| async { Err(StoreError::Missing) });
+    assert_eq!(block_on(domain.handle().get(context(), 7u64)), Err(CallError::Domain(StoreError::Missing)));
+}
+"#,
+        )
+        .unwrap();
+        let contract_status = Command::new("cargo")
+            .args(["check", "--offline", "--manifest-path"])
+            .arg(root.join("generated/contract/Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("contract-target"))
+            .status()
+            .unwrap();
+        assert!(contract_status.success());
         let status = Command::new("cargo")
             .args(["run", "--offline", "--manifest-path"])
             .arg(consumer.join("Cargo.toml"))
