@@ -54,10 +54,11 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let parsed = ParsedRustInputs::parse(request)?;
     let contract = parsed.controlled_contract()?;
     contract.require_v0_emittable()?;
-    // Hydrate and fail closed on any declared import; PR-1b binds and threads the returned models
-    // into the adapter. This PR discards the value: no emission changes, so every existing box
-    // stays byte-identical.
-    ImportModel::parse_all(request)?;
+    // Hydrate and fail closed on any declared import, then thread the returned models into the
+    // adapter's implementation descriptor. A box with no imports emits `[]` — the pre-import token
+    // — so every existing box stays byte-identical; imports are implementation-local and never
+    // affect the outward contract, schema, revision, or semantic digest.
+    let imports = ImportModel::parse_all(request)?;
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
         "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",
@@ -149,7 +150,7 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
     let dispatch = dispatch_source(request.box_id().as_str(), contract.model());
     let test_support = test_support_source(request.box_id().as_str(), contract.model());
-    let adapter = adapter_source(request.box_id().as_str(), contract.model());
+    let adapter = adapter_source(request.box_id().as_str(), contract.model(), &imports);
     let syntax = syn::parse_file(&format!(
         "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
         error.name
@@ -537,7 +538,11 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
     )
 }
 
-fn adapter_source(box_id: &str, contract: &Contract) -> String {
+fn adapter_source(
+    box_id: &str,
+    contract: &Contract,
+    imports: &[boxology_generator_model::ImportModel],
+) -> String {
     let prefix = pascal_case(box_id);
     // The per-capability decode/dispatch/encode body is identical between the single- and
     // multi-capability `call` shapes; only the routing envelope around it differs.
@@ -623,6 +628,10 @@ fn adapter_source(box_id: &str, contract: &Contract) -> String {
                 {branches}Box::pin(::std::future::ready(Err(unknown_capability())))"#,
         )
     };
+    // Zero imports emit the bare `[]` token — token-identical to the pre-import adapter, so the
+    // prettyplease output stays byte-identical for every existing box. One or more imports build a
+    // `[ ImportDescriptor::new(...), ... ]` literal preserving import and capability order.
+    let import_list = import_descriptors(imports);
     format!(
         r#"
         use ::boxology_contract::ContractType;
@@ -631,7 +640,7 @@ fn adapter_source(box_id: &str, contract: &Contract) -> String {
         pub fn implementation_descriptor() -> ::boxology_contract::ImplementationDescriptor {{
             ::boxology_contract::ImplementationDescriptor::new(
                 ::boxology_generated_contract::contract_descriptor(),
-                [],
+                {import_list},
             )
             .expect("generated adapter import descriptors are valid")
         }}
@@ -695,7 +704,47 @@ fn adapter_source(box_id: &str, contract: &Contract) -> String {
         "#,
         prefix = prefix,
         call_body = call_body,
+        import_list = import_list,
     )
+}
+
+/// Spells the adapter's `ImplementationDescriptor` import list from the hydrated import models.
+///
+/// Zero imports return the bare `[]` token so the generated adapter stays byte-identical to the
+/// pre-import output for every existing box. One or more imports return a `[ ImportDescriptor::new(
+/// package, revision, [ CapabilityId, ... ]), ... ]` literal that preserves import order and, within
+/// each import, capability order. Imports are implementation-local: they land only in the adapter,
+/// never in the outward contract, schema, revision, or semantic digest.
+fn import_descriptors(imports: &[boxology_generator_model::ImportModel]) -> String {
+    if imports.is_empty() {
+        return "[]".to_owned();
+    }
+    let entries = imports
+        .iter()
+        .map(|import| {
+            let package = import.package().as_str();
+            let capabilities = import
+                .capabilities()
+                .iter()
+                .map(|capability| {
+                    format!(
+                        "::boxology_contract::CapabilityId::new(::boxology_contract::BoxId::new({package:?}).expect(\"generated import package id is valid\"), ::boxology_contract::CapabilityName::new({name:?}).expect(\"generated import capability name is valid\"))",
+                        package = package,
+                        name = capability.name(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "::boxology_contract::ImportDescriptor::new(::boxology_contract::BoxId::new({package:?}).expect(\"generated import package id is valid\"), ::boxology_contract::ContractRevision::new({revision:?}).expect(\"generated import revision is valid\"), [{capabilities}]).expect(\"generated import descriptor is valid\")",
+                package = package,
+                revision = import.expected_revision(),
+                capabilities = capabilities,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{entries}]")
 }
 
 fn dispatch_source(box_id: &str, contract: &Contract) -> String {
@@ -1195,6 +1244,43 @@ macro_rules! __boxology_check_implementation {
         .unwrap()
     }
 
+    /// The checked-in `hello` public revision; a valid import schema declares it.
+    const IMPORT_REVISION: &str =
+        "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
+
+    /// A minimal valid `hello` import schema offering the `greet` capability over `String`.
+    fn valid_hello_schema() -> String {
+        format!(
+            "{{ \"box_id\": \"hello\", \"capabilities\": [ {{ \"id\": \"hello.greet\", \
+             \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \"name\": \"greet\", \
+             \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }} ], \
+             \"revision\": \"{IMPORT_REVISION}\", \"schema_format\": 1 }}"
+        )
+    }
+
+    /// Builds a full-output request for `box_id` declaring one import of `schema` at `schema_path`.
+    fn request_for_with_import(
+        box_id: &str,
+        source: &str,
+        package: &str,
+        schema_path: &str,
+        schema: &str,
+    ) -> GenerationRequest {
+        let manifest = format!("schema = 1\nid = \"{box_id}\"\nkind = \"box\"\n");
+        GenerationRequest::new(
+            BoxId::new(box_id).unwrap(),
+            "src/lib.rs".into(),
+            vec![
+                ("boxology.toml".into(), manifest.into_bytes()),
+                ("src/lib.rs".into(), source.as_bytes().to_vec()),
+                (schema_path.into(), schema.as_bytes().to_vec()),
+            ],
+            vec![(BoxId::new(package).unwrap(), schema_path.into())],
+            OUTPUTS.iter().map(|output| (*output).to_owned()).collect(),
+        )
+        .unwrap()
+    }
+
     fn tree(source: &str, reverse: bool) -> GeneratedTree {
         generate(&request(source, reverse, OUTPUTS.to_vec())).unwrap()
     }
@@ -1673,7 +1759,7 @@ macro_rules! __boxology_check_implementation {
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:u32)->Result<bool,GreetError>; }",
         );
-        let adapter = adapter_source("hello", contract.model());
+        let adapter = adapter_source("hello", contract.model(), &[]);
         assert!(adapter.contains("::boxology_contract::TypeDescriptor::u32()"));
         assert!(adapter.contains("u32::decode(&input)"));
         assert!(!adapter.contains("::std::string::String::decode"));
@@ -1688,7 +1774,7 @@ macro_rules! __boxology_check_implementation {
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
-        let adapter = adapter_source("store", contract.model());
+        let adapter = adapter_source("store", contract.model(), &[]);
         syn::parse_file(&adapter).expect("multi-capability adapter must parse");
         let get_dispatch = adapter
             .find("StoreDispatch::get(")
@@ -1712,6 +1798,73 @@ macro_rules! __boxology_check_implementation {
         // capability `.first().expect("... has one capability")` envelope.
         assert!(adapter.contains("unknown_capability"));
         assert!(!adapter.contains("has one capability"));
+    }
+
+    #[test]
+    fn import_adapter_emits_import_descriptors() {
+        // A greeter box that declares an import of the hello schema emits the import into its
+        // adapter's implementation descriptor: the ImportDescriptor constructor, the package, its
+        // revision, and each imported capability name. The emitted adapter still parses.
+        let request = request_for_with_import(
+            "greeter",
+            CONTRACT,
+            "hello",
+            "imports/hello.json",
+            &valid_hello_schema(),
+        );
+        let tree = generate(&request).unwrap();
+        let adapter =
+            std::str::from_utf8(file(&tree, "generated/adapter/adapter.rs").bytes()).unwrap();
+        syn::parse_file(adapter).expect("import adapter must parse");
+        assert!(adapter.contains("::boxology_contract::ImportDescriptor::new("));
+        assert!(adapter.contains("\"hello\""));
+        assert!(adapter.contains(IMPORT_REVISION));
+        assert!(adapter.contains("CapabilityName::new(\"greet\")"));
+    }
+
+    #[test]
+    fn zero_import_and_with_import_differ_only_in_adapter() {
+        // Imports are implementation-local: declaring one changes only the adapter. The outward
+        // contract crate, schema, revision, and semantic digest are byte-identical with and without.
+        let without = generate(&request_for("greeter", CONTRACT)).unwrap();
+        let with = generate(&request_for_with_import(
+            "greeter",
+            CONTRACT,
+            "hello",
+            "imports/hello.json",
+            &valid_hello_schema(),
+        ))
+        .unwrap();
+        for path in [
+            "generated/contract/Cargo.toml",
+            "generated/contract/src/lib.rs",
+            "generated/schema.json",
+        ] {
+            assert_eq!(
+                file(&without, path).bytes(),
+                file(&with, path).bytes(),
+                "{path} must be identical with and without imports"
+            );
+        }
+        assert_ne!(
+            file(&without, "generated/adapter/adapter.rs").bytes(),
+            file(&with, "generated/adapter/adapter.rs").bytes(),
+            "the adapter must carry the declared import"
+        );
+        let revision = |tree: &GeneratedTree| {
+            serde_json::from_slice::<Value>(file(tree, "generated/schema.json").bytes()).unwrap()
+                ["revision"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(revision(&without), revision(&with));
+        let digest = |tree: &GeneratedTree| {
+            marker_parts(file(tree, "generated/contract/src/lib.rs").bytes())
+                .1
+                .to_owned()
+        };
+        assert_eq!(digest(&without), digest(&with));
     }
 
     #[test]
