@@ -140,12 +140,12 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
         .map(u8::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    let checker = checker_source(contract.model());
+    let checker = checker_source(request.box_id().as_str(), contract.model());
     let descriptor =
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
     let dispatch = dispatch_source(request.box_id().as_str(), contract.model());
     let test_support = test_support_source(request.box_id().as_str(), contract.model());
-    let adapter = adapter_source(contract.model());
+    let adapter = adapter_source(request.box_id().as_str(), contract.model());
     let syntax = syn::parse_file(&format!(
         "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
         error.name
@@ -196,7 +196,8 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
 /// separate impls of the same trait for the same receiver would be a coherence conflict (E0119).
 /// The multi-capability shape is exercised only by a direct unit test; `generate()` still fails
 /// closed (`BXG0041`) on more than one capability.
-fn checker_source(contract: &Contract) -> String {
+fn checker_source(box_id: &str, contract: &Contract) -> String {
+    let prefix = pascal_case(box_id);
     let error = &contract.error;
     if contract.capabilities.len() == 1 {
         let capability = &contract.capabilities[0];
@@ -216,7 +217,7 @@ fn checker_source(contract: &Contract) -> String {
                         require_future(receiver.__CAPABILITY__(context, input));
                     }
                 };
-                impl $crate::HelloDispatch for $receiver {
+                impl $crate::__DISPATCH__ for $receiver {
                     fn __CAPABILITY__<'a>(
                         &'a self,
                         context: ::boxology::CallContext,
@@ -250,7 +251,8 @@ fn checker_source(contract: &Contract) -> String {
         .replace("__CAPABILITY__", &capability.name)
         .replace("__ERROR__", &error.name)
         .replace("__INPUT_TY__", rust_value_type(capability.input_type, true))
-        .replace("__OUTPUT_TY__", rust_value_type(capability.output_type, true));
+        .replace("__OUTPUT_TY__", rust_value_type(capability.output_type, true))
+        .replace("__DISPATCH__", &format!("{prefix}Dispatch"));
     }
     // Beyond one capability the macro body is almost entirely braces, so it is assembled by
     // `.replace()` on raw templates rather than `format!` (whose `{{`/`}}` escaping would be
@@ -338,7 +340,7 @@ fn checker_source(contract: &Contract) -> String {
         #[macro_export]
         macro_rules! __boxology_check_implementation {
             ($receiver:ty; $($method:ident $validity:ident;)*) => {
-__INVOCATIONS__                impl $crate::HelloDispatch for $receiver {
+__INVOCATIONS__                impl $crate::__DISPATCH__ for $receiver {
 __BRIDGES__                }
             };
 __ARMS__        }
@@ -346,9 +348,11 @@ __ARMS__        }
     .replace("__INVOCATIONS__", &invocations)
     .replace("__BRIDGES__", &bridges)
     .replace("__ARMS__", &arms)
+    .replace("__DISPATCH__", &format!("{prefix}Dispatch"))
 }
 
 fn test_support_source(box_id: &str, contract: &Contract) -> String {
+    let prefix = pascal_case(box_id);
     let error_name = &contract.error.name;
     let routing_statics_csv = contract
         .capabilities
@@ -485,24 +489,24 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
                 ErasedCallTarget, SlotValue, TypeDescriptor,
             }};
 
-            use super::{{{error_name}, {routing_statics_csv}, HelloHandle, conversion_detail}};
+            use super::{{{error_name}, {routing_statics_csv}, {prefix}Handle, conversion_detail}};
 
 {type_aliases}
             #[derive(Clone, Default)]
-            pub struct HelloFake {{
+            pub struct {prefix}Fake {{
 {struct_fields}            }}
 
-            impl HelloFake {{
+            impl {prefix}Fake {{
                 pub fn new() -> Self {{
                     Self::default()
                 }}
 
-{builders}                pub fn handle(&self) -> HelloHandle {{
-                    HelloHandle::from_erased(Arc::new(self.clone()))
+{builders}                pub fn handle(&self) -> {prefix}Handle {{
+                    {prefix}Handle::from_erased(Arc::new(self.clone()))
                 }}
             }}
 
-            impl ErasedCallTarget for HelloFake {{
+            impl ErasedCallTarget for {prefix}Fake {{
                 fn call<'a>(
                     &'a self,
                     capability: &'a CapabilityId,
@@ -519,6 +523,7 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
             }}
         }}
         "#,
+        prefix = prefix,
         error_name = error_name,
         routing_statics_csv = routing_statics_csv,
         type_aliases = type_aliases,
@@ -528,7 +533,8 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
     )
 }
 
-fn adapter_source(contract: &Contract) -> String {
+fn adapter_source(box_id: &str, contract: &Contract) -> String {
+    let prefix = pascal_case(box_id);
     // The per-capability decode/dispatch/encode body is identical between the single- and
     // multi-capability `call` shapes; only the routing envelope around it differs.
     let async_body = |capability: &CapabilityDeclaration| -> String {
@@ -548,7 +554,7 @@ fn adapter_source(contract: &Contract) -> String {
                             conversion_detail("input_decode", error),
                         )
                     }})?;
-                    match ::boxology_generated_contract::HelloDispatch::{capability_name}(
+                    match ::boxology_generated_contract::{prefix}Dispatch::{capability_name}(
                         &self.service,
                         context,
                         input,
@@ -564,6 +570,7 @@ fn adapter_source(contract: &Contract) -> String {
                             &error,
                         )),
                     }}"#,
+            prefix = prefix,
             input_constructor = schema::descriptor_constructor(capability.input_type),
             input_qualified = rust_value_type(capability.input_type, true),
             capability_name = capability.name,
@@ -578,7 +585,7 @@ fn adapter_source(contract: &Contract) -> String {
             r#"let expected = ::boxology_generated_contract::contract_descriptor()
                     .capabilities()
                     .first()
-                    .expect("generated Hello contract has one capability")
+                    .expect("generated {prefix} contract has one capability")
                     .id();
                 if capability != expected {{
                     return Box::pin(::std::future::ready(Err(unknown_capability())));
@@ -586,6 +593,7 @@ fn adapter_source(contract: &Contract) -> String {
                 Box::pin(async move {{
                     {async_body}
                 }})"#,
+            prefix = prefix,
             async_body = async_body(capability),
         )
     } else {
@@ -625,7 +633,7 @@ fn adapter_source(contract: &Contract) -> String {
         }}
 
         #[doc(hidden)]
-        pub struct HelloAdapter<T> {{
+        pub struct {prefix}Adapter<T> {{
             service: T,
             _imports: ::boxology_runtime::Imports,
         }}
@@ -634,19 +642,19 @@ fn adapter_source(contract: &Contract) -> String {
         pub fn factory<T>(
             service: T,
             imports: ::boxology_runtime::Imports,
-        ) -> HelloAdapter<T>
+        ) -> {prefix}Adapter<T>
         where
-            T: ::boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
+            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
         {{
-            HelloAdapter {{
+            {prefix}Adapter {{
                 service,
                 _imports: imports,
             }}
         }}
 
-        impl<T> ::boxology_contract::ErasedTarget for HelloAdapter<T>
+        impl<T> ::boxology_contract::ErasedTarget for {prefix}Adapter<T>
         where
-            T: ::boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
+            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
         {{
             fn call<'a>(
                 &'a self,
@@ -681,13 +689,19 @@ fn adapter_source(contract: &Contract) -> String {
             )
         }}
         "#,
+        prefix = prefix,
         call_body = call_body,
     )
 }
 
 fn dispatch_source(box_id: &str, contract: &Contract) -> String {
+    let prefix = pascal_case(box_id);
     let error_name = &contract.error.name;
     let error_static = format!("{}_DESCRIPTOR", screaming_snake(error_name));
+    let error_descriptor_expect = format!(
+        "generated {} descriptor is valid",
+        screaming_snake(error_name).to_lowercase().replace('_', " ")
+    );
     let variants = contract
         .error
         .variants
@@ -787,15 +801,15 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
             DecodeRole, Detail, ErasedCallTarget, TypeDescriptor,
         }};
 
-        pub trait HelloDispatch: Send + Sync + 'static {{
+        pub trait {prefix}Dispatch: Send + Sync + 'static {{
 {trait_methods}        }}
 
         #[derive(Clone)]
-        pub struct HelloHandle {{
+        pub struct {prefix}Handle {{
             target: Arc<dyn ErasedCallTarget>,
         }}
 
-        impl HelloHandle {{
+        impl {prefix}Handle {{
             #[doc(hidden)]
             pub fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {{
                 Self {{ target }}
@@ -808,17 +822,19 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
             TypeDescriptor::enumeration([
                 {variants}
             ])
-            .expect("generated greet error descriptor is valid")
+            .expect("{error_descriptor_expect}")
         }});
 
         fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detail {{
             Detail::new(code).with_message(error.to_string())
         }}
         "#,
+        prefix = prefix,
         trait_methods = trait_methods,
         handle_methods = handle_methods,
         capability_statics = capability_statics,
         error_static = error_static,
+        error_descriptor_expect = error_descriptor_expect,
         variants = variants,
     )
 }
@@ -843,12 +859,14 @@ fn capability_static_name(box_id: &str, cap_name: &str) -> String {
     )
 }
 
-/// Converts a snake_case capability name to PascalCase for a generated type-alias prefix.
+/// Converts a snake_case or kebab-case identifier to PascalCase for a generated type prefix.
 ///
-/// Each `_`-separated segment has its first character uppercased and the rest kept verbatim, so
-/// `greet` -> `Greet`, `get` -> `Get`, and `get_item` -> `GetItem`.
+/// Each segment split on `_` or `-` has its first character uppercased and the rest kept verbatim,
+/// so capability `greet` -> `Greet`, `get_item` -> `GetItem`, and box id `my-box` -> `MyBox`. Box
+/// ids follow the `[a-z][a-z0-9-]*` grammar, so `-` must split too; capability names never contain
+/// `-`, so their derivation is unchanged.
 fn pascal_case(name: &str) -> String {
-    name.split('_')
+    name.split(['_', '-'])
         .map(|segment| {
             let mut chars = segment.chars();
             match chars.next() {
@@ -1582,7 +1600,7 @@ macro_rules! __boxology_check_implementation {
         assert!(fake.contains("type PutFuture"));
         assert!(fake.contains("type PutResponder"));
         assert!(fake.contains(
-            "use super::{StoreError, STORE_GET, STORE_PUT, HelloHandle, conversion_detail}"
+            "use super::{StoreError, STORE_GET, STORE_PUT, StoreHandle, conversion_detail}"
         ));
         let get_branch = fake
             .find("if capability == &*STORE_GET")
@@ -1638,7 +1656,7 @@ macro_rules! __boxology_check_implementation {
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:u32)->Result<bool,GreetError>; }",
         );
-        let adapter = adapter_source(contract.model());
+        let adapter = adapter_source("hello", contract.model());
         assert!(adapter.contains("::boxology_contract::TypeDescriptor::u32()"));
         assert!(adapter.contains("u32::decode(&input)"));
         assert!(!adapter.contains("::std::string::String::decode"));
@@ -1653,13 +1671,13 @@ macro_rules! __boxology_check_implementation {
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
-        let adapter = adapter_source(contract.model());
+        let adapter = adapter_source("store", contract.model());
         syn::parse_file(&adapter).expect("multi-capability adapter must parse");
         let get_dispatch = adapter
-            .find("HelloDispatch::get(")
+            .find("StoreDispatch::get(")
             .expect("adapter dispatches the get capability");
         let put_dispatch = adapter
-            .find("HelloDispatch::put(")
+            .find("StoreDispatch::put(")
             .expect("adapter dispatches the put capability");
         assert!(
             get_dispatch < put_dispatch,
@@ -1689,7 +1707,7 @@ macro_rules! __boxology_check_implementation {
         let contract = scalar_model(
             "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
         );
-        let checker = checker_source(contract.model());
+        let checker = checker_source("store", contract.model());
         syn::parse_file(&checker).expect("multi-capability checker macro must parse");
         assert!(checker.contains("@find_get"));
         assert!(checker.contains("@find_put"));
@@ -1711,7 +1729,7 @@ macro_rules! __boxology_check_implementation {
         // Exactly one combined impl bridges both capabilities.
         assert_eq!(
             checker
-                .matches("impl $crate::HelloDispatch for $receiver")
+                .matches("impl $crate::StoreDispatch for $receiver")
                 .count(),
             1
         );
