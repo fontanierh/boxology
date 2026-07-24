@@ -55,9 +55,9 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let contract = parsed.controlled_contract()?;
     contract.require_v0_emittable()?;
     // `require_v0_emittable` fails closed unless there is exactly one capability. The dispatch
-    // trait and typed handle now generalize to N capabilities and read the model directly, so this
-    // sole-capability binding serves only the still single-capability checker macro, adapter, and
-    // test-support (each generalized by a later PR).
+    // trait, typed handle, test-support fake, and adapter now generalize to N capabilities and read
+    // the model directly, so this sole-capability binding serves only the still single-capability
+    // checker macro (generalized by a later PR).
     let capability = &contract.model().capabilities[0];
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
@@ -206,7 +206,7 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
     let dispatch = dispatch_source(request.box_id().as_str(), contract.model());
     let test_support = test_support_source(request.box_id().as_str(), contract.model());
-    let adapter = adapter_source(&capability.name, capability.input_type);
+    let adapter = adapter_source(contract.model());
     let syntax = syn::parse_file(&format!(
         "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
         error.name
@@ -428,9 +428,89 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
     )
 }
 
-fn adapter_source(capability_name: &str, input_type: CanonicalType) -> String {
-    let input_constructor = schema::descriptor_constructor(input_type);
-    let input_qualified = rust_value_type(input_type, true);
+fn adapter_source(contract: &Contract) -> String {
+    // The per-capability decode/dispatch/encode body is identical between the single- and
+    // multi-capability `call` shapes; only the routing envelope around it differs.
+    let async_body = |capability: &CapabilityDeclaration| -> String {
+        format!(
+            r#"let input = ::boxology_contract::TypeDescriptor::{input_constructor}()
+                        .conform(
+                            ::boxology_contract::DecodeRole::ProviderInput,
+                            input,
+                        )
+                        .map_err(|error| {{
+                            ::boxology_contract::ErasedCallError::ContractViolation(
+                                conversion_detail("input_decode", error),
+                            )
+                        }})?;
+                    let input = {input_qualified}::decode(&input).map_err(|error| {{
+                        ::boxology_contract::ErasedCallError::ContractViolation(
+                            conversion_detail("input_decode", error),
+                        )
+                    }})?;
+                    match ::boxology_generated_contract::HelloDispatch::{capability_name}(
+                        &self.service,
+                        context,
+                        input,
+                    )
+                    .await
+                    {{
+                        Ok(output) => output.encode().map_err(|error| {{
+                            ::boxology_contract::ErasedCallError::InvalidResponse(
+                                conversion_detail("output_encode", error),
+                            )
+                        }}),
+                        Err(error) => Err(::boxology_contract::ErasedCallError::from_domain(
+                            &error,
+                        )),
+                    }}"#,
+            input_constructor = schema::descriptor_constructor(capability.input_type),
+            input_qualified = rust_value_type(capability.input_type, true),
+            capability_name = capability.name,
+        )
+    };
+    // At a single capability the adapter keeps today's exact routing so the Hello golden stays
+    // byte-identical; beyond one it matches each capability's descriptor id in source order and
+    // falls through to `unknown_capability`.
+    let call_body = if contract.capabilities.len() == 1 {
+        let capability = &contract.capabilities[0];
+        format!(
+            r#"let expected = ::boxology_generated_contract::contract_descriptor()
+                    .capabilities()
+                    .first()
+                    .expect("generated Hello contract has one capability")
+                    .id();
+                if capability != expected {{
+                    return Box::pin(::std::future::ready(Err(unknown_capability())));
+                }}
+                Box::pin(async move {{
+                    {async_body}
+                }})"#,
+            async_body = async_body(capability),
+        )
+    } else {
+        let branches = contract
+            .capabilities
+            .iter()
+            .enumerate()
+            .map(|(index, capability)| {
+                format!(
+                    r#"if capability == capabilities[{index}].id() {{
+                    return Box::pin(async move {{
+                        {async_body}
+                    }});
+                }}
+                "#,
+                    index = index,
+                    async_body = async_body(capability),
+                )
+            })
+            .collect::<String>();
+        format!(
+            r#"let capabilities = ::boxology_generated_contract::contract_descriptor().capabilities();
+                {branches}Box::pin(::std::future::ready(Err(unknown_capability())))"#,
+        )
+    };
     format!(
         r#"
         use ::boxology_contract::ContractType;
@@ -484,47 +564,7 @@ fn adapter_source(capability_name: &str, input_type: CanonicalType) -> String {
                         + 'a,
                 >,
             > {{
-                let expected = ::boxology_generated_contract::contract_descriptor()
-                    .capabilities()
-                    .first()
-                    .expect("generated Hello contract has one capability")
-                    .id();
-                if capability != expected {{
-                    return Box::pin(::std::future::ready(Err(unknown_capability())));
-                }}
-                Box::pin(async move {{
-                    let input = ::boxology_contract::TypeDescriptor::{input_constructor}()
-                        .conform(
-                            ::boxology_contract::DecodeRole::ProviderInput,
-                            input,
-                        )
-                        .map_err(|error| {{
-                            ::boxology_contract::ErasedCallError::ContractViolation(
-                                conversion_detail("input_decode", error),
-                            )
-                        }})?;
-                    let input = {input_qualified}::decode(&input).map_err(|error| {{
-                        ::boxology_contract::ErasedCallError::ContractViolation(
-                            conversion_detail("input_decode", error),
-                        )
-                    }})?;
-                    match ::boxology_generated_contract::HelloDispatch::{capability_name}(
-                        &self.service,
-                        context,
-                        input,
-                    )
-                    .await
-                    {{
-                        Ok(output) => output.encode().map_err(|error| {{
-                            ::boxology_contract::ErasedCallError::InvalidResponse(
-                                conversion_detail("output_encode", error),
-                            )
-                        }}),
-                        Err(error) => Err(::boxology_contract::ErasedCallError::from_domain(
-                            &error,
-                        )),
-                    }}
-                }})
+                {call_body}
             }}
         }}
 
@@ -541,9 +581,7 @@ fn adapter_source(capability_name: &str, input_type: CanonicalType) -> String {
             )
         }}
         "#,
-        capability_name = capability_name,
-        input_constructor = input_constructor,
-        input_qualified = input_qualified,
+        call_body = call_body,
     )
 }
 
@@ -1497,11 +1535,48 @@ macro_rules! __boxology_check_implementation {
         // The generated numeric adapter is the same substitution path as the String
         // adapter that generated_adapter_registers_and_dispatches_through_stub_transport
         // compiles; this guards its input-type parameterization against regression.
-        let adapter = adapter_source("greet", CanonicalType::U32);
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:u32)->Result<bool,GreetError>; }",
+        );
+        let adapter = adapter_source(contract.model());
         assert!(adapter.contains("::boxology_contract::TypeDescriptor::u32()"));
         assert!(adapter.contains("u32::decode(&input)"));
         assert!(!adapter.contains("::std::string::String::decode"));
         assert!(!adapter.contains("::boxology_contract::TypeDescriptor::string()"));
+    }
+
+    #[test]
+    fn multi_capability_adapter_source_routes_each_capability() {
+        // Two capabilities share one error enum; the adapter routes each by its descriptor id in
+        // source order with per-capability decode, then falls through to unknown_capability.
+        // Exercised directly because generate() still fails closed (BXG0041) beyond one capability.
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
+        );
+        let adapter = adapter_source(contract.model());
+        syn::parse_file(&adapter).expect("multi-capability adapter must parse");
+        let get_dispatch = adapter
+            .find("HelloDispatch::get(")
+            .expect("adapter dispatches the get capability");
+        let put_dispatch = adapter
+            .find("HelloDispatch::put(")
+            .expect("adapter dispatches the put capability");
+        assert!(
+            get_dispatch < put_dispatch,
+            "capabilities route in source order"
+        );
+        // The get branch decodes u64 before its dispatch; the put branch decodes String between
+        // the two dispatches.
+        let get_branch = &adapter[..get_dispatch];
+        assert!(get_branch.contains("::boxology_contract::TypeDescriptor::u64()"));
+        assert!(get_branch.contains("u64::decode(&input)"));
+        let put_branch = &adapter[get_dispatch..put_dispatch];
+        assert!(put_branch.contains("::boxology_contract::TypeDescriptor::string()"));
+        assert!(put_branch.contains("::std::string::String::decode"));
+        // N>1 index routing falls through to unknown_capability and never emits the single-
+        // capability `.first().expect("... has one capability")` envelope.
+        assert!(adapter.contains("unknown_capability"));
+        assert!(!adapter.contains("has one capability"));
     }
 
     #[test]
