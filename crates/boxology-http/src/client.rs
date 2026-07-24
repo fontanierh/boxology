@@ -513,9 +513,9 @@ mod tests {
         ContractDescriptor, ContractRevision, ErasedTarget, ImplementationDescriptor,
         ImportDescriptor,
     };
+    use boxology_generated_contract::HelloHandle;
     #[cfg(feature = "server")]
     use boxology_runtime::{CompositionBuilder, ImportHandle, ImportTarget};
-    use hello_contract::HelloHandle;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
