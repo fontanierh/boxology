@@ -49,8 +49,6 @@ const CONTROLLED_PARSE_RULE: &str = "contract tokens must satisfy the controlled
 const CONTROLLED_PARSE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
 const EMITTABLE_RULE: &str = "the `Blob` capability boundary leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.";
 const EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3,D5";
-const EMITTABLE_MULTI_RULE: &str = "a contract's multiple capabilities are parsed and modelled under one shared error enum, but v0 emission is single-capability only (deferred); exactly one capability is emittable.";
-const EMITTABLE_MULTI_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3,D8";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -136,24 +134,18 @@ impl ControlledContract {
     ///
     /// Scalar leaves and `String` are emittable and pass; the plain parse path still returns the full
     /// `Blob` model so later tasks can consume it, and this guard exists so that honest parsing does
-    /// not silently emit a wrong `Blob` artifact before its runtime encoding lands.
+    /// not silently emit a wrong `Blob` artifact before its runtime encoding lands. Contracts holding
+    /// any number of capabilities are emittable; the guard checks every capability's boundary leaves.
     ///
     /// # Errors
-    /// Returns `BXG0041` at the contract-invocation span when the contract holds more than one
-    /// capability, or `BXG0040` at the same span when either boundary leaf is `Blob`.
+    /// Returns `BXG0040` at the contract-invocation span when ANY capability's boundary leaf is `Blob`.
     pub fn require_v0_emittable(&self) -> Result<(), Diagnostics> {
-        if self.model.capabilities.len() != 1 {
-            return Err(Diagnostics(vec![Diagnostic {
-                path: self.source.clone(),
-                span: self.span,
-                code: "BXG0041",
-                offending: "multiple capabilities not yet emittable in v0".into(),
-                rule: EMITTABLE_MULTI_RULE,
-                rule_source: EMITTABLE_MULTI_RULE_SOURCE,
-            }]));
-        }
-        let capability = &self.model.capabilities[0];
-        if !capability.input_type.is_blob() && !capability.output_type.is_blob() {
+        if self
+            .model
+            .capabilities
+            .iter()
+            .all(|capability| !capability.input_type.is_blob() && !capability.output_type.is_blob())
+        {
             return Ok(());
         }
         Err(Diagnostics(vec![Diagnostic {
