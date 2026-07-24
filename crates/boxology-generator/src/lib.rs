@@ -2364,6 +2364,149 @@ fn main() {
     }
 
     #[test]
+    fn generated_multi_capability_adapter_and_implementation_compile_and_route() {
+        use std::{
+            fs,
+            process::Command,
+            sync::atomic::{AtomicUsize, Ordering},
+        };
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let source = "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }";
+        let root = std::env::temp_dir().join(format!(
+            "boxology-multicap-adapter-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for file in generate(&request_for("store", source)).unwrap().files() {
+            let path = root.join(file.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, file.bytes()).unwrap();
+        }
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.0.0\",path={:?}}}\nboxology-runtime={{version=\"=0.0.0\",path={:?},features=[\"test-support\"]}}\n",
+                workspace.join("boxology"),
+                workspace.join("boxology-contract"),
+                workspace.join("boxology-runtime"),
+            ),
+        )
+        .unwrap();
+        let implementation = root.join("implementation");
+        fs::create_dir_all(implementation.join("src")).unwrap();
+        fs::write(
+            implementation.join("Cargo.toml"),
+            "[package]\nname=\"store-implementation\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology={workspace=true}\nboxology-contract={workspace=true}\nboxology-runtime={workspace=true}\nboxology_generated_contract={package=\"store-contract\",path=\"../generated/contract\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            implementation.join("src/main.rs"),
+            r#"
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll, Waker};
+use boxology_contract::{CallContext, Caller, CancelToken, ContractType, ExposureLevel, TraceContext};
+use boxology_runtime::{CompositionBuilder, test_support::StubTransport};
+use boxology_generated_contract::StoreError;
+
+pub struct StoreService;
+
+#[boxology::implementation]
+impl StoreService {
+    pub async fn get(&self, context: CallContext, key: u64) -> Result<String, StoreError> {
+        let _ = context;
+        Ok(format!("value-{key}"))
+    }
+
+    pub async fn put(&self, context: CallContext, value: String) -> Result<bool, StoreError> {
+        let _ = context;
+        Ok(!value.is_empty())
+    }
+}
+
+mod generated {
+    include!("../../generated/adapter/adapter.rs");
+}
+
+fn context() -> CallContext {
+    CallContext::new(Caller::Anonymous, None, CancelToken::new(), TraceContext::empty(), None)
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut TaskContext::from_waker(Waker::noop())) {
+            return output;
+        }
+    }
+}
+
+fn assert_bounds<T: Send + Sync + 'static>() {}
+fn assert_send<T: Send>(value: T) -> T { value }
+
+fn main() {
+    assert_bounds::<generated::StoreAdapter<StoreService>>();
+    let descriptor = generated::implementation_descriptor();
+    assert!(std::ptr::eq(
+        descriptor.contract(),
+        boxology_generated_contract::contract_descriptor()
+    ));
+    assert!(descriptor.imports().is_empty());
+    let capabilities = descriptor.contract().capabilities();
+    assert_eq!(capabilities.len(), 2);
+    let get_cap = capabilities[0].id().clone();
+    let put_cap = capabilities[1].id().clone();
+    assert_eq!(get_cap.to_string(), "store.get");
+    assert_eq!(put_cap.to_string(), "store.put");
+
+    let transport = Arc::new(StubTransport::new());
+    let provider = boxology_contract::BoxId::new("store").unwrap();
+    let mut builder = CompositionBuilder::new();
+    builder.add_box(descriptor, |imports| generated::factory(StoreService, imports));
+    builder.expose(provider.clone(), get_cap.clone(), transport.clone(), ExposureLevel::External);
+    builder.expose(provider.clone(), put_cap.clone(), transport.clone(), ExposureLevel::External);
+    let composition = builder.start().unwrap();
+
+    let runtime = transport.runtime().unwrap();
+    let exposures = runtime.exposures();
+    assert_eq!(exposures.len(), 2);
+    let get_exposure = exposures
+        .iter()
+        .find(|exposure| exposure.descriptor().id().to_string() == "store.get")
+        .expect("store.get exposure missing");
+    let put_exposure = exposures
+        .iter()
+        .find(|exposure| exposure.descriptor().id().to_string() == "store.put")
+        .expect("store.put exposure missing");
+
+    let get_input = 7u64.encode().unwrap();
+    let get_output = block_on(assert_send(get_exposure.dispatch(context(), get_input))).unwrap();
+    assert_eq!(String::decode(&get_output).unwrap(), "value-7");
+
+    let put_input = "x".to_owned().encode().unwrap();
+    let put_output = block_on(assert_send(put_exposure.dispatch(context(), put_input))).unwrap();
+    assert!(bool::decode(&put_output).unwrap());
+
+    drop(composition);
+}
+"#,
+        )
+        .unwrap();
+        let status = Command::new("cargo")
+            .args(["run", "--offline", "--manifest-path"])
+            .arg(implementation.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn output_set_fails_closed_with_one_stable_code() {
         let cases = [
             (
