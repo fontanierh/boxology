@@ -117,6 +117,11 @@ impl DispatchTasks {
         task
     }
 
+    /// Returns the composition tracker that also owns the connection tasks.
+    pub(crate) fn tracker(&self) -> &TransportTaskTracker {
+        &self.0.tracker
+    }
+
     pub(crate) fn cancel_all(&self) {
         for task in self.0.tasks.lock().unwrap().values() {
             task.cancellation.cancel();
@@ -726,6 +731,9 @@ fn validate_json_content_type(value: &str) -> Result<(), WireCallError> {
 
 trait ExposureView {
     fn descriptor(&self) -> &CapabilityDescriptor;
+    /// TODO(s3): v0 admits Internal and External identically on this transport
+    /// (`specs/s3-http-binding.md`), so only the codec tests read this seam.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn level(&self) -> ExposureLevel;
 }
 

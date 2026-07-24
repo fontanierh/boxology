@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[allow(dead_code)]
 #[cfg(feature = "server")]
 mod binding;
 #[cfg(feature = "client")]
@@ -14,11 +13,12 @@ mod encoder;
 mod replay_tests;
 #[allow(dead_code)]
 mod semantic;
-#[allow(dead_code)]
 #[cfg(feature = "server")]
 mod server;
 #[allow(dead_code)]
 mod syntax;
 
+#[cfg(feature = "server")]
+pub use binding::{HttpServerBinding, HttpServerConfig, HttpServerHandle};
 #[cfg(feature = "client")]
 pub use client::{HttpClientConfig, HttpClientTarget};

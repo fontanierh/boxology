@@ -39,5 +39,6 @@ ryu = "=1.0.23"
 
 [dev-dependencies]
 boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime", features = ["test-support"] }
-hello-contract = { version = "=0.0.0", path = "../fixtures/hello/generated/contract" }
+boxology_generated_contract = { package = "hello-contract", version = "=0.0.0", path = "../fixtures/hello/generated/contract" }
+hello-implementation = { version = "=0.0.0", path = "../fixtures/hello/implementation" }
 tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "test-util", "time"] }

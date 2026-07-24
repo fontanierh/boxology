@@ -99,6 +99,7 @@ dependencies = [
  "boxology-runtime",
  "bytes",
  "hello-contract",
+ "hello-implementation",
  "http",
  "http-body",
  "http-body-util",
