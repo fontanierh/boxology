@@ -632,6 +632,9 @@ fn adapter_source(
     // prettyplease output stays byte-identical for every existing box. One or more imports build a
     // `[ ImportDescriptor::new(...), ... ]` literal preserving import and capability order.
     let import_list = import_descriptors(imports);
+    // Purely additive: emitted only when the box has >=1 import, so zero-import boxes stay
+    // byte-identical. `factory` and `{prefix}Adapter` are unchanged.
+    let typed_imports = typed_imports_source(box_id, imports);
     format!(
         r#"
         use ::boxology_contract::ContractType;
@@ -664,6 +667,8 @@ fn adapter_source(
                 _imports: imports,
             }}
         }}
+
+        {typed_imports}
 
         impl<T> ::boxology_contract::ErasedTarget for {prefix}Adapter<T>
         where
@@ -705,6 +710,7 @@ fn adapter_source(
         prefix = prefix,
         call_body = call_body,
         import_list = import_list,
+        typed_imports = typed_imports,
     )
 }
 
@@ -745,6 +751,139 @@ fn import_descriptors(imports: &[boxology_generator_model::ImportModel]) -> Stri
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{entries}]")
+}
+
+/// Emits the adapter's typed import surface: a `{BPascal}Import` wrapper per imported box, a
+/// `{APascal}Imports` bundle, and a `typed_imports(&Imports)` converter, so box A can call an
+/// imported capability with typed leaf I/O — level 2 (leaf-typed I/O; the error stays
+/// `ErasedCallError`, foreign typed errors deferred). It has no dependency on box B's contract crate.
+///
+/// Zero imports return `String::new()`: the adapter is reprinted through prettyplease from a parsed
+/// AST, so an empty interpolation is byte-identical to the pre-import output — the same mechanism
+/// `import_descriptors` uses for its bare `[]`. The surface is purely additive; imports are
+/// implementation-local and land only in the adapter, never in the outward contract, schema,
+/// revision, or semantic digest.
+///
+/// The bundle field name maps the box_id `-` to `_`; the map is injective because `_` is outside the
+/// `[a-z][a-z0-9-]*` box-id grammar (identity.rs). Adversarial identifiers — a Rust-keyword box id,
+/// or a digit-boundary pascal collision such as `a-1b` and `a1b` both pascal-casing to `A1b` — fail
+/// closed loudly: the bad adapter fails `syn::parse_file` or produces a duplicate-definition rustc
+/// error. A generator-side diagnostic is deferred, mirroring the routing-static precedent at
+/// `capability_static_name`.
+fn typed_imports_source(box_id: &str, imports: &[boxology_generator_model::ImportModel]) -> String {
+    if imports.is_empty() {
+        return String::new();
+    }
+    let prefix = pascal_case(box_id);
+    let wrappers = imports
+        .iter()
+        .map(|import| {
+            let package = import.package().as_str();
+            let import_prefix = pascal_case(package);
+            let methods = import
+                .capabilities()
+                .iter()
+                .map(|capability| {
+                    format!(
+                        r#"            pub async fn {name}(
+                &self,
+                context: ::boxology_contract::CallContext,
+                input: {input_qualified},
+            ) -> Result<{output_qualified}, ::boxology_contract::ErasedCallError> {{
+                let capability = ::boxology_contract::CapabilityId::new(
+                    ::boxology_contract::BoxId::new({package:?})
+                        .expect("generated import package id is valid"),
+                    ::boxology_contract::CapabilityName::new({name:?})
+                        .expect("generated import capability name is valid"),
+                );
+                let input = input.encode().map_err(|error| {{
+                    ::boxology_contract::ErasedCallError::ContractViolation(
+                        conversion_detail("input_encode", error),
+                    )
+                }})?;
+                let output = self.handle.call(&capability, context, input).await?;
+                let output = ::boxology_contract::TypeDescriptor::{output_constructor}()
+                    .conform(::boxology_contract::DecodeRole::ConsumerOutput, output)
+                    .map_err(|error| {{
+                        ::boxology_contract::ErasedCallError::InvalidResponse(
+                            conversion_detail("output_decode", error),
+                        )
+                    }})?;
+                {output_qualified}::decode(&output).map_err(|error| {{
+                    ::boxology_contract::ErasedCallError::InvalidResponse(
+                        conversion_detail("output_decode", error),
+                    )
+                }})
+            }}
+"#,
+                        name = capability.name(),
+                        input_qualified = rust_value_type(capability.input_type(), true),
+                        output_qualified = rust_value_type(capability.output_type(), true),
+                        output_constructor =
+                            schema::descriptor_constructor(capability.output_type()),
+                        package = package,
+                    )
+                })
+                .collect::<String>();
+            format!(
+                r#"        pub struct {import_prefix}Import {{
+            handle: ::boxology_runtime::ImportHandle,
+        }}
+
+        impl {import_prefix}Import {{
+{methods}        }}
+
+"#,
+                import_prefix = import_prefix,
+                methods = methods,
+            )
+        })
+        .collect::<String>();
+    let fields = imports
+        .iter()
+        .map(|import| {
+            format!(
+                "            pub {field}: {import_prefix}Import,\n",
+                field = import.package().as_str().replace('-', "_"),
+                import_prefix = pascal_case(import.package().as_str()),
+            )
+        })
+        .collect::<String>();
+    let conversions = imports
+        .iter()
+        .map(|import| {
+            format!(
+                r#"                {field}: {import_prefix}Import {{
+                    handle: imports
+                        .handle(
+                            &::boxology_contract::BoxId::new({package:?})
+                                .expect("generated import package id is valid"),
+                        )
+                        .expect("declared import handle is present")
+                        .clone(),
+                }},
+"#,
+                field = import.package().as_str().replace('-', "_"),
+                import_prefix = pascal_case(import.package().as_str()),
+                package = import.package().as_str(),
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"
+{wrappers}        pub struct {prefix}Imports {{
+{fields}        }}
+
+        pub fn typed_imports(imports: &::boxology_runtime::Imports) -> {prefix}Imports {{
+            {prefix}Imports {{
+{conversions}            }}
+        }}
+"#,
+        wrappers = wrappers,
+        prefix = prefix,
+        fields = fields,
+        conversions = conversions,
+    )
 }
 
 fn dispatch_source(box_id: &str, contract: &Contract) -> String {
@@ -1250,12 +1389,7 @@ macro_rules! __boxology_check_implementation {
 
     /// A minimal valid `hello` import schema offering the `greet` capability over `String`.
     fn valid_hello_schema() -> String {
-        format!(
-            "{{ \"box_id\": \"hello\", \"capabilities\": [ {{ \"id\": \"hello.greet\", \
-             \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \"name\": \"greet\", \
-             \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }} ], \
-             \"revision\": \"{IMPORT_REVISION}\", \"schema_format\": 1 }}"
-        )
+        import_schema("hello", &[("greet", "String", "String")])
     }
 
     /// Builds a full-output request for `box_id` declaring one import of `schema` at `schema_path`.
@@ -1266,19 +1400,54 @@ macro_rules! __boxology_check_implementation {
         schema_path: &str,
         schema: &str,
     ) -> GenerationRequest {
+        request_for_with_imports(box_id, source, &[(package, schema_path, schema)])
+    }
+
+    /// Builds a full-output request for `box_id` declaring one import per `(package, path, schema)`,
+    /// in request order. The plural form drives ordering coverage for the typed import surface.
+    fn request_for_with_imports(
+        box_id: &str,
+        source: &str,
+        imports: &[(&str, &str, &str)],
+    ) -> GenerationRequest {
         let manifest = format!("schema = 1\nid = \"{box_id}\"\nkind = \"box\"\n");
+        let mut inputs = vec![
+            ("boxology.toml".into(), manifest.into_bytes()),
+            ("src/lib.rs".into(), source.as_bytes().to_vec()),
+        ];
+        let mut declared = Vec::new();
+        for (package, schema_path, schema) in imports {
+            inputs.push(((*schema_path).into(), schema.as_bytes().to_vec()));
+            declared.push((BoxId::new(*package).unwrap(), (*schema_path).into()));
+        }
         GenerationRequest::new(
             BoxId::new(box_id).unwrap(),
             "src/lib.rs".into(),
-            vec![
-                ("boxology.toml".into(), manifest.into_bytes()),
-                ("src/lib.rs".into(), source.as_bytes().to_vec()),
-                (schema_path.into(), schema.as_bytes().to_vec()),
-            ],
-            vec![(BoxId::new(package).unwrap(), schema_path.into())],
+            inputs,
+            declared,
             OUTPUTS.iter().map(|output| (*output).to_owned()).collect(),
         )
         .unwrap()
+    }
+
+    /// A minimal valid import schema for `package` offering each `(name, input, output)` capability.
+    fn import_schema(package: &str, capabilities: &[(&str, &str, &str)]) -> String {
+        let entries = capabilities
+            .iter()
+            .map(|(name, input, output)| {
+                format!(
+                    "{{ \"id\": \"{package}.{name}\", \
+                     \"input\": {{ \"name\": \"name\", \"type\": \"{input}\" }}, \
+                     \"name\": \"{name}\", \"output\": {{ \"type\": \"{output}\" }}, \
+                     \"shape\": \"unary\" }}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{{ \"box_id\": \"{package}\", \"capabilities\": [ {entries} ], \
+             \"revision\": \"{IMPORT_REVISION}\", \"schema_format\": 1 }}"
+        )
     }
 
     fn tree(source: &str, reverse: bool) -> GeneratedTree {
@@ -1823,6 +1992,77 @@ macro_rules! __boxology_check_implementation {
     }
 
     #[test]
+    fn import_adapter_emits_typed_import_surface() {
+        // A greeter box importing two packages — hello (two capabilities) and world (one) — emits a
+        // typed import handle per package into its adapter: a `{BPascal}Import` wrapper with one
+        // typed leaf-I/O async method per capability, a `{APascal}Imports` bundle, and a
+        // `typed_imports` converter. The surface is purely additive — the factory still parks
+        // `_imports: imports` unchanged.
+        let hello = import_schema(
+            "hello",
+            &[("greet", "String", "String"), ("count", "u64", "bool")],
+        );
+        let world = import_schema("world", &[("ping", "String", "String")]);
+        let request = request_for_with_imports(
+            "greeter",
+            CONTRACT,
+            &[
+                ("hello", "imports/hello.json", &hello),
+                ("world", "imports/world.json", &world),
+            ],
+        );
+        let tree = generate(&request).unwrap();
+        let adapter =
+            std::str::from_utf8(file(&tree, "generated/adapter/adapter.rs").bytes()).unwrap();
+        syn::parse_file(adapter).expect("typed-import adapter must parse");
+
+        // One wrapper per imported box, with a typed leaf-I/O method per capability.
+        assert!(adapter.contains("pub struct HelloImport"));
+        assert!(adapter.contains("handle: ::boxology_runtime::ImportHandle"));
+        assert!(adapter.contains("pub async fn greet("));
+        assert!(adapter.contains("pub async fn count("));
+        assert!(adapter.contains("pub struct WorldImport"));
+        assert!(adapter.contains("pub async fn ping("));
+        // Level-2 typing: leaf-typed I/O, output conformed as ConsumerOutput, error stays erased.
+        // `TypeDescriptor::bool()` cannot come from box A's own String contract, so it proves the
+        // per-capability output descriptor constructor for the `count` method.
+        assert!(adapter.contains("::boxology_contract::DecodeRole::ConsumerOutput"));
+        assert!(adapter.contains("::boxology_contract::TypeDescriptor::bool()"));
+        // Faithful error mapping.
+        assert!(adapter.contains("ErasedCallError::ContractViolation"));
+        assert!(adapter.contains("\"input_encode\""));
+        assert!(adapter.contains("ErasedCallError::InvalidResponse"));
+        assert!(adapter.contains("\"output_decode\""));
+        // Bundle + converter; field name = box_id with `-`->`_` (here identity).
+        assert!(adapter.contains("pub struct GreeterImports"));
+        assert!(adapter.contains("pub hello: HelloImport"));
+        assert!(adapter.contains("pub world: WorldImport"));
+        assert!(adapter.contains("pub fn typed_imports("));
+
+        // Capability order within a wrapper: greet before count (schema order).
+        let greet = adapter.find("pub async fn greet(").unwrap();
+        let count = adapter.find("pub async fn count(").unwrap();
+        assert!(greet < count, "capabilities emitted out of schema order");
+        // Import order across wrappers and bundle fields: hello before world (request order).
+        let hello_struct = adapter.find("pub struct HelloImport").unwrap();
+        let world_struct = adapter.find("pub struct WorldImport").unwrap();
+        assert!(
+            hello_struct < world_struct,
+            "wrappers emitted out of request order"
+        );
+        let hello_field = adapter.find("pub hello: HelloImport").unwrap();
+        let world_field = adapter.find("pub world: WorldImport").unwrap();
+        assert!(
+            hello_field < world_field,
+            "bundle fields emitted out of request order"
+        );
+
+        // Additive: the factory still parks the raw imports unchanged, exactly once.
+        assert_eq!(adapter.matches("_imports: imports").count(), 1);
+        assert!(adapter.contains("pub fn factory"));
+    }
+
+    #[test]
     fn zero_import_and_with_import_differ_only_in_adapter() {
         // Imports are implementation-local: declaring one changes only the adapter. The outward
         // contract crate, schema, revision, and semantic digest are byte-identical with and without.
@@ -1865,6 +2105,16 @@ macro_rules! __boxology_check_implementation {
                 .to_owned()
         };
         assert_eq!(digest(&without), digest(&with));
+        // The typed import surface is emitted only when the box has an import; the zero-import
+        // adapter never carries the `typed_imports` converter (the hard mechanical guard is the
+        // zero-import fixture golden in crates/fixtures/).
+        let adapter = |tree: &GeneratedTree| {
+            std::str::from_utf8(file(tree, "generated/adapter/adapter.rs").bytes())
+                .unwrap()
+                .to_owned()
+        };
+        assert!(adapter(&with).contains("typed_imports"));
+        assert!(!adapter(&without).contains("typed_imports"));
     }
 
     #[test]
@@ -2506,6 +2756,127 @@ fn main() {
     assert!(matches!(domain, Err(ErasedCallError::Domain { error_tag, .. }) if error_tag == "EmptyName"));
 
     drop(composition);
+}
+"#,
+        )
+        .unwrap();
+        let status = Command::new("cargo")
+            .args(["run", "--offline", "--manifest-path"])
+            .arg(implementation.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_import_adapter_typed_imports_compile_and_fail_unsealed() {
+        // The greeter box imports hello; its adapter's typed import surface must type-check against
+        // the real crates and behave. The box captures its `HelloImport` out of the `add_box`
+        // factory closure (composition.rs `F: FnOnce(Imports) -> T` has no `'static` bound, so the
+        // borrow-then-move compiles), then calls the typed `greet` on the still-unsealed handle. No
+        // second box and no resolve_import (sealed e2e is PR-3): the call must fail closed as
+        // Unavailable("unsealed_import"). This proves the emitted encode succeeds, the erased error
+        // passes straight through `?`, and the `typed_imports` BoxId lookup agrees with the emitted
+        // ImportDescriptor slot — else `typed_imports` would have panicked on the missing handle.
+        use std::{
+            fs,
+            process::Command,
+            sync::atomic::{AtomicUsize, Ordering},
+        };
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "boxology-typed-imports-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let request = request_for_with_import(
+            "greeter",
+            CONTRACT,
+            "hello",
+            "imports/hello.json",
+            &valid_hello_schema(),
+        );
+        for file in generate(&request).unwrap().files() {
+            let path = root.join(file.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, file.bytes()).unwrap();
+        }
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.0.0\",path={:?}}}\nboxology-runtime={{version=\"=0.0.0\",path={:?}}}\n",
+                workspace.join("boxology"),
+                workspace.join("boxology-contract"),
+                workspace.join("boxology-runtime"),
+            ),
+        )
+        .unwrap();
+        let implementation = root.join("implementation");
+        fs::create_dir_all(implementation.join("src")).unwrap();
+        fs::write(
+            implementation.join("Cargo.toml"),
+            "[package]\nname=\"greeter-implementation\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology={workspace=true}\nboxology-contract={workspace=true}\nboxology-runtime={workspace=true}\nboxology_generated_contract={package=\"greeter-contract\",path=\"../generated/contract\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            implementation.join("src/main.rs"),
+            r#"
+use std::future::Future;
+use std::task::{Context as TaskContext, Poll, Waker};
+use boxology_contract::{CallContext, Caller, CancelToken, ErasedCallError, TraceContext};
+use boxology_runtime::CompositionBuilder;
+use boxology_generated_contract::GreetError;
+
+pub struct GreeterService {
+    hello: generated::HelloImport,
+}
+
+#[boxology::implementation]
+impl GreeterService {
+    pub async fn greet(&self, context: CallContext, name: String) -> Result<String, GreetError> {
+        let _ = (&self.hello, context);
+        Ok(format!("Hello, {name}!"))
+    }
+}
+
+mod generated {
+    include!("../../generated/adapter/adapter.rs");
+}
+
+fn context() -> CallContext {
+    CallContext::new(Caller::Anonymous, None, CancelToken::new(), TraceContext::empty(), None)
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut TaskContext::from_waker(Waker::noop())) {
+            return output;
+        }
+    }
+}
+
+fn main() {
+    let descriptor = generated::implementation_descriptor();
+    assert_eq!(descriptor.imports().len(), 1);
+    let mut builder = CompositionBuilder::new();
+    let mut captured = None;
+    builder.add_box(descriptor, |imports| {
+        let deps = generated::typed_imports(&imports);
+        captured = Some(generated::typed_imports(&imports).hello);
+        generated::factory(GreeterService { hello: deps.hello }, imports)
+    });
+    let result = block_on(captured.unwrap().greet(context(), "Ada".into()));
+    let Err(ErasedCallError::Unavailable(detail)) = result else {
+        panic!("unsealed import did not fail as unavailable: {result:?}")
+    };
+    assert_eq!(detail.code(), "unsealed_import");
 }
 "#,
         )
