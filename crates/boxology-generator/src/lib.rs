@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 use boxology_contract_syntax::{CanonicalType, CapabilityDeclaration, Contract};
-use boxology_generator_model::{Diagnostics, GenerationRequest, ParsedRustInputs};
+use boxology_generator_model::{Diagnostics, GenerationRequest, ImportModel, ParsedRustInputs};
 
 mod schema;
 
@@ -54,6 +54,10 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let parsed = ParsedRustInputs::parse(request)?;
     let contract = parsed.controlled_contract()?;
     contract.require_v0_emittable()?;
+    // Hydrate and fail closed on any declared import; PR-1b binds and threads the returned models
+    // into the adapter. This PR discards the value: no emission changes, so every existing box
+    // stays byte-identical.
+    ImportModel::parse_all(request)?;
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
         "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",

@@ -85,6 +85,7 @@ dependencies = [
  "boxology-contract",
  "boxology-contract-syntax",
  "proc-macro2",
+ "serde_json",
  "syn 3.0.0",
  "toml_edit",
 ]
