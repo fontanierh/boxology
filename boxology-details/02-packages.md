@@ -37,7 +37,7 @@ This distinction preserves the universal ownership rule while allowing Cargo to 
 
 Every logical package root contains exactly one package-local `boxology.toml`, discovered deterministically without a hand-maintained central index. Every package kind participates in the same manifest model, with common ownership fields and kind-specific sections. TOML is the v1 serialization.
 
-The workspace checker walks from the Cargo workspace root, excluding VCS metadata and Cargo build-output directories, and finds every `boxology.toml`. Manifest paths are normalized relative to that root. Absolute paths, `..` escapes, symlink escapes, duplicate package identities, overlapping ownership, and files that classify under no package are rejected.
+The workspace checker walks from the Cargo workspace root, excluding VCS metadata and Cargo build-output directories, and finds every `boxology.toml`. Manifest paths are normalized relative to that root. A platform-kind package may declare owned subtrees as fixture data; a `boxology.toml` inside a declared fixture subtree is that package's owned test material, not a workspace package, and discovery does not descend into it. Absolute paths, `..` escapes, symlink escapes, duplicate package identities, overlapping ownership, and files that classify under no package are rejected.
 
 Every manifest begins with:
 
