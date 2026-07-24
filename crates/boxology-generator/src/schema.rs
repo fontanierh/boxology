@@ -93,10 +93,39 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
             )
         })
         .collect::<String>();
-    let capability = &contract.capabilities[0];
-    let capability_deprecation = rust_deprecation(&capability.deprecation);
-    let input_constructor = descriptor_constructor(capability.input_type);
-    let output_constructor = descriptor_constructor(capability.output_type);
+    // Every capability binds `box_id.clone()` and MUST run before `ContractDescriptor::new`
+    // moves `box_id`. At a single capability the binding name, error move, and array are the
+    // exact tokens emitted before this generalization, so the frozen Hello output is unchanged.
+    let single = contract.capabilities.len() == 1;
+    let bindings = contract
+        .capabilities
+        .iter()
+        .enumerate()
+        .map(|(index, capability)| {
+            let binding = if single {
+                "capability".to_owned()
+            } else {
+                format!("capability_{index}")
+            };
+            let error_expr = if single { "error" } else { "error.clone()" };
+            format!(
+                "let {binding} = {expression};",
+                binding = binding,
+                expression = capability_expression("box_id.clone()", capability, error_expr),
+            )
+        })
+        .collect::<String>();
+    let array = if single {
+        "[capability]".to_owned()
+    } else {
+        format!(
+            "[{}]",
+            (0..contract.capabilities.len())
+                .map(|index| format!("capability_{index}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     let revision = hash_spelling(revision);
     format!(
         r#"
@@ -108,23 +137,10 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
                 {variants}
             ])
             .expect("generated error descriptor is valid");
-            let capability = ::boxology_contract::CapabilityDescriptor::new(
-                ::boxology_contract::CapabilityId::new(
-                    box_id.clone(),
-                    ::boxology_contract::CapabilityName::new({capability_name:?})
-                        .expect("generated capability name is valid"),
-                ),
-                ::boxology_contract::TypeDescriptor::{input_constructor}(),
-                ::boxology_contract::TypeDescriptor::{output_constructor}(),
-                error,
-                ::boxology_contract::CapabilityShape::Unary,
-                ::boxology_contract::ExposureLevel::External,
-                ::boxology_contract::Idempotency::None,
-                {capability_deprecation},
-            );
+            {bindings}
             ::boxology_contract::ContractDescriptor::new(
                 box_id,
-                [capability],
+                {array},
                 ::boxology_contract::ContractRevision::new({revision:?})
                     .expect("generated contract revision is non-empty"),
             )
@@ -138,11 +154,28 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
         "#,
         box_id = box_id,
         variants = variants,
-        capability_name = capability.name,
-        capability_deprecation = capability_deprecation,
-        input_constructor = input_constructor,
-        output_constructor = output_constructor,
+        bindings = bindings,
+        array = array,
         revision = revision,
+    )
+}
+
+/// Emits one `CapabilityDescriptor::new(...)` expression with the exact tokens the single-capability
+/// descriptor emitted before generalization. `box_id_expr` names the moved-or-cloned box identity and
+/// `error_expr` names the error descriptor (a move at one capability, a clone when several share it).
+fn capability_expression(
+    box_id_expr: &str,
+    capability: &CapabilityDeclaration,
+    error_expr: &str,
+) -> String {
+    format!(
+        "::boxology_contract::CapabilityDescriptor::new(::boxology_contract::CapabilityId::new({box_id_expr}, ::boxology_contract::CapabilityName::new({name:?}).expect(\"generated capability name is valid\")), ::boxology_contract::TypeDescriptor::{input_constructor}(), ::boxology_contract::TypeDescriptor::{output_constructor}(), {error_expr}, ::boxology_contract::CapabilityShape::Unary, ::boxology_contract::ExposureLevel::External, ::boxology_contract::Idempotency::None, {deprecation},)",
+        box_id_expr = box_id_expr,
+        name = capability.name,
+        input_constructor = descriptor_constructor(capability.input_type),
+        output_constructor = descriptor_constructor(capability.output_type),
+        error_expr = error_expr,
+        deprecation = rust_deprecation(&capability.deprecation),
     )
 }
 

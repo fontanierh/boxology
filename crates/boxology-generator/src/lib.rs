@@ -1085,6 +1085,10 @@ macro_rules! __boxology_check_implementation {
             schema::descriptor_source("hello", model, &schema::revision("hello", model));
         assert!(descriptor.contains("::boxology_contract::TypeDescriptor::u32()"));
         assert!(descriptor.contains("::boxology_contract::TypeDescriptor::bool()"));
+        // At a single capability the emitter keeps the pre-generalization binding name and never
+        // uses the indexed `capability_0` name reserved for the multi-capability path.
+        assert!(descriptor.contains("let capability = "));
+        assert!(!descriptor.contains("capability_0"));
     }
 
     #[test]
@@ -1180,6 +1184,55 @@ macro_rules! __boxology_check_implementation {
         assert_eq!(capabilities[1]["error"], "StoreError");
         assert!(capabilities[0]["id"].as_str().unwrap().ends_with(".get"));
         assert!(capabilities[1]["id"].as_str().unwrap().ends_with(".put"));
+    }
+
+    #[test]
+    fn multi_capability_descriptor_source_lists_all_in_source_order() {
+        // Two capabilities share one error enum; the Rust descriptor emitter must emit one
+        // CapabilityDescriptor per capability in source order, each with its own boundary types,
+        // over a single shared error descriptor. Exercised directly because generate() still
+        // fails closed (BXG0041) on more than one capability.
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
+        );
+        let model = contract.model();
+        let descriptor =
+            schema::descriptor_source("store", model, &schema::revision("store", model));
+        syn::parse_file(&descriptor).expect("multi-capability descriptor source must parse");
+        assert_eq!(
+            descriptor
+                .matches("::boxology_contract::CapabilityDescriptor::new(")
+                .count(),
+            2
+        );
+        let get_index = descriptor
+            .find("::boxology_contract::CapabilityName::new(\"get\")")
+            .expect("descriptor names get");
+        let put_index = descriptor
+            .find("::boxology_contract::CapabilityName::new(\"put\")")
+            .expect("descriptor names put");
+        assert!(
+            get_index < put_index,
+            "capabilities emitted out of source order"
+        );
+        let second = descriptor
+            .match_indices("CapabilityDescriptor::new(")
+            .nth(1)
+            .expect("descriptor has a second capability")
+            .0;
+        let (first_capability, second_capability) = descriptor.split_at(second);
+        assert!(first_capability.contains("::boxology_contract::TypeDescriptor::u64()"));
+        assert!(second_capability.contains("::boxology_contract::TypeDescriptor::bool()"));
+        assert!(descriptor.contains("let capability_0"));
+        assert!(descriptor.contains("let capability_1"));
+        assert!(descriptor.contains("[capability_0, capability_1]"));
+        assert!(descriptor.contains("error.clone()"));
+        assert_eq!(
+            descriptor
+                .matches("::boxology_contract::TypeDescriptor::enumeration(")
+                .count(),
+            1
+        );
     }
 
     #[test]
