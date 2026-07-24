@@ -36,7 +36,7 @@ The deterministic initializer: creating the Cargo workspace, the Hello box (impl
 
 ## S7 — Skill, acceptance, and stage-2 self-hosting
 
-The portable Agent Skills-format skill that teaches a coding agent the box model and names it the lead; the end-to-end acceptance run of the foundation scenario, including the `greet(name)` task; and stage 2 of the [self-hosting ladder](10-strategy-review.md#self-hosting-ladder) — adopting `boxology.toml` manifests and `boxology check` on this product repository itself, including the standing friction log required by the dogfooding pain discriminator. Depends on S0–S6.
+The portable Agent Skills-format skill that teaches a coding agent the box model and names it the lead; the end-to-end acceptance run of the foundation scenario, including the `greet(name)` task; and stage 2 of the [self-hosting ladder](10-strategy-review.md#self-hosting-ladder) — adopting `boxology.toml` manifests and `boxology check` on this product repository itself, including the standing friction log required by the dogfooding pain discriminator. Depends on S0–S6. Spec: [S7 — Skill, Acceptance, and Stage-2 Self-Hosting](../specs/s7-skill-acceptance-self-hosting.md).
 
 ## Recorded v0 exclusions
 
