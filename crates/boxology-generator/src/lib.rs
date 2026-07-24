@@ -2,7 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_contract_syntax::CanonicalType;
+use boxology_contract_syntax::{CanonicalType, Contract};
 use boxology_generator_model::{Diagnostics, GenerationRequest, ParsedRustInputs};
 
 mod schema;
@@ -54,8 +54,10 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let parsed = ParsedRustInputs::parse(request)?;
     let contract = parsed.controlled_contract()?;
     contract.require_v0_emittable()?;
-    // `require_v0_emittable` fails closed unless there is exactly one capability, so binding the
-    // sole capability once here makes the single-capability emission invariant explicit.
+    // `require_v0_emittable` fails closed unless there is exactly one capability. The dispatch
+    // trait and typed handle now generalize to N capabilities and read the model directly, so this
+    // sole-capability binding serves only the still single-capability checker macro, adapter, and
+    // test-support (each generalized by a later PR).
     let capability = &contract.model().capabilities[0];
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
@@ -202,20 +204,7 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     );
     let descriptor =
         schema::descriptor_source(request.box_id().as_str(), contract.model(), &revision);
-    let dispatch = dispatch_source(
-        request.box_id().as_str(),
-        &capability.name,
-        &capability.input_name,
-        &contract.model().error.name,
-        capability.input_type,
-        capability.output_type,
-        contract
-            .model()
-            .error
-            .variants
-            .iter()
-            .map(|variant| (variant.name.as_str(), variant.deprecation.as_deref())),
-    );
+    let dispatch = dispatch_source(request.box_id().as_str(), contract.model());
     let test_support =
         test_support_source(&error.name, capability.input_type, capability.output_type);
     let adapter = adapter_source(&capability.name, capability.input_type);
@@ -487,24 +476,95 @@ fn adapter_source(capability_name: &str, input_type: CanonicalType) -> String {
     )
 }
 
-fn dispatch_source<'a>(
-    box_id: &str,
-    capability_name: &str,
-    input_name: &str,
-    error_name: &str,
-    input_type: CanonicalType,
-    output_type: CanonicalType,
-    variants: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
-) -> String {
-    let input_bare = rust_value_type(input_type, false);
-    let output_bare = rust_value_type(output_type, false);
-    let output_constructor = schema::descriptor_constructor(output_type);
-    let variants = variants
-        .into_iter()
-        .map(|(name, deprecation)| {
+fn dispatch_source(box_id: &str, contract: &Contract) -> String {
+    let error_name = &contract.error.name;
+    let error_static = format!("{}_DESCRIPTOR", screaming_snake(error_name));
+    let variants = contract
+        .error
+        .variants
+        .iter()
+        .map(|variant| {
             format!(
                 "::boxology_contract::VariantDescriptor::new({name:?}, ::boxology_contract::VariantPayload::Unit, {}),",
-                rust_deprecation(deprecation),
+                rust_deprecation(variant.deprecation.as_deref()),
+                name = variant.name,
+            )
+        })
+        .collect::<String>();
+    let trait_methods = contract
+        .capabilities
+        .iter()
+        .map(|capability| {
+            format!(
+                r#"            fn {capability_name}<'a>(
+                &'a self,
+                context: CallContext,
+                {input_name}: {input_bare},
+            ) -> Pin<Box<dyn Future<Output = Result<{output_bare}, {error_name}>> + Send + 'a>>;
+"#,
+                capability_name = capability.name,
+                input_name = capability.input_name,
+                input_bare = rust_value_type(capability.input_type, false),
+                output_bare = rust_value_type(capability.output_type, false),
+                error_name = error_name,
+            )
+        })
+        .collect::<String>();
+    let handle_methods = contract
+        .capabilities
+        .iter()
+        .map(|capability| {
+            format!(
+                r#"            pub async fn {capability_name}(
+                &self,
+                context: CallContext,
+                {input_name}: {input_bare},
+            ) -> Result<{output_bare}, CallError<{error_name}>> {{
+                let input = {input_name}
+                    .encode()
+                    .map_err(|error| conversion_detail("input_encode", error))
+                    .map_err(CallError::ContractViolation)?;
+                let output = self
+                    .target
+                    .call(&{capability_static}, context, input)
+                    .await
+                    .map_err(|error| error.into_typed::<{error_name}>(&{error_static}))?;
+                let output = TypeDescriptor::{output_constructor}()
+                    .conform(DecodeRole::ConsumerOutput, output)
+                    .map_err(|error| conversion_detail("output_decode", error))
+                    .map_err(CallError::InvalidResponse)?;
+                {output_bare}::decode(&output)
+                    .map_err(|error| conversion_detail("output_decode", error))
+                    .map_err(CallError::InvalidResponse)
+            }}
+"#,
+                capability_name = capability.name,
+                input_name = capability.input_name,
+                input_bare = rust_value_type(capability.input_type, false),
+                output_bare = rust_value_type(capability.output_type, false),
+                error_name = error_name,
+                capability_static = capability_static_name(box_id, &capability.name),
+                error_static = error_static,
+                output_constructor = schema::descriptor_constructor(capability.output_type),
+            )
+        })
+        .collect::<String>();
+    let capability_statics = contract
+        .capabilities
+        .iter()
+        .map(|capability| {
+            format!(
+                r#"        static {capability_static}: LazyLock<CapabilityId> = LazyLock::new(|| {{
+            CapabilityId::new(
+                BoxId::new({box_id:?}).expect("generated box identity is valid"),
+                CapabilityName::new({capability_name:?})
+                    .expect("generated capability name is valid"),
+            )
+        }});
+"#,
+                capability_static = capability_static_name(box_id, &capability.name),
+                box_id = box_id,
+                capability_name = capability.name,
             )
         })
         .collect::<String>();
@@ -519,12 +579,7 @@ fn dispatch_source<'a>(
         }};
 
         pub trait HelloDispatch: Send + Sync + 'static {{
-            fn {capability_name}<'a>(
-                &'a self,
-                context: CallContext,
-                {input_name}: {input_bare},
-            ) -> Pin<Box<dyn Future<Output = Result<{output_bare}, {error_name}>> + Send + 'a>>;
-        }}
+{trait_methods}        }}
 
         #[derive(Clone)]
         pub struct HelloHandle {{
@@ -537,39 +592,10 @@ fn dispatch_source<'a>(
                 Self {{ target }}
             }}
 
-            pub async fn {capability_name}(
-                &self,
-                context: CallContext,
-                {input_name}: {input_bare},
-            ) -> Result<{output_bare}, CallError<{error_name}>> {{
-                let input = {input_name}
-                    .encode()
-                    .map_err(|error| conversion_detail("input_encode", error))
-                    .map_err(CallError::ContractViolation)?;
-                let output = self
-                    .target
-                    .call(&HELLO_GREET, context, input)
-                    .await
-                    .map_err(|error| error.into_typed::<{error_name}>(&GREET_ERROR_DESCRIPTOR))?;
-                let output = TypeDescriptor::{output_constructor}()
-                    .conform(DecodeRole::ConsumerOutput, output)
-                    .map_err(|error| conversion_detail("output_decode", error))
-                    .map_err(CallError::InvalidResponse)?;
-                {output_bare}::decode(&output)
-                    .map_err(|error| conversion_detail("output_decode", error))
-                    .map_err(CallError::InvalidResponse)
-            }}
-        }}
+{handle_methods}        }}
 
-        static HELLO_GREET: LazyLock<CapabilityId> = LazyLock::new(|| {{
-            CapabilityId::new(
-                BoxId::new({box_id:?}).expect("generated box identity is valid"),
-                CapabilityName::new({capability_name:?})
-                    .expect("generated capability name is valid"),
-            )
-        }});
-
-        static GREET_ERROR_DESCRIPTOR: LazyLock<TypeDescriptor> = LazyLock::new(|| {{
+{capability_statics}
+        static {error_static}: LazyLock<TypeDescriptor> = LazyLock::new(|| {{
             TypeDescriptor::enumeration([
                 {variants}
             ])
@@ -580,15 +606,44 @@ fn dispatch_source<'a>(
             Detail::new(code).with_message(error.to_string())
         }}
         "#,
-        box_id = box_id,
-        capability_name = capability_name,
-        input_name = input_name,
-        error_name = error_name,
-        input_bare = input_bare,
-        output_bare = output_bare,
-        output_constructor = output_constructor,
+        trait_methods = trait_methods,
+        handle_methods = handle_methods,
+        capability_statics = capability_statics,
+        error_static = error_static,
         variants = variants,
     )
+}
+
+/// Names the per-capability `CapabilityId` routing static as `{BOX}_{CAP}`.
+///
+/// The box identity is uppercased with `-` mapped to `_` and the capability name is uppercased, so
+/// box `hello` capability `greet` yields `HELLO_GREET` — the pre-generalization literal at a single
+/// capability — while each capability of a larger box (e.g. `STORE_GET`, `STORE_PUT`) gets its own.
+///
+/// A routing static name can in principle collide with the shared error-descriptor static
+/// (`{ERROR}_DESCRIPTOR`) for adversarial identifiers — e.g. box `error`, capability `descriptor`,
+/// error enum `Error`. Such a collision is fail-closed: it emits two statics of the same name and
+/// the generated crate fails to compile; it never silently misroutes. It is unreachable through the
+/// current single-`hello`-box pipeline; a generator diagnostic will reject it when the multi-box /
+/// multi-capability emission guard (`BXG0041`) is lifted.
+fn capability_static_name(box_id: &str, cap_name: &str) -> String {
+    format!(
+        "{}_{}",
+        box_id.to_uppercase().replace('-', "_"),
+        cap_name.to_uppercase()
+    )
+}
+
+/// Converts a PascalCase identifier to SCREAMING_SNAKE_CASE (e.g. `GreetError` -> `GREET_ERROR`).
+fn screaming_snake(ident: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in ident.char_indices() {
+        if index != 0 && ch.is_uppercase() {
+            out.push('_');
+        }
+        out.extend(ch.to_uppercase());
+    }
+    out
 }
 
 /// Spells a canonical boundary leaf as a Rust value type for a runtime template site.
@@ -1233,6 +1288,51 @@ macro_rules! __boxology_check_implementation {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn multi_capability_dispatch_source_lists_all_in_source_order() {
+        // Two capabilities share one error enum; the dispatch trait and typed handle must emit one
+        // method per capability in source order, each routed through its own capability-id static,
+        // over a single shared error descriptor. Exercised directly because generate() still fails
+        // closed (BXG0041) on more than one capability.
+        let contract = scalar_model(
+            "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }",
+        );
+        let model = contract.model();
+        let dispatch = dispatch_source("store", model);
+        syn::parse_file(&dispatch).expect("multi-capability dispatch source must parse");
+        let get_trait = dispatch.find("fn get").expect("trait names get");
+        let put_trait = dispatch.find("fn put").expect("trait names put");
+        assert!(get_trait < put_trait, "trait methods out of source order");
+        let get_handle = dispatch.find("pub async fn get").expect("handle names get");
+        let put_handle = dispatch.find("pub async fn put").expect("handle names put");
+        assert!(
+            get_handle < put_handle,
+            "handle methods out of source order"
+        );
+        let get_static = dispatch
+            .find("static STORE_GET")
+            .expect("emits the STORE_GET capability static");
+        let put_static = dispatch
+            .find("static STORE_PUT")
+            .expect("emits the STORE_PUT capability static");
+        assert!(
+            get_static < put_static,
+            "capability statics out of source order"
+        );
+        assert_eq!(dispatch.matches("TypeDescriptor::enumeration(").count(), 1);
+        assert_eq!(dispatch.matches("static STORE_ERROR_DESCRIPTOR").count(), 1);
+        let get_section = &dispatch[get_handle..put_handle];
+        assert!(get_section.contains("u64"), "get input spells u64");
+        assert!(get_section.contains("String"), "get output spells String");
+        assert!(
+            !get_section.contains("bool"),
+            "get section leaks put output"
+        );
+        let put_section = &dispatch[put_handle..];
+        assert!(put_section.contains("String"), "put input spells String");
+        assert!(put_section.contains("bool"), "put output spells bool");
     }
 
     #[test]
