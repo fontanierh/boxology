@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[allow(dead_code)]
+#[cfg(feature = "server")]
+mod binding;
 #[cfg(feature = "client")]
 mod client;
 #[cfg(any(feature = "client", feature = "server"))]
