@@ -736,9 +736,11 @@ fn rule_of(code: Code) -> Code {
         "BXW0011" => "a known manifest key must hold its declared TOML type",
         "BXW0012" => "a required manifest key must be present",
         "BXW0020" => "patterns within one list must be unique",
+        "BXW0021" => "only a platform package may declare fixtures",
+        "BXW0022" => "only composition packages may declare a composition section",
+        "BXW0023" => "a composition package must declare its composition section",
         "BXW0024" => "v1 imports the package's canonical contract, so contract must equal package",
         "BXW0025" => "declared import packages must be unique",
-        "BXW0021" => "only a platform package may declare fixtures",
         "BXW0026" => "a quality command must be non-blank text",
         "BXW0027" => ROLES,
         "BXW0028" => "crate paths must be literal relative paths",
@@ -748,8 +750,6 @@ fn rule_of(code: Code) -> Code {
         "BXW0032" => "derived output ids must be unique",
         "BXW0033" => "generator identities must match [a-z][a-z0-9-]*",
         "BXW0034" => "this list must contain at least one entry",
-        "BXW0022" => "only composition packages may declare a composition section",
-        "BXW0023" => "a composition package must declare its composition section",
         "BXW0035" => "box references must match [a-z][a-z0-9-]*",
         "BXW0036" => "selected boxes must be unique",
         "BXW0037" => "binding capabilities must be box-qualified names",
@@ -845,6 +845,202 @@ mod tests {
     }
     fn kinded(kind: &str) -> String {
         format!("schema = 1\nid = \"demo\"\nkind = {kind}\nowned = []\n")
+    }
+    /// A valid document up to the open bracket of its `owned` list, for one pattern under test.
+    const OWNED: &str = "schema = 1\nid = \"d\"\nkind = \"box\"\nowned = [";
+    /// Every code this crate emits, ascending. The corpus and the golden below are both driven
+    /// from it, so a code that registers nowhere fails loudly instead of going unproven.
+    const ALL_CODES: &[Code] = &[
+        "BXW0001", "BXW0002", "BXW0003", "BXW0004", "BXW0005", "BXW0006", "BXW0007", "BXW0008",
+        "BXW0009", "BXW0010", "BXW0011", "BXW0012", "BXW0013", "BXW0014", "BXW0015", "BXW0016",
+        "BXW0017", "BXW0018", "BXW0019", "BXW0020", "BXW0021", "BXW0022", "BXW0023", "BXW0024",
+        "BXW0025", "BXW0026", "BXW0027", "BXW0028", "BXW0029", "BXW0030", "BXW0031", "BXW0032",
+        "BXW0033", "BXW0034", "BXW0035", "BXW0036", "BXW0037", "BXW0038", "BXW0039", "BXW0040",
+        "BXW0041",
+    ];
+    /// One minimal document per code, spelled `<code> <base> <body>` and ordered as `ALL_CODES`
+    /// is. Each document provokes its code, so every code is reachable from a real document.
+    const CORPUS: &[&str] = &[
+        "BXW0001 utf8 -",
+        r#"BXW0002 raw schema = 1|id = "a" oops"#,
+        r#"BXW0003 raw id = "demo""#,
+        "BXW0004 raw schema = 2",
+        r#"BXW0005 raw schema = 1|kind = "box"|owned = []"#,
+        r#"BXW0006 raw schema = 1|id = "Bad"|kind = "box"|owned = []"#,
+        "BXW0007 kind 7",
+        r#"BXW0008 kind "provider""#,
+        r#"BXW0009 kind "nope""#,
+        "BXW0010 head nope = 1",
+        "BXW0011 head display_name = 7",
+        "BXW0012 head [quality]",
+        r#"BXW0013 owned """#,
+        r#"BXW0014 owned "/a""#,
+        r#"BXW0015 owned "a//b""#,
+        r#"BXW0016 owned "../a""#,
+        r#"BXW0017 owned "a\tb""#,
+        r#"BXW0018 owned "a?""#,
+        r#"BXW0019 owned "a**b""#,
+        r#"BXW0020 owned "a", "a""#,
+        r#"BXW0021 head fixtures = ["f"]"#,
+        r#"BXW0022 head [composition]|boxes = ["h"]"#,
+        r#"BXW0023 raw schema = 1|id = "d"|kind = "composition"|owned = ["a"]"#,
+        r#"BXW0024 imports package = "a"|contract = "b""#,
+        r#"BXW0025 imports package = "a"|contract = "a"|[[imports]]|package = "a"|contract = "a""#,
+        "BXW0026 head [quality]|commands = []",
+        r#"BXW0027 crates cargo_package = "a"|path = "a"|role = "nope""#,
+        r#"BXW0028 crates cargo_package = "a"|path = "!a"|role = "platform""#,
+        r#"BXW0029 crates cargo_package = "a"|path = "a"|role = "platform"|[[crates]]|cargo_package = "a"|path = "b"|role = "platform""#,
+        r#"BXW0030 crates cargo_package = ""|path = "a"|role = "platform""#,
+        r#"BXW0031 derived id = "A"|generator = "g"|inputs = ["a"]|outputs = ["b"]"#,
+        r#"BXW0032 derived id = "c"|generator = "g"|inputs = ["a"]|outputs = ["b"]|[[derived]]|id = "c"|generator = "g"|inputs = ["a"]|outputs = ["b"]"#,
+        r#"BXW0033 derived id = "c"|generator = "G"|inputs = ["a"]|outputs = ["b"]"#,
+        "BXW0034 boxes []",
+        r#"BXW0035 boxes ["A"]"#,
+        r#"BXW0036 boxes ["a", "a"]"#,
+        r#"BXW0037 bind box = "hello"|capability = "x"|transport = "http""#,
+        r#"BXW0038 bind box = "hello"|capability = "hello.a"|transport = "x""#,
+        r#"BXW0039 bind box = "hello"|capability = "hello.a"|transport = "http"|exposure = "x""#,
+        r#"BXW0040 bind box = "other"|capability = "other.a"|transport = "http""#,
+        r#"BXW0041 bind box = "hello"|capability = "other.a"|transport = "http""#,
+    ];
+    /// The document a corpus entry names: `raw` is the whole of it, `head`, `kind`, `owned`,
+    /// `boxes`, and `bind` fill one hole in an otherwise valid one, `utf8` is not text at all,
+    /// and every other base names an array-of-tables section holding the body as its elements.
+    fn document(base: &str, body: &str) -> Vec<u8> {
+        let lines: String = body.split('|').map(|line| format!("{line}\n")).collect();
+        let text = match base {
+            "utf8" => return vec![0xff],
+            "raw" => lines,
+            "head" => format!("{HEAD}{lines}"),
+            "kind" => kinded(body),
+            "owned" => format!("{OWNED}{body}]\n"),
+            "boxes" => composed(body),
+            "bind" => bound(body),
+            name => section(name, body),
+        };
+        text.into_bytes()
+    }
+    /// The rendered wording of every code, byte for byte, as `<code> <rule> <source>` per line in
+    /// `ALL_CODES` order. Nothing else in this crate pins a rule text or its attribution, so any
+    /// edit to either -- including the silent rewording one merged change slipped through -- was
+    /// invisible to the suite. A wording diff now shows up here as a diff.
+    const EXPECTED: &str = "\
+BXW0001 boxology.toml must be valid UTF-8 specs/s5-manifest-and-validation.md D2
+BXW0002 boxology.toml must be well-formed TOML specs/s5-manifest-and-validation.md D2
+BXW0003 the manifest must declare an integer schema version boxology-details/02-packages.md
+BXW0004 this reader supports manifest schema 1 and rejects unknown versions boxology-details/02-packages.md
+BXW0005 the manifest must declare a string package id boxology-details/02-packages.md
+BXW0006 the package id must match [a-z][a-z0-9-]* boxology-details/02-packages.md
+BXW0007 the manifest must declare a string package kind boxology-details/02-packages.md
+BXW0008 provider packages are not supported in v0 boxology-details/02-packages.md
+BXW0009 the package kind must be box, composition, or platform boxology-details/02-packages.md
+BXW0010 schema 1 rejects unknown manifest keys specs/s5-manifest-and-validation.md D2
+BXW0011 a known manifest key must hold its declared TOML type specs/s5-manifest-and-validation.md D2
+BXW0012 a required manifest key must be present specs/s5-manifest-and-validation.md D2
+BXW0013 glob patterns must be non-empty specs/s5-manifest-and-validation.md D2
+BXW0014 glob patterns must be relative specs/s5-manifest-and-validation.md D2
+BXW0015 glob patterns must not contain empty or . segments specs/s5-manifest-and-validation.md D2
+BXW0016 glob patterns must not contain .. segments specs/s5-manifest-and-validation.md D2
+BXW0017 glob patterns must not contain backslashes or control characters specs/s5-manifest-and-validation.md D2
+BXW0018 the v1 glob dialect supports only * and ** wildcards specs/s5-manifest-and-validation.md D2
+BXW0019 ** must stand alone as a complete segment specs/s5-manifest-and-validation.md D2
+BXW0020 patterns within one list must be unique specs/s5-manifest-and-validation.md D2
+BXW0021 only a platform package may declare fixtures specs/s5-manifest-and-validation.md D2
+BXW0022 only composition packages may declare a composition section specs/s5-manifest-and-validation.md D2
+BXW0023 a composition package must declare its composition section specs/s5-manifest-and-validation.md D2
+BXW0024 v1 imports the package's canonical contract, so contract must equal package boxology-details/02-packages.md
+BXW0025 declared import packages must be unique specs/s5-manifest-and-validation.md D2
+BXW0026 a quality command must be non-blank text specs/s5-manifest-and-validation.md D2
+BXW0027 a crate role must be box-implementation, box-contract, composition, or platform boxology-details/02-packages.md
+BXW0028 crate paths must be literal relative paths specs/s5-manifest-and-validation.md D2
+BXW0029 crate paths and cargo package names must be unique specs/s5-manifest-and-validation.md D2
+BXW0030 cargo package names must be non-empty identifiers specs/s5-manifest-and-validation.md D2
+BXW0031 derived output ids must match [a-z][a-z0-9-]* specs/s5-manifest-and-validation.md D2
+BXW0032 derived output ids must be unique specs/s5-manifest-and-validation.md D2
+BXW0033 generator identities must match [a-z][a-z0-9-]* specs/s5-manifest-and-validation.md D2
+BXW0034 this list must contain at least one entry specs/s5-manifest-and-validation.md D2
+BXW0035 box references must match [a-z][a-z0-9-]* specs/s5-manifest-and-validation.md D2
+BXW0036 selected boxes must be unique specs/s5-manifest-and-validation.md D2
+BXW0037 binding capabilities must be box-qualified names specs/s5-manifest-and-validation.md D2
+BXW0038 binding transport must be in-process or http specs/s5-manifest-and-validation.md D2
+BXW0039 binding exposure must be code_only, internal, or external specs/s5-manifest-and-validation.md D2
+BXW0040 every binding must reference a selected box specs/s5-manifest-and-validation.md D2
+BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-and-validation.md D2
+";
+    #[test]
+    fn rule_text_and_sources_are_locked() {
+        // The glob dialect keeps its own rule table in `glob.rs`, so `rule_of` has no arm for
+        // BXW0013-BXW0019: locking what each code actually reports covers both tables at once,
+        // and rejects the generic fallback a code with no arm of its own would render.
+        let generic = rule_of("BXW9999");
+        let mut rendered = String::new();
+        for spec in CORPUS {
+            let (code, rest) = spec.split_once(' ').expect("a corpus entry names its code");
+            let (base, body) = rest.split_once(' ').expect("a corpus entry names its base");
+            let path = RelativePath::new("boxology.toml").expect("test literal is a valid path");
+            let Err(defects) = Manifest::parse(path, &document(base, body)) else {
+                panic!("accepted: {spec}");
+            };
+            let Some(found) = defects.into_iter().find(|d| d.code() == code) else {
+                panic!("{spec} reported {defects}");
+            };
+            assert_ne!(found.rule(), generic, "{code} renders the generic fallback");
+            let line = format!("{code} {} {}\n", found.rule(), found.rule_source());
+            rendered.push_str(&line);
+        }
+        assert_eq!(rendered, EXPECTED);
+    }
+    #[test]
+    fn corpus_covers_every_code() {
+        // Comparing the two ordered lists proves both directions at once: no code without a
+        // document that provokes it, and no document for a code this crate does not emit.
+        let covered: Vec<&str> = CORPUS.iter().map(|spec| &spec[..7]).collect();
+        assert_eq!(covered, ALL_CODES);
+        assert!(ALL_CODES.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+    #[test]
+    fn all_codes_is_exhaustive() {
+        // Both rule tables' own source text, read at compile time: a code emitted anywhere in the
+        // crate but registered nowhere above fails here rather than drifting in unproven. The test
+        // module is split off so this module's own probe literals do not count as emissions.
+        let parse = include_str!("parse.rs");
+        let sources = [
+            parse.split("#[cfg(test)]").next().unwrap_or(parse),
+            include_str!("glob.rs"),
+        ];
+        let mut seen: Vec<&str> = Vec::new();
+        for source in sources {
+            for (at, _) in source.match_indices("\"BXW") {
+                let code = &source[at + 1..at + 8];
+                if !seen.contains(&code) {
+                    seen.push(code);
+                }
+            }
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, ALL_CODES);
+    }
+    #[test]
+    fn hello_fixture_parses_green() {
+        // The repository's own fixture, byte for byte at compile time: the green path is proven
+        // against a real document, and reading it costs no filesystem access at runtime.
+        let bytes = include_bytes!("../../fixtures/hello/boxology.toml");
+        let path = RelativePath::new("boxology.toml").expect("test literal is a valid path");
+        let valid = match Manifest::parse(path, bytes) {
+            Ok(valid) => valid,
+            Err(defects) => panic!("the hello fixture is rejected:\n{defects}"),
+        };
+        assert_eq!(valid.id().as_str(), "hello");
+        assert_eq!(valid.kind(), Kind::Box);
+        assert_eq!(valid.owned().len(), 2);
+        assert_eq!(valid.owned()[1].as_str(), "implementation/**");
+        assert_eq!(valid.quality_commands().len(), 3);
+        assert_eq!(valid.crates().len(), 2);
+        assert_eq!(valid.crates()[1].role(), CrateRole::BoxContract);
+        assert_eq!(valid.derived().len(), 1);
+        assert_eq!(valid.derived()[0].outputs().len(), 3);
+        assert!(valid.fixtures().is_empty() && valid.imports().is_empty());
+        assert!(valid.composition().is_none());
     }
     #[test]
     fn schema_gate_precedes_field_checks() {
@@ -1030,6 +1226,16 @@ mod tests {
         };
         assert_eq!(codes(&twin("demo-impl", "other")), ["BXW0029"]);
         assert_eq!(codes(&twin("other", "impl")), ["BXW0029"]);
+        // A clash reports at the offending element's own key -- not at that element's header, and
+        // not at the first occurrence -- so each identity names the one it repeated.
+        let named = parse(&twin("demo-impl", "x"))
+            .expect_err("name")
+            .to_string();
+        let at = r#"BXW0029 boxology.toml:10:1-10:14 offending="manifest key cargo_package""#;
+        assert!(named.starts_with(at), "{named}");
+        let reused = parse(&twin("x", "impl")).expect_err("path").to_string();
+        let at = r#"BXW0029 boxology.toml:11:1-11:5 offending="manifest key path""#;
+        assert!(reused.starts_with(at), "{reused}");
         let twins = parse(&twin("o", "o")).expect("distinct twins");
         assert_eq!(twins.crates()[1].path().as_str(), "o");
         // Every field is required, and holds a declared type.
@@ -1042,7 +1248,7 @@ mod tests {
         let located = "BXW0012 boxology.toml:5:1-5:11";
         assert!(rendered.starts_with(located), "{rendered}");
         // Shape confusion is a typed defect, as `[[quality]]` is; an inline element is equivalent.
-        for shape in ["[crates]\npath = \"a\"\n", "crates = [1]\n"] {
+        for shape in ["[crates]\npath = \"a\"\n", "crates = [1]\n", "crates = 7\n"] {
             assert_eq!(codes(&format!("{HEAD}{shape}")), ["BXW0011"], "{shape}");
         }
         let inline = format!("{HEAD}crates = [{{ {} }}]\n", CRATE.replace('|', ", "));
@@ -1092,6 +1298,21 @@ mod tests {
             let body = format!(r#"id = "c"|generator = "g"|{lists}"#);
             assert_eq!(codes(&section("derived", &body)), [code], "{lists}");
         }
+        // An element declaring none of its keys is coded once per key, not once per element.
+        assert_eq!(codes(&section("derived", "")), ["BXW0012"; 4]);
+        // Shape confusion is a typed defect here as it is for `[[crates]]`: a section that is not
+        // an array of tables, an entry that is not a table, and the plain-table spelling all
+        // reject; the inline-element spelling is equivalent TOML and parses.
+        for shape in [
+            "derived = 7\n",
+            "derived = [1]\n",
+            "[derived]\nid = \"c\"\n",
+        ] {
+            assert_eq!(codes(&format!("{HEAD}{shape}")), ["BXW0011"], "{shape}");
+        }
+        let inline = format!("{HEAD}derived = [{{ {} }}]\n", output().replace('|', ", "));
+        let valid = parse(&inline).expect("an inline element is equivalent TOML");
+        assert_eq!(valid.derived()[0].id(), "contract");
         // A rejected generator is reported by key name, never by value.
         let rendered = parse(&named("c", "payload_x")).expect_err("id").to_string();
         let key = r#"BXW0033 boxology.toml:7:1-7:10 offending="manifest key generator""#;
@@ -1138,6 +1359,19 @@ mod tests {
         // deliberate exception -- an unowned package is T2 classification, not a parse defect.
         let empty = format!("{HEAD}imports = []\n");
         assert!(parse(&empty).expect("none declared").imports().is_empty());
+        assert_eq!(codes(&section("imports", "")), ["BXW0012", "BXW0012"]);
+        // The same shape edges `[[crates]]` and `[[derived]]` cover: only an array of tables, or
+        // its equivalent inline spelling, is a section; every other shape is a typed defect.
+        for shape in [
+            "imports = 7\n",
+            "imports = [1]\n",
+            "[imports]\npackage = \"c\"\n",
+        ] {
+            assert_eq!(codes(&format!("{HEAD}{shape}")), ["BXW0011"], "{shape}");
+        }
+        let inline = format!("{HEAD}imports = [{{ {} }}]\n", IMPORT.replace('|', ", "));
+        let valid = parse(&inline).expect("an inline element is equivalent TOML");
+        assert_eq!(valid.imports()[0].package().as_str(), "customer");
         // The canonical-contract rule is 02-packages', and names the key, never the value.
         let unequal = pair("customer", "payload");
         let rendered = parse(&unequal).expect_err("contract").to_string();
