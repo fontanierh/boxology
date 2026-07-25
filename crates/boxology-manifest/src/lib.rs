@@ -9,11 +9,17 @@
 mod glob;
 
 pub use glob::GlobPattern;
+pub use parse::{Kind, Manifest};
 
 use std::fmt;
 
 /// The normative source of the manifest rules this crate enforces.
 const D2_SOURCE: &str = "specs/s5-manifest-and-validation.md D2";
+// `BXW####` allocation, recorded so this task's slices cannot collide or strand gaps. Landed:
+// BXW0013–BXW0019 the glob dialect; BXW0001–BXW0012 the document gates, identity, kind, and key
+// inventory; BXW0020 duplicate list patterns. Allocated, not yet landed: BXW0021 and BXW0034 for
+// `fixtures`, BXW0026 for `[quality]`, BXW0022–BXW0025 and BXW0027–BXW0033 for `[[imports]]`,
+// `[[crates]]`, `[[derived]]`, and `[composition]`; BXW0035 up for discovery and classification.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -24,6 +30,7 @@ macro_rules! copy_getters {
         #[$meta] pub fn $name(&self) -> $return { self.$field }
     )*};
 }
+mod parse;
 /// An owned, package-relative UTF-8 logical path with bytewise equality and order.
 ///
 /// Deliberately stricter than `boxology_generator_model::RelativePath`, which permits leading
@@ -54,6 +61,13 @@ impl RelativePath {
     }
 }
 /// The location-free rejection of a malformed logical path; callers add code and span.
+///
+/// Deliberately kept opaque rather than split into a discriminant per violation. No manifest value
+/// reaches `RelativePath::new`: the path-shaped values a manifest declares are globs, which carry
+/// their own seven codes, and the manifest's own location is supplied by the caller. Every path
+/// rejection here is therefore a caller error, not a diagnosable document defect, and a public
+/// six-variant vocabulary would have no reporting consumer. Discovery gains the discriminant, with
+/// the codes it needs, when and if it starts reading paths out of documents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PathError;
 fn has_drive_prefix(bytes: &[u8]) -> bool {
@@ -257,6 +271,28 @@ mod tests {
         assert_eq!(diagnostics.to_string().lines().count(), cases.len());
         assert!(Diagnostics::new(Vec::new()).is_none());
     }
+    /// Check order, not input shape, decides the code an input violating two rules reports. The
+    /// frozen priority is structural rejection before dialect rejection: a pattern that cannot be
+    /// anchored at all (absolute, drive-prefixed, control-bearing) is rejected as such before any
+    /// question about the wildcard vocabulary, and segment shape is judged left to right. Pinning
+    /// it here keeps corpus goldens stable when the checks are ever reordered or fused.
+    #[test]
+    fn multi_violation_priority_is_frozen() {
+        let here = path("boxology.toml");
+        for (pattern, code) in [
+            ("/..", "BXW0014"),
+            ("c:/**x", "BXW0014"),
+            ("//..", "BXW0014"),
+            ("..\\x", "BXW0017"),
+            ("../?", "BXW0018"),
+            ("a//..", "BXW0015"),
+        ] {
+            let Err(diagnostic) = GlobPattern::parse(pattern, &here, point()) else {
+                panic!("{pattern:?} was accepted");
+            };
+            assert_eq!(diagnostic.code(), code, "{pattern:?}");
+        }
+    }
     #[test]
     fn relative_path_grammar() {
         for accepted in ["boxology.toml", "a/b/c.rs", "a b/c!.rs", "..a/b", "a.rs "] {
@@ -276,5 +312,6 @@ mod tests {
         fn bounds<T: Send + Sync + 'static>() {}
         bounds::<(RelativePath, PathError, GlobPattern)>();
         bounds::<(LineColumn, Span, Diagnostic, Diagnostics)>();
+        bounds::<(Kind, Manifest)>();
     }
 }

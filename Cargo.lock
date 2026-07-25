@@ -126,6 +126,10 @@ dependencies = [
 [[package]]
 name = "boxology-manifest"
 version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "toml_edit",
+]
 
 [[package]]
 name = "boxology-runtime"
