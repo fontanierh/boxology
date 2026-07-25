@@ -92,12 +92,43 @@ pub struct HttpServerHandle {
     abort: CancellationToken,
     tasks: DispatchTasks,
     accept: Mutex<Option<JoinHandle<()>>>,
+    connections: ConnectionTasks,
 }
 
 impl HttpServerHandle {
     /// Locks the accept-driver slot, tolerating a poisoned lock.
     fn accept_slot(&self) -> MutexGuard<'_, Option<JoinHandle<()>>> {
         self.accept.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The per-binding registry of accepted-connection tasks. Joining every
+/// transport-owned task is the handle's contract, and the shared composition
+/// tracker cannot serve that purpose: awaiting it would block this binding on
+/// every *other* binding's tasks. So the accept loop hands each connection
+/// handle here instead, and [`HttpServerHandle::join_tasks`] drains it.
+#[derive(Clone, Default)]
+pub(crate) struct ConnectionTasks(Arc<Mutex<Vec<JoinHandle<()>>>>);
+
+impl ConnectionTasks {
+    /// Registers `handle`, first dropping the handles of connections that have
+    /// already finished. A long-lived server accepts unboundedly many
+    /// connections, so retaining them all would leak; `is_finished` is one
+    /// atomic load, which keeps the sweep proportional to the registry's
+    /// current size rather than to the lifetime connection count.
+    pub(crate) fn register(&self, handle: JoinHandle<()>) {
+        let mut registered = self.lock();
+        registered.retain(|connection| !connection.is_finished());
+        registered.push(handle);
+    }
+
+    /// Takes every registered handle, leaving the registry empty.
+    fn take(&self) -> Vec<JoinHandle<()>> {
+        std::mem::take(&mut *self.lock())
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -160,8 +191,10 @@ impl TransportBinding for HttpServerBinding {
         let tracker = runtime.tracker().clone();
         let tasks = DispatchTasks::new(tracker.clone());
         let config = self.config.clone();
+        let connections = ConnectionTasks::default();
         let accept = tracker.spawn({
             let (intake, abort, tasks) = (intake.clone(), abort.clone(), tasks.clone());
+            let connections = connections.clone();
             async move {
                 tokio::select! {
                     () = runtime.wait_until_active() => {}
@@ -169,12 +202,15 @@ impl TransportBinding for HttpServerBinding {
                 }
                 serve(
                     listener,
-                    runtime.exposures().iter().cloned().collect(),
-                    tasks,
-                    config.default_timeout,
-                    config.limits,
-                    intake,
-                    abort,
+                    ConnectionContext {
+                        exposures: runtime.exposures().iter().cloned().collect(),
+                        tasks,
+                        default_timeout: config.default_timeout,
+                        limits: config.limits,
+                        shutdown: intake,
+                        abort,
+                    },
+                    connections,
                 )
                 .await;
             }
@@ -184,6 +220,7 @@ impl TransportBinding for HttpServerBinding {
             abort,
             tasks,
             accept: Mutex::new(Some(accept)),
+            connections,
         })
     }
 }
@@ -208,14 +245,32 @@ impl TransportHandle for HttpServerHandle {
     fn join_tasks(self: Box<Self>) -> TransportJoinFuture {
         let accept = self.accept_slot().take();
         Box::pin(async move {
+            // A faulted accept task is latched rather than returned, so the
+            // connection registry is still drained below; returning here would
+            // detach every connection task, which is the defect this join
+            // exists to prevent.
+            let mut failure = None;
             if let Some(accept) = accept
                 && let Err(error) = accept.await
                 && !error.is_cancelled()
             {
-                return Err(Detail::new("http_accept_failed").with_message(error.to_string()));
+                failure = Some(Detail::new("http_accept_failed").with_message(error.to_string()));
+            }
+            // The accept loop has stopped, so no further connection can
+            // register: draining the registry now joins the whole set. A
+            // cancelled join is this handle's own `abort_tasks`, not a fault,
+            // and every handle is joined before the first fault is reported.
+            for connection in self.connections.take() {
+                if let Err(error) = connection.await
+                    && !error.is_cancelled()
+                    && failure.is_none()
+                {
+                    failure =
+                        Some(Detail::new("http_connection_failed").with_message(error.to_string()));
+                }
             }
             self.tasks.wait_empty().await;
-            Ok(())
+            failure.map_or(Ok(()), Err)
         })
     }
 }
@@ -233,18 +288,27 @@ impl fmt::Display for Abandoned {
 
 impl std::error::Error for Abandoned {}
 
-/// Accepts connections until `shutdown` is triggered, dispatching each request
-/// through the shared codec. The tracker behind `tasks` owns both the accepted
-/// connection tasks and the per-request dispatch tasks, and `abort` is the hard
-/// stop the binding's handle uses to drop connections that ignore `shutdown`.
-pub(crate) async fn serve(
-    listener: TcpListener,
+/// Everything an accepted connection needs, bundled so that it is cloned in one
+/// place and so that [`serve`] stays within the argument budget.
+#[derive(Clone)]
+pub(crate) struct ConnectionContext {
     exposures: Arc<[TransportExposure]>,
     tasks: DispatchTasks,
     default_timeout: Duration,
     limits: SyntaxLimits,
     shutdown: CancellationToken,
     abort: CancellationToken,
+}
+
+/// Accepts connections until `shutdown` is triggered, dispatching each request
+/// through the shared codec. The tracker behind `tasks` owns both the accepted
+/// connection tasks and the per-request dispatch tasks, `connections` retains
+/// each connection task so the binding's handle can join it, and `abort` is the
+/// hard stop the handle uses to drop connections that ignore `shutdown`.
+pub(crate) async fn serve(
+    listener: TcpListener,
+    context: ConnectionContext,
+    connections: ConnectionTasks,
 ) {
     loop {
         tokio::select! {
@@ -252,32 +316,29 @@ pub(crate) async fn serve(
                 let Ok((stream, _peer)) = accepted else {
                     continue;
                 };
-                tasks.tracker().spawn(serve_connection(
-                    stream,
-                    exposures.clone(),
-                    tasks.clone(),
-                    default_timeout,
-                    limits,
-                    shutdown.clone(),
-                    abort.clone(),
-                ));
+                connections.register(
+                    context
+                        .tasks
+                        .tracker()
+                        .spawn(serve_connection(stream, context.clone())),
+                );
             }
-            () = shutdown.cancelled() => break,
+            () = context.shutdown.cancelled() => break,
         }
     }
 }
 
 /// Serves one accepted connection, letting `shutdown` request a graceful close
 /// of an in-flight or kept-alive connection and `abort` drop it outright.
-async fn serve_connection(
-    stream: TcpStream,
-    exposures: Arc<[TransportExposure]>,
-    tasks: DispatchTasks,
-    default_timeout: Duration,
-    limits: SyntaxLimits,
-    shutdown: CancellationToken,
-    abort: CancellationToken,
-) {
+async fn serve_connection(stream: TcpStream, context: ConnectionContext) {
+    let ConnectionContext {
+        exposures,
+        tasks,
+        default_timeout,
+        limits,
+        shutdown,
+        abort,
+    } = context;
     let service = service_fn(move |request: Request<Incoming>| {
         let exposures = Arc::clone(&exposures);
         let tasks = tasks.clone();
@@ -413,12 +474,15 @@ mod tests {
         let shutdown = CancellationToken::new();
         let handle = tokio::spawn(serve(
             listener,
-            exposures,
-            DispatchTasks::new(TransportTaskTracker::new()),
-            Duration::from_secs(5),
-            SyntaxLimits(64 * 1024, DEFAULT_DEPTH_LIMIT),
-            shutdown.clone(),
-            CancellationToken::new(),
+            ConnectionContext {
+                exposures,
+                tasks: DispatchTasks::new(TransportTaskTracker::new()),
+                default_timeout: Duration::from_secs(5),
+                limits: SyntaxLimits(64 * 1024, DEFAULT_DEPTH_LIMIT),
+                shutdown: shutdown.clone(),
+                abort: CancellationToken::new(),
+            },
+            ConnectionTasks::default(),
         ));
         (address, shutdown, handle)
     }
@@ -622,10 +686,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_timeout_aborts_a_parked_connection() {
+    async fn drain_timeout_aborts_and_joins_a_parked_connection() {
         let (composition, binding) = serve_generated_hello();
         let address = binding.local_addr().unwrap();
-        let mut parked = park_connection(address).await;
+        let parked = park_connection(address).await;
         // Let the server read the head and park on the missing body.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -638,13 +702,24 @@ mod tests {
                 .is_ok()
         );
 
+        // Shutdown joins every transport-owned task, so the connection is
+        // already closed at this point. The check must therefore not await:
+        // awaiting would hand this single-threaded runtime the chance to poll a
+        // connection task that shutdown left running, which is exactly the
+        // regression under test. Blocking the runtime thread instead lets only
+        // the kernel deliver the peer's FIN, so a loaded machine cannot make an
+        // unjoined connection look joined.
+        let parked = parked.into_std().expect("parked connection is registered");
+        std::thread::sleep(Duration::from_millis(20));
         let mut discard = [0_u8; 64];
-        let read = tokio::time::timeout(Duration::from_secs(5), parked.read(&mut discard))
-            .await
-            .expect("shutdown returned while the parked connection was still open");
+        let read = std::io::Read::read(&mut &parked, &mut discard);
+        let closed = match &read {
+            Ok(read) => *read == 0,
+            Err(error) => error.kind() != std::io::ErrorKind::WouldBlock,
+        };
         assert!(
-            matches!(read, Ok(0) | Err(_)),
-            "parked connection was not dropped: {read:?}"
+            closed,
+            "shutdown returned before the parked connection was closed: {read:?}"
         );
     }
 }
