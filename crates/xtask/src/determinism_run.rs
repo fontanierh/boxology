@@ -125,6 +125,7 @@ pub fn child(name: &str, out: &Path) -> u8 {
     let run = match name {
         "generator-model" => crate::generator_model_subject::run,
         "trivial-tree" => run_trivial,
+        "workspace-report" => crate::workspace_subject::run,
         _ => {
             return report(
                 Failure::Infra(format!("unknown determinism subject: {name}")),
@@ -166,6 +167,11 @@ pub(crate) fn registry() -> std::result::Result<Vec<Subject>, String> {
             prepare: None,
             argv: trivial_argv,
         },
+        Subject {
+            name: "workspace-report",
+            prepare: None,
+            argv: workspace_argv,
+        },
     ];
     validate_registry(&subjects)?;
     Ok(subjects)
@@ -189,6 +195,11 @@ pub(crate) fn validate_registry(subjects: &[Subject]) -> std::result::Result<(),
 fn generator_model_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
     let mut command = trivial_argv(out);
     command.1[1] = "generator-model".into();
+    command
+}
+fn workspace_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+    let mut command = trivial_argv(out);
+    command.1[1] = "workspace-report".into();
     command
 }
 fn trivial_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
