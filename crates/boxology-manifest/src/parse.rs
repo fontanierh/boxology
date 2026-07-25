@@ -15,15 +15,15 @@ const POINT: Span = Span {
     start: ORIGIN,
     end: ORIGIN,
 };
-/// The schema-1 keys this slice models. `[[imports]]` and `[composition]` are absent on purpose:
-/// until modelled they are unknown keys and reject, so no intermediate state of this crate accepts
-/// what it cannot check.
-const TOP_KEYS: &str = "schema id kind owned display_name fixtures quality crates derived";
+/// The schema-1 keys this slice models. `[composition]` is absent on purpose: until modelled it is
+/// an unknown key and rejects, so no intermediate state of this crate accepts what it cannot check.
+const TOP_KEYS: &str = "schema id kind owned display_name fixtures quality crates derived imports";
 /// The only key `[quality]` models; nesting inherits the same fail-closed inventory rule.
 const QUALITY_KEYS: &str = "commands";
 /// The key inventory of one element of each array-of-tables section, applied per element.
 const CRATE_KEYS: &str = "cargo_package path role";
 const DERIVED_KEYS: &str = "id generator inputs outputs";
+const IMPORT_KEYS: &str = "package contract";
 
 /// The declared package kind. `provider` parses as TOML and is rejected by rule (BXW0008), so it
 /// is deliberately absent here: the model can only hold a kind v0 supports.
@@ -97,6 +97,19 @@ impl DerivedOutput {
     }
 }
 
+/// One declared dependency: the package whose canonical contract this package imports. The
+/// declared `contract` is validated and deliberately not stored — v1 requires it to equal
+/// `package`, so a field for it could only ever hold this same id a second time.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Import {
+    package: BoxId,
+}
+impl Import {
+    ref_getters! {
+        #[doc = "Returns the imported package's id."] package: &BoxId = package;
+    }
+}
+
 /// A validated schema-1 `boxology.toml`. Construction is the validation: a `Manifest` exists only
 /// for a document that satisfied every rule this crate knows, so consumers never re-check it.
 #[derive(Debug, Eq, PartialEq)]
@@ -109,6 +122,7 @@ pub struct Manifest {
     quality_commands: Vec<String>,
     crates: Vec<CrateEntry>,
     derived: Vec<DerivedOutput>,
+    imports: Vec<Import>,
 }
 impl Manifest {
     /// Parses `bytes` as the manifest logically located at `manifest_path`.
@@ -197,6 +211,8 @@ impl Manifest {
         let crates = root.get("crates").map_or(Vec::new(), |i| parser.crates(i));
         let outputs = root.get("derived");
         let derived = outputs.map_or(Vec::new(), |i| parser.derived(i));
+        let declared = root.get("imports");
+        let imports = declared.map_or(Vec::new(), |i| parser.imports(i));
         match (Diagnostics::new(parser.errors), id.zip(kind)) {
             (None, Some((id, kind))) => Ok(Manifest {
                 id,
@@ -207,6 +223,7 @@ impl Manifest {
                 quality_commands,
                 crates,
                 derived,
+                imports,
             }),
             (Some(diagnostics), _) => Err(diagnostics),
             // Unreachable: a missing or rejected id or kind always records a diagnostic above. It
@@ -226,6 +243,7 @@ impl Manifest {
         #[doc = "Returns the declared quality commands, in declaration order."] quality_commands: &[String] = quality_commands;
         #[doc = "Returns the declared Cargo crates, in declaration order."] crates: &[CrateEntry] = crates;
         #[doc = "Returns the declared derived outputs, in declaration order."] derived: &[DerivedOutput] = derived;
+        #[doc = "Returns the declared imports, in declaration order."] imports: &[Import] = imports;
     }
     copy_getters! {
         #[doc = "Returns the declared package kind."] kind: Kind = kind;
@@ -470,6 +488,31 @@ impl Parser<'_> {
         }
         derived
     }
+    /// Reads `[[imports]]`. `contract` is required, not defaulted to `package`: 02-packages writes
+    /// it explicitly, and a default would let a document that names no contract be accepted as if
+    /// it had named one. V1 imports the package's canonical contract, so the two must be equal.
+    fn imports(&mut self, item: &Item) -> Vec<Import> {
+        let mut imports: Vec<Import> = Vec::new();
+        for (whole, table) in self.section(item, "imports", IMPORT_KEYS) {
+            let raw = self.field(table, "package", whole);
+            let id = raw.and_then(|t| self.check(table, "package", "BXW0006", BoxId::new(t).ok()));
+            let package = id.and_then(|id| {
+                let fresh = !imports.iter().any(|other| other.package == id);
+                self.check(table, "package", "BXW0025", fresh.then_some(id))
+            });
+            // `contract` holds the wrong value, so the defect spans that key. An element missing
+            // either key is already coded as absent and is not also called unequal.
+            let contract = self.field(table, "contract", whole);
+            if raw.zip(contract).is_some_and(|(p, c)| p != c) {
+                let span = key_span(self.source, table, "contract");
+                self.key("BXW0024", span, "contract");
+            }
+            if let Some(package) = package {
+                imports.push(Import { package });
+            }
+        }
+        imports
+    }
 }
 /// The `[a-z][a-z0-9-]*` identity grammar, taken from `BoxId` so the two cannot drift apart.
 fn identity(text: &str) -> Option<String> {
@@ -503,6 +546,8 @@ fn rule_of(code: Code) -> Code {
         "BXW0011" => "a known manifest key must hold its declared TOML type",
         "BXW0012" => "a required manifest key must be present",
         "BXW0020" => "patterns within one list must be unique",
+        "BXW0024" => "v1 imports the package's canonical contract, so contract must equal package",
+        "BXW0025" => "declared import packages must be unique",
         "BXW0021" => "only a platform package may declare fixtures",
         "BXW0026" => "a quality command must be non-blank text",
         "BXW0027" => ROLES,
@@ -516,10 +561,10 @@ fn rule_of(code: Code) -> Code {
         _ => "the manifest must satisfy schema 1",
     }
 }
-/// The shape, id grammar, kind vocabulary, and crate-role vocabulary are 02-packages'; the rest is
-/// the S5 spec's D2.
+/// The shape, id grammar, kind vocabulary, crate-role vocabulary, and canonical-import rule are
+/// 02-packages'; the rest is the S5 spec's D2.
 fn source_of(code: Code) -> Code {
-    match ("BXW0003"..="BXW0009").contains(&code) || code == "BXW0027" {
+    match ("BXW0003"..="BXW0009").contains(&code) || matches!(code, "BXW0024" | "BXW0027") {
         true => PACKAGES,
         false => D2_SOURCE,
     }
@@ -566,6 +611,7 @@ mod tests {
     const HEAD: &str = "schema = 1\nid = \"demo\"\nkind = \"box\"\nowned = [\"a.rs\"]\n";
     const CRATE: &str = r#"cargo_package = "demo-impl"|path = "impl"|role = "box-contract""#;
     const LISTS: &str = r#"inputs = ["boxology.toml"]|outputs = ["generated/**"]"#;
+    const IMPORT: &str = r#"package = "customer"|contract = "customer""#;
     /// A document whose `[[name]]` section holds one element, a key per `|`-separated field.
     fn section(name: &str, body: &str) -> String {
         let element: String = body.split('|').map(|line| format!("{line}\n")).collect();
@@ -616,13 +662,15 @@ mod tests {
     }
     #[test]
     fn unknown_keys_reject_at_every_level() {
-        // Later slices model the last two; until then schema 1 rejects them, fail-closed. Each
-        // case must flip to an accepted key exactly when its slice lands, as `[[crates]]` and
-        // `[[derived]]` did in this one.
+        // `[composition]` is the last unmodelled section: until then schema 1 rejects it,
+        // fail-closed, and its case flips to an accepted key when that slice lands, as the
+        // `[[imports]]` case did in this one. The last two keys are prefix collisions in both
+        // directions: the inventory match is equality, so no near-miss of a known key is accepted.
         for extra in [
             "nope = 1\n",
             "[composition]\nboxes = []\n",
-            "[[imports]]\npackage = \"x\"\n",
+            "import = 1\n",
+            "schemas = 1\n",
         ] {
             assert_eq!(codes(&format!("{HEAD}{extra}")), ["BXW0010"], "{extra}");
         }
@@ -845,10 +893,63 @@ mod tests {
         assert!(!rendered.contains("payload"), "{rendered}");
     }
     #[test]
+    fn imports_require_canonical_contract_and_uniqueness() {
+        let valid = parse(&section("imports", IMPORT)).expect("an import");
+        assert_eq!(valid.imports().len(), 1);
+        assert_eq!(valid.imports()[0].package().as_str(), "customer");
+        assert!(parse(HEAD).expect("valid").imports().is_empty());
+        let pair = |package: &str, contract: &str| {
+            let body = format!(r#"package = "{package}"|contract = "{contract}""#);
+            section("imports", &body)
+        };
+        // V1 imports the package's canonical contract and has no parallel-surface selector, so
+        // every other contract is a defect and `contract` is required rather than defaulted.
+        for wrong in ["supplier", "Customer", "customer-x", ""] {
+            assert_eq!(codes(&pair("customer", wrong)), ["BXW0024"], "{wrong}");
+        }
+        assert_eq!(codes(&section("imports", r#"package = "c""#)), ["BXW0012"]);
+        let unnamed = section("imports", r#"contract = "customer""#);
+        assert_eq!(codes(&unnamed), ["BXW0012"]);
+        // An import package is the package-id grammar, and each package is imported at most once.
+        for package in ["Customer", "0customer", "customer_x", ""] {
+            assert_eq!(codes(&pair(package, package)), ["BXW0006"], "{package}");
+        }
+        let twice = format!("{IMPORT}|[[imports]]|{IMPORT}");
+        assert_eq!(codes(&section("imports", &twice)), ["BXW0025"]);
+        // A clash reports at the offending element's own `package` key -- not at that element's
+        // header, and not at the first occurrence -- so every later duplicate names itself.
+        let rendered = parse(&section("imports", &twice))
+            .expect_err("dup")
+            .to_string();
+        let at = r#"BXW0025 boxology.toml:9:1-9:8 offending="manifest key package""#;
+        assert!(rendered.starts_with(at), "{rendered}");
+        let thrice = format!("{twice}|[[imports]]|{IMPORT}");
+        assert_eq!(codes(&section("imports", &thrice)), ["BXW0025", "BXW0025"]);
+        // An array-of-tables section is a container, so an empty one declares nothing and reads
+        // exactly as omitting it, like `crates` and `derived`. A list whose presence is itself a
+        // claim rejects empty instead: `fixtures` claims a platform privilege, `inputs`/`outputs`
+        // claim input completeness, `commands` claims a quality entry point. `owned` is the
+        // deliberate exception -- an unowned package is T2 classification, not a parse defect.
+        let empty = format!("{HEAD}imports = []\n");
+        assert!(parse(&empty).expect("none declared").imports().is_empty());
+        // The canonical-contract rule is 02-packages', and names the key, never the value.
+        let unequal = pair("customer", "payload");
+        let rendered = parse(&unequal).expect_err("contract").to_string();
+        let key = r#"BXW0024 boxology.toml:7:1-7:9 offending="manifest key contract""#;
+        let source = r#"source="boxology-details/02-packages.md""#;
+        assert!(rendered.starts_with(key), "{rendered}");
+        assert!(rendered.ends_with(source), "{rendered}");
+        assert!(!rendered.contains("payload"), "{rendered}");
+    }
+    #[test]
     fn array_of_tables_reject_unknown_nested_keys() {
         // `ArrayOfTables` is not `TableLike`, so no signature demands the per-element inventory
         // check: one case per section, each located at the offending key, not its section header.
-        for (name, body, line) in [("crates", CRATE, 9), ("derived", &output(), 10)] {
+        for (name, body, line) in [
+            ("crates", CRATE, 9),
+            ("derived", &output(), 10),
+            ("imports", IMPORT, 8),
+        ] {
             let text = format!("{}nope = 1\n", section(name, body));
             assert_eq!(codes(&text), ["BXW0010"], "{name}");
             let rendered = parse(&text).expect_err("unknown key").to_string();
