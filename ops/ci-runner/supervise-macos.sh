@@ -34,7 +34,18 @@ for tool in curl jq security uuidgen shasum sw_vers; do command -v "$tool" >/dev
 [[ -x "$RUNNER_BASE/run.sh" && -x "$RUNNER_BASE/bin/Runner.Listener" ]] || exit 69
 mkdir -p "$RUNTIME_DIR" "$RUNNER_ROOT/runs" "$CACHE_ROOT/home" "$TARGET_ROOT"
 chmod 700 "$RUNTIME_DIR" "$RUNNER_ROOT" "$RUNNER_ROOT/runs" "$CACHE_ROOT" "$CACHE_ROOT/home" "$TARGET_ROOT"
-mkdir "$LOCK" 2>/dev/null || { printf '%s\n' 'runner: macOS supervisor already running' >&2; exit 75; }
+# Single-owner mutex per RUNTIME_DIR. A supervisor killed uncleanly (OOM, SIGKILL,
+# reboot) leaves the lock behind; reclaim it only when the recorded owner PID is gone,
+# so a live supervisor is still refused but a dead one cannot brick the slot forever.
+if ! mkdir "$LOCK" 2>/dev/null; then
+  lock_owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  if [[ "$lock_owner" =~ ^[0-9]+$ ]] && kill -0 "$lock_owner" 2>/dev/null; then
+    printf '%s\n' 'runner: macOS supervisor already running' >&2; exit 75
+  fi
+  rm -rf "$LOCK"
+  mkdir "$LOCK" 2>/dev/null || { printf '%s\n' 'runner: macOS supervisor already running' >&2; exit 75; }
+fi
+printf '%s\n' "$$" >"$LOCK/pid"
 
 validate_runner_list() {
   jq -e '
@@ -177,7 +188,9 @@ cleanup() {
   if [[ -n "$run_dir" ]]; then remove_run_dir "$run_dir" && run_dir= || cleanup_status=1; fi
   delete_jit_runner || cleanup_status=1
   unset token
-  ((cleanup_status)) || rmdir "$LOCK" "$RUNTIME_DIR" 2>/dev/null || cleanup_status=1
+  # `rm -rf` on the lock, not `rmdir`: it now holds the owner pid file, so `rmdir`
+  # would fail and leak the lock on every clean exit.
+  ((cleanup_status)) || { rm -rf "$LOCK" && rmdir "$RUNTIME_DIR"; } 2>/dev/null || cleanup_status=1
   return "$cleanup_status"
 }
 trap cleanup EXIT
