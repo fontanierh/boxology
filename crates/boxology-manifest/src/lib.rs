@@ -17,9 +17,10 @@ use std::fmt;
 const D2_SOURCE: &str = "specs/s5-manifest-and-validation.md D2";
 // `BXW####` allocation, recorded so this task's slices cannot collide or strand gaps. Landed:
 // BXW0013–BXW0019 the glob dialect; BXW0001–BXW0012 the document gates, identity, kind, and key
-// inventory; BXW0020 duplicate list patterns. Allocated, not yet landed: BXW0021 and BXW0034 for
-// `fixtures`, BXW0026 for `[quality]`, BXW0022–BXW0025 and BXW0027–BXW0033 for `[[imports]]`,
-// `[[crates]]`, `[[derived]]`, and `[composition]`; BXW0035 up for discovery and classification.
+// inventory; BXW0020 duplicate list patterns; BXW0021 and BXW0034 `fixtures`; BXW0026
+// `[quality].commands`. Allocated, not yet landed: BXW0022–BXW0025 and BXW0027–BXW0033 for
+// `[[imports]]`, `[[crates]]`, `[[derived]]`, and `[composition]`; BXW0035 up for discovery and
+// classification.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
