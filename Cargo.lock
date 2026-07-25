@@ -152,6 +152,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-workspace"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "boxology-manifest",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1383,6 +1391,8 @@ dependencies = [
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",
+ "boxology-manifest",
+ "boxology-workspace",
  "serde_json",
  "sha2",
 ]

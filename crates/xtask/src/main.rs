@@ -18,6 +18,7 @@ mod determinism_verify;
 mod generator_model_subject;
 mod links;
 mod records;
+mod workspace_subject;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
 const OWNED_FMT_PACKAGES: &[&str] = &[
@@ -29,6 +30,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-generator-model",
     "boxology-generator",
     "boxology-manifest",
+    "boxology-workspace",
     "boxology-http",
     "boxology-runtime",
     "boxology-telegram",
