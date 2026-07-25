@@ -12,6 +12,7 @@ The strategy review of 2026-07-18 predates this directory and remains at [`boxol
 
 ## Index
 
+- [2026-07-25 — V0 planning completion and the spec review round](2026-07-25-v0-planning-and-spec-review-round.md)
 - [2026-07-24 — Multi-capability generation situation report](2026-07-24-multi-capability-generation.md)
 - [2026-07-23 — S2 architecture proof and v0 reassessment](2026-07-23-s2-arch-proof.md)
 - [2026-07-22 — Generated-box progress and tracker-integrity situation report](2026-07-22-generated-box-and-tracker-sitrep.md)
