@@ -28,6 +28,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-fixture-tests",
     "boxology-generator-model",
     "boxology-generator",
+    "boxology-manifest",
     "boxology-http",
     "boxology-runtime",
     "boxology-telegram",

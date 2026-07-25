@@ -124,6 +124,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-manifest"
+version = "0.0.0"
+
+[[package]]
 name = "boxology-runtime"
 version = "0.0.0"
 dependencies = [
