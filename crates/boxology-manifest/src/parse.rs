@@ -1,5 +1,5 @@
 use crate::{D2_SOURCE, Diagnostic, Diagnostics, GlobPattern, LineColumn, RelativePath, Span};
-use boxology_contract::BoxId;
+use boxology_contract::{BoxId, CapabilityId, CapabilityName};
 use std::ops::Range;
 use toml_edit::{Document, Item, TableLike, Value};
 
@@ -15,15 +15,18 @@ const POINT: Span = Span {
     start: ORIGIN,
     end: ORIGIN,
 };
-/// The schema-1 keys this slice models. `[composition]` is absent on purpose: until modelled it is
-/// an unknown key and rejects, so no intermediate state of this crate accepts what it cannot check.
-const TOP_KEYS: &str = "schema id kind owned display_name fixtures quality crates derived imports";
+/// The complete schema-1 key inventory. Every key outside it rejects, at every nesting level.
+const TOP_KEYS: &str =
+    "schema id kind owned display_name fixtures quality crates derived imports composition";
 /// The only key `[quality]` models; nesting inherits the same fail-closed inventory rule.
 const QUALITY_KEYS: &str = "commands";
+/// `[composition]`'s own keys: an array of tables nested in a table is still that table's key.
+const COMPOSITION_KEYS: &str = "boxes bindings";
 /// The key inventory of one element of each array-of-tables section, applied per element.
 const CRATE_KEYS: &str = "cargo_package path role";
 const DERIVED_KEYS: &str = "id generator inputs outputs";
 const IMPORT_KEYS: &str = "package contract";
+const BINDING_KEYS: &str = "box capability transport exposure";
 
 /// The declared package kind. `provider` parses as TOML and is rejected by rule (BXW0008), so it
 /// is deliberately absent here: the model can only hold a kind v0 supports.
@@ -110,6 +113,84 @@ impl Import {
     }
 }
 
+/// How a binding reaches the capability it wires. The vocabulary is closed and case-sensitive.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Transport {
+    /// Linked into the same process as its caller.
+    InProcess,
+    /// Reached over HTTP.
+    Http,
+}
+impl Transport {
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "in-process" => Some(Self::InProcess),
+            "http" => Some(Self::Http),
+            _ => None,
+        }
+    }
+}
+
+/// How widely a binding is exposed. `Ord` is the S4 D5 total order, because T5 compares a binding's
+/// exposure against the box's maximum and a declaration-accident order would misclassify that.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Exposure {
+    /// Visible only to code compiled with the composition.
+    CodeOnly,
+    /// Reachable inside the deployment.
+    Internal,
+    /// Reachable from outside the deployment.
+    External,
+}
+impl Exposure {
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "code_only" => Some(Self::CodeOnly),
+            "internal" => Some(Self::Internal),
+            "external" => Some(Self::External),
+            _ => None,
+        }
+    }
+}
+
+/// One wiring of one box-qualified capability, held as a `CapabilityId` rather than as its two
+/// segments: it already carries both validated halves, and BXW0041 needs the qualifier back. The
+/// declared `box` is validated and deliberately not stored, as `[[imports]]` does with `contract`:
+/// BXW0041 requires it to equal the capability's own qualifier, so a field could only hold that
+/// same id a second time.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Binding {
+    capability: CapabilityId,
+    transport: Transport,
+    exposure: Option<Exposure>,
+}
+impl Binding {
+    /// Returns the declared exposure, which is optional and defaulted by no one here.
+    pub fn exposure(&self) -> Option<Exposure> {
+        self.exposure
+    }
+    ref_getters! {
+        #[doc = "Returns the box-qualified capability."] capability: &CapabilityId = capability;
+    }
+    copy_getters! {
+        #[doc = "Returns the declared transport."] transport: Transport = transport;
+    }
+}
+
+/// A composition package's selected boxes and their bindings. Whether a selected identity exists,
+/// and whether a binding suits the generated contract, are cross-document questions T5 owns.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Composition {
+    boxes: Vec<BoxId>,
+    bindings: Vec<Binding>,
+}
+impl Composition {
+    ref_getters! {
+        #[doc = "Returns the selected boxes, in declaration order."] boxes: &[BoxId] = boxes;
+        #[doc = "Returns the declared bindings, in declaration order."] bindings: &[Binding] = bindings;
+    }
+}
+
 /// A validated schema-1 `boxology.toml`. Construction is the validation: a `Manifest` exists only
 /// for a document that satisfied every rule this crate knows, so consumers never re-check it.
 #[derive(Debug, Eq, PartialEq)]
@@ -123,6 +204,7 @@ pub struct Manifest {
     crates: Vec<CrateEntry>,
     derived: Vec<DerivedOutput>,
     imports: Vec<Import>,
+    composition: Option<Composition>,
 }
 impl Manifest {
     /// Parses `bytes` as the manifest logically located at `manifest_path`.
@@ -213,6 +295,7 @@ impl Manifest {
         let derived = outputs.map_or(Vec::new(), |i| parser.derived(i));
         let declared = root.get("imports");
         let imports = declared.map_or(Vec::new(), |i| parser.imports(i));
+        let composition = parser.composition(root, kind);
         match (Diagnostics::new(parser.errors), id.zip(kind)) {
             (None, Some((id, kind))) => Ok(Manifest {
                 id,
@@ -224,6 +307,7 @@ impl Manifest {
                 crates,
                 derived,
                 imports,
+                composition,
             }),
             (Some(diagnostics), _) => Err(diagnostics),
             // Unreachable: a missing or rejected id or kind always records a diagnostic above. It
@@ -235,6 +319,10 @@ impl Manifest {
     /// Returns the optional display name, which never carries identity.
     pub fn display_name(&self) -> Option<&str> {
         self.display_name.as_deref()
+    }
+    /// Returns the composition section, which exists on exactly the composition packages.
+    pub fn composition(&self) -> Option<&Composition> {
+        self.composition.as_ref()
     }
     ref_getters! {
         #[doc = "Returns the validated package id."] id: &BoxId = id;
@@ -513,6 +601,108 @@ impl Parser<'_> {
         }
         imports
     }
+    /// Reads `[composition]`, whose presence is itself a kind claim: only a composition package may
+    /// declare one (BXW0022), and every composition package must (BXW0023). It is read whatever the
+    /// kind, so a misplaced one still reports what is inside it, as a misplaced `fixtures` does; an
+    /// already-rejected kind adds no second complaint. `bindings` is optional, being a container
+    /// section: a composition may link boxes without wiring a capability across them.
+    fn composition(&mut self, root: &dyn TableLike, kind: Option<Kind>) -> Option<Composition> {
+        let Some(item) = root.get("composition") else {
+            if kind == Some(Kind::Composition) {
+                self.key("BXW0023", POINT, "composition");
+            }
+            return None;
+        };
+        if matches!(kind, Some(Kind::Box | Kind::Platform)) {
+            let span = key_span(self.source, root, "composition");
+            self.key("BXW0022", span, "composition");
+        }
+        let whole = item_span(self.source, Some(item));
+        let Some(table) = item.as_table_like() else {
+            self.key("BXW0011", whole, "composition");
+            return None;
+        };
+        self.unknown(table, COMPOSITION_KEYS);
+        let boxes = self.boxes(table, whole);
+        let bindings = table
+            .get("bindings")
+            .map_or(Vec::new(), |i| self.bindings(i, &boxes));
+        Some(Composition { boxes, bindings })
+    }
+    /// Reads `boxes`: required, unique, box-id grammar, and non-empty. Emptiness is BXW0034 because
+    /// this list's presence is itself a claim, unlike a container section's.
+    fn boxes(&mut self, at: Fields<'_>, whole: Span) -> Vec<BoxId> {
+        let Some(item) = at.get("boxes") else {
+            self.key("BXW0012", whole, "boxes");
+            return Vec::new();
+        };
+        let Some(array) = item.as_array() else {
+            self.key("BXW0011", item_span(self.source, Some(item)), "boxes");
+            return Vec::new();
+        };
+        if array.is_empty() {
+            self.key("BXW0034", key_span(self.source, at, "boxes"), "boxes");
+        }
+        let mut boxes: Vec<BoxId> = Vec::new();
+        for value in array.iter() {
+            let span = locate(self.source, value.span());
+            match value.as_str().map(BoxId::new) {
+                None => self.key("BXW0011", span, "boxes"),
+                Some(Err(_)) => self.key("BXW0035", span, "boxes"),
+                Some(Ok(id)) if boxes.contains(&id) => self.key("BXW0036", span, "boxes"),
+                Some(Ok(id)) => boxes.push(id),
+            }
+        }
+        boxes
+    }
+    /// Reads `[[composition.bindings]]` through the one section funnel, so each element's key
+    /// inventory is applied. Both cross-checks are in-document: a binding names a box this document
+    /// selected (BXW0040), by a capability that same box qualifies (BXW0041).
+    fn bindings(&mut self, item: &Item, boxes: &[BoxId]) -> Vec<Binding> {
+        let mut bindings: Vec<Binding> = Vec::new();
+        for (whole, table) in self.section(item, "bindings", BINDING_KEYS) {
+            let raw = self.field(table, "box", whole);
+            let id = raw.and_then(|t| self.check(table, "box", "BXW0035", BoxId::new(t).ok()));
+            let box_id = id.and_then(|id| {
+                let selected = boxes.contains(&id);
+                self.check(table, "box", "BXW0040", selected.then_some(id))
+            });
+            let cap = self.field(table, "capability", whole);
+            let named = cap.and_then(|t| self.check(table, "capability", "BXW0037", qualified(t)));
+            // A `box` absent is already coded as absent, and one rejected qualifies nothing.
+            let capability = named.and_then(|id| {
+                let own = raw.is_none_or(|text| text == id.box_id().as_str());
+                self.check(table, "capability", "BXW0041", own.then_some(id))
+            });
+            let transport = self
+                .field(table, "transport", whole)
+                .and_then(|t| self.check(table, "transport", "BXW0038", Transport::parse(t)));
+            // Absent is legal for `exposure` alone: 02-packages writes a binding both ways.
+            let exposure = table.get("exposure").and_then(|item| match item.as_str() {
+                Some(text) => self.check(table, "exposure", "BXW0039", Exposure::parse(text)),
+                None => {
+                    self.key("BXW0011", item_span(self.source, Some(item)), "exposure");
+                    None
+                }
+            });
+            let wired = box_id.zip(capability).zip(transport);
+            bindings.extend(wired.map(|((_, capability), transport)| Binding {
+                capability,
+                transport,
+                exposure,
+            }));
+        }
+        bindings
+    }
+}
+/// The `<box>.<name>` binding-capability grammar, composed of the contract crate's own identities
+/// so it cannot drift: a box reference, the first dot, and a box-local `[a-z][a-z0-9_]*` name.
+fn qualified(text: &str) -> Option<CapabilityId> {
+    let (box_id, name) = text.split_once('.')?;
+    Some(CapabilityId::new(
+        BoxId::new(box_id).ok()?,
+        CapabilityName::new(name).ok()?,
+    ))
 }
 /// The `[a-z][a-z0-9-]*` identity grammar, taken from `BoxId` so the two cannot drift apart.
 fn identity(text: &str) -> Option<String> {
@@ -558,6 +748,15 @@ fn rule_of(code: Code) -> Code {
         "BXW0032" => "derived output ids must be unique",
         "BXW0033" => "generator identities must match [a-z][a-z0-9-]*",
         "BXW0034" => "this list must contain at least one entry",
+        "BXW0022" => "only composition packages may declare a composition section",
+        "BXW0023" => "a composition package must declare its composition section",
+        "BXW0035" => "box references must match [a-z][a-z0-9-]*",
+        "BXW0036" => "selected boxes must be unique",
+        "BXW0037" => "binding capabilities must be box-qualified names",
+        "BXW0038" => "binding transport must be in-process or http",
+        "BXW0039" => "binding exposure must be code_only, internal, or external",
+        "BXW0040" => "every binding must reference a selected box",
+        "BXW0041" => "a binding capability must be qualified by its own box",
         _ => "the manifest must satisfy schema 1",
     }
 }
@@ -612,6 +811,8 @@ mod tests {
     const CRATE: &str = r#"cargo_package = "demo-impl"|path = "impl"|role = "box-contract""#;
     const LISTS: &str = r#"inputs = ["boxology.toml"]|outputs = ["generated/**"]"#;
     const IMPORT: &str = r#"package = "customer"|contract = "customer""#;
+    const COMPOSED: &str = "schema = 1\nid = \"demo\"\nkind = \"composition\"\nowned = [\"a\"]\n";
+    const BINDING: &str = r#"box = "hello"|capability = "hello.greet"|transport = "in-process""#;
     /// A document whose `[[name]]` section holds one element, a key per `|`-separated field.
     fn section(name: &str, body: &str) -> String {
         let element: String = body.split('|').map(|line| format!("{line}\n")).collect();
@@ -620,6 +821,16 @@ mod tests {
     /// The one derived output the tests declare, spelled as `section` splits it.
     fn output() -> String {
         format!(r#"id = "contract"|generator = "boxology-contract"|{LISTS}"#)
+    }
+    /// A composition package selecting `boxes` and declaring no binding.
+    fn composed(boxes: &str) -> String {
+        format!("{COMPOSED}[composition]\nboxes = {boxes}\n")
+    }
+    /// The same document with one binding element, a key per `|`-separated field.
+    fn bound(body: &str) -> String {
+        let element: String = body.split('|').map(|line| format!("{line}\n")).collect();
+        let head = composed("[\"hello\"]");
+        format!("{head}[[composition.bindings]]\n{element}")
     }
     fn parse(text: &str) -> Result<Manifest, Diagnostics> {
         let path = RelativePath::new("boxology.toml").expect("test literal is a valid path");
@@ -662,16 +873,10 @@ mod tests {
     }
     #[test]
     fn unknown_keys_reject_at_every_level() {
-        // `[composition]` is the last unmodelled section: until then schema 1 rejects it,
-        // fail-closed, and its case flips to an accepted key when that slice lands, as the
-        // `[[imports]]` case did in this one. The last two keys are prefix collisions in both
-        // directions: the inventory match is equality, so no near-miss of a known key is accepted.
-        for extra in [
-            "nope = 1\n",
-            "[composition]\nboxes = []\n",
-            "import = 1\n",
-            "schemas = 1\n",
-        ] {
+        // `[composition]` was the last unmodelled section and left its pin here; it is modelled
+        // now, so that case is gone rather than flipped. The last two keys are prefix collisions
+        // in both directions: the match is equality, so no near-miss of a known key is accepted.
+        for extra in ["nope = 1\n", "import = 1\n", "schemas = 1\n"] {
             assert_eq!(codes(&format!("{HEAD}{extra}")), ["BXW0010"], "{extra}");
         }
         let hostile = parse("schema = 1\n\"a b\\u000A\" = 1\n").expect_err("unknown key");
@@ -692,7 +897,7 @@ mod tests {
             let text = kinded(&format!("\"{kind}\""));
             assert_eq!(parse(&text).expect("valid manifest").kind(), expected);
         }
-        let text = kinded("\"composition\"");
+        let text = composed("[\"hello\"]");
         assert_eq!(parse(&text).expect("valid").kind(), Kind::Composition);
     }
     #[test]
@@ -746,9 +951,10 @@ mod tests {
         assert_eq!(valid.fixtures()[0].as_str(), "f/**");
         assert!(parse(platform).expect("valid").fixtures().is_empty());
         // Off a platform package the key itself is the defect, whatever it holds.
-        for kind in ["box", "composition"] {
+        let section = "[composition]\nboxes = [\"h\"]\n";
+        for (kind, tail) in [("box", ""), ("composition", section)] {
             let head = format!("schema = 1\nid = \"p\"\nkind = \"{kind}\"\nowned = [\"a\"]\n");
-            let text = format!("{head}fixtures = [\"f/**\"]\n");
+            let text = format!("{head}fixtures = [\"f/**\"]\n{tail}");
             assert_eq!(codes(&text), ["BXW0021"], "{kind}");
         }
         assert_eq!(codes(&format!("{platform}fixtures = []\n")), ["BXW0034"]);
@@ -962,6 +1168,175 @@ mod tests {
         let rendered = parse(&hostile).expect_err("hostile key").to_string();
         assert!(rendered.contains("BXW0010"), "{rendered}");
         assert!(!rendered.contains("a b"), "{rendered}");
+        // A binding element nests one level deeper still, and the same funnel reaches it.
+        let nested = format!("{}nope = 1\n", bound(BINDING));
+        assert_eq!(codes(&nested), ["BXW0010"]);
+        let rendered = parse(&nested).expect_err("unknown key").to_string();
+        let key = "offending=\"manifest key nope\"";
+        assert!(rendered.starts_with(&format!("BXW0010 boxology.toml:11:1-11:5 {key}")));
+    }
+    #[test]
+    fn composition_is_kind_gated() {
+        let valid = parse(&composed("[\"hello\"]")).expect("a composition section");
+        assert_eq!(valid.kind(), Kind::Composition);
+        let composition = valid.composition().expect("declared");
+        assert_eq!(composition.boxes()[0].as_str(), "hello");
+        assert!(composition.bindings().is_empty());
+        // The section is a kind claim in both directions. An absent one has no span of its own,
+        // so it reports at the document origin, exactly as an absent `owned` does.
+        assert_eq!(codes(COMPOSED), ["BXW0023"]);
+        let absent = parse(COMPOSED).expect_err("no section").to_string();
+        let at = r#"BXW0023 boxology.toml:1:1-1:1 offending="manifest key composition""#;
+        assert!(absent.starts_with(at), "{absent}");
+        let source = format!("source={D2_SOURCE:?}");
+        assert!(absent.ends_with(&source), "{absent}");
+        for kind in ["box", "platform"] {
+            let head = format!("schema = 1\nid = \"d\"\nkind = \"{kind}\"\nowned = [\"a\"]\n");
+            let text = format!("{head}[composition]\nboxes = [\"hello\"]\n");
+            assert_eq!(codes(&text), ["BXW0022"], "{kind}");
+            let rendered = parse(&text).expect_err("misplaced").to_string();
+            let at = r#"BXW0022 boxology.toml:5:2-5:13 offending="manifest key composition""#;
+            assert!(rendered.starts_with(at), "{rendered}");
+        }
+        // An already-rejected kind adds no second complaint about the section it cannot judge.
+        let rejected = "schema = 1\nid = \"d\"\nkind = \"nope\"\nowned = []\n[composition]\n";
+        assert_eq!(codes(&format!("{rejected}boxes = [\"h\"]\n")), ["BXW0009"]);
+        // The section holds its declared type, and its own key inventory rejects below the root.
+        assert_eq!(codes(&format!("{COMPOSED}composition = 7\n")), ["BXW0011"]);
+        let extra = format!("{}nope = 1\n", composed("[\"h\"]"));
+        assert_eq!(codes(&extra), ["BXW0010"]);
+    }
+    #[test]
+    fn selected_boxes_are_named_and_unique() {
+        let valid = parse(&composed("[\"hello\", \"other-1\"]")).expect("two boxes");
+        let boxes = valid.composition().expect("declared").boxes();
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(boxes[1].as_str(), "other-1");
+        // `boxes` is required, and empty is a defect: a section is a container whose emptiness
+        // reads as omission, but a list whose presence is itself a claim rejects empty, and a
+        // composition selecting nothing composes nothing. `owned` stays the exception: an
+        // unowned package is T2 classification rather than a parse defect.
+        // An absent `boxes` is blamed on the section header, the nearest construct that can hold it.
+        let bare = parse(&format!("{COMPOSED}[composition]\n"))
+            .expect_err("bare")
+            .to_string();
+        let header = r#"BXW0012 boxology.toml:5:1-5:14 offending="manifest key boxes""#;
+        assert!(bare.starts_with(header), "{bare}");
+        assert_eq!(codes(&composed("[]")), ["BXW0034"]);
+        let empty = parse(&composed("[]")).expect_err("empty").to_string();
+        let at = r#"BXW0034 boxology.toml:6:1-6:6 offending="manifest key boxes""#;
+        assert!(empty.starts_with(at), "{empty}");
+        for wrong in ["\"hello\"", "7", "[7]"] {
+            assert_eq!(codes(&composed(wrong)), ["BXW0011"], "{wrong}");
+        }
+        // A selection is the package-id grammar, and never echoes what it rejected.
+        for id in ["Payload", "0payload", "payload_x", "payload.x", ""] {
+            let text = composed(&format!("[\"{id}\"]"));
+            assert_eq!(codes(&text), ["BXW0035"], "{id}");
+            let rendered = parse(&text).expect_err("bad id").to_string().to_lowercase();
+            assert!(!rendered.contains("payload"), "{rendered}");
+        }
+        // A duplicate reports at its own entry, not at the first occurrence.
+        assert_eq!(codes(&composed("[\"a\", \"a\"]")), ["BXW0036"]);
+        let twice = parse(&composed("[\"a\", \"a\"]"))
+            .expect_err("dup")
+            .to_string();
+        let at = r#"BXW0036 boxology.toml:6:15-6:18 offending="manifest key boxes""#;
+        assert!(twice.starts_with(at), "{twice}");
+    }
+    #[test]
+    fn bindings_reference_selected_boxes() {
+        let valid = parse(&bound(BINDING)).expect("a declared binding");
+        let bindings = valid.composition().expect("declared").bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].capability().box_id().as_str(), "hello");
+        assert_eq!(bindings[0].capability().to_string(), "hello.greet");
+        assert_eq!(bindings[0].transport(), Transport::InProcess);
+        assert_eq!(bindings[0].exposure(), None);
+        // Declaring no binding reads as omitting the section: selecting boxes is one claim,
+        // wiring a capability across them is another.
+        let none = parse(&composed("[\"hello\"]")).expect("no bindings");
+        assert!(none.composition().expect("declared").bindings().is_empty());
+        // 02-packages binds one capability twice over two transports, so repetition is legal and
+        // its own example parses: this is that document's `[composition]` block exactly.
+        let second = r#"box = "hello"|capability = "hello.greet"|transport = "http""#;
+        let twice = format!("{BINDING}|[[composition.bindings]]|{second}|exposure = \"external\"");
+        let twice = bound(&twice);
+        let valid = parse(&twice).expect("one capability bound twice");
+        let pair = valid.composition().expect("declared").bindings();
+        assert_eq!(pair.len(), 2);
+        assert_eq!(pair[1].transport(), Transport::Http);
+        assert_eq!(pair[1].exposure(), Some(Exposure::External));
+        let http = r#"|transport = "http""#;
+        let wired = |b: &str, c: &str| bound(&format!(r#"box = "{b}"|capability = "{c}"{http}"#));
+        // Both membership rules are in-document: the selection list, and the capability's own
+        // qualifier. Whether either identity exists at all is T5's cross-document work.
+        assert_eq!(codes(&wired("other", "other.greet")), ["BXW0040"]);
+        let stray = parse(&wired("other", "other.greet")).expect_err("unselected");
+        let at = r#"BXW0040 boxology.toml:8:1-8:4 offending="manifest key box""#;
+        assert!(stray.to_string().starts_with(at), "{stray}");
+        assert_eq!(codes(&wired("hello", "other.greet")), ["BXW0041"]);
+        let foreign = parse(&wired("hello", "other.greet")).expect_err("qualifier");
+        let at = r#"BXW0041 boxology.toml:9:1-9:11 offending="manifest key capability""#;
+        assert!(foreign.to_string().starts_with(at), "{foreign}");
+        // A rejected box reference still qualifies nothing, so both report, in span order.
+        let both = ["BXW0035", "BXW0041"];
+        assert_eq!(codes(&wired("Hello", "hello.greet")), both);
+        // The capability grammar is a box id, the first dot, then [a-z][a-z0-9_]*.
+        for name in "hello hello.Greet hello.greet-x hello. .greet hello.a.b".split(' ') {
+            assert_eq!(codes(&wired("hello", name)), ["BXW0037"], "{name}");
+        }
+        for name in ["hello.greet", "hello.a_1", "hello.a__b"] {
+            assert!(parse(&wired("hello", name)).is_ok(), "{name}");
+        }
+        // An absent required key is located at the element it is missing from, and an element
+        // missing its `box` is coded as absent rather than also called misqualified.
+        let unnamed = bound(r#"capability = "hello.greet"|transport = "http""#);
+        assert_eq!(codes(&unnamed), ["BXW0012"]);
+        let absent = bound(r#"box = "hello"|transport = "http""#);
+        assert_eq!(codes(&absent), ["BXW0012"]);
+        let rendered = parse(&absent).expect_err("absent").to_string();
+        let at = r#"BXW0012 boxology.toml:7:1-7:25 offending="manifest key capability""#;
+        assert!(rendered.starts_with(at), "{rendered}");
+    }
+    #[test]
+    fn binding_transport_and_exposure_vocabularies() {
+        // Exposure orders as S4 D5 fixes it, so T5's max_exposure comparison cannot invert.
+        let order = [Exposure::CodeOnly, Exposure::Internal, Exposure::External];
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
+        let head = r#"box = "hello"|capability = "hello.greet""#;
+        let wired = |tail: &str| bound(&format!("{head}|{tail}"));
+        let exposed = |t: &str, e: &str| wired(&format!(r#"transport = "{t}"|exposure = "{e}""#));
+        for (word, expected) in ["code_only", "internal", "external"].into_iter().zip(order) {
+            let valid = parse(&exposed("http", word)).expect("a declared exposure");
+            let bindings = valid.composition().expect("declared").bindings();
+            assert_eq!(bindings[0].exposure(), Some(expected), "{word}");
+            assert_eq!(bindings[0].transport(), Transport::Http, "{word}");
+        }
+        // Both vocabularies are closed and case-sensitive; exposure alone is optional.
+        for word in ["Code_Only", "code-only", "payload", ""] {
+            assert_eq!(codes(&exposed("http", word)), ["BXW0039"], "{word}");
+        }
+        for word in ["In-Process", "in_process", "payload", ""] {
+            let tail = format!(r#"transport = "{word}""#);
+            assert_eq!(codes(&wired(&tail)), ["BXW0038"], "{word}");
+        }
+        for tail in ["transport = 7", "transport = \"http\"|exposure = 7"] {
+            assert_eq!(codes(&wired(tail)), ["BXW0011"], "{tail}");
+        }
+        assert_eq!(
+            codes(&bound(r#"box = "hello"|capability = "hello.greet""#)),
+            ["BXW0012"]
+        );
+        // Neither vocabulary echoes the word it rejected; both name their own key.
+        let rendered = parse(&exposed("payload", "payload"))
+            .expect_err("both")
+            .to_string();
+        let at = r#"BXW0038 boxology.toml:10:1-10:10 offending="manifest key transport""#;
+        let then = r#"BXW0039 boxology.toml:11:1-11:9 offending="manifest key exposure""#;
+        assert!(rendered.starts_with(at), "{rendered}");
+        assert!(rendered.contains(then), "{rendered}");
+        assert!(!rendered.contains("payload"), "{rendered}");
     }
     #[test]
     fn fixtures_key_spans_are_pinned() {
