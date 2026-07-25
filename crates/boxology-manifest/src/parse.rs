@@ -10,10 +10,12 @@ const POINT: Span = Span {
     start: ORIGIN,
     end: ORIGIN,
 };
-/// The schema-1 keys this slice models. `display_name`, `fixtures`, `[quality]`, `[[imports]]`,
-/// `[[crates]]`, `[[derived]]`, and `[composition]` are absent on purpose: until modelled they are
-/// unknown keys and reject, so no intermediate state of this crate accepts what it cannot check.
-const TOP_KEYS: &str = "schema id kind owned";
+/// The schema-1 keys this slice models. `[[imports]]`, `[[crates]]`, `[[derived]]`, and
+/// `[composition]` are absent on purpose: until modelled they are unknown keys and reject, so no
+/// intermediate state of this crate accepts what it cannot check.
+const TOP_KEYS: &str = "schema id kind owned display_name fixtures quality";
+/// The only key `[quality]` models; nesting inherits the same fail-closed inventory rule.
+const QUALITY_KEYS: &str = "commands";
 
 /// The declared package kind. `provider` parses as TOML and is rejected by rule (BXW0008), so it
 /// is deliberately absent here: the model can only hold a kind v0 supports.
@@ -34,6 +36,9 @@ pub struct Manifest {
     id: BoxId,
     kind: Kind,
     owned: Vec<GlobPattern>,
+    display_name: Option<String>,
+    fixtures: Vec<GlobPattern>,
+    quality_commands: Vec<String>,
 }
 impl Manifest {
     /// Parses `bytes` as the manifest logically located at `manifest_path`.
@@ -98,8 +103,35 @@ impl Manifest {
                 Vec::new()
             }
         };
+        let display_name = parser.optional_text(root, "display_name");
+        // Fixture opacity is a platform-package privilege, so the key is judged against the
+        // declared kind; an already-rejected kind adds no second complaint about this key.
+        let fixtures = match root.get("fixtures") {
+            None => Vec::new(),
+            Some(item) => {
+                let span = item_span(source, Some(item));
+                if matches!(kind, Some(Kind::Box | Kind::Composition)) {
+                    parser.key("BXW0021", span, "fixtures");
+                }
+                if item.as_array().is_some_and(|array| array.is_empty()) {
+                    parser.key("BXW0034", span, "fixtures");
+                }
+                parser.patterns("fixtures", item)
+            }
+        };
+        let quality_commands = match root.get("quality") {
+            Some(item) => parser.quality(item),
+            None => Vec::new(),
+        };
         match (Diagnostics::new(parser.errors), id.zip(kind)) {
-            (None, Some((id, kind))) => Ok(Manifest { id, kind, owned }),
+            (None, Some((id, kind))) => Ok(Manifest {
+                id,
+                kind,
+                owned,
+                display_name,
+                fixtures,
+                quality_commands,
+            }),
             (Some(diagnostics), _) => Err(diagnostics),
             // Unreachable: a missing or rejected id or kind always records a diagnostic above. It
             // is coded rather than panicked so the crate keeps no uncoded failure path even if the
@@ -107,9 +139,15 @@ impl Manifest {
             (None, None) => Err(one(&parser.path, POINT, "BXW0005", "manifest key id")),
         }
     }
+    /// Returns the optional display name, which never carries identity.
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
     ref_getters! {
         #[doc = "Returns the validated package id."] id: &BoxId = id;
         #[doc = "Returns the declared owned patterns, in declaration order."] owned: &[GlobPattern] = owned;
+        #[doc = "Returns the declared fixture patterns; always empty off a platform package."] fixtures: &[GlobPattern] = fixtures;
+        #[doc = "Returns the declared quality commands, in declaration order."] quality_commands: &[String] = quality_commands;
     }
     copy_getters! {
         #[doc = "Returns the declared package kind."] kind: Kind = kind;
@@ -159,6 +197,49 @@ impl Parser<'_> {
             }
         }
     }
+    /// Reads an optional string-valued key: absence is legal, a present non-string is BXW0011.
+    fn optional_text(&mut self, table: &dyn TableLike, key: Code) -> Option<String> {
+        let item = table.get(key)?;
+        match item.as_str() {
+            Some(value) => Some(value.to_owned()),
+            None => {
+                self.key("BXW0011", item_span(self.source, Some(item)), key);
+                None
+            }
+        }
+    }
+    /// Reads `[quality]`: the nested key inventory first, then its required list of commands, each
+    /// of which must be text that is not blank. Command text is never echoed into a diagnostic.
+    fn quality(&mut self, item: &Item) -> Vec<String> {
+        let table_span = item_span(self.source, Some(item));
+        let Some(table) = item.as_table_like() else {
+            self.key("BXW0011", table_span, "quality");
+            return Vec::new();
+        };
+        self.unknown(table, QUALITY_KEYS);
+        let Some(item) = table.get("commands") else {
+            self.key("BXW0012", table_span, "commands");
+            return Vec::new();
+        };
+        let span = item_span(self.source, Some(item));
+        let Some(array) = item.as_array() else {
+            self.key("BXW0011", span, "commands");
+            return Vec::new();
+        };
+        if array.is_empty() {
+            self.key("BXW0026", span, "commands");
+        }
+        let mut commands = Vec::new();
+        for value in array.iter() {
+            let span = locate(self.source, value.span());
+            match value.as_str() {
+                None => self.key("BXW0011", span, "commands"),
+                Some(text) if text.trim().is_empty() => self.key("BXW0026", span, "commands"),
+                Some(text) => commands.push(text.to_owned()),
+            }
+        }
+        commands
+    }
     /// Reads an array of glob patterns, coding non-arrays, non-string entries, and duplicates.
     fn patterns(&mut self, key: Code, item: &Item) -> Vec<GlobPattern> {
         let Some(array) = item.as_array() else {
@@ -200,6 +281,9 @@ fn rule_of(code: Code) -> Code {
         "BXW0011" => "a known manifest key must hold its declared TOML type",
         "BXW0012" => "a required manifest key must be present",
         "BXW0020" => "patterns within one list must be unique",
+        "BXW0021" => "only a platform package may declare fixtures",
+        "BXW0026" => "a quality command must be non-blank text",
+        "BXW0034" => "a declared fixtures list must not be empty",
         _ => "the manifest must satisfy schema 1",
     }
 }
@@ -291,7 +375,7 @@ mod tests {
     }
     #[test]
     fn unknown_keys_reject_at_every_level() {
-        // Later slices model the last six; until then schema 1 rejects them, fail-closed. Each
+        // Later slices model the last four; until then schema 1 rejects them, fail-closed. Each
         // case must flip to an accepted key exactly when its slice lands.
         for extra in [
             "nope = 1\n",
@@ -299,9 +383,6 @@ mod tests {
             "[[imports]]\nid = \"x\"\n",
             "[[crates]]\npath = \"a\"\n",
             "[[derived]]\nid = \"c\"\n",
-            "display_name = \"Demo\"\n",
-            "fixtures = [\"f/**\"]\n",
-            "[quality]\ncommands = [\"cargo test\"]\n",
         ] {
             assert_eq!(codes(&format!("{HEAD}{extra}")), ["BXW0010"], "{extra}");
         }
@@ -354,5 +435,87 @@ mod tests {
         assert_eq!(valid.owned()[0].as_str(), "a.rs");
         let many = "schema = 1\nid = \"d\"\nkind = \"box\"\nowned = [\"a\", \"b/**\"]\n";
         assert_eq!(parse(many).expect("valid").owned().len(), 2);
+    }
+    #[test]
+    fn display_name_is_optional_and_typed() {
+        assert_eq!(parse(HEAD).expect("valid").display_name(), None);
+        let named = format!("{HEAD}display_name = \"Demo Box\"\n");
+        let valid = parse(&named).expect("a display name is optional, not unknown");
+        assert_eq!(valid.display_name(), Some("Demo Box"));
+        // A display name is free-form text, so its typed rejection describes the key and no more.
+        let wrong = format!("{HEAD}display_name = [\"payload\"]\n");
+        assert_eq!(codes(&wrong), ["BXW0011"]);
+        let rendered = parse(&wrong).expect_err("wrong type").to_string();
+        assert!(rendered.contains("key display_name\""), "{rendered}");
+        assert!(!rendered.contains("payload"), "{rendered}");
+    }
+    #[test]
+    fn fixtures_are_platform_only_and_non_empty() {
+        let platform = "schema = 1\nid = \"p\"\nkind = \"platform\"\nowned = [\"a\"]\n";
+        let declared = format!("{platform}fixtures = [\"f/**\", \"g\"]\n");
+        let valid = parse(&declared).expect("a platform package may declare fixtures");
+        assert_eq!(valid.fixtures().len(), 2);
+        assert_eq!(valid.fixtures()[0].as_str(), "f/**");
+        assert!(parse(platform).expect("valid").fixtures().is_empty());
+        // Off a platform package the key itself is the defect, whatever it holds.
+        for kind in ["box", "composition"] {
+            let head = format!("schema = 1\nid = \"p\"\nkind = \"{kind}\"\nowned = [\"a\"]\n");
+            let text = format!("{head}fixtures = [\"f/**\"]\n");
+            assert_eq!(codes(&text), ["BXW0021"], "{kind}");
+        }
+        assert_eq!(codes(&format!("{platform}fixtures = []\n")), ["BXW0034"]);
+        assert_eq!(codes(&format!("{platform}fixtures = \"f\"\n")), ["BXW0011"]);
+        // The list rules are `owned`'s: the dialect and the duplicate check apply unchanged.
+        let repeated = format!("{platform}fixtures = [\"f/**\", \"f/**\"]\n");
+        assert_eq!(codes(&repeated), ["BXW0020"]);
+        let escaping = format!("{platform}fixtures = [\"../x\"]\n");
+        assert_eq!(codes(&escaping), ["BXW0016"]);
+    }
+    #[test]
+    fn quality_commands_reject_empty_and_blank() {
+        let text = format!("{HEAD}[quality]\ncommands = [\"cargo test\", \"cargo fmt\"]\n");
+        let valid = parse(&text).expect("a quality table with commands is valid");
+        assert_eq!(valid.quality_commands(), ["cargo test", "cargo fmt"]);
+        // The table is optional; the key is required once the table is declared.
+        assert!(parse(HEAD).expect("valid").quality_commands().is_empty());
+        assert_eq!(codes(&format!("{HEAD}[quality]\n")), ["BXW0012"]);
+        for list in ["[]", "[\"\"]", "[\"   \"]", "[\"cargo test\", \"\\t\\n\"]"] {
+            let text = format!("{HEAD}[quality]\ncommands = {list}\n");
+            assert_eq!(codes(&text), ["BXW0026"], "{list}");
+        }
+        for list in ["7", "[7]", "\"cargo test\""] {
+            let text = format!("{HEAD}[quality]\ncommands = {list}\n");
+            assert_eq!(codes(&text), ["BXW0011"], "{list}");
+        }
+        // Free-form values never reach the report. Assert what the payload IS rather than what
+        // it is not: an absence check passes vacuously whenever the value had no path there.
+        let rendered = parse(&format!("{HEAD}quality = 7\n"))
+            .expect_err("table")
+            .to_string();
+        assert!(
+            rendered.contains("offending=\"manifest key quality\""),
+            "{rendered}"
+        );
+        let blank = format!("{HEAD}[quality]\ncommands = [\"\\t\\n\"]\n");
+        let rendered = parse(&blank).expect_err("blank command").to_string();
+        assert!(
+            rendered.contains("offending=\"manifest key commands\""),
+            "{rendered}"
+        );
+    }
+    #[test]
+    fn unknown_keys_reject_inside_nested_tables() {
+        // `[quality]` is the first modelled nested table, so key rejection must now be shown to
+        // reach a level below the root, and to point at the offending key, not its table header.
+        let text = format!("{HEAD}[quality]\ncommands = [\"cargo test\"]\nnope = 1\n");
+        assert_eq!(codes(&text), ["BXW0010"]);
+        let rendered = parse(&text).expect_err("unknown nested key").to_string();
+        let located = "BXW0010 boxology.toml:7:1-7:5 offending=\"manifest key nope\"";
+        assert!(rendered.starts_with(located), "{rendered}");
+        // Nesting inherits the payload gate: a hostile nested key is described, never echoed.
+        let hostile = format!("{HEAD}[quality]\ncommands = [\"cargo test\"]\n\"a b\" = 1\n");
+        let rendered = parse(&hostile).expect_err("hostile nested key").to_string();
+        assert!(rendered.contains("BXW0010"), "{rendered}");
+        assert!(!rendered.contains("a b"), "{rendered}");
     }
 }
