@@ -9,7 +9,7 @@
 mod glob;
 
 pub use glob::GlobPattern;
-pub use parse::{Kind, Manifest};
+pub use parse::{CrateEntry, CrateRole, DerivedOutput, Kind, Manifest};
 
 use std::fmt;
 
@@ -17,10 +17,10 @@ use std::fmt;
 const D2_SOURCE: &str = "specs/s5-manifest-and-validation.md D2";
 // `BXW####` allocation, recorded so this task's slices cannot collide or strand gaps. Landed:
 // BXW0013–BXW0019 the glob dialect; BXW0001–BXW0012 the document gates, identity, kind, and key
-// inventory; BXW0020 duplicate list patterns; BXW0021 and BXW0034 `fixtures`; BXW0026
-// `[quality].commands`. Allocated, not yet landed: BXW0022–BXW0025 and BXW0027–BXW0033 for
-// `[[imports]]`, `[[crates]]`, `[[derived]]`, and `[composition]`; BXW0035 up for discovery and
-// classification.
+// inventory; BXW0020 duplicate list patterns; BXW0021 `fixtures` and BXW0034 an empty required
+// list; BXW0026 `[quality].commands`; BXW0027–BXW0030 `[[crates]]`; BXW0031–BXW0033 `[[derived]]`.
+// Allocated, not yet landed: BXW0022–BXW0025 for `[composition]` and `[[imports]]`; BXW0035 up for
+// discovery and classification.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -314,5 +314,6 @@ mod tests {
         bounds::<(RelativePath, PathError, GlobPattern)>();
         bounds::<(LineColumn, Span, Diagnostic, Diagnostics)>();
         bounds::<(Kind, Manifest)>();
+        bounds::<(CrateEntry, CrateRole, DerivedOutput)>();
     }
 }
