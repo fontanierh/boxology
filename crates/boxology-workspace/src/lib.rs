@@ -6,10 +6,12 @@
 //! a typed [`InputError`] and every document defect a coded [`Finding`].
 //!
 //! **Payload safety.** A rendered finding or classification echoes only grammar-validated values: a
-//! [`BoxId`] (`[a-z][a-z0-9-]*`), a [`RelativePath`] and [`GlobPattern`] (no NUL, tab, line break,
-//! or backslash; no `..` in a path). Rejecting line breaks holds one finding to one line; other
-//! control bytes reach a report, a residual gap in the grammar this crate consumes. Every other
-//! word this crate renders is a `&'static str` it chose. An [`Entry::Manifest`] line is
+//! [`BoxId`] (`[a-z][a-z0-9-]*`) — a package identity, or a `[[derived]]` element's id, which
+//! `boxology_manifest` admits through no other grammar (BXW0031), so the model carries the proof
+//! and this crate never re-validates it — a [`RelativePath`] and [`GlobPattern`] (no NUL, tab,
+//! line break, or backslash; no `..` in a path). Rejecting line breaks holds one finding to one
+//! line; other control bytes reach a report, a residual gap in the grammar this crate consumes.
+//! Every other word this crate renders is a `&'static str` it chose. An [`Entry::Manifest`] line is
 //! `boxology_manifest`'s own rendering, whose only caller-derived part is a manifest key name it
 //! echoes just when the name is plain `[A-Za-z0-9_-]` text.
 //!
@@ -21,7 +23,7 @@
 #![forbid(unsafe_code)]
 
 use boxology_contract::BoxId;
-use boxology_manifest::{Diagnostic, GlobPattern, Manifest, RelativePath};
+use boxology_manifest::{DerivedOutput, Diagnostic, GlobPattern, Kind, Manifest, RelativePath};
 use std::{cmp::Ordering, fmt};
 /// A coded rule: its stable `BXW####` code and the static text of the obligation it states.
 type Rule = (&'static str, &'static str);
@@ -37,13 +39,24 @@ const UNOWNED_TEXT: &str = "every tracked file must classify under some package"
 const UNOWNED: Rule = ("BXW0044", UNOWNED_TEXT);
 const OVERLAP_TEXT: &str = "at most one package may claim a non-derived path";
 const OVERLAP: Rule = ("BXW0045", OVERLAP_TEXT);
+const RIVALS_TEXT: &str = "at most one declared derived output may claim a path";
+const RIVALS: Rule = ("BXW0046", RIVALS_TEXT);
+const BOTH_TEXT: &str = "a declared derived output must not also be claimed as a non-derived path";
+const BOTH: Rule = ("BXW0047", BOTH_TEXT);
+const LOCK_TEXT: &str = "Cargo.lock must be a platform package's declared global derived artifact";
+const LOCK: Rule = ("BXW0049", LOCK_TEXT);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
+/// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
+const LOCKFILE: &str = "Cargo.lock";
 // `BXW####` allocation, recorded so this task's slices cannot collide or strand gaps. T1 landed
-// BXW0001–BXW0041, the whole schema-1 manifest inventory, so T2 opens at BXW0042 and reserves
-// through BXW0054. Landed: BXW0042 duplicate identity, BXW0043 self-claiming fixture pattern,
-// BXW0044 unowned path, BXW0045 overlapping ownership, BXW0048 symlink escape. Allocated:
-// BXW0046–BXW0047 and BXW0049–BXW0051 derived outputs, BXW0052–BXW0054 crate-role mapping.
+// BXW0001–BXW0041, the whole schema-1 manifest inventory, so T2 opens at BXW0042 and now reserves
+// through BXW0052: derived classification needed three of its five reserved codes, so crate-role
+// mapping moves down to keep the range dense rather than strand BXW0050–BXW0051. Landed:
+// BXW0042 duplicate identity, BXW0043 self-claiming fixture pattern, BXW0044 unowned path,
+// BXW0045 overlapping ownership, BXW0046 rival derived outputs, BXW0047 derived and non-derived
+// at once, BXW0048 symlink escape, BXW0049 the workspace lockfile. Allocated: BXW0050–BXW0052
+// crate-role mapping.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -127,22 +140,51 @@ impl WorkspaceInputs {
             classifications,
         })
     }
-    /// Classifies every tracked file under the one package claiming it, and reports the files that
-    /// classify no times or more than once. A package claims a path when any `owned` or `fixtures`
-    /// pattern of its manifest matches, so a pruned fixture manifest — not a package itself — still
-    /// classifies here, as the owned non-derived file of whichever package claimed it.
+    /// Classifies every tracked file under the one claim it has, and reports the files that
+    /// classify no times or more than once. D3 admits exactly two kinds of claim, and a path may
+    /// hold only one of them: a package claims a path *non-derived* when any `owned` or `fixtures`
+    /// pattern of its manifest matches — so a pruned fixture manifest, not a package itself, still
+    /// classifies here as the owned file of whichever package claimed it — and claims it *derived*
+    /// when an `outputs` pattern of one of its `[[derived]]` elements matches.
+    ///
+    /// Rival claims of the same kind are BXW0045 (non-derived) and BXW0046 (derived); a path
+    /// claimed under both kinds is BXW0047, whether one manifest or two make the two claims. That
+    /// is deliberately **one** code, not a same-package and a cross-package one: the rule broken is
+    /// the same sentence either way, the candidate list already names each claim with its manifest
+    /// path so the distinction is read off the payload rather than off the code, and a split would
+    /// have to invent a precedence for the mixed case where one package claims a path both ways and
+    /// a second package claims it too.
     fn classify(&self, packages: &[Package]) -> (Vec<FileClassification>, Vec<Entry>) {
         let (mut classified, mut defects) = (Vec::new(), Vec::new());
         for file in &self.files {
             let path = file.path();
-            let claiming = |package: &&Package| !package.owns(path).is_empty();
-            let claimants: Vec<&Package> = packages.iter().filter(claiming).collect();
-            let report =
-                |rule: Rule, named| Entry::Workspace(Finding::new(rule, path.clone(), None, named));
-            match claimants.as_slice() {
-                [package] => classified.push(FileClassification::new(path, package)),
-                [] => defects.push(report(UNOWNED, Vec::new())),
-                rivals => defects.push(report(OVERLAP, every_claim(rivals, path))),
+            let owning = |package: &&Package| !package.owns(path).is_empty();
+            let deriving = |package: &&Package| !package.derives(path).is_empty();
+            let claiming = |package: &&Package| owning(package) || deriving(package);
+            let rivals: Vec<&Package> = packages.iter().filter(claiming).collect();
+            let owners: Vec<&Package> = rivals.iter().copied().filter(owning).collect();
+            let mut outputs: Vec<(&Package, &DerivedOutput)> = Vec::new();
+            for package in &rivals {
+                outputs.extend(package.derives(path).into_iter().map(|o| (*package, o)));
+            }
+            let every = || every_claim(&rivals, path);
+            let attributed = match (outputs.as_slice(), owners.as_slice()) {
+                ([(package, output)], []) => Ok((*package, Some(*output))),
+                ([], [package]) => Ok((*package, None)),
+                ([], []) => Err((UNOWNED, Vec::new())),
+                ([], _) => Err((OVERLAP, every())),
+                (_, []) => Err((RIVALS, every())),
+                (_, _) => Err((BOTH, every())),
+            };
+            match attributed {
+                Ok((package, output)) => {
+                    classified.push(FileClassification::new(path, package, output));
+                    defects.extend(package.lockfile(path, output));
+                }
+                Err((rule, named)) => {
+                    let found = Finding::new(rule, path.clone(), None, named);
+                    defects.push(Entry::Workspace(found));
+                }
             }
         }
         classified.sort_by(|left, right| left.key().cmp(&right.key()));
@@ -220,13 +262,24 @@ impl WorkspaceInputs {
 }
 /// Names every claim every rival makes on `path`. The order is the caller's, never the rendering's:
 /// packages in the walk order discovery fixed — ascending `(depth, path)`, so the outermost claimant
-/// leads — and within one package its patterns in declaration order.
+/// leads — and within one package its non-derived patterns in declaration order, then every
+/// `outputs` pattern of every declared derived output claiming the path, likewise in declaration
+/// order. A derived claim names the output it is made under, which is the only thing separating it
+/// from a non-derived claim of the same package on the same pattern text.
 fn every_claim(rivals: &[&Package], path: &RelativePath) -> Vec<Candidate> {
     let mut named = Vec::new();
     for package in rivals {
+        let at = || (package.id().clone(), package.manifest_path.clone());
         for claim in package.owns(path) {
-            let at = package.manifest_path.clone();
-            named.push(Candidate::new(package.id().clone(), at, claim.clone()));
+            let (id, manifest) = at();
+            named.push(Candidate::new(id, manifest, claim.clone()));
+        }
+        for output in package.derives(path) {
+            for claim in package.matching(path, output.outputs()) {
+                let (id, manifest) = at();
+                let named_by = output.id().clone();
+                named.push(Candidate::derived(id, manifest, claim.clone(), named_by));
+            }
         }
     }
     named
@@ -297,6 +350,29 @@ impl Package {
         claimed.extend(self.claims(path));
         claimed
     }
+    /// Returns every declared derived output of this package whose `outputs` patterns claim `path`,
+    /// in declaration order: the other, exclusive half of the classification question. An output
+    /// claiming a path under several of its own patterns is still that one output, exactly as a
+    /// package claiming a path under several of its own patterns is still that one package.
+    fn derives(&self, path: &RelativePath) -> Vec<&DerivedOutput> {
+        let hit = |output: &&DerivedOutput| !self.matching(path, output.outputs()).is_empty();
+        self.manifest.derived().iter().filter(hit).collect()
+    }
+    /// Reports BXW0049 when the workspace's own `Cargo.lock` is not this platform package's
+    /// declared derived output. The rule is judged on the classification a path actually earned, so
+    /// a lockfile no claim or too many claims reached is answered by the finding that denied it one
+    /// and never a second time. The match is on the whole workspace-relative path, so a
+    /// `Cargo.lock` inside a fixture subtree is untouched by this rule: it is the ordinary owned
+    /// non-derived material of whichever package's `fixtures` pattern claimed it.
+    fn lockfile(&self, path: &RelativePath, output: Option<&DerivedOutput>) -> Option<Entry> {
+        let global = output.is_some() && self.manifest.kind() == Kind::Platform;
+        if path.as_str() != LOCKFILE || global {
+            return None;
+        }
+        let owner = Some(self.id().clone());
+        let found = Finding::new(LOCK, path.clone(), owner, every_claim(&[self], path));
+        Some(Entry::Workspace(found))
+    }
     /// Reports BXW0043 for every `fixtures` pattern claiming this package's own manifest. The
     /// package keeps its identity and every other claim: honouring a self-claim would erase the
     /// package that declares the fixtures, which turns one located defect into a cascade of
@@ -342,20 +418,22 @@ impl Workspace {
 pub struct FileClassification {
     path: RelativePath,
     package: BoxId,
-    derived_output: Option<String>,
+    derived_output: Option<BoxId>,
 }
 impl FileClassification {
-    fn new(path: &RelativePath, package: &Package) -> Self {
+    fn new(path: &RelativePath, package: &Package, output: Option<&DerivedOutput>) -> Self {
         Self {
             path: path.clone(),
             package: package.id().clone(),
-            derived_output: None,
+            derived_output: output.map(|output| output.id().clone()),
         }
     }
     /// Returns the declaration this file is a derived output of, `None` for a non-derived owned
-    /// file. Derived outputs are not modelled yet, so today every classified file answers `None`.
-    pub fn derived_output(&self) -> Option<&str> {
-        self.derived_output.as_deref()
+    /// file. The id is a [`BoxId`] rather than free text because it is echoed: `boxology_manifest`
+    /// admits a `[[derived]]` element's id through that grammar alone (BXW0031), and this type
+    /// carries that proof instead of restating the check or trusting a `String`.
+    pub fn derived_output(&self) -> Option<&BoxId> {
+        self.derived_output.as_ref()
     }
     ref_getters! {
         #[doc = "Returns the workspace-relative logical path."] path: &RelativePath = path;
@@ -367,7 +445,7 @@ impl FileClassification {
         (&self.package, &self.path)
     }
     fn render(&self) -> String {
-        let derived = self.derived_output.as_deref().unwrap_or("");
+        let derived = self.derived_output.as_ref().map_or("", BoxId::as_str);
         let (package, path) = (self.package.as_str(), self.path.as_str());
         format!("{package} {path} derived={derived}")
     }
@@ -402,11 +480,28 @@ fn escapes(path: &RelativePath, target: &str) -> bool {
 /// constructible on purpose: every field is already grammar-validated, so a candidate list carries
 /// dynamic data into a report without carrying caller text.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Candidate(BoxId, RelativePath, GlobPattern);
+pub struct Candidate(BoxId, RelativePath, GlobPattern, Option<BoxId>);
 impl Candidate {
-    /// Names a package, its manifest, and the pattern under which it claims a path.
+    /// Names a package, its manifest, and the pattern under which it claims a path as owned
+    /// non-derived material.
     pub fn new(package: BoxId, manifest_path: RelativePath, claim: GlobPattern) -> Self {
-        Self(package, manifest_path, claim)
+        Self(package, manifest_path, claim, None)
+    }
+    /// [`Candidate::new`], for a claim made under the named declared derived output instead. The
+    /// output id is what a report needs to be repairable: one manifest may spell the same pattern
+    /// text in `owned` and in two `[[derived]]` elements, and without the id those three claims
+    /// render identically and name no document line to change.
+    pub fn derived(
+        package: BoxId,
+        manifest_path: RelativePath,
+        claim: GlobPattern,
+        output: BoxId,
+    ) -> Self {
+        Self(package, manifest_path, claim, Some(output))
+    }
+    /// Returns the derived output the claim is made under, `None` for a non-derived claim.
+    pub fn output(&self) -> Option<&BoxId> {
+        self.3.as_ref()
     }
     ref_getters! {
         #[doc = "Returns the claiming package identity."] package: &BoxId = 0;
@@ -414,7 +509,9 @@ impl Candidate {
         #[doc = "Returns the claiming pattern."] claim: &GlobPattern = 2;
     }
     fn render(&self) -> String {
-        format!("{} {} {}", self.0, self.1.as_str(), self.2.as_str())
+        let derived = self.3.as_ref().map(|id| format!(" derived={id}"));
+        let (at, claim) = (self.1.as_str(), self.2.as_str());
+        format!("{} {at} {claim}{}", self.0, derived.unwrap_or_default())
     }
 }
 /// One stable coded workspace finding, rendered on a single line. The derived order agrees with
@@ -588,6 +685,23 @@ mod tests {
         let mut text = format!("{head}owned = [{}]\n", list(owned));
         if !fixtures.is_empty() {
             text.push_str(&format!("fixtures = [{}]\n", list(fixtures)));
+        }
+        text.into_bytes()
+    }
+    /// A manifest document with `[[derived]]` elements appended, each one an output id and the
+    /// `outputs` patterns it declares, in declaration order. Every element declares the same fixed
+    /// nonempty `inputs`, which this slice never reads.
+    fn deriving(base: Vec<u8>, outputs: &[(&str, &[&str])]) -> Vec<u8> {
+        let mut text = String::from_utf8(base).expect("test manifests are ASCII");
+        for (id, patterns) in outputs {
+            let quoted: Vec<String> = patterns.iter().map(|p| format!("{p:?}")).collect();
+            let head = format!("[[derived]]\nid = {id:?}\ngenerator = \"cargo\"\n");
+            let lists = format!(
+                "inputs = [{MANIFEST:?}]\noutputs = [{}]\n",
+                quoted.join(", ")
+            );
+            text.push_str(&head);
+            text.push_str(&lists);
         }
         text.into_bytes()
     }
@@ -819,7 +933,10 @@ mod tests {
         let seen: Vec<(&str, &str, Option<&str>)> = checked
             .classifications()
             .iter()
-            .map(|c| (c.package().as_str(), c.path().as_str(), c.derived_output()))
+            .map(|c| {
+                let derived = c.derived_output().map(BoxId::as_str);
+                (c.package().as_str(), c.path().as_str(), derived)
+            })
             .collect();
         assert_eq!(
             seen,
@@ -926,6 +1043,183 @@ mod tests {
             report.to_string(),
             "BXW0045 a/x.rs package= candidates=[zulu boxology.toml a/*.rs,\
              zulu boxology.toml a/x.rs,alpha a/boxology.toml x.rs]"
+        );
+    }
+    /// D3's other classification: a path an `outputs` pattern claims is *that declared output*, and
+    /// its id reaches the rendered line. The fixture is built so a wrong answer is reachable — the
+    /// declaring package is nested, so its outputs re-anchor at its own root and not at the
+    /// workspace root; `gen` is a strict prefix of `gen-extra`, so a prefix comparison anywhere
+    /// answers with the wrong id; and `pkg/api/v1.rs` is claimed by *two* patterns of the same
+    /// output, which is one claim, exactly as two patterns of one package are.
+    #[test]
+    fn declared_outputs_classify_as_that_output() {
+        let outputs: [(&str, &[&str]); 2] = [
+            ("gen-extra", &["extra/*.rs"]),
+            ("gen", &["api/**", "api/v1.rs"]),
+        ];
+        let deep = deriving(
+            owning("deep", "box", &[MANIFEST, "src/*.rs"], &[]),
+            &outputs,
+        );
+        let root = owning("root", "platform", &[MANIFEST], &[]);
+        let manifests = vec![("boxology.toml", root), ("pkg/boxology.toml", deep)];
+        let tracked = ["pkg/api/v1.rs", "pkg/extra/e.rs", "pkg/src/a.rs"];
+        let checked = listing(manifests, &tracked)
+            .check()
+            .expect("each classifies");
+        assert_eq!(
+            checked.render_report().lines().collect::<Vec<_>>(),
+            [
+                "deep pkg/api/v1.rs derived=gen",
+                "deep pkg/boxology.toml derived=",
+                "deep pkg/extra/e.rs derived=gen-extra",
+                "deep pkg/src/a.rs derived=",
+                "root boxology.toml derived=",
+            ]
+        );
+        let first = &checked.classifications()[0];
+        assert_eq!(first.derived_output(), Some(&id("gen")));
+        assert_eq!(first.package(), &id("deep"));
+        assert_eq!(checked.classifications()[1].derived_output(), None);
+    }
+    /// BXW0046 codes a path more than one declared derived output claims, naming every one. The
+    /// same-manifest pair below spells the *identical pattern text* in both elements, so nothing
+    /// but the named output id separates the two claims in the report.
+    #[test]
+    fn rival_derived_outputs_are_coded() {
+        let owned = [MANIFEST, "pkg/boxology.toml"];
+        let claims: [(&str, &[&str]); 3] = [
+            ("one", &["gen/*.rs"]),
+            ("two", &["gen/*.rs"]),
+            ("three", &["pkg/y.rs"]),
+        ];
+        let zulu = deriving(owning("zulu", "platform", &owned, &[]), &claims);
+        let alpha = deriving(owning("alpha", "box", &[], &[]), &[("out", &["y.rs"])]);
+        let manifests = vec![("boxology.toml", zulu), ("pkg/boxology.toml", alpha)];
+        let inputs = listing(manifests, &["gen/a.rs", "pkg/y.rs"]);
+        let report = inputs.check().expect_err("two paths are claimed twice");
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0046 gen/a.rs package= candidates=[zulu boxology.toml gen/*.rs derived=one,\
+                 zulu boxology.toml gen/*.rs derived=two]",
+                "BXW0046 pkg/y.rs package= candidates=[zulu boxology.toml pkg/y.rs derived=three,\
+                 alpha pkg/boxology.toml y.rs derived=out]",
+            ]
+        );
+        let [Entry::Workspace(rivals), _] = report.as_slice() else {
+            panic!("two workspace findings: {report}");
+        };
+        assert_eq!(rivals.code(), "BXW0046");
+        assert_eq!(rivals.path(), &path("gen/a.rs"));
+        assert_eq!(rivals.package(), None);
+        assert_eq!(rivals.rule(), RIVALS_TEXT);
+        assert_eq!(rivals.rule_source(), WALK_SOURCE);
+        let named: Vec<Option<&BoxId>> =
+            rivals.candidates().iter().map(Candidate::output).collect();
+        assert_eq!(named, [Some(&id("one")), Some(&id("two"))]);
+    }
+    /// BXW0047 codes a path claimed as owned non-derived material *and* as a declared derived
+    /// output. One code covers both the same-manifest case — `solo/a.rs`, where `owned` and a
+    /// `[[derived]]` element spell the identical pattern, and `fix/a.rs`, where the non-derived
+    /// claim comes from `fixtures` rather than `owned` — and the cross-manifest one, `pkg/b.rs`.
+    #[test]
+    fn a_path_owned_and_derived_at_once_is_coded() {
+        let owned = [MANIFEST, "solo/*.rs", "pkg/b.rs", "pkg/boxology.toml"];
+        let claims: [(&str, &[&str]); 2] = [("fix", &["fix/a.rs"]), ("gen", &["solo/*.rs"])];
+        let zulu = deriving(owning("zulu", "platform", &owned, &["fix/**"]), &claims);
+        let alpha = deriving(
+            owning("alpha", "box", &["b.rs"], &[]),
+            &[("out", &["b.rs"])],
+        );
+        let manifests = vec![("boxology.toml", zulu), ("pkg/boxology.toml", alpha)];
+        let tracked = ["fix/a.rs", "pkg/b.rs", "solo/a.rs"];
+        let report = listing(manifests, &tracked)
+            .check()
+            .expect_err("three collisions");
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0047 fix/a.rs package= candidates=[zulu boxology.toml fix/**,\
+                 zulu boxology.toml fix/a.rs derived=fix]",
+                "BXW0047 pkg/b.rs package= candidates=[zulu boxology.toml pkg/b.rs,\
+                 alpha pkg/boxology.toml b.rs,alpha pkg/boxology.toml b.rs derived=out]",
+                "BXW0047 solo/a.rs package= candidates=[zulu boxology.toml solo/*.rs,\
+                 zulu boxology.toml solo/*.rs derived=gen]",
+            ]
+        );
+        let [_, _, Entry::Workspace(both)] = report.as_slice() else {
+            panic!("three workspace findings: {report}");
+        };
+        assert_eq!(both.code(), "BXW0047");
+        assert_eq!(both.package(), None, "neither claim is accountable");
+        assert_eq!(both.rule(), BOTH_TEXT);
+        assert_eq!(both.rule_source(), WALK_SOURCE);
+        let named: Vec<Option<&BoxId>> = both.candidates().iter().map(Candidate::output).collect();
+        assert_eq!(named, [None, Some(&id("gen"))]);
+    }
+    /// D3's lockfile sentence: the workspace's `Cargo.lock` classifies as the platform package's
+    /// declared global derived artifact, and nothing else satisfies the rule. The green case is
+    /// declared by the package sitting *at the workspace root*, whose patterns anchor at no
+    /// directory at all, and the same listing carries a `Cargo.lock` **inside a fixture subtree** —
+    /// ordinary owned non-derived material — which this rule must leave entirely alone.
+    #[test]
+    fn the_workspace_lockfile_is_a_platform_derived_output() {
+        let lock: [(&str, &[&str]); 1] = [("lockfile", &[LOCKFILE])];
+        let owned = [MANIFEST, "Cargo.toml", LOCKFILE];
+        let declared = owning("root", "platform", &owned[..2], &["corpus/**"]);
+        let root = deriving(declared, &lock);
+        let tracked = ["Cargo.lock", "Cargo.toml", "corpus/p/Cargo.lock"];
+        let held = vec![("boxology.toml", root)];
+        let checked = listing(held, &tracked).check().expect("each classifies");
+        assert_eq!(
+            checked.render_report().lines().collect::<Vec<_>>(),
+            [
+                "root Cargo.lock derived=lockfile",
+                "root Cargo.toml derived=",
+                "root boxology.toml derived=",
+                "root corpus/p/Cargo.lock derived=",
+            ]
+        );
+        // Claimed by the right package, in the wrong way: owned non-derived instead of declared.
+        let plain = owning("root", "platform", &owned, &["corpus/**"]);
+        let report = listing(vec![("boxology.toml", plain)], &tracked)
+            .check()
+            .expect_err("the lockfile is not declared derived");
+        assert_eq!(
+            report.to_string(),
+            "BXW0049 Cargo.lock package=root candidates=[root boxology.toml Cargo.lock]"
+        );
+        let [Entry::Workspace(found)] = report.as_slice() else {
+            panic!("one workspace finding: {report}");
+        };
+        assert_eq!(found.code(), "BXW0049");
+        assert_eq!(found.path(), &path(LOCKFILE));
+        assert_eq!(found.package(), Some(&id("root")));
+        assert_eq!(found.rule(), LOCK_TEXT);
+        assert_eq!(found.rule_source(), WALK_SOURCE);
+        // Declared derived, by a package that is not the platform. Only a workspace-root manifest
+        // can reach the path at all, so the wrong-kind case is a root manifest of the wrong kind.
+        let boxed = deriving(owning("root", "box", &owned[..2], &[]), &lock);
+        let report = listing(vec![("boxology.toml", boxed)], &tracked[..2])
+            .check()
+            .expect_err("a box package declares no global artifact");
+        assert_eq!(
+            report.to_string(),
+            "BXW0049 Cargo.lock package=root \
+             candidates=[root boxology.toml Cargo.lock derived=lockfile]"
+        );
+        // A composition root is equally not the platform: the rule names one kind, not "not a box".
+        let composed = deriving(owning("root", "composition", &owned[..2], &[]), &lock);
+        let mut text = String::from_utf8(composed).expect("test manifests are ASCII");
+        text.push_str("[composition]\nboxes = [\"hello\"]\n");
+        let report = listing(vec![("boxology.toml", text.into_bytes())], &tracked[..2])
+            .check()
+            .expect_err("a composition package declares no global artifact");
+        assert_eq!(
+            report.to_string(),
+            "BXW0049 Cargo.lock package=root \
+             candidates=[root boxology.toml Cargo.lock derived=lockfile]"
         );
     }
     #[test]

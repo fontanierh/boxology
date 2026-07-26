@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-/// A stable box, package, and import-slot identifier.
+/// A stable box, package, import-slot, and derived-output identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BoxId(String);
 

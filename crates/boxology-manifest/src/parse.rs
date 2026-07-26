@@ -86,14 +86,15 @@ impl CrateEntry {
 /// paths it owns. Inputs are declared and fail closed, so regeneration proves provenance.
 #[derive(Debug, Eq, PartialEq)]
 pub struct DerivedOutput {
-    id: String,
+    id: BoxId,
     generator: String,
     inputs: Vec<GlobPattern>,
     outputs: Vec<GlobPattern>,
 }
 impl DerivedOutput {
     ref_getters! {
-        #[doc = "Returns the package-local output id."] id: &str = id;
+        #[doc = "Returns the package-local output id, carrying its grammar in its type."]
+        id: &BoxId = id;
         #[doc = "Returns the logical generator identity."] generator: &str = generator;
         #[doc = "Returns the declared semantic inputs, in declaration order."] inputs: &[GlobPattern] = inputs;
         #[doc = "Returns the declared output patterns, in declaration order."] outputs: &[GlobPattern] = outputs;
@@ -555,7 +556,7 @@ impl Parser<'_> {
         let mut derived: Vec<DerivedOutput> = Vec::new();
         for (whole, table) in self.section(item, "derived", DERIVED_KEYS) {
             let raw = self.field(table, "id", whole);
-            let id = raw.and_then(|t| self.check(table, "id", "BXW0031", identity(t)));
+            let id = raw.and_then(|t| self.check(table, "id", "BXW0031", BoxId::new(t).ok()));
             let id = id.and_then(|id| {
                 let fresh = !derived.iter().any(|other| other.id == id);
                 self.check(table, "id", "BXW0032", fresh.then_some(id))
@@ -1267,7 +1268,7 @@ BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-
     fn derived_ids_generators_and_pattern_lists() {
         let valid = parse(&section("derived", &output())).expect("a declared output");
         assert_eq!(valid.derived().len(), 1);
-        assert_eq!(valid.derived()[0].id(), "contract");
+        assert_eq!(valid.derived()[0].id().as_str(), "contract");
         assert_eq!(valid.derived()[0].generator(), "boxology-contract");
         assert_eq!(valid.derived()[0].inputs()[0].as_str(), "boxology.toml");
         assert_eq!(valid.derived()[0].outputs()[0].as_str(), "generated/**");
@@ -1312,7 +1313,7 @@ BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-
         }
         let inline = format!("{HEAD}derived = [{{ {} }}]\n", output().replace('|', ", "));
         let valid = parse(&inline).expect("an inline element is equivalent TOML");
-        assert_eq!(valid.derived()[0].id(), "contract");
+        assert_eq!(valid.derived()[0].id().as_str(), "contract");
         // A rejected generator is reported by key name, never by value.
         let rendered = parse(&named("c", "payload_x")).expect_err("id").to_string();
         let key = r#"BXW0033 boxology.toml:7:1-7:10 offending="manifest key generator""#;

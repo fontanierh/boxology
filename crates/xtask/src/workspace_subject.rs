@@ -21,9 +21,21 @@ const MANIFESTS: [(&str, &str); 2] = [
 ];
 // A third fixed input set, this one clean, so the subject covers the success body too: every
 // tracked file classified exactly once, rendered in the frozen (package id, path) order.
+// The `[[derived]]` element makes the subject cover a derived classification, and the lockfile
+// under `c/bad/` pins the distinction the workspace lockfile rule turns on: a fixture subtree's own
+// lockfile is this package's owned non-derived material, not its declared global artifact.
 const OWNS: &str = "schema = 1\nid = \"root\"\nkind = \"platform\"\n\
-                    owned = [\"boxology.toml\", \"z/**\"]\nfixtures = [\"c/**\"]\n";
-const TRACKED: [&str; 4] = ["z/b.rs", "c/bad/boxology.toml", "z/a.rs", "boxology.toml"];
+                    owned = [\"boxology.toml\", \"z/**\"]\nfixtures = [\"c/**\"]\n\
+                    [[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\n\
+                    inputs = [\"boxology.toml\"]\noutputs = [\"Cargo.lock\"]\n";
+const TRACKED: [&str; 6] = [
+    "z/b.rs",
+    "c/bad/boxology.toml",
+    "z/a.rs",
+    "boxology.toml",
+    "Cargo.lock",
+    "c/bad/Cargo.lock",
+];
 fn rel(path: &str) -> Result<RelativePath, String> {
     RelativePath::new(path).map_err(|_| format!("fixed path {path} is invalid"))
 }
@@ -94,7 +106,9 @@ mod tests {
         assert_eq!(rendered, again.expect("it classifies again"));
         assert_eq!(
             rendered,
-            "root boxology.toml derived=\n\
+            "root Cargo.lock derived=lockfile\n\
+             root boxology.toml derived=\n\
+             root c/bad/Cargo.lock derived=\n\
              root c/bad/boxology.toml derived=\n\
              root z/a.rs derived=\n\
              root z/b.rs derived=\n"
