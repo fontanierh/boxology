@@ -8,9 +8,12 @@
 //! **Payload safety.** A rendered finding or classification echoes only grammar-validated values: a
 //! [`BoxId`] (`[a-z][a-z0-9-]*`) — a package identity, or a `[[derived]]` element's id, which
 //! `boxology_manifest` admits through no other grammar (BXW0031), so the model carries the proof
-//! and this crate never re-validates it — a [`RelativePath`] and [`GlobPattern`] (no NUL, tab,
-//! line break, or backslash; no `..` in a path). Rejecting line breaks holds one finding to one
-//! line; other control bytes reach a report, a residual gap in the grammar this crate consumes.
+//! and this crate never re-validates it — a [`RelativePath`] and [`GlobPattern`] (no backslash and
+//! no ASCII control byte, the whole C0 range and DEL; no `..` in a path). Rejecting line breaks
+//! holds one finding to one line, and rejecting the rest of the C0 range is what makes a payload
+//! safe to write to a terminal: no escape sequence, bell, or carriage return can reach a report
+//! through a path or a pattern. The residual is narrow and named: the C1 range (`U+0080`-`U+009F`)
+//! is multi-byte in UTF-8 and survives a bytewise grammar.
 //! **No value read out of the `cargo metadata` document is echoed at all** — its paths are absolute
 //! and its names unvalidated — and a defect of that document is reported at a location this crate
 //! names, never at one the document spells.
@@ -891,6 +894,158 @@ mod tests {
         let held = Manifest::parse(path(at), OPAQUE);
         let mut errors = held.expect_err("opaque bytes are no manifest").into_vec();
         Entry::Manifest(errors.pop().expect("the schema gate reports one"))
+    }
+    /// Every code this crate *authors*, ascending. A report may also carry BXW0001-BXW0041 through
+    /// [`Entry::Manifest`], which is `boxology_manifest`'s own rendering of its own rule table and
+    /// is pinned by that crate's own golden; this list is what this crate is accountable for. The
+    /// corpus and the golden below are both driven from it, so a code that registers nowhere fails
+    /// loudly instead of going unproven.
+    const ALL_CODES: &[&str] = &[
+        "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
+        "BXW0050",
+    ];
+    /// One minimal workspace per code, ordered as `ALL_CODES` is: each is a shape the suite above
+    /// already exercises, reduced to the least input that provokes its code, so the golden below
+    /// reads every rule off a finding a real check produced rather than off a constant table.
+    fn corpus() -> Vec<(&'static str, WorkspaceInputs)> {
+        let twin = || document("twin", "box", &[]);
+        let platform = |owned: &[&str]| owning("root", "platform", owned, &[]);
+        let solo = |bytes| vec![(MANIFEST, bytes)];
+        let twice: [(&str, &[&str]); 2] = [("one", &["g.rs"]), ("two", &["g.rs"])];
+        let once: [(&str, &[&str]); 1] = [("gen", &["g.rs"])];
+        let nested = owning("p", "box", &[MANIFEST], &[]);
+        let escaping = FileEntry::symlink(path("link"), String::from("/etc"));
+        vec![
+            (
+                "BXW0042",
+                workspace(vec![
+                    ("a/boxology.toml", twin()),
+                    ("b/boxology.toml", twin()),
+                ]),
+            ),
+            (
+                "BXW0043",
+                workspace(solo(document("root", "platform", &[MANIFEST]))),
+            ),
+            (
+                "BXW0044",
+                listing(solo(platform(&[MANIFEST])), &["orphan.rs"]),
+            ),
+            (
+                "BXW0045",
+                workspace(vec![
+                    (MANIFEST, platform(&["**"])),
+                    ("p/boxology.toml", nested),
+                ]),
+            ),
+            (
+                "BXW0046",
+                listing(solo(deriving(platform(&[MANIFEST]), &twice)), &["g.rs"]),
+            ),
+            (
+                "BXW0047",
+                listing(
+                    solo(deriving(platform(&[MANIFEST, "g.rs"]), &once)),
+                    &["g.rs"],
+                ),
+            ),
+            ("BXW0048", inputs(vec![escaping])),
+            (
+                "BXW0049",
+                listing(solo(platform(&[MANIFEST, LOCKFILE])), &[LOCKFILE]),
+            ),
+            (
+                "BXW0050",
+                mapped(solo(platform(&[MANIFEST])), &[], "not json"),
+            ),
+        ]
+    }
+    /// The rendered wording of every code, byte for byte, as `<code> <rule> <source>` per line in
+    /// `ALL_CODES` order. It is the only thing that pins either: the scattered assertions above
+    /// reach seven of the nine rule texts and compare every `rule_source` but one against the
+    /// constant it guards, and nothing there forces a *new* code to be pinned at all. Reword one of
+    /// those constants and the suite stays green; only *repointing* a code at a different constant
+    /// trips them. A wording change is a readable diff here instead of an invisible one.
+    const EXPECTED: &str = "\
+BXW0042 one package identity must be declared by exactly one manifest boxology-details/02-packages.md discovery walk
+BXW0043 a fixtures pattern must not claim its own declaring manifest boxology-details/02-packages.md discovery walk
+BXW0044 every tracked file must classify under some package boxology-details/02-packages.md discovery walk
+BXW0045 at most one package may claim a non-derived path boxology-details/02-packages.md discovery walk
+BXW0046 at most one declared derived output may claim a path boxology-details/02-packages.md discovery walk
+BXW0047 a declared derived output must not also be claimed as a non-derived path boxology-details/02-packages.md discovery walk
+BXW0048 symlink targets must stay inside the workspace root boxology-details/02-packages.md discovery walk
+BXW0049 Cargo.lock must be a platform package's declared global derived artifact boxology-details/02-packages.md discovery walk
+BXW0050 cargo metadata must be a readable workspace document boxology-details/02-packages.md crate roles
+";
+    #[test]
+    fn rule_text_and_sources_are_locked() {
+        // What each code actually *reports*, not what a table spells: this proves the rule its
+        // constant carries is reached by a real finding, which reading the constants cannot.
+        let mut rendered = String::new();
+        for (code, inputs) in corpus() {
+            let Err(report) = inputs.check() else {
+                panic!("{code} accepted its own corpus input");
+            };
+            // *Every* entry must carry the code, not merely one of them: finding one would pass a
+            // corpus input that provokes its code plus unrelated ones, leaving "the least input
+            // that provokes it" asserted nowhere. It is not "exactly one" either — BXW0042 reports
+            // once per carrier of the duplicated identity, and both entries are that same code.
+            let mut first = None;
+            for entry in &report {
+                let Entry::Workspace(carried) = entry else {
+                    panic!("{code} reported {report}");
+                };
+                assert_eq!(carried.code(), code, "{code} reported {report}");
+                first = first.or(Some(carried));
+            }
+            let found = first.expect("a rejection carries at least one entry");
+            let line = format!("{code} {} {}\n", found.rule(), found.rule_source());
+            rendered.push_str(&line);
+        }
+        assert_eq!(rendered, EXPECTED);
+    }
+    #[test]
+    fn corpus_covers_every_code() {
+        // Comparing the two ordered lists proves both directions at once: no code without a
+        // workspace that provokes it, and no workspace for a code this crate does not emit.
+        let covered: Vec<&str> = corpus().iter().map(|(code, _)| *code).collect();
+        assert_eq!(covered, ALL_CODES);
+        assert!(ALL_CODES.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+    #[test]
+    fn all_codes_is_exhaustive() {
+        // The rule table's own source text, read at compile time: a code emitted anywhere in the
+        // crate but registered nowhere above fails here rather than drifting in unproven. The test
+        // module is cut off so this module's own probe literals do not count as emissions.
+        //
+        // Both halves of that cut are pinned, because either one narrows the scan *silently* and
+        // silence here reads exactly like success. Taking the text before the first
+        // `#[cfg(test)]` is only the production half if that occurrence is the test module itself:
+        // a `#[cfg(test)] use`, a test-only helper module, or a `#[cfg(test)] impl` above it would
+        // truncate the scan there and hide every code below. And one file is only the whole crate
+        // while the crate is one file: the next slice's BXW0051-BXW0054 are a natural candidate
+        // for a second source file, which `include_str!` would not reach.
+        let whole = include_str!("lib.rs");
+        let (source, rest) = whole
+            .split_once("#[cfg(test)]")
+            .expect("the test module marker");
+        assert!(
+            rest.starts_with("\nmod tests"),
+            "the cut missed the test module"
+        );
+        assert!(
+            !source.contains("mod "),
+            "a second source file is unscanned"
+        );
+        let mut seen: Vec<&str> = Vec::new();
+        for (at, _) in source.match_indices("\"BXW") {
+            let code = &source[at + 1..at + 8];
+            if !seen.contains(&code) {
+                seen.push(code);
+            }
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, ALL_CODES);
     }
     /// The frozen order is (attributed package id or "", path, code, rendered line), over both
     /// entry kinds: a manifest parse diagnostic interleaves with workspace findings by that same

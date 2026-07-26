@@ -43,8 +43,9 @@ mod parse;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RelativePath(String);
 impl RelativePath {
-    /// Validates a manifest-relative path: nonempty, no root or drive prefix, no backslash or
-    /// control byte, and no empty, `.`, or `..` segment.
+    /// Validates a manifest-relative path: nonempty, no root or drive prefix, no backslash and no
+    /// ASCII control byte — the whole C0 range and DEL, so a validated path is safe to echo into a
+    /// terminal report — and no empty, `.`, or `..` segment.
     pub fn new(value: impl Into<String>) -> Result<Self, PathError> {
         let value = value.into();
         let bytes = value.as_bytes();
@@ -76,8 +77,21 @@ pub struct PathError;
 fn has_drive_prefix(bytes: &[u8]) -> bool {
     matches!(bytes.first(), Some(byte) if byte.is_ascii_alphabetic()) && bytes.get(1) == Some(&b':')
 }
+/// The one byte-level rejection both logical-path grammars share: a backslash, and **every** ASCII
+/// control byte — C0 `0x00`-`0x1f` and DEL `0x7f`, not the four whitespace-and-NUL cases alone.
+///
+/// Widened at the grammar rather than at each renderer because a validated value is echoed as a
+/// payload by every report this workspace produces, and one of them is the terminal: `0x1b` in a
+/// path spells an ANSI escape sequence into a human-readable report, and `0x07` rings a bell.
+/// Rejecting the byte here holds for every current renderer and for T5's JSON output, which does
+/// not exist yet and would otherwise inherit the hole one renderer at a time.
+///
+/// The predicate is bytewise, so it reaches the C0 range and DEL exactly. The C1 range
+/// (`U+0080`-`U+009F`) is *not* rejected: those are two-byte sequences in UTF-8, no ASCII byte of
+/// which is a control byte, and rejecting them needs a `char`-level pass this grammar does not
+/// make. A path or pattern may still carry one.
 fn is_forbidden_byte(byte: u8) -> bool {
-    matches!(byte, b'\\' | b'\t' | b'\n' | b'\r' | 0)
+    byte == b'\\' || byte.is_ascii_control()
 }
 /// A source coordinate with one-based line and character-column units.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -284,6 +298,30 @@ mod tests {
     /// anchored at all (absolute, drive-prefixed, control-bearing) is rejected as such before any
     /// question about the wildcard vocabulary, and segment shape is judged left to right. Pinning
     /// it here keeps corpus goldens stable when the checks are ever reordered or fused.
+    /// #368, on the other grammar: BXW0017 covers the whole C0 range and DEL, with the *same*
+    /// coded diagnostic the backslash case already reported, and it echoes none of the input. The
+    /// rule text was always "backslashes or control characters"; the code now enforces what it says.
+    #[test]
+    fn every_control_byte_is_one_coded_glob_rejection() {
+        let here = path("boxology.toml");
+        for byte in (0..=0x1fu8).chain([0x7f]) {
+            let pattern = format!("payload{}x", char::from(byte));
+            let Err(diagnostic) = GlobPattern::parse(&pattern, &here, point()) else {
+                panic!("{pattern:?} was accepted");
+            };
+            assert_eq!(diagnostic.code(), "BXW0017", "{pattern:?}");
+            let stated = "glob patterns must not contain backslashes or control characters";
+            assert_eq!(diagnostic.rule(), stated, "{pattern:?}");
+            let rendered = diagnostic.to_string();
+            assert!(
+                !rendered.contains("payload"),
+                "{pattern:?} echoed its input"
+            );
+            assert!(!rendered.contains(char::from(byte)), "{pattern:?} leaked");
+        }
+        assert!(GlobPattern::parse("payload~x", &here, point()).is_ok());
+        assert!(GlobPattern::parse("a\u{80}b", &here, point()).is_ok());
+    }
     #[test]
     fn multi_violation_priority_is_frozen() {
         let here = path("boxology.toml");
@@ -312,6 +350,18 @@ mod tests {
             "a/../b", "a/",
         ] {
             assert!(RelativePath::new(rejected).is_err(), "{rejected:?}");
+        }
+        // #368: the whole C0 range and DEL, not the four whitespace-and-NUL cases above. `0x1b`
+        // is the one that matters most — it spells an ANSI escape sequence into a report — but a
+        // grammar that admitted any of the others would let the next renderer inherit the hole.
+        for byte in (0..=0x1fu8).chain([0x7f]) {
+            let bearing = format!("a{}b.rs", char::from(byte));
+            assert!(RelativePath::new(bearing.clone()).is_err(), "{bearing:?}");
+        }
+        // Every other byte the grammar has no quarrel with still passes, so the widening rejects
+        // control bytes rather than everything: `~`, `\x20`, and the C1 range's UTF-8 lead byte.
+        for accepted in ["a~b.rs", "a b.rs", "a\u{80}b.rs", "a\u{9f}b.rs"] {
+            assert!(RelativePath::new(accepted).is_ok(), "{accepted:?}");
         }
         assert_eq!(path("a/b").as_str(), "a/b");
     }
