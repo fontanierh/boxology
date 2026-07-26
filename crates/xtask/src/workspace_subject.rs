@@ -24,8 +24,12 @@ const MANIFESTS: [(&str, &str); 2] = [
 // The `[[derived]]` element makes the subject cover a derived classification, and the lockfile
 // under `c/bad/` pins the distinction the workspace lockfile rule turns on: a fixture subtree's own
 // lockfile is this package's owned non-derived material, not its declared global artifact.
+// The two `[[crates]]` entries map the two Cargo members below, so the subject covers a clean
+// crate mapping as well: a platform package hosting platform crates, one nested inside the other.
 const OWNS: &str = "schema = 1\nid = \"root\"\nkind = \"platform\"\n\
                     owned = [\"boxology.toml\", \"z/**\"]\nfixtures = [\"c/**\"]\n\
+                    [[crates]]\ncargo_package = \"zulu\"\npath = \"z\"\nrole = \"platform\"\n\
+                    [[crates]]\ncargo_package = \"alpha\"\npath = \"z/a\"\nrole = \"platform\"\n\
                     [[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\n\
                     inputs = [\"boxology.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 // A fixed `cargo metadata` document, so the subject covers the members read out of one: two whose
