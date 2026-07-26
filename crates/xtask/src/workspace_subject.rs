@@ -19,10 +19,32 @@ const MANIFESTS: [(&str, &str); 2] = [
     ("a/boxology.toml", PARSES),
     ("b/boxology.toml", "schema = 9\nnot toml"),
 ];
+// A third fixed input set, this one clean, so the subject covers the success body too: every
+// tracked file classified exactly once, rendered in the frozen (package id, path) order.
+const OWNS: &str = "schema = 1\nid = \"root\"\nkind = \"platform\"\n\
+                    owned = [\"boxology.toml\", \"z/**\"]\nfixtures = [\"c/**\"]\n";
+const TRACKED: [&str; 4] = ["z/b.rs", "c/bad/boxology.toml", "z/a.rs", "boxology.toml"];
+fn rel(path: &str) -> Result<RelativePath, String> {
+    RelativePath::new(path).map_err(|_| format!("fixed path {path} is invalid"))
+}
+fn classification() -> Result<String, String> {
+    let mut files = Vec::new();
+    for path in TRACKED {
+        files.push(FileEntry::file(rel(path)?));
+    }
+    let manifests = vec![
+        (rel("boxology.toml")?, OWNS.as_bytes().to_vec()),
+        (rel("c/bad/boxology.toml")?, b"not toml".to_vec()),
+    ];
+    let inputs = WorkspaceInputs::new(files, manifests, "{\"packages\":[]}")
+        .map_err(|_| String::from("fixed clean listing rejected"))?;
+    let workspace = inputs.check().map_err(|found| format!("found {found}"))?;
+    Ok(format!("{}\n", workspace.render_report()))
+}
 fn report() -> Result<String, String> {
     let mut files = Vec::new();
     for (path, target) in LISTING {
-        let path = RelativePath::new(path).map_err(|_| format!("fixed path {path} is invalid"))?;
+        let path = rel(path)?;
         files.push(match target {
             Some(target) => FileEntry::symlink(path, String::from(target)),
             None => FileEntry::file(path),
@@ -30,18 +52,24 @@ fn report() -> Result<String, String> {
     }
     let mut manifests = Vec::new();
     for (path, text) in MANIFESTS {
-        let path = RelativePath::new(path).map_err(|_| format!("fixed path {path} is invalid"))?;
+        let path = rel(path)?;
         files.push(FileEntry::file(path.clone()));
         manifests.push((path, text.as_bytes().to_vec()));
     }
     let inputs = WorkspaceInputs::new(files, manifests, "{\"packages\":[]}")
         .map_err(|_| String::from("fixed listing rejected"))?;
-    let findings = inputs.check().ok_or("fixed listing reported nothing")?;
+    let findings = inputs.check().err().ok_or("fixed listing is clean")?;
     Ok(format!("{findings}\n"))
 }
 pub(crate) fn run(out: &Path) -> Result<(), String> {
-    fs::write(out.join("workspace-report.txt"), report()?)
-        .map_err(|error| format!("write workspace-report.txt: {error}"))
+    let written = [
+        ("workspace-report.txt", report()?),
+        ("workspace-classification.txt", classification()?),
+    ];
+    for (name, body) in written {
+        fs::write(out.join(name), body).map_err(|error| format!("write {name}: {error}"))?;
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -57,6 +85,19 @@ mod tests {
              rule=\"boxology.toml must be well-formed TOML\" \
              source=\"specs/s5-manifest-and-validation.md D2\"\n\
              BXW0048 z/escape package= candidates=[]\n"
+        );
+    }
+    #[test]
+    fn subject_classification_is_golden_and_repeatable() {
+        let again = super::classification();
+        let rendered = super::classification().expect("the clean listing classifies");
+        assert_eq!(rendered, again.expect("it classifies again"));
+        assert_eq!(
+            rendered,
+            "root boxology.toml derived=\n\
+             root c/bad/boxology.toml derived=\n\
+             root z/a.rs derived=\n\
+             root z/b.rs derived=\n"
         );
     }
 }
