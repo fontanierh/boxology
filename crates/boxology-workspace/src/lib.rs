@@ -14,9 +14,11 @@
 //! safe to write to a terminal: no escape sequence, bell, or carriage return can reach a report
 //! through a path or a pattern. The residual is narrow and named: the C1 range (`U+0080`-`U+009F`)
 //! is multi-byte in UTF-8 and survives a bytewise grammar.
-//! **No value read out of the `cargo metadata` document is echoed at all** — its paths are absolute
-//! and its names unvalidated — and a defect of that document is reported at a location this crate
-//! names, never at one the document spells.
+//! **No value the `cargo metadata` document spells is echoed as text** — its names are unvalidated
+//! and its paths absolute — and a defect of that document is reported at a location this crate
+//! names. The one document-derived value a report carries is a member's `manifest_path`
+//! **re-validated as a [`RelativePath`]**, locating the member a workspace fails to map: it carries
+//! that grammar's proof like every other echoed path, and a package name reaches no report at all.
 //! Every other word this crate renders is a `&'static str` it chose. An [`Entry::Manifest`] line is
 //! `boxology_manifest`'s own rendering, whose only caller-derived part is a manifest key name it
 //! echoes just when the name is plain `[A-Za-z0-9_-]` text.
@@ -29,7 +31,8 @@
 #![forbid(unsafe_code)]
 
 use boxology_contract::BoxId;
-use boxology_manifest::{DerivedOutput, Diagnostic, GlobPattern, Kind, Manifest, RelativePath};
+use boxology_manifest::{CrateEntry, CrateRole, DerivedOutput, Diagnostic, GlobPattern};
+use boxology_manifest::{Kind, Manifest, RelativePath};
 use serde_json::Value;
 use std::{cmp::Ordering, fmt};
 /// A coded rule: its stable `BXW####` code and the static text of the obligation it states.
@@ -38,6 +41,10 @@ type Rule = (&'static str, &'static str);
 const WALK_SOURCE: &str = "boxology-details/02-packages.md discovery walk";
 /// The normative source of the crate-role vocabulary and the exactly-one matching rule.
 const CRATE_SOURCE: &str = "boxology-details/02-packages.md crate roles";
+/// The normative source of the two obligations 02-packages does *not* state: it requires every
+/// Cargo package to match one entry, says nothing about the converse, and delegates crate-role
+/// policy to 08-topology. This spec states both — unmatched crates and role mismatches are failures.
+const D4_SOURCE: &str = "specs/s5-manifest-and-validation.md D4";
 const ESCAPE_TEXT: &str = "symlink targets must stay inside the workspace root";
 const ESCAPE: Rule = ("BXW0048", ESCAPE_TEXT);
 const DUPLICATE_TEXT: &str = "one package identity must be declared by exactly one manifest";
@@ -56,6 +63,14 @@ const LOCK_TEXT: &str = "Cargo.lock must be a platform package's declared global
 const LOCK: Rule = ("BXW0049", LOCK_TEXT);
 const DOCUMENT_TEXT: &str = "cargo metadata must be a readable workspace document";
 const DOCUMENT: Rule = ("BXW0050", DOCUMENT_TEXT);
+const UNMAPPED_TEXT: &str = "every Cargo workspace member must match one declared crate entry";
+const UNMAPPED: Rule = ("BXW0051", UNMAPPED_TEXT);
+const UNMATCHED_TEXT: &str = "every declared crate entry must match one Cargo workspace member";
+const UNMATCHED: Rule = ("BXW0052", UNMATCHED_TEXT);
+const CLAIMED_TEXT: &str = "at most one declared crate entry may match a Cargo workspace member";
+const CLAIMED: Rule = ("BXW0053", CLAIMED_TEXT);
+const ROLE_TEXT: &str = "a declared crate role must be one its package kind can host";
+const ROLE: Rule = ("BXW0054", ROLE_TEXT);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
@@ -70,10 +85,10 @@ const CARGO_MANIFEST: &str = "Cargo.toml";
 // tracker. Landed: BXW0042 duplicate identity, BXW0043 self-claiming fixture pattern, BXW0044
 // unowned path, BXW0045 overlapping ownership, BXW0046 rival derived outputs, BXW0047 derived and
 // non-derived at once, BXW0048 symlink escape, BXW0049 the workspace lockfile, BXW0050 an
-// unreadable `cargo metadata` document. Allocated: BXW0051 an unmapped Cargo workspace member,
-// BXW0052 an unmatched `[[crates]]` entry, BXW0053 a member two entries claim, BXW0054 an
-// impossible crate role — the four codes matching this crate's members against those entries
-// needs, which is the next slice.
+// unreadable `cargo metadata` document, BXW0051 an unmapped Cargo workspace member, BXW0052 an
+// unmatched `[[crates]]` entry, BXW0053 a member two entries claim, BXW0054 an impossible crate
+// role. That closes T2's block: nothing here is allocated and unlanded, and T3's edge policy opens
+// at BXW0055 exactly as recorded on the tracker.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -157,8 +172,15 @@ impl WorkspaceInputs {
             return Err(findings);
         }
         let (classifications, mut defects) = self.classify(&packages);
-        let (cargo_members, found) = self.members();
-        defects.extend(found);
+        let (cargo_members, unreadable) = self.members();
+        // A declared role is a property of one manifest alone, so it is judged whether or not the
+        // document read. Matching needs the members, and an unreadable document proves none:
+        // a BXW0052 per declared entry beside BXW0050 answers one located defect with a cascade.
+        defects.extend(roles(&packages));
+        if unreadable.is_empty() {
+            defects.extend(map(&packages, &cargo_members));
+        }
+        defects.extend(unreadable);
         if let Some(findings) = Findings::new(defects) {
             return Err(findings);
         }
@@ -333,6 +355,110 @@ fn every_claim(rivals: &[&Package], path: &RelativePath) -> Vec<Candidate> {
     }
     named
 }
+/// Reports whether `entry`, declared by `package`, names `member`.
+///
+/// 02-packages fixes the match as a **pair**: "every Cargo package [matches] exactly one manifest
+/// `[[crates]]` entry by normalized manifest path and Cargo package name". An entry whose
+/// `cargo_package` names a member but whose `path` locates another directory therefore matches
+/// nothing, and the member is unmapped rather than adopted by the half that agreed. The entry's
+/// path is package-relative, so the member's directory re-anchors at the declaring package's own
+/// root — as every pattern of that manifest does — and a member outside the package, at the
+/// workspace root, or at the package's own root re-anchors to nothing.
+fn maps(package: &Package, entry: &CrateEntry, member: &CargoMember) -> bool {
+    let at = member.crate_dir().and_then(|dir| package.under(dir));
+    entry.cargo_package() == member.cargo_package() && at.as_ref() == Some(entry.path())
+}
+/// Names one claiming entry: its package identity, its declaring manifest, and the package-relative
+/// directory it spells — three grammar-validated values, and no byte of the metadata document.
+fn spell(package: &Package, entry: &CrateEntry) -> String {
+    let (at, dir) = (package.manifest_path.as_str(), entry.path().as_str());
+    format!("{} {at} {dir}", package.id())
+}
+/// Matches every Cargo member against every declared `[[crates]]` entry: BXW0051 a member no entry
+/// maps, BXW0052 an entry no member matches, BXW0053 a member two entries claim — which needs two
+/// manifests, since BXW0029 refuses a repeated name or path inside one, and stays reachable because
+/// two anchors can resolve onto one directory. A name-matching, path-disagreeing entry is *both* a
+/// BXW0051 and a BXW0052, which is what makes [`maps`]' pair rule observable rather than assumed.
+///
+/// A member in a `fixtures` subtree is an ordinary member: D2's opacity hides a `boxology.toml` from
+/// *discovery*, and every entry it declares with it, but removes nothing from `cargo metadata`. It
+/// is therefore BXW0051 — not exempt, which would leave Cargo graph nodes with no role — until S7
+/// D4's T4 migration takes fixture crates out of this workspace's membership, which is how that spec
+/// resolves it. The owning platform package is *no* escape hatch: its kind hosts only `platform`, so
+/// mapping a fixture box implementation declares a false role. A member at the workspace root, or at
+/// a declaring package's own root, is likewise unmatchable: no `[[crates]].path` is empty or `.`.
+fn map(packages: &[Package], members: &[CargoMember]) -> Vec<Entry> {
+    let mut declared: Vec<(&Package, &CrateEntry)> = Vec::new();
+    for package in packages {
+        declared.extend(package.manifest.crates().iter().map(|e| (package, e)));
+    }
+    let mut defects = Vec::new();
+    for member in members {
+        // Walk order, not sorted order: `check` sorts packages by identity only after this runs,
+        // so the outermost claimant leads, exactly as a candidate list does.
+        let claiming = |(p, e): &&(&Package, &CrateEntry)| maps(p, e, member);
+        let claims: Vec<_> = declared.iter().filter(claiming).collect();
+        let rule = match claims.as_slice() {
+            [_] => continue,
+            [] => UNMAPPED,
+            _ => CLAIMED,
+        };
+        let named: Vec<String> = claims.iter().map(|(p, e)| spell(p, e)).collect();
+        let at = member.manifest_path().clone();
+        let found = Finding::about(rule, CRATE_SOURCE, at, None, named.join(","));
+        defects.push(Entry::Workspace(found));
+    }
+    for (package, entry) in &declared {
+        if members.iter().any(|member| maps(package, entry, member)) {
+            continue;
+        }
+        let at = package.manifest_path.clone();
+        let owner = Some(package.id().clone());
+        let payload = String::from(entry.path().as_str());
+        let found = Finding::about(UNMATCHED, D4_SOURCE, at, owner, payload);
+        defects.push(Entry::Workspace(found));
+    }
+    defects
+}
+/// Reports whether a package of `kind` can host a crate of `role`.
+///
+/// **Ten** of the twelve cells are textually determined. "A native box owns a handwritten
+/// implementation crate and a mechanically generated contract crate. Both compilation units belong
+/// to the same logical box" gives `box-implementation` and `box-contract` to a box package and to no
+/// other kind; "Conversely, an application composition is a separate logical owner even when it
+/// compiles both box implementations into one binary" gives `composition` to a composition package
+/// and denies a box or a platform package one. The remaining two — `box`/`platform` and
+/// `composition`/`platform` — are **inferred**, from "Repository-wide ownership policy, CI, build
+/// tooling ... belong to platform packages", a sentence about material rather than about crate
+/// roles. S5 D4 licenses the whole table generically, so the relation is the identity between a
+/// role's owning kind and the declaring kind, with `box` the one kind hosting two. The match is over
+/// the closed vocabulary, so a role added later fails to compile here rather than defaulting to
+/// possible; **how many** crates of a role a package hosts is a different sentence.
+fn hosts(kind: Kind, role: CrateRole) -> bool {
+    match role {
+        CrateRole::BoxImplementation | CrateRole::BoxContract => kind == Kind::Box,
+        CrateRole::Composition => kind == Kind::Composition,
+        CrateRole::Platform => kind == Kind::Platform,
+    }
+}
+/// Reports BXW0054 for every declared crate role its declaring package's kind cannot host, located
+/// at that manifest and naming the entry by the directory it spells — unique within one manifest by
+/// BXW0029, so the finding names the document line to change.
+fn roles(packages: &[Package]) -> Vec<Entry> {
+    let mut defects = Vec::new();
+    for package in packages {
+        let kind = package.manifest.kind();
+        let impossible = |entry: &&CrateEntry| !hosts(kind, entry.role());
+        for entry in package.manifest.crates().iter().filter(impossible) {
+            let at = package.manifest_path.clone();
+            let owner = Some(package.id().clone());
+            let payload = String::from(entry.path().as_str());
+            let found = Finding::about(ROLE, D4_SOURCE, at, owner, payload);
+            defects.push(Entry::Workspace(found));
+        }
+    }
+    defects
+}
 /// Reads the workspace members of a `cargo metadata` document. `None` is BXW0050: the whole
 /// document is a defect, never a partial reading, so every `None` below — malformed JSON, a missing
 /// or mistyped field, or a member path [`member`] cannot normalize — is that one coded answer and
@@ -489,8 +615,10 @@ impl Package {
     }
 }
 /// A workspace no finding rejects: every discovered package, the one classification every tracked
-/// file has, and every Cargo workspace member the metadata document proved readable. Only [`WorkspaceInputs::check`] builds one, so D3's "every tracked file
-/// classifies exactly once" is a property of this type's existence, not a check a consumer repeats.
+/// file has, and every Cargo workspace member the metadata document proved readable. Only
+/// [`WorkspaceInputs::check`] builds one, so D3's "every tracked file classifies exactly once" — and
+/// 02-packages' "every Cargo package matches exactly one `[[crates]]` entry", whose role its
+/// declaring kind can host — are properties of this type's existence, not checks a consumer repeats.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Workspace {
     packages: Vec<Package>,
@@ -520,8 +648,8 @@ impl Workspace {
 /// the proof the document was readable — and the absolute paths it carries reach nothing else.
 ///
 /// This is the left-hand side of 02-packages' rule that every Cargo package match exactly one
-/// manifest `[[crates]]` entry by normalized manifest path and Cargo package name. The match
-/// itself, and the roles it assigns, are the next slice.
+/// manifest `[[crates]]` entry by normalized manifest path and Cargo package name; a [`Workspace`]
+/// is the proof every member made exactly one such match.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CargoMember {
     manifest_path: RelativePath,
@@ -853,6 +981,16 @@ mod tests {
         }
         text.into_bytes()
     }
+    /// A manifest with `[[crates]]` entries appended: a name, its directory, and the role declared.
+    fn crates(base: Vec<u8>, entries: &[(&str, &str, &str)]) -> Vec<u8> {
+        let mut text = String::from_utf8(base).expect("test manifests are ASCII");
+        for (name, at, role) in entries {
+            let head = format!("[[crates]]\ncargo_package = {name:?}\n");
+            text.push_str(&head);
+            text.push_str(&format!("path = {at:?}\nrole = {role:?}\n"));
+        }
+        text.into_bytes()
+    }
     /// Inputs whose listing tracks every named manifest as a plain file.
     fn workspace(manifests: Vec<(&str, Vec<u8>)>) -> WorkspaceInputs {
         listing(manifests, &[])
@@ -902,7 +1040,7 @@ mod tests {
     /// loudly instead of going unproven.
     const ALL_CODES: &[&str] = &[
         "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
-        "BXW0050",
+        "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054",
     ];
     /// One minimal workspace per code, ordered as `ALL_CODES` is: each is a shape the suite above
     /// already exercises, reduced to the least input that provokes its code, so the golden below
@@ -915,6 +1053,15 @@ mod tests {
         let once: [(&str, &[&str]); 1] = [("gen", &["g.rs"])];
         let nested = owning("p", "box", &[MANIFEST], &[]);
         let escaping = FileEntry::symlink(path("link"), String::from("/etc"));
+        // One member at `c/`, and the entries mapping it rightly, unmatchably, and impossibly.
+        let one_member = metadata(&[("c", "c")], &[]);
+        let one = |bytes, document: &str| mapped(solo(bytes), &[], document);
+        let mapping = |at: &str| crates(platform(&[MANIFEST]), &[("c", at, "platform")]);
+        let inner: [(&str, &str, &str); 1] = [("c", "c", "box-contract")];
+        let boxed = crates(platform(&[MANIFEST]), &inner);
+        // Two manifests resolving one entry each onto the same member: what BXW0053 needs.
+        let deep = crates(owning("deep", "box", &[MANIFEST], &[]), &inner);
+        let twins = vec![(MANIFEST, mapping("sub/c")), ("sub/boxology.toml", deep)];
         vec![
             (
                 "BXW0042",
@@ -958,6 +1105,13 @@ mod tests {
                 "BXW0050",
                 mapped(solo(platform(&[MANIFEST])), &[], "not json"),
             ),
+            ("BXW0051", one(platform(&[MANIFEST]), &one_member)),
+            ("BXW0052", one(mapping("c"), EMPTY)),
+            (
+                "BXW0053",
+                mapped(twins, &[], &metadata(&[("sub/c", "c")], &[])),
+            ),
+            ("BXW0054", one(boxed, &one_member)),
         ]
     }
     /// The rendered wording of every code, byte for byte, as `<code> <rule> <source>` per line in
@@ -976,6 +1130,10 @@ BXW0047 a declared derived output must not also be claimed as a non-derived path
 BXW0048 symlink targets must stay inside the workspace root boxology-details/02-packages.md discovery walk
 BXW0049 Cargo.lock must be a platform package's declared global derived artifact boxology-details/02-packages.md discovery walk
 BXW0050 cargo metadata must be a readable workspace document boxology-details/02-packages.md crate roles
+BXW0051 every Cargo workspace member must match one declared crate entry boxology-details/02-packages.md crate roles
+BXW0052 every declared crate entry must match one Cargo workspace member specs/s5-manifest-and-validation.md D4
+BXW0053 at most one declared crate entry may match a Cargo workspace member boxology-details/02-packages.md crate roles
+BXW0054 a declared crate role must be one its package kind can host specs/s5-manifest-and-validation.md D4
 ";
     #[test]
     fn rule_text_and_sources_are_locked() {
@@ -1585,11 +1743,11 @@ BXW0050 cargo metadata must be a readable workspace document boxology-details/02
         ];
         let held = vec![(MANIFEST, owning("root", "platform", &[MANIFEST], &[]))];
         let document = metadata(&members, &[registry.as_str(), sibling]);
-        let checked = mapped(held, &[], &document)
-            .check()
-            .expect("a clean listing");
-        let seen: Vec<(&str, &str, &str)> = checked
-            .cargo_members()
+        // The reading alone: this manifest maps none of the four, which is BXW0051's business
+        // below, so the members are read off `members` rather than off an accepted `Workspace`.
+        let (read, defects) = mapped(held, &[], &document).members();
+        assert!(defects.is_empty(), "the document is readable");
+        let seen: Vec<(&str, &str, &str)> = read
             .iter()
             .map(|member| {
                 let at = member.crate_dir().map_or("", RelativePath::as_str);
@@ -1658,18 +1816,18 @@ BXW0050 cargo metadata must be a readable workspace document boxology-details/02
                 whole => String::from(whole),
             };
             let held = vec![(MANIFEST, owning("solo", "platform", &[MANIFEST], &[]))];
-            let Err(report) = mapped(held, &[], &document).check() else {
-                // `/w/crate/Cargo.toml` and `/w/Cargo.toml` normalize; nothing else here does.
-                assert!(readable.is_some(), "{case:?} is unreadable");
-                continue;
-            };
-            assert!(
-                readable.is_none(),
-                "{case:?} is readable, and reported {report}"
-            );
+            let report = mapped(held, &[], &document)
+                .check()
+                .expect_err("this manifest maps no member");
             let [Entry::Workspace(found)] = report.as_slice() else {
                 panic!("{case:?} reported {report}");
             };
+            if readable.is_some() {
+                // `/w/crate/Cargo.toml` and `/w/Cargo.toml` normalize; nothing else here does, and
+                // reading them is what leaves one *member* — unmapped, which is BXW0051, not this.
+                assert_eq!(found.code(), "BXW0051", "{case:?}");
+                continue;
+            }
             assert_eq!(found.code(), "BXW0050", "{case:?}");
             assert_eq!(found.path(), &path(CARGO_MANIFEST), "{case:?}");
             assert_eq!(found.package(), None, "{case:?}");
@@ -1700,6 +1858,215 @@ BXW0050 cargo metadata must be a readable workspace document boxology-details/02
             "BXW0050 Cargo.toml package= candidates=[]\n\
              BXW0044 boxology.toml package= candidates=[]\n\
              BXW0044 unowned.txt package= candidates=[]"
+        );
+    }
+    /// 02-packages' matching rule, satisfied: every Cargo member matches exactly one `[[crates]]`
+    /// entry by the *pair* (normalized directory, Cargo package name). A wrong answer is reachable —
+    /// the box package's entries re-anchor at its own root, so an unanchored comparison matches none
+    /// of them; and two members carry the identical name `twin` in different directories under
+    /// different manifests, so matching by name alone claims each twice and reports BXW0053.
+    #[test]
+    fn every_cargo_member_matches_one_declared_entry() {
+        let claimed: [(&str, &str, &str); 3] = [
+            ("tool", "tools", "platform"),
+            ("fixture-impl", "fix/crate/impl", "platform"),
+            ("twin", "tools/twin", "platform"),
+        ];
+        let owns: [(&str, &str, &str); 3] = [
+            ("deep-impl", "implementation", "box-implementation"),
+            ("deep-contract", "generated/contract", "box-contract"),
+            ("twin", "twin", "box-implementation"),
+        ];
+        let root = owning("root", "platform", &[MANIFEST], &["fix/**"]);
+        let deep = owning("deep", "box", &[MANIFEST], &[]);
+        let held = vec![
+            (MANIFEST, crates(root, &claimed)),
+            ("pkg/boxology.toml", crates(deep, &owns)),
+        ];
+        let members = [
+            ("tools", "tool"),
+            ("fix/crate/impl", "fixture-impl"),
+            ("pkg/implementation", "deep-impl"),
+            ("pkg/generated/contract", "deep-contract"),
+            ("tools/twin", "twin"),
+            ("pkg/twin", "twin"),
+        ];
+        let checked = mapped(held, &[], &metadata(&members, &[]))
+            .check()
+            .expect("every member matches one entry");
+        let named = checked.cargo_members().iter();
+        let seen: Vec<&str> = named.map(CargoMember::cargo_package).collect();
+        let sorted = "deep-contract deep-impl fixture-impl tool twin twin";
+        assert_eq!(seen.join(" "), sorted);
+    }
+    /// BXW0051 codes a Cargo member no entry maps, BXW0052 an entry no member matches. The six
+    /// unmapped members fail for five distinct reasons: `plain` is declared nowhere; the member at
+    /// the workspace root and the one at the `deep` package's own root can be spelled by no entry at
+    /// all; `right/dir` is named by an entry whose path disagrees and `spelled` is located by an
+    /// entry whose name disagrees, so each reports **both** codes — the pair rule failing one half at
+    /// a time, which a name-only or a path-only rule would answer with silence; and `fix/crate/impl`
+    /// is mapped only by a manifest *inside* the pruned fixture subtree. The `ghost` entry is
+    /// declared by the *nested* package, so a BXW0052 is located at its own manifest.
+    #[test]
+    fn unmapped_members_and_unmatched_entries_are_coded() {
+        let entries: [(&str, &str, &str); 2] = [
+            ("named", "wrong/dir", "platform"),
+            ("other", "spelled", "platform"),
+        ];
+        let ghost: [(&str, &str, &str); 1] = [("ghost", "nowhere", "box-implementation")];
+        let root = owning("root", "platform", &[MANIFEST], &["fix/**"]);
+        let pruned = owning("fixture", "box", &[MANIFEST], &[]);
+        let opaque: [(&str, &str, &str); 1] = [("fixture-impl", "impl", "box-implementation")];
+        let deep = crates(owning("deep", "box", &[MANIFEST], &[]), &ghost);
+        let held = vec![
+            (MANIFEST, crates(root, &entries)),
+            ("fix/crate/boxology.toml", crates(pruned, &opaque)),
+            ("pkg/boxology.toml", deep),
+        ];
+        let members = [
+            ("", "at-root"),
+            ("plain", "plain"),
+            ("pkg", "at-pkg-root"),
+            ("right/dir", "named"),
+            ("spelled", "elsewhere"),
+            ("fix/crate/impl", "fixture-impl"),
+        ];
+        let report = mapped(held, &[], &metadata(&members, &[]))
+            .check()
+            .expect_err("six members and three entries match nothing");
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0051 Cargo.toml package= candidates=[]",
+                "BXW0051 fix/crate/impl/Cargo.toml package= candidates=[]",
+                "BXW0051 pkg/Cargo.toml package= candidates=[]",
+                "BXW0051 plain/Cargo.toml package= candidates=[]",
+                "BXW0051 right/dir/Cargo.toml package= candidates=[]",
+                "BXW0051 spelled/Cargo.toml package= candidates=[]",
+                "BXW0052 pkg/boxology.toml package=deep candidates=[nowhere]",
+                "BXW0052 boxology.toml package=root candidates=[spelled]",
+                "BXW0052 boxology.toml package=root candidates=[wrong/dir]",
+            ]
+        );
+        let [Entry::Workspace(bare), .., Entry::Workspace(entry)] = report.as_slice() else {
+            panic!("nine workspace findings: {report}");
+        };
+        // The rendered lines pin code, path, package, and payload byte for byte; these pin what no
+        // rendering shows. The literal texts, not the constants they guard.
+        assert_eq!(bare.candidates(), [], "a member names no glob claim");
+        let unmapped = "every Cargo workspace member must match one declared crate entry";
+        assert_eq!(bare.rule(), unmapped);
+        assert_eq!(bare.rule_source(), CRATE_SOURCE);
+        let unmatched = "every declared crate entry must match one Cargo workspace member";
+        assert_eq!(entry.rule(), unmatched);
+        assert_eq!(
+            entry.rule_source(),
+            "specs/s5-manifest-and-validation.md D4"
+        );
+    }
+    /// BXW0053 codes a member two entries claim. It takes two manifests: BXW0029 refuses a repeated
+    /// name or path inside one, and a member carries one name. The root package spells the member's
+    /// whole directory and the `sub` package spells its tail, so two anchors resolve onto one member,
+    /// and the payload names each claim in walk order — outermost first, not the sorted order.
+    #[test]
+    fn a_member_two_entries_claim_is_coded() {
+        let outer: [(&str, &str, &str); 1] = [("shared", "sub/c", "platform")];
+        let inner: [(&str, &str, &str); 1] = [("shared", "c", "box-implementation")];
+        let root = crates(owning("zulu", "platform", &[MANIFEST], &[]), &outer);
+        let deep = crates(owning("alpha", "box", &[MANIFEST], &[]), &inner);
+        let held = vec![(MANIFEST, root), ("sub/boxology.toml", deep)];
+        let report = mapped(held, &[], &metadata(&[("sub/c", "shared")], &[]))
+            .check()
+            .expect_err("two entries claim one member");
+        assert_eq!(
+            report.to_string(),
+            "BXW0053 sub/c/Cargo.toml package= candidates=[zulu boxology.toml sub/c,\
+             alpha sub/boxology.toml c]"
+        );
+        let [Entry::Workspace(found)] = report.as_slice() else {
+            panic!("one workspace finding: {report}");
+        };
+        assert_eq!(found.candidates(), [], "no claim is a glob claim");
+        let stated = "at most one declared crate entry may match a Cargo workspace member";
+        assert_eq!(found.rule(), stated);
+        let source = "boxology-details/02-packages.md crate roles";
+        assert_eq!(found.rule_source(), source);
+    }
+    /// BXW0054's whole table, all twelve cells: the four a package kind can host as well as the
+    /// eight it cannot. Every case declares one entry that *does* match the one Cargo member, so
+    /// nothing but the role decides it, and an accepted cell is a workspace with no finding at all.
+    #[test]
+    fn impossible_crate_roles_are_coded() {
+        // "<kind> <role>", `!`-prefixed when that kind cannot host that role.
+        let cases = "box box-implementation,box box-contract,!box composition,!box platform,\
+                     !composition box-implementation,!composition box-contract,\
+                     composition composition,!composition platform,\
+                     !platform box-implementation,!platform box-contract,!platform composition,\
+                     platform platform";
+        for case in cases.split(',') {
+            let impossible = case.strip_prefix('!');
+            let Some((kind, role)) = impossible.unwrap_or(case).split_once(' ') else {
+                panic!("malformed case {case:?}");
+            };
+            let mut base = owning("solo", kind, &[MANIFEST], &[]);
+            if kind == "composition" {
+                base.extend_from_slice(b"[composition]\nboxes = [\"hello\"]\n");
+            }
+            let held = vec![(MANIFEST, crates(base, &[("c", "c", role)]))];
+            let document = metadata(&[("c", "c")], &[]);
+            let Err(report) = mapped(held, &[], &document).check() else {
+                assert!(impossible.is_none(), "{case:?} cannot be hosted");
+                continue;
+            };
+            assert!(
+                impossible.is_some(),
+                "{case:?} is hostable, and reported {report}"
+            );
+            assert_eq!(
+                report.to_string(),
+                "BXW0054 boxology.toml package=solo candidates=[c]",
+                "{case:?}"
+            );
+            let [Entry::Workspace(found)] = report.as_slice() else {
+                panic!("{case:?} reported {report}");
+            };
+            assert_eq!(found.candidates(), [], "{case:?}");
+            let stated = "a declared crate role must be one its package kind can host";
+            assert_eq!(found.rule(), stated, "{case:?}");
+            let source = "specs/s5-manifest-and-validation.md D4";
+            assert_eq!(found.rule_source(), source, "{case:?}");
+        }
+        // Located at the *declaring* manifest and reported once per impossible role: the nested
+        // package declares two, and the root package — first in walk order — declares none.
+        let both: [(&str, &str, &str); 2] = [("x", "a", "composition"), ("y", "b", "platform")];
+        let deep = crates(owning("deep", "box", &[MANIFEST], &[]), &both);
+        let root = owning("root", "platform", &[MANIFEST], &[]);
+        let held = vec![(MANIFEST, root), ("pkg/boxology.toml", deep)];
+        let report = mapped(held, &[], &metadata(&[("pkg/a", "x"), ("pkg/b", "y")], &[]))
+            .check()
+            .expect_err("the nested package declares two impossible roles");
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0054 pkg/boxology.toml package=deep candidates=[a]",
+                "BXW0054 pkg/boxology.toml package=deep candidates=[b]",
+            ]
+        );
+    }
+    /// A declared role is a property of one manifest, so it is judged with no Cargo member at all
+    /// and BXW0054 joins BXW0050. Matching does not: the entry below matches nothing, and a BXW0052
+    /// per declared entry is the cascade the whole-document reading prevents. Two lines, no third.
+    #[test]
+    fn roles_are_judged_beside_an_unreadable_document() {
+        let base = owning("solo", "platform", &[MANIFEST], &[]);
+        let held = vec![(MANIFEST, crates(base, &[("c", "c", "composition")]))];
+        let report = mapped(held, &[], "not json")
+            .check()
+            .expect_err("both defects are reported");
+        assert_eq!(
+            report.to_string(),
+            "BXW0050 Cargo.toml package= candidates=[]\n\
+             BXW0054 boxology.toml package=solo candidates=[c]"
         );
     }
     #[test]
