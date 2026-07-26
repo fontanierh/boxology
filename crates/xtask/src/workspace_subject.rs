@@ -28,6 +28,15 @@ const OWNS: &str = "schema = 1\nid = \"root\"\nkind = \"platform\"\n\
                     owned = [\"boxology.toml\", \"z/**\"]\nfixtures = [\"c/**\"]\n\
                     [[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\n\
                     inputs = [\"boxology.toml\"]\noutputs = [\"Cargo.lock\"]\n";
+// A fixed `cargo metadata` document, so the subject covers the members read out of one: two whose
+// declaration order is not their sorted order, plus one `packages[]` element no `workspace_members`
+// entry names. No host path reaches it; `/w` is as fixed as the listing above.
+const MEMBERS: &str = "{\"workspace_root\":\"/w\",\"workspace_members\":[\"a\",\"b\"],\
+                       \"packages\":[{\"id\":\"a\",\"name\":\"zulu\",\
+                       \"manifest_path\":\"/w/z/Cargo.toml\"},{\"id\":\"b\",\"name\":\"alpha\",\
+                       \"manifest_path\":\"/w/z/a/Cargo.toml\"},{\"id\":\"c\",\"name\":\"vendor\",\
+                       \"manifest_path\":\"/vendor/Cargo.toml\"}]}";
+const NO_MEMBERS: &str = "{\"workspace_root\":\"/w\",\"workspace_members\":[],\"packages\":[]}";
 const TRACKED: [&str; 6] = [
     "z/b.rs",
     "c/bad/boxology.toml",
@@ -48,10 +57,15 @@ fn classification() -> Result<String, String> {
         (rel("boxology.toml")?, OWNS.as_bytes().to_vec()),
         (rel("c/bad/boxology.toml")?, b"not toml".to_vec()),
     ];
-    let inputs = WorkspaceInputs::new(files, manifests, "{\"packages\":[]}")
+    let inputs = WorkspaceInputs::new(files, manifests, MEMBERS)
         .map_err(|_| String::from("fixed clean listing rejected"))?;
     let workspace = inputs.check().map_err(|found| format!("found {found}"))?;
-    Ok(format!("{}\n", workspace.render_report()))
+    let mut body = format!("{}\n", workspace.render_report());
+    for held in workspace.cargo_members() {
+        let at = held.crate_dir().map_or("", RelativePath::as_str);
+        body.push_str(&format!("{} {at}\n", held.cargo_package()));
+    }
+    Ok(body)
 }
 fn report() -> Result<String, String> {
     let mut files = Vec::new();
@@ -68,7 +82,7 @@ fn report() -> Result<String, String> {
         files.push(FileEntry::file(path.clone()));
         manifests.push((path, text.as_bytes().to_vec()));
     }
-    let inputs = WorkspaceInputs::new(files, manifests, "{\"packages\":[]}")
+    let inputs = WorkspaceInputs::new(files, manifests, NO_MEMBERS)
         .map_err(|_| String::from("fixed listing rejected"))?;
     let findings = inputs.check().err().ok_or("fixed listing is clean")?;
     Ok(format!("{findings}\n"))
@@ -111,7 +125,9 @@ mod tests {
              root c/bad/Cargo.lock derived=\n\
              root c/bad/boxology.toml derived=\n\
              root z/a.rs derived=\n\
-             root z/b.rs derived=\n"
+             root z/b.rs derived=\n\
+             alpha z/a\n\
+             zulu z\n"
         );
     }
 }

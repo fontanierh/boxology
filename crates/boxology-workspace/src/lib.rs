@@ -11,6 +11,9 @@
 //! and this crate never re-validates it — a [`RelativePath`] and [`GlobPattern`] (no NUL, tab,
 //! line break, or backslash; no `..` in a path). Rejecting line breaks holds one finding to one
 //! line; other control bytes reach a report, a residual gap in the grammar this crate consumes.
+//! **No value read out of the `cargo metadata` document is echoed at all** — its paths are absolute
+//! and its names unvalidated — and a defect of that document is reported at a location this crate
+//! names, never at one the document spells.
 //! Every other word this crate renders is a `&'static str` it chose. An [`Entry::Manifest`] line is
 //! `boxology_manifest`'s own rendering, whose only caller-derived part is a manifest key name it
 //! echoes just when the name is plain `[A-Za-z0-9_-]` text.
@@ -24,11 +27,14 @@
 
 use boxology_contract::BoxId;
 use boxology_manifest::{DerivedOutput, Diagnostic, GlobPattern, Kind, Manifest, RelativePath};
+use serde_json::Value;
 use std::{cmp::Ordering, fmt};
 /// A coded rule: its stable `BXW####` code and the static text of the obligation it states.
 type Rule = (&'static str, &'static str);
 /// The normative source of the discovery rules this crate enforces.
 const WALK_SOURCE: &str = "boxology-details/02-packages.md discovery walk";
+/// The normative source of the crate-role vocabulary and the exactly-one matching rule.
+const CRATE_SOURCE: &str = "boxology-details/02-packages.md crate roles";
 const ESCAPE_TEXT: &str = "symlink targets must stay inside the workspace root";
 const ESCAPE: Rule = ("BXW0048", ESCAPE_TEXT);
 const DUPLICATE_TEXT: &str = "one package identity must be declared by exactly one manifest";
@@ -45,18 +51,26 @@ const BOTH_TEXT: &str = "a declared derived output must not also be claimed as a
 const BOTH: Rule = ("BXW0047", BOTH_TEXT);
 const LOCK_TEXT: &str = "Cargo.lock must be a platform package's declared global derived artifact";
 const LOCK: Rule = ("BXW0049", LOCK_TEXT);
+const DOCUMENT_TEXT: &str = "cargo metadata must be a readable workspace document";
+const DOCUMENT: Rule = ("BXW0050", DOCUMENT_TEXT);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
 const LOCKFILE: &str = "Cargo.lock";
+/// The Cargo manifest name: the final segment of every member's `manifest_path`, and — at the
+/// workspace root — the one document a defect of the `cargo metadata` document is reported at.
+const CARGO_MANIFEST: &str = "Cargo.toml";
 // `BXW####` allocation, recorded so this task's slices cannot collide or strand gaps. T1 landed
-// BXW0001–BXW0041, the whole schema-1 manifest inventory, so T2 opens at BXW0042 and now reserves
-// through BXW0052: derived classification needed three of its five reserved codes, so crate-role
-// mapping moves down to keep the range dense rather than strand BXW0050–BXW0051. Landed:
-// BXW0042 duplicate identity, BXW0043 self-claiming fixture pattern, BXW0044 unowned path,
-// BXW0045 overlapping ownership, BXW0046 rival derived outputs, BXW0047 derived and non-derived
-// at once, BXW0048 symlink escape, BXW0049 the workspace lockfile. Allocated: BXW0050–BXW0052
-// crate-role mapping.
+// BXW0001–BXW0041, the whole schema-1 manifest inventory, so T2 opens at BXW0042 and ends at
+// BXW0054: crate-role mapping needs five codes rather than the three first reserved, so its block
+// is extended by two — the range stays dense and T3 still opens at BXW0055, as recorded on the
+// tracker. Landed: BXW0042 duplicate identity, BXW0043 self-claiming fixture pattern, BXW0044
+// unowned path, BXW0045 overlapping ownership, BXW0046 rival derived outputs, BXW0047 derived and
+// non-derived at once, BXW0048 symlink escape, BXW0049 the workspace lockfile, BXW0050 an
+// unreadable `cargo metadata` document. Allocated: BXW0051 an unmapped Cargo workspace member,
+// BXW0052 an unmatched `[[crates]]` entry, BXW0053 a member two entries claim, BXW0054 an
+// impossible crate role — the four codes matching this crate's members against those entries
+// needs, which is the next slice.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -94,6 +108,7 @@ pub struct WorkspaceInputs {
     files: Vec<FileEntry>,
     manifests: Vec<(RelativePath, Vec<u8>)>,
     cargo_metadata: String,
+    cargo_manifest: RelativePath,
 }
 impl WorkspaceInputs {
     /// Sorts files and manifests bytewise by path, rejecting a path repeated within either list
@@ -102,7 +117,7 @@ impl WorkspaceInputs {
     /// package's `fixtures` patterns, which only this crate computes, so a pre-parsed argument
     /// would make a deliberately malformed corpus manifest fail in the *caller* and defeat
     /// fixture opacity. The bytes are stored unexamined, as is `cargo_metadata`, until discovery
-    /// and crate-role mapping read them in later slices.
+    /// and the metadata reading below take them up.
     pub fn new(
         files: Vec<FileEntry>,
         manifests: Vec<(RelativePath, Vec<u8>)>,
@@ -112,6 +127,12 @@ impl WorkspaceInputs {
             files: sorted_unique(files, FileEntry::path)?,
             manifests: sorted_unique(manifests, |entry| &entry.0)?,
             cargo_metadata: String::from(cargo_metadata),
+            // The one location a defect of the metadata document is reported at, promoted through
+            // the caller-facing path grammar exactly here. `RelativePath::new` is fallible over
+            // caller data; this argument is a `&'static str` this crate chose, and admitting the
+            // impossible rejection as caller misuse is what leaves the crate with no fallible
+            // construction, and so no fallback value, on any later path.
+            cargo_manifest: RelativePath::new(CARGO_MANIFEST).map_err(|_| InputError)?,
         })
     }
     /// Classifies every tracked file, or reports every defect these inputs prove in the frozen
@@ -124,13 +145,17 @@ impl WorkspaceInputs {
     /// Classification runs only over a package set discovery accepted whole. A manifest that did
     /// not parse, or a duplicated identity, declares no usable ownership, so classifying beside it
     /// would answer one located defect with a BXW0044 for every path the missing declarations would
-    /// have claimed. Discovery's own findings are returned alone instead.
+    /// have claimed. Discovery's own findings are returned alone instead. Reading the `cargo
+    /// metadata` document needs no package at all, so it runs beside classification and its one
+    /// coded defect joins that report rather than pre-empting it.
     pub fn check(&self) -> Result<Workspace, Findings> {
         let (mut packages, found) = self.discover();
         if let Some(findings) = found {
             return Err(findings);
         }
-        let (classifications, defects) = self.classify(&packages);
+        let (classifications, mut defects) = self.classify(&packages);
+        let (cargo_members, found) = self.members();
+        defects.extend(found);
         if let Some(findings) = Findings::new(defects) {
             return Err(findings);
         }
@@ -138,7 +163,28 @@ impl WorkspaceInputs {
         Ok(Workspace {
             packages,
             classifications,
+            cargo_members,
         })
+    }
+    /// Reads the Cargo workspace members out of the `cargo metadata` document, or reports the one
+    /// coded defect an unreadable document is.
+    ///
+    /// The document is *input*, so every way of failing to read it is BXW0050 and none of them is a
+    /// panic: malformed JSON, a missing or mistyped field this crate reads, and a `manifest_path`
+    /// that will not normalize under `workspace_root` are the same coded answer, located at the
+    /// workspace's own `Cargo.toml` — the document has no other workspace-relative location, and
+    /// the absolute paths it carries are never echoed. A defect of the document is the whole
+    /// reading: no partial member list escapes it, because matching a manifest's `[[crates]]`
+    /// entries against half a workspace would answer one located defect with a finding for every
+    /// entry the workspace declares.
+    fn members(&self) -> (Vec<CargoMember>, Vec<Entry>) {
+        let Some(mut members) = read(&self.cargo_metadata) else {
+            let at = self.cargo_manifest.clone();
+            let found = Finding::about(DOCUMENT, CRATE_SOURCE, at, None, String::new());
+            return (Vec::new(), vec![Entry::Workspace(found)]);
+        };
+        members.sort_by(|left, right| left.name.cmp(&right.name));
+        (members, Vec::new())
     }
     /// Classifies every tracked file under the one claim it has, and reports the files that
     /// classify no times or more than once. D3 admits exactly two kinds of claim, and a path may
@@ -284,6 +330,56 @@ fn every_claim(rivals: &[&Package], path: &RelativePath) -> Vec<Candidate> {
     }
     named
 }
+/// Reads the workspace members of a `cargo metadata` document. `None` is BXW0050: the whole
+/// document is a defect, never a partial reading, so every `None` below — malformed JSON, a missing
+/// or mistyped field, or a member path [`member`] cannot normalize — is that one coded answer and
+/// not a discarded failure.
+///
+/// Exactly three top-level names are read, and exactly three of each package: D4's declaration-based
+/// reading is what makes purity over one document sound, and `resolve` — null under the `--no-deps`
+/// invocation T5 owns — is never consulted. A `packages[]` element whose id no `workspace_members`
+/// entry spells is a dependency of the workspace, not a member of it: it is skipped before its
+/// manifest path is normalized, so a registry package living outside the workspace root is no
+/// defect. Ids are matched as opaque strings, never parsed.
+fn read(document: &str) -> Option<Vec<CargoMember>> {
+    let document: Value = serde_json::from_str(document).ok()?;
+    let root = document.get("workspace_root")?.as_str()?;
+    let mut ids = Vec::new();
+    for id in document.get("workspace_members")?.as_array()? {
+        ids.push(id.as_str()?);
+    }
+    let mut members = Vec::new();
+    for package in document.get("packages")?.as_array()? {
+        let id = package.get("id")?.as_str()?;
+        let name = package.get("name")?.as_str()?;
+        let at = package.get("manifest_path")?.as_str()?;
+        if ids.contains(&id) {
+            members.push(member(root, at, name)?);
+        }
+    }
+    Some(members)
+}
+/// Normalizes one member's absolute `manifest_path` against the absolute `workspace_root`.
+///
+/// The root must be followed by a separator, so a sibling root whose name this one is a prefix of
+/// never normalizes, and the remainder must be exactly `Cargo.toml` or end in `/Cargo.toml`, whose
+/// head is the crate directory — absent at the workspace root, which no [`RelativePath`] can spell.
+/// Separators are `/` only: a drive-prefixed or backslash-separated document is BXW0050 rather than
+/// a second path dialect, because [`RelativePath`] admits neither and this crate reports no path it
+/// has not re-validated.
+fn member(root: &str, manifest_path: &str, name: &str) -> Option<CargoMember> {
+    let rest = manifest_path.strip_prefix(root)?.strip_prefix('/')?;
+    let head = rest.strip_suffix(CARGO_MANIFEST)?;
+    let directory = match head {
+        "" => None,
+        head => Some(RelativePath::new(head.strip_suffix('/')?).ok()?),
+    };
+    Some(CargoMember {
+        manifest_path: RelativePath::new(rest).ok()?,
+        directory,
+        name: String::from(name),
+    })
+}
 /// Reports whether `path`'s final segment is exactly `boxology.toml`.
 fn is_manifest(path: &RelativePath) -> bool {
     let head = path.as_str().strip_suffix(MANIFEST);
@@ -389,13 +485,14 @@ impl Package {
         Some(Finding::new(SELF_CLAIM, at.clone(), owner, named))
     }
 }
-/// A workspace no finding rejects: every discovered package, and the one classification every
-/// tracked file has. Only [`WorkspaceInputs::check`] builds one, so D3's "every tracked file
+/// A workspace no finding rejects: every discovered package, the one classification every tracked
+/// file has, and every Cargo workspace member the metadata document proved readable. Only [`WorkspaceInputs::check`] builds one, so D3's "every tracked file
 /// classifies exactly once" is a property of this type's existence, not a check a consumer repeats.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Workspace {
     packages: Vec<Package>,
     classifications: Vec<FileClassification>,
+    cargo_members: Vec<CargoMember>,
 }
 impl Workspace {
     ref_getters! {
@@ -403,6 +500,8 @@ impl Workspace {
         packages: &[Package] = packages;
         #[doc = "Returns every tracked file's classification, in report order."]
         classifications: &[FileClassification] = classifications;
+        #[doc = "Returns every Cargo workspace member, sorted by Cargo package name."]
+        cargo_members: &[CargoMember] = cargo_members;
     }
     /// Renders the classification body: one line per tracked file, ordered by package identity then
     /// workspace-relative path, exactly as [`Workspace::classifications`] holds them.
@@ -410,6 +509,34 @@ impl Workspace {
         let render = FileClassification::render;
         let lines: Vec<String> = self.classifications.iter().map(render).collect();
         lines.join("\n")
+    }
+}
+/// One Cargo workspace member the metadata document names, normalized into this repository's own
+/// terms: the crate's directory, its `Cargo.toml` re-validated as a workspace-relative path, and
+/// its Cargo package name. Only [`WorkspaceInputs::check`] builds one, so a value of this type is
+/// the proof the document was readable — and the absolute paths it carries reach nothing else.
+///
+/// This is the left-hand side of 02-packages' rule that every Cargo package match exactly one
+/// manifest `[[crates]]` entry by normalized manifest path and Cargo package name. The match
+/// itself, and the roles it assigns, are the next slice.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CargoMember {
+    manifest_path: RelativePath,
+    directory: Option<RelativePath>,
+    name: String,
+}
+impl CargoMember {
+    /// Returns the crate's workspace-relative directory. `None` is the workspace root itself, which
+    /// no [`RelativePath`] can spell — and which no `[[crates]]` path can spell either, so a Cargo
+    /// package sitting there is unmatchable and the next slice codes it.
+    pub fn crate_dir(&self) -> Option<&RelativePath> {
+        self.directory.as_ref()
+    }
+    ref_getters! {
+        #[doc = "Returns the Cargo package name, exactly as the document spells it."]
+        cargo_package: &str = name;
+        #[doc = "Returns the workspace-relative path of the crate's own `Cargo.toml`."]
+        manifest_path: &RelativePath = manifest_path;
     }
 }
 /// The one classification of one tracked file: the package accountable for it, and the declaration
@@ -533,14 +660,29 @@ pub struct Finding {
 impl Finding {
     fn new(rule: Rule, path: RelativePath, package: Option<BoxId>, named: Vec<Candidate>) -> Self {
         let rendered: Vec<String> = named.iter().map(Candidate::render).collect();
+        let payload = rendered.join(",");
+        let mut found = Self::about(rule, WALK_SOURCE, path, package, payload);
+        found.candidates = named;
+        found
+    }
+    /// [`Finding::new`], for a rule from another normative source whose payload names no pattern
+    /// claim. A defect of the `cargo metadata` document is about the whole document, not about a
+    /// glob some manifest spells, so its [`Finding::candidates`] list is empty and stays so.
+    fn about(
+        rule: Rule,
+        source: &'static str,
+        path: RelativePath,
+        package: Option<BoxId>,
+        payload: String,
+    ) -> Self {
         Self {
             package,
             path,
             code: rule.0,
-            payload: rendered.join(","),
-            candidates: named,
+            payload,
+            candidates: Vec::new(),
             rule: rule.1,
-            rule_source: WALK_SOURCE,
+            rule_source: source,
         }
     }
     /// Returns the stable `BXW####` code.
@@ -652,6 +794,9 @@ mod tests {
     use super::*;
     use boxology_manifest::{Kind, LineColumn, Span};
     const OPAQUE: &[u8] = b"schema = 9\nnot toml";
+    /// A `cargo metadata` document naming no workspace member: what a listing under test that is
+    /// not about crate-role mapping supplies, so it reports only what it is about.
+    const EMPTY: &str = r#"{"workspace_root":"/w","workspace_members":[],"packages":[]}"#;
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("test literals are workspace-relative paths")
     }
@@ -669,7 +814,7 @@ mod tests {
         let at = path(MANIFEST);
         entries.push(FileEntry::file(at.clone()));
         let held = vec![(at, owning("root", "platform", &["**"], &[]))];
-        WorkspaceInputs::new(entries, held, "{}").expect("distinct test paths")
+        WorkspaceInputs::new(entries, held, EMPTY).expect("distinct test paths")
     }
     /// A minimal valid manifest, carrying the given `fixtures` list when it is nonempty.
     fn document(id: &str, kind: &str, fixtures: &[&str]) -> Vec<u8> {
@@ -711,11 +856,35 @@ mod tests {
     }
     /// [`workspace`], plus `tracked` ordinary files the listing also carries.
     fn listing(manifests: Vec<(&str, Vec<u8>)>, tracked: &[&str]) -> WorkspaceInputs {
+        mapped(manifests, tracked, EMPTY)
+    }
+    /// [`listing`], carrying a `cargo metadata` document crate-role mapping actually reads.
+    fn mapped(held: Vec<(&str, Vec<u8>)>, tracked: &[&str], document: &str) -> WorkspaceInputs {
         let entry = |(at, _): &(&str, Vec<u8>)| FileEntry::file(path(at));
-        let mut files: Vec<FileEntry> = manifests.iter().map(entry).collect();
+        let mut files: Vec<FileEntry> = held.iter().map(entry).collect();
         files.extend(tracked.iter().map(|at| FileEntry::file(path(at))));
-        let held = manifests.into_iter().map(|(at, bytes)| (path(at), bytes));
-        WorkspaceInputs::new(files, held.collect(), "{}").expect("distinct test paths")
+        let manifests = held.into_iter().map(|(at, bytes)| (path(at), bytes));
+        WorkspaceInputs::new(files, manifests.collect(), document).expect("distinct test paths")
+    }
+    /// A `cargo metadata` document under workspace root `/w`, naming one member per `(directory,
+    /// Cargo package name)` pair — the empty directory being the workspace root itself — plus
+    /// `strangers`, raw `packages[]` elements that no `workspace_members` entry names.
+    fn metadata(members: &[(&str, &str)], strangers: &[&str]) -> String {
+        let (mut ids, mut packages) = (Vec::new(), Vec::from(strangers).join(","));
+        for (at, name) in members {
+            let head = if at.is_empty() {
+                String::new()
+            } else {
+                format!("{at}/")
+            };
+            let id = format!("path+file:///w/{head}#0.0.0");
+            let one = format!("\"name\":{name:?},\"manifest_path\":\"/w/{head}Cargo.toml\"");
+            packages.push_str(&format!(",{{\"id\":{id:?},{one}}}"));
+            ids.push(format!("{id:?}"));
+        }
+        let listed = ids.join(",");
+        let body = packages.trim_start_matches(',');
+        format!(r#"{{"workspace_root":"/w","workspace_members":[{listed}],"packages":[{body}]}}"#)
     }
     /// The one diagnostic `OPAQUE` bytes provoke, as a report entry located at `at`.
     fn rejected(at: &str) -> Entry {
@@ -787,7 +956,10 @@ mod tests {
             assert_eq!(finding.code(), "BXW0048", "{case:?}");
             assert_eq!(finding.path().as_str(), at, "{case:?}");
             assert_eq!(finding.package(), None, "{case:?}");
-            assert_eq!(finding.rule(), ESCAPE_TEXT, "{case:?}");
+            assert_eq!(
+                finding.rule(),
+                "symlink targets must stay inside the workspace root"
+            );
             assert_eq!(finding.rule_source(), WALK_SOURCE, "{case:?}");
         }
         // The exact rendering, over a target chosen to wreck a report were it ever echoed.
@@ -988,9 +1160,15 @@ mod tests {
         assert_eq!(unowned.path(), &path("orphan.rs"));
         assert_eq!(unowned.package(), None);
         assert_eq!(unowned.candidates(), []);
-        assert_eq!(unowned.rule(), UNOWNED_TEXT);
+        assert_eq!(
+            unowned.rule(),
+            "every tracked file must classify under some package"
+        );
         assert_eq!(unowned.rule_source(), WALK_SOURCE);
-        assert_eq!(overlap.rule(), OVERLAP_TEXT);
+        assert_eq!(
+            overlap.rule(),
+            "at most one package may claim a non-derived path"
+        );
         assert_eq!(
             overlap.package(),
             None,
@@ -1113,7 +1291,10 @@ mod tests {
         assert_eq!(rivals.code(), "BXW0046");
         assert_eq!(rivals.path(), &path("gen/a.rs"));
         assert_eq!(rivals.package(), None);
-        assert_eq!(rivals.rule(), RIVALS_TEXT);
+        assert_eq!(
+            rivals.rule(),
+            "at most one declared derived output may claim a path"
+        );
         assert_eq!(rivals.rule_source(), WALK_SOURCE);
         let named: Vec<Option<&BoxId>> =
             rivals.candidates().iter().map(Candidate::output).collect();
@@ -1153,7 +1334,10 @@ mod tests {
         };
         assert_eq!(both.code(), "BXW0047");
         assert_eq!(both.package(), None, "neither claim is accountable");
-        assert_eq!(both.rule(), BOTH_TEXT);
+        assert_eq!(
+            both.rule(),
+            "a declared derived output must not also be claimed as a non-derived path"
+        );
         assert_eq!(both.rule_source(), WALK_SOURCE);
         let named: Vec<Option<&BoxId>> = both.candidates().iter().map(Candidate::output).collect();
         assert_eq!(named, [None, Some(&id("gen"))]);
@@ -1196,7 +1380,10 @@ mod tests {
         assert_eq!(found.code(), "BXW0049");
         assert_eq!(found.path(), &path(LOCKFILE));
         assert_eq!(found.package(), Some(&id("root")));
-        assert_eq!(found.rule(), LOCK_TEXT);
+        assert_eq!(
+            found.rule(),
+            "Cargo.lock must be a platform package's declared global derived artifact"
+        );
         assert_eq!(found.rule_source(), WALK_SOURCE);
         // Declared derived, by a package that is not the platform. Only a workspace-root manifest
         // can reach the path at all, so the wrong-kind case is a root manifest of the wrong kind.
@@ -1222,11 +1409,149 @@ mod tests {
              candidates=[root boxology.toml Cargo.lock derived=lockfile]"
         );
     }
+    /// 02-packages' left-hand side: the checker reads Cargo metadata, selects the *workspace
+    /// members*, and normalizes each `manifest_path` against `workspace_root`. The fixture is built
+    /// so a wrong answer is reachable — `crates/foo` is a strict prefix of `crates/foo-bar`, so a
+    /// prefix comparison anywhere loses one; the members are declared out of sorted order; one sits
+    /// at the workspace root, whose directory no `RelativePath` can spell; and `packages[]` carries
+    /// two elements no `workspace_members` entry names, one a registry package whose *name collides
+    /// with a member's* and one under a sibling root `/w2` that is not `/w`, so selecting by name,
+    /// or normalizing before selecting, either doubles a member or fails the whole document.
+    #[test]
+    fn cargo_members_are_selected_and_normalized() {
+        let out = "/home/u/.cargo/registry/src/index/foo-1.0.0/Cargo.toml";
+        let registry = format!(r#"{{"id":"registry-foo","name":"foo","manifest_path":{out:?}}}"#);
+        let sibling = r#"{"id":"sibling","name":"other","manifest_path":"/w2/crates/foo/x.toml"}"#;
+        let members = [
+            ("tools", "root-tools"),
+            ("crates/foo-bar", "foo-bar"),
+            ("", "whole-workspace"),
+            ("crates/foo", "foo"),
+        ];
+        let held = vec![(MANIFEST, owning("root", "platform", &[MANIFEST], &[]))];
+        let document = metadata(&members, &[registry.as_str(), sibling]);
+        let checked = mapped(held, &[], &document)
+            .check()
+            .expect("a clean listing");
+        let seen: Vec<(&str, &str, &str)> = checked
+            .cargo_members()
+            .iter()
+            .map(|member| {
+                let at = member.crate_dir().map_or("", RelativePath::as_str);
+                (member.cargo_package(), at, member.manifest_path().as_str())
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("foo", "crates/foo", "crates/foo/Cargo.toml"),
+                ("foo-bar", "crates/foo-bar", "crates/foo-bar/Cargo.toml"),
+                ("root-tools", "tools", "tools/Cargo.toml"),
+                ("whole-workspace", "", "Cargo.toml"),
+            ]
+        );
+    }
+    /// BXW0050 codes every defect of the metadata document itself, including a `manifest_path` that
+    /// will not normalize under `workspace_root`. Every case below is the *same* rendered line: no
+    /// partial member list survives a defect, and no byte of the document — least of all one of its
+    /// absolute paths — reaches the report.
+    #[test]
+    fn unreadable_metadata_documents_are_coded() {
+        // A one-member document, from its whole `packages[]` element or from that member's path.
+        let named = |package: &str| {
+            format!(
+                r#"{{"workspace_root":"/w","workspace_members":["i"],"packages":[{{{package}}}]}}"#
+            )
+        };
+        let one = |at: &str| {
+            named(&format!(
+                r#""id":"i","name":"solo-crate","manifest_path":{at:?}"#
+            ))
+        };
+        // Absolute `manifest_path` values, `!`-prefixed when the document is readable.
+        let paths = "/w2/crate/Cargo.toml,/other/crate/Cargo.toml,/wCargo.toml,\
+                     /w/crateCargo.toml,/w/crate/cargo.toml,/w/../x/Cargo.toml,/w/./Cargo.toml,\
+                     /w/a\\b/Cargo.toml,\
+                     !/w/crate/Cargo.toml,!/w/Cargo.toml";
+        let mut cases: Vec<String> = paths.split(',').map(String::from).collect();
+        cases.extend(
+            [
+                "not json",
+                "[]",
+                r#"{"workspace_members":[],"packages":[]}"#,
+                r#"{"workspace_root":7,"workspace_members":[],"packages":[]}"#,
+                r#"{"workspace_root":"/w","packages":[]}"#,
+                r#"{"workspace_root":"/w","workspace_members":7,"packages":[]}"#,
+                r#"{"workspace_root":"/w","workspace_members":[7],"packages":[]}"#,
+                r#"{"workspace_root":"/w","workspace_members":[]}"#,
+                r#"{"workspace_root":"/w","workspace_members":[],"packages":{}}"#,
+                r#"{"workspace_root":"/w","workspace_members":["i"],"packages":[{"id":"i"}]}"#,
+                &named(r#""id":"i","name":"n""#),
+                &named(r#""name":"n","manifest_path":"/w/a/Cargo.toml""#),
+                &named(r#""id":"i","name":7,"manifest_path":"/w/a/Cargo.toml""#),
+                &named(r#""id":7,"name":"n","manifest_path":"/w/a/Cargo.toml""#),
+                &named(r#""id":"i","name":"n","manifest_path":7"#),
+                r#"{"workspace_root":"/w/","workspace_members":["i"],"packages":[{"id":"i",
+                   "name":"n","manifest_path":"/w/a/Cargo.toml"}]}"#,
+            ]
+            .map(String::from),
+        );
+        for case in &cases {
+            let readable = case.strip_prefix('!');
+            let document = match readable.unwrap_or(case) {
+                whole if whole.starts_with('/') => one(whole),
+                whole => String::from(whole),
+            };
+            let held = vec![(MANIFEST, owning("solo", "platform", &[MANIFEST], &[]))];
+            let Err(report) = mapped(held, &[], &document).check() else {
+                // `/w/crate/Cargo.toml` and `/w/Cargo.toml` normalize; nothing else here does.
+                assert!(readable.is_some(), "{case:?} is unreadable");
+                continue;
+            };
+            assert!(
+                readable.is_none(),
+                "{case:?} is readable, and reported {report}"
+            );
+            let [Entry::Workspace(found)] = report.as_slice() else {
+                panic!("{case:?} reported {report}");
+            };
+            assert_eq!(found.code(), "BXW0050", "{case:?}");
+            assert_eq!(found.path(), &path(CARGO_MANIFEST), "{case:?}");
+            assert_eq!(found.package(), None, "{case:?}");
+            assert_eq!(found.candidates(), [], "{case:?}");
+            // The literal text, not the constant: an assertion against the constant it guards is
+            // green for every value that constant could hold, which proves nothing about either.
+            let stated = "cargo metadata must be a readable workspace document";
+            assert_eq!(found.rule(), stated, "{case:?}");
+            let source = "boxology-details/02-packages.md crate roles";
+            assert_eq!(found.rule_source(), source, "{case:?}");
+            assert_eq!(
+                report.to_string(),
+                "BXW0050 Cargo.toml package= candidates=[]",
+                "{case:?} must yield one line, echoing no byte of the document"
+            );
+        }
+    }
+    /// A defect of the metadata document joins the classification report rather than pre-empting
+    /// it, and takes its place in the frozen order like any other unattributed finding.
+    #[test]
+    fn an_unreadable_document_joins_the_classification_report() {
+        let held = vec![(MANIFEST, owning("solo", "platform", &["only.txt"], &[]))];
+        let report = mapped(held, &["unowned.txt"], "not json")
+            .check()
+            .expect_err("both defects are reported");
+        assert_eq!(
+            report.to_string(),
+            "BXW0050 Cargo.toml package= candidates=[]\n\
+             BXW0044 boxology.toml package= candidates=[]\n\
+             BXW0044 unowned.txt package= candidates=[]"
+        );
+    }
     #[test]
     fn public_seam_is_send_sync_static() {
         fn bounds<T: Send + Sync + 'static>() {}
         bounds::<(FileEntry, InputError, WorkspaceInputs, Package)>();
         bounds::<(Candidate, Finding, Entry, Findings)>();
-        bounds::<(Workspace, FileClassification)>();
+        bounds::<(Workspace, FileClassification, CargoMember)>();
     }
 }
