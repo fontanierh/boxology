@@ -141,6 +141,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-schema"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "serde_json",
+]
+
+[[package]]
 name = "boxology-telegram"
 version = "0.0.0"
 dependencies = [

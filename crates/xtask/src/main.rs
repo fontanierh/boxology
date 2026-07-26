@@ -30,6 +30,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-generator-model",
     "boxology-generator",
     "boxology-manifest",
+    "boxology-schema",
     "boxology-workspace",
     "boxology-http",
     "boxology-runtime",
