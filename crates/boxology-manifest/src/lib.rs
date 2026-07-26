@@ -161,6 +161,11 @@ impl Diagnostics {
         diagnostics.sort();
         (!diagnostics.is_empty()).then_some(Self(diagnostics))
     }
+    /// Consumes the collection into its sorted diagnostics, which a consumer moves into a report
+    /// of its own. `Diagnostic` is deliberately not `Clone`: one diagnostic has one owner.
+    pub fn into_vec(self) -> Vec<Diagnostic> {
+        self.0
+    }
     ref_getters! {
         #[doc = "Returns the sorted diagnostics."] as_slice: &[Diagnostic] = 0;
     }
