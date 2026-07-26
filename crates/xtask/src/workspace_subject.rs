@@ -12,6 +12,13 @@ const LISTING: [(&str, Option<&str>); 5] = [
     ("a/b/c.rs", None),
     ("a/escape", Some("..\\windows")),
 ];
+// Two fixed manifests, so the subject covers a mixed report — a manifest parse diagnostic
+// interleaved with workspace findings — and not only the symlink escapes above.
+const PARSES: &str = "schema = 1\nid = \"demo\"\nkind = \"box\"\nowned = []\n";
+const MANIFESTS: [(&str, &str); 2] = [
+    ("a/boxology.toml", PARSES),
+    ("b/boxology.toml", "schema = 9\nnot toml"),
+];
 fn report() -> Result<String, String> {
     let mut files = Vec::new();
     for (path, target) in LISTING {
@@ -21,7 +28,13 @@ fn report() -> Result<String, String> {
             None => FileEntry::file(path),
         });
     }
-    let inputs = WorkspaceInputs::new(files, Vec::new(), "{\"packages\":[]}")
+    let mut manifests = Vec::new();
+    for (path, text) in MANIFESTS {
+        let path = RelativePath::new(path).map_err(|_| format!("fixed path {path} is invalid"))?;
+        files.push(FileEntry::file(path.clone()));
+        manifests.push((path, text.as_bytes().to_vec()));
+    }
+    let inputs = WorkspaceInputs::new(files, manifests, "{\"packages\":[]}")
         .map_err(|_| String::from("fixed listing rejected"))?;
     let findings = inputs.check().ok_or("fixed listing reported nothing")?;
     Ok(format!("{findings}\n"))
@@ -40,6 +53,9 @@ mod tests {
             rendered,
             "BXW0048 a/b/escape package= candidates=[]\n\
              BXW0048 a/escape package= candidates=[]\n\
+             BXW0002 b/boxology.toml:2:5-2:5 offending=\"manifest document\" \
+             rule=\"boxology.toml must be well-formed TOML\" \
+             source=\"specs/s5-manifest-and-validation.md D2\"\n\
              BXW0048 z/escape package= candidates=[]\n"
         );
     }
