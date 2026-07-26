@@ -332,17 +332,25 @@ role = "box-implementation"
 
     #[test]
     fn field_diagnostics_are_complete_sorted_and_deterministic() {
-        let source = "schema = 1\nid = \"Bad_Id\"\nkind = \"composition\"\n";
-        let (first, second) = (errors("demo", source), errors("demo", source));
-        assert_eq!(first, second);
-        assert_eq!(
-            first
-                .as_slice()
-                .iter()
-                .map(Diagnostic::code)
-                .collect::<Vec<_>>(),
-            ["BXG0011", "BXG0013"]
-        );
-        assert!(first.as_slice().windows(2).all(|pair| pair[0] <= pair[1]));
+        // Push order is fixed — BXG0011 from the `id` arm, then BXG0013 from
+        // `kind` — so declaration order alone decides whether it already equals
+        // span order. Both spellings are asserted: the reversed one catches a
+        // dropped sort, the sorted one catches a sort replaced by any
+        // order-reversing operation. Either fixture alone leaves a mutant alive.
+        for (source, codes) in [
+            (
+                "schema = 1\nkind = \"composition\"\nid = \"Bad_Id\"\n",
+                ["BXG0013", "BXG0011"],
+            ),
+            (
+                "schema = 1\nid = \"Bad_Id\"\nkind = \"composition\"\n",
+                ["BXG0011", "BXG0013"],
+            ),
+        ] {
+            let (first, second) = (errors("demo", source), errors("demo", source));
+            assert_eq!(first, second);
+            let seen: Vec<_> = first.as_slice().iter().map(Diagnostic::code).collect();
+            assert_eq!(seen, codes);
+        }
     }
 }

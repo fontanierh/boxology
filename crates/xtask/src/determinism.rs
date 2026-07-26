@@ -328,23 +328,37 @@ mod tests {
     #[test]
     fn tree_roundtrip_is_stable_byte_sorted_and_hashes_known_bytes() {
         let temp = Temp::new();
+        // `a.txt` and the directory `a/` conflict on a byte prefix: the walk emits
+        // `a/z` first (`a` < `a.txt` as a name) while bytewise `a.txt` (0x2e) sorts
+        // before `a/z` (0x2f). Only the top-level sort repairs that order.
+        fs::create_dir(temp.0.join("a")).unwrap();
+        fs::write(temp.0.join("a/z"), b"").unwrap();
+        fs::write(temp.0.join("a.txt"), b"").unwrap();
         fs::write(temp.0.join("é"), b"").unwrap();
         fs::write(temp.0.join("z"), b"abc").unwrap();
         let manifest = scan_tree("clean", &temp.0).unwrap();
-        let once = manifest.serialize();
-        assert_eq!(once, manifest.serialize());
-        assert_eq!(Manifest::parse(&once).unwrap(), manifest);
-        assert_eq!(manifest.records()[0].path, "clean/z");
+        let paths: Vec<_> = manifest.records().iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["clean/a.txt", "clean/a/z", "clean/z", "clean/é"]);
+        assert_eq!(scan_tree("clean", &temp.0).unwrap(), manifest);
+        assert_eq!(Manifest::parse(&manifest.serialize()).unwrap(), manifest);
         assert_eq!(
-            manifest.records()[0].sha256,
+            manifest.records()[2].sha256,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
     #[test]
     fn parser_rejects_bad_schema_records_order_names_sizes_and_hashes() {
-        assert!(Manifest::parse(b"boxology-determinism-manifest schema=2\n").is_err());
+        // A future schema and a corrupt header are separate diagnoses; `is_err`
+        // alone cannot tell which of the two arms produced the error.
+        assert_eq!(
+            Manifest::parse(b"boxology-determinism-manifest schema=2\n"),
+            Err("unknown manifest schema".into())
+        );
+        assert_eq!(
+            Manifest::parse(b"bad\n"),
+            Err("malformed manifest header".into())
+        );
         assert!(Manifest::parse(format!("{HEADER}\n").as_bytes()).is_err());
-        assert!(Manifest::parse(b"bad\n").is_err());
         assert!(Manifest::parse(format!("{HEADER}\ns/a\t0\n").as_bytes()).is_err());
         let a = line("s/a", "0", zero());
         let duplicate = [a.as_slice(), &a[HEADER.len() + 1..]].concat();
