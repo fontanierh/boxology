@@ -1004,11 +1004,33 @@ BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-
         // Both rule tables' own source text, read at compile time: a code emitted anywhere in the
         // crate but registered nowhere above fails here rather than drifting in unproven. The test
         // module is split off so this module's own probe literals do not count as emissions.
-        let parse = include_str!("parse.rs");
-        let sources = [
-            parse.split("#[cfg(test)]").next().unwrap_or(parse),
-            include_str!("glob.rs"),
-        ];
+        //
+        // Both halves of that split are pinned, because either one narrows the scan *silently*.
+        // The text before the first `#[cfg(test)]` is the production half only when that
+        // occurrence is the test module itself: a `#[cfg(test)]` above it — a test-only `use`,
+        // helper module, or `impl` — would truncate the scan there and hide every code below.
+        // `glob.rs` carries no test module at all, so its cut is absent rather than wrong. And
+        // this list of files is the whole crate only while the crate root declares exactly them,
+        // which is asserted rather than assumed: a fourth source file must join the scan or fail.
+        let production = |whole: &'static str| match whole.split_once("#[cfg(test)]") {
+            Some((source, rest)) => {
+                assert!(
+                    rest.starts_with("\nmod tests"),
+                    "a cut missed a test module"
+                );
+                source
+            }
+            None => whole,
+        };
+        let root = include_str!("lib.rs");
+        let named = |(at, _): (usize, &str)| root[at + 5..].split([';', ' ']).next().unwrap_or("");
+        let declared: Vec<&str> = root.match_indices("\nmod ").map(named).collect();
+        assert_eq!(
+            declared,
+            ["glob", "parse", "tests"],
+            "an unscanned source file"
+        );
+        let sources = [include_str!("parse.rs"), include_str!("glob.rs"), root].map(production);
         let mut seen: Vec<&str> = Vec::new();
         for source in sources {
             for (at, _) in source.match_indices("\"BXW") {

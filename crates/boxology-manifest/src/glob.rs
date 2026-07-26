@@ -13,8 +13,10 @@ const WHOLE: &str = "** must stand alone as a complete segment";
 /// and never crosses `/`. `**` stands alone as a whole segment and matches zero or more segments,
 /// except as the final segment, where it matches one or more, so `a/**` never matches the file
 /// `a`. Every other character, including `{`, `}`, `]`, a non-leading `!`, and spaces, is an
-/// untrimmed literal. Matching is bytewise and case-sensitive over file paths only, so a pattern
-/// equal to a directory path matches nothing by itself.
+/// untrimmed literal — except a backslash or an ASCII control byte, which the whole C0 range and
+/// DEL are, and which BXW0017 rejects so a validated pattern is safe to echo into a terminal
+/// report. Matching is bytewise and case-sensitive over file paths only, so a pattern equal to a
+/// directory path matches nothing by itself.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct GlobPattern(String);
 impl GlobPattern {
