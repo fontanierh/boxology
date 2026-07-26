@@ -5,7 +5,7 @@
 //! environment, network, locale, or clock, and it has no uncoded failure path — caller misuse is
 //! a typed [`InputError`] and every document defect a coded [`Finding`].
 //!
-//! **Payload safety.** A rendered finding echoes only values a grammar already validated: a
+//! **Payload safety.** A rendered finding or classification echoes only grammar-validated values: a
 //! [`BoxId`] (`[a-z][a-z0-9-]*`), a [`RelativePath`] and [`GlobPattern`] (no NUL, tab, line break,
 //! or backslash; no `..` in a path). Rejecting line breaks holds one finding to one line; other
 //! control bytes reach a report, a residual gap in the grammar this crate consumes. Every other
@@ -33,13 +33,17 @@ const DUPLICATE_TEXT: &str = "one package identity must be declared by exactly o
 const DUPLICATE: Rule = ("BXW0042", DUPLICATE_TEXT);
 const SELF_CLAIM_TEXT: &str = "a fixtures pattern must not claim its own declaring manifest";
 const SELF_CLAIM: Rule = ("BXW0043", SELF_CLAIM_TEXT);
+const UNOWNED_TEXT: &str = "every tracked file must classify under some package";
+const UNOWNED: Rule = ("BXW0044", UNOWNED_TEXT);
+const OVERLAP_TEXT: &str = "at most one package may claim a non-derived path";
+const OVERLAP: Rule = ("BXW0045", OVERLAP_TEXT);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 // `BXW####` allocation, recorded so this task's slices cannot collide or strand gaps. T1 landed
 // BXW0001–BXW0041, the whole schema-1 manifest inventory, so T2 opens at BXW0042 and reserves
 // through BXW0054. Landed: BXW0042 duplicate identity, BXW0043 self-claiming fixture pattern,
-// BXW0048 symlink escape. Allocated: BXW0044–BXW0047 ownership, BXW0049–BXW0051 derived outputs,
-// BXW0052–BXW0054 crate-role mapping.
+// BXW0044 unowned path, BXW0045 overlapping ownership, BXW0048 symlink escape. Allocated:
+// BXW0046–BXW0047 and BXW0049–BXW0051 derived outputs, BXW0052–BXW0054 crate-role mapping.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -97,10 +101,52 @@ impl WorkspaceInputs {
             cargo_metadata: String::from(cargo_metadata),
         })
     }
-    /// Reports every defect these inputs prove, in the frozen report order; `None` means the
-    /// inputs are clean. Later findings join the same report.
-    pub fn check(&self) -> Option<Findings> {
-        self.discover().1
+    /// Classifies every tracked file, or reports every defect these inputs prove in the frozen
+    /// report order.
+    ///
+    /// The `Result` is the point: a [`Workspace`] is the *proof* that classification succeeded, so
+    /// no caller can read an attribution out of inputs that never earned one, and no `Ok` value can
+    /// hold a partial model of a workspace that does not exist.
+    ///
+    /// Classification runs only over a package set discovery accepted whole. A manifest that did
+    /// not parse, or a duplicated identity, declares no usable ownership, so classifying beside it
+    /// would answer one located defect with a BXW0044 for every path the missing declarations would
+    /// have claimed. Discovery's own findings are returned alone instead.
+    pub fn check(&self) -> Result<Workspace, Findings> {
+        let (mut packages, found) = self.discover();
+        if let Some(findings) = found {
+            return Err(findings);
+        }
+        let (classifications, defects) = self.classify(&packages);
+        if let Some(findings) = Findings::new(defects) {
+            return Err(findings);
+        }
+        packages.sort_by(|left, right| left.id().cmp(right.id()));
+        Ok(Workspace {
+            packages,
+            classifications,
+        })
+    }
+    /// Classifies every tracked file under the one package claiming it, and reports the files that
+    /// classify no times or more than once. A package claims a path when any `owned` or `fixtures`
+    /// pattern of its manifest matches, so a pruned fixture manifest — not a package itself — still
+    /// classifies here, as the owned non-derived file of whichever package claimed it.
+    fn classify(&self, packages: &[Package]) -> (Vec<FileClassification>, Vec<Entry>) {
+        let (mut classified, mut defects) = (Vec::new(), Vec::new());
+        for file in &self.files {
+            let path = file.path();
+            let claiming = |package: &&Package| !package.owns(path).is_empty();
+            let claimants: Vec<&Package> = packages.iter().filter(claiming).collect();
+            let report =
+                |rule: Rule, named| Entry::Workspace(Finding::new(rule, path.clone(), None, named));
+            match claimants.as_slice() {
+                [package] => classified.push(FileClassification::new(path, package)),
+                [] => defects.push(report(UNOWNED, Vec::new())),
+                rivals => defects.push(report(OVERLAP, every_claim(rivals, path))),
+            }
+        }
+        classified.sort_by(|left, right| left.key().cmp(&right.key()));
+        (classified, defects)
     }
     /// Discovers the workspace packages, and reports every defect these inputs prove.
     ///
@@ -153,7 +199,11 @@ impl WorkspaceInputs {
             }
         }
         // Every carrier of a duplicated identity is named, each located at its own manifest, so
-        // the report points at every document that has to change, not only at the later one.
+        // the report points at every document that has to change, not only at the later one. One
+        // line cannot also name its rivals: a `Candidate`'s third component is the *pattern* a
+        // claim is made under, and an identity is claimed under no pattern, so naming them would
+        // need a fabricated pattern or a widened public type. D3's "naming every candidate" is met
+        // here in the one-line-per-carrier sense, and in the payload sense by BXW0045.
         for package in &packages {
             let same = |other: &&Package| other.id() == package.id();
             if packages.iter().filter(same).count() > 1 {
@@ -167,6 +217,19 @@ impl WorkspaceInputs {
         entries.extend(escapes.map(Entry::Workspace));
         (packages, Findings::new(entries))
     }
+}
+/// Names every claim every rival makes on `path`. The order is the caller's, never the rendering's:
+/// packages in the walk order discovery fixed — ascending `(depth, path)`, so the outermost claimant
+/// leads — and within one package its patterns in declaration order.
+fn every_claim(rivals: &[&Package], path: &RelativePath) -> Vec<Candidate> {
+    let mut named = Vec::new();
+    for package in rivals {
+        for claim in package.owns(path) {
+            let at = package.manifest_path.clone();
+            named.push(Candidate::new(package.id().clone(), at, claim.clone()));
+        }
+    }
+    named
 }
 /// Reports whether `path`'s final segment is exactly `boxology.toml`.
 fn is_manifest(path: &RelativePath) -> bool {
@@ -213,14 +276,26 @@ impl Package {
         let rest = path.as_str().strip_prefix(root.as_str())?;
         RelativePath::new(rest.strip_prefix('/')?).ok()
     }
-    /// Returns every `fixtures` pattern of this package claiming `path`, in declaration order.
-    /// Matching is [`GlobPattern::matches`], the single definition of the frozen dialect.
-    fn claims(&self, path: &RelativePath) -> Vec<&GlobPattern> {
-        let Some(under) = self.under(path) else {
+    /// Returns every pattern of `declared` claiming `path`, in declaration order. Matching is
+    /// [`GlobPattern::matches`], the single definition of the frozen dialect.
+    fn matching<'a>(&self, at: &RelativePath, list: &'a [GlobPattern]) -> Vec<&'a GlobPattern> {
+        let Some(under) = self.under(at) else {
             return Vec::new();
         };
         let hit = |pattern: &&GlobPattern| pattern.matches(&under);
-        self.manifest.fixtures().iter().filter(hit).collect()
+        list.iter().filter(hit).collect()
+    }
+    /// Returns every `fixtures` pattern of this package claiming `path`: the pruning question.
+    fn claims(&self, path: &RelativePath) -> Vec<&GlobPattern> {
+        self.matching(path, self.manifest.fixtures())
+    }
+    /// Returns every `owned` or `fixtures` pattern of this package claiming `path`, `owned` first:
+    /// the classification question. Fixture data is that package's own owned non-derived material
+    /// (D2), so the two lists are one attribution and never two competing ones.
+    fn owns(&self, path: &RelativePath) -> Vec<&GlobPattern> {
+        let mut claimed = self.matching(path, self.manifest.owned());
+        claimed.extend(self.claims(path));
+        claimed
     }
     /// Reports BXW0043 for every `fixtures` pattern claiming this package's own manifest. The
     /// package keeps its identity and every other claim: honouring a self-claim would erase the
@@ -236,6 +311,65 @@ impl Package {
         }
         let owner = Some(self.id().clone());
         Some(Finding::new(SELF_CLAIM, at.clone(), owner, named))
+    }
+}
+/// A workspace no finding rejects: every discovered package, and the one classification every
+/// tracked file has. Only [`WorkspaceInputs::check`] builds one, so D3's "every tracked file
+/// classifies exactly once" is a property of this type's existence, not a check a consumer repeats.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Workspace {
+    packages: Vec<Package>,
+    classifications: Vec<FileClassification>,
+}
+impl Workspace {
+    ref_getters! {
+        #[doc = "Returns every discovered package, sorted by identity."]
+        packages: &[Package] = packages;
+        #[doc = "Returns every tracked file's classification, in report order."]
+        classifications: &[FileClassification] = classifications;
+    }
+    /// Renders the classification body: one line per tracked file, ordered by package identity then
+    /// workspace-relative path, exactly as [`Workspace::classifications`] holds them.
+    pub fn render_report(&self) -> String {
+        let render = FileClassification::render;
+        let lines: Vec<String> = self.classifications.iter().map(render).collect();
+        lines.join("\n")
+    }
+}
+/// The one classification of one tracked file: the package accountable for it, and the declaration
+/// it is a derived output of when it is one.
+#[derive(Debug, Eq, PartialEq)]
+pub struct FileClassification {
+    path: RelativePath,
+    package: BoxId,
+    derived_output: Option<String>,
+}
+impl FileClassification {
+    fn new(path: &RelativePath, package: &Package) -> Self {
+        Self {
+            path: path.clone(),
+            package: package.id().clone(),
+            derived_output: None,
+        }
+    }
+    /// Returns the declaration this file is a derived output of, `None` for a non-derived owned
+    /// file. Derived outputs are not modelled yet, so today every classified file answers `None`.
+    pub fn derived_output(&self) -> Option<&str> {
+        self.derived_output.as_deref()
+    }
+    ref_getters! {
+        #[doc = "Returns the workspace-relative logical path."] path: &RelativePath = path;
+        #[doc = "Returns the accountable package."] package: &BoxId = package;
+    }
+    /// The frozen classification order: package identity, then path. Paths are unique across a
+    /// listing, so no tie remains for the rendering to break.
+    fn key(&self) -> (&BoxId, &RelativePath) {
+        (&self.package, &self.path)
+    }
+    fn render(&self) -> String {
+        let derived = self.derived_output.as_deref().unwrap_or("");
+        let (package, path) = (self.package.as_str(), self.path.as_str());
+        format!("{package} {path} derived={derived}")
     }
 }
 fn sorted_unique<T>(mut items: Vec<T>, key: fn(&T) -> &RelativePath) -> Result<Vec<T>, InputError> {
@@ -362,8 +496,19 @@ impl Entry {
     }
 }
 impl Ord for Entry {
+    /// The report key decides the order; the structural comparison below decides only what the key
+    /// cannot. Two distinct entries *can* render identically — a comma and a space are literal in
+    /// the glob dialect, so one candidate's pattern can spell what two candidates render — and an
+    /// `Ord` that called them equal would be inconsistent with `Eq`, silently swallowing one of
+    /// them in a `BTreeSet` or a `dedup`. It never reorders a report: it breaks ties the key left.
     fn cmp(&self, other: &Self) -> Ordering {
-        self.key().cmp(&other.key())
+        let structural = || match (self, other) {
+            (Self::Workspace(left), Self::Workspace(right)) => left.cmp(right),
+            (Self::Manifest(left), Self::Manifest(right)) => left.cmp(right),
+            (Self::Workspace(_), Self::Manifest(_)) => Ordering::Less,
+            (Self::Manifest(_), Self::Workspace(_)) => Ordering::Greater,
+        };
+        self.key().cmp(&other.key()).then_with(structural)
     }
 }
 impl PartialOrd for Entry {
@@ -421,22 +566,40 @@ mod tests {
         let glob = GlobPattern::parse(pattern, &path("m.toml"), point).expect("a valid pattern");
         Candidate::new(id("owner"), path("m.toml"), glob)
     }
-    fn inputs(entries: Vec<FileEntry>) -> WorkspaceInputs {
-        WorkspaceInputs::new(entries, Vec::new(), "{}").expect("distinct test paths")
+    /// Inputs carrying one root package that owns every path, so a listing under test reports only
+    /// what it is about and never the unowned paths of a workspace with no manifest at all.
+    fn inputs(mut entries: Vec<FileEntry>) -> WorkspaceInputs {
+        let at = path(MANIFEST);
+        entries.push(FileEntry::file(at.clone()));
+        let held = vec![(at, owning("root", "platform", &["**"], &[]))];
+        WorkspaceInputs::new(entries, held, "{}").expect("distinct test paths")
     }
     /// A minimal valid manifest, carrying the given `fixtures` list when it is nonempty.
     fn document(id: &str, kind: &str, fixtures: &[&str]) -> Vec<u8> {
-        let mut text = format!("schema = 1\nid = {id:?}\nkind = {kind:?}\nowned = []\n");
-        let quoted: Vec<String> = fixtures.iter().map(|f| format!("{f:?}")).collect();
-        if !quoted.is_empty() {
-            text.push_str(&format!("fixtures = [{}]\n", quoted.join(", ")));
+        owning(id, kind, &[], fixtures)
+    }
+    /// [`document`], declaring an `owned` list as well: what the package actually claims.
+    fn owning(id: &str, kind: &str, owned: &[&str], fixtures: &[&str]) -> Vec<u8> {
+        let list = |patterns: &[&str]| {
+            let quoted: Vec<String> = patterns.iter().map(|p| format!("{p:?}")).collect();
+            quoted.join(", ")
+        };
+        let head = format!("schema = 1\nid = {id:?}\nkind = {kind:?}\n");
+        let mut text = format!("{head}owned = [{}]\n", list(owned));
+        if !fixtures.is_empty() {
+            text.push_str(&format!("fixtures = [{}]\n", list(fixtures)));
         }
         text.into_bytes()
     }
     /// Inputs whose listing tracks every named manifest as a plain file.
     fn workspace(manifests: Vec<(&str, Vec<u8>)>) -> WorkspaceInputs {
+        listing(manifests, &[])
+    }
+    /// [`workspace`], plus `tracked` ordinary files the listing also carries.
+    fn listing(manifests: Vec<(&str, Vec<u8>)>, tracked: &[&str]) -> WorkspaceInputs {
         let entry = |(at, _): &(&str, Vec<u8>)| FileEntry::file(path(at));
-        let files = manifests.iter().map(entry).collect();
+        let mut files: Vec<FileEntry> = manifests.iter().map(entry).collect();
+        files.extend(tracked.iter().map(|at| FileEntry::file(path(at))));
         let held = manifests.into_iter().map(|(at, bytes)| (path(at), bytes));
         WorkspaceInputs::new(files, held.collect(), "{}").expect("distinct test paths")
     }
@@ -499,7 +662,7 @@ mod tests {
                 panic!("malformed case {case:?}");
             };
             let entry = FileEntry::symlink(path(at), String::from(target));
-            let Some(findings) = inputs(vec![entry]).check() else {
+            let Err(findings) = inputs(vec![entry]).check() else {
                 assert!(contained.is_some(), "{case:?} escapes");
                 continue;
             };
@@ -515,7 +678,7 @@ mod tests {
         }
         // The exact rendering, over a target chosen to wreck a report were it ever echoed.
         let hostile = FileEntry::symlink(path("a/link"), "../../\npackage=x".into());
-        let report = inputs(vec![hostile]).check().expect("an escape");
+        let report = inputs(vec![hostile]).check().expect_err("an escape");
         assert_eq!(report.to_string(), "BXW0048 a/link package= candidates=[]");
     }
     #[test]
@@ -583,7 +746,7 @@ mod tests {
     #[test]
     fn unpruned_parse_failures_reach_the_report() {
         let manifests = vec![("a/boxology.toml", OPAQUE.to_vec())];
-        let report = workspace(manifests).check().expect("the parse failed");
+        let report = workspace(manifests).check().expect_err("the parse failed");
         assert_eq!(report.to_string(), rejected("a/boxology.toml").to_string());
     }
     /// BXW0042 names every manifest carrying a duplicated identity, each at its own path.
@@ -594,7 +757,9 @@ mod tests {
             ("b/boxology.toml", document("twin", "box", &[])),
             ("c/boxology.toml", document("alone", "box", &[])),
         ];
-        let report = workspace(manifests).check().expect("twin declared twice");
+        let report = workspace(manifests)
+            .check()
+            .expect_err("twin declared twice");
         assert_eq!(
             report.to_string().lines().collect::<Vec<_>>(),
             [
@@ -630,10 +795,144 @@ mod tests {
              candidates=[tools tools/deep/boxology.toml boxology.toml]"
         );
     }
+    /// D3: every tracked file classifies exactly once. The fixture is built so a wrong answer is
+    /// reachable — the claiming package is nested two levels deep; `pkg/deepsrc/a.rs` is a
+    /// prefix-colliding sibling of its root that a bare-prefix re-anchoring would hand it; and the
+    /// pruned fixture manifest, which is no package, is still a tracked path that must classify.
+    #[test]
+    fn every_tracked_file_classifies_exactly_once() {
+        let claimed = [MANIFEST, "pkg/deepsrc/*"];
+        let deep = owning("deep", "box", &[MANIFEST, "src/*.rs"], &[]);
+        let manifests = vec![
+            (
+                "boxology.toml",
+                owning("root", "platform", &claimed, &["corpus/**"]),
+            ),
+            ("corpus/bad/boxology.toml", OPAQUE.to_vec()),
+            ("pkg/deep/boxology.toml", deep),
+        ];
+        let inputs = listing(manifests, &["pkg/deep/src/a.rs", "pkg/deepsrc/a.rs"]);
+        let checked = inputs.check().expect("each path classifies");
+        let ids: Vec<&str> = checked.packages().iter().map(|p| p.id().as_str()).collect();
+        // Walk order is ("root", "deep"); `packages` is sorted by identity, so this is not it.
+        assert_eq!(ids, ["deep", "root"]);
+        let seen: Vec<(&str, &str, Option<&str>)> = checked
+            .classifications()
+            .iter()
+            .map(|c| (c.package().as_str(), c.path().as_str(), c.derived_output()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("deep", "pkg/deep/boxology.toml", None),
+                ("deep", "pkg/deep/src/a.rs", None),
+                ("root", "boxology.toml", None),
+                ("root", "corpus/bad/boxology.toml", None),
+                ("root", "pkg/deepsrc/a.rs", None),
+            ]
+        );
+        assert_eq!(
+            checked.render_report().lines().collect::<Vec<_>>(),
+            [
+                "deep pkg/deep/boxology.toml derived=",
+                "deep pkg/deep/src/a.rs derived=",
+                "root boxology.toml derived=",
+                "root corpus/bad/boxology.toml derived=",
+                "root pkg/deepsrc/a.rs derived=",
+            ]
+        );
+    }
+    /// BXW0044 codes a path no package claims; BXW0045 codes one two packages claim, naming every
+    /// claim of every rival. Both payloads below are deliberately *unsorted*: `zulu` is the root
+    /// package and leads because the walk reached it first, not because "zulu" sorts first, and its
+    /// two claims on `pkg/x/f.rs` render in declaration order, not in pattern order.
+    #[test]
+    fn unowned_and_overlapping_paths_are_coded() {
+        let owned = [MANIFEST, "pkg/x/*.rs", "pkg/**"];
+        let alpha = owning("alpha", "box", &[MANIFEST, "f.rs"], &[]);
+        let zulu = owning("zulu", "platform", &owned, &[]);
+        let manifests = vec![("boxology.toml", zulu), ("pkg/x/boxology.toml", alpha)];
+        let inputs = listing(manifests, &["orphan.rs", "pkg/x/f.rs"]);
+        let report = inputs.check().expect_err("one orphan and two overlaps");
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0044 orphan.rs package= candidates=[]",
+                "BXW0045 pkg/x/boxology.toml package= candidates=[zulu boxology.toml pkg/**,\
+                 alpha pkg/x/boxology.toml boxology.toml]",
+                "BXW0045 pkg/x/f.rs package= candidates=[zulu boxology.toml pkg/x/*.rs,\
+                 zulu boxology.toml pkg/**,alpha pkg/x/boxology.toml f.rs]",
+            ]
+        );
+        let [Entry::Workspace(unowned), _, Entry::Workspace(overlap)] = report.as_slice() else {
+            panic!("three workspace findings: {report}");
+        };
+        assert_eq!(unowned.code(), "BXW0044");
+        assert_eq!(unowned.path(), &path("orphan.rs"));
+        assert_eq!(unowned.package(), None);
+        assert_eq!(unowned.candidates(), []);
+        assert_eq!(unowned.rule(), UNOWNED_TEXT);
+        assert_eq!(unowned.rule_source(), WALK_SOURCE);
+        assert_eq!(overlap.rule(), OVERLAP_TEXT);
+        assert_eq!(
+            overlap.package(),
+            None,
+            "no rival is accountable for the other"
+        );
+        let named: Vec<(&str, &str, &str)> = overlap
+            .candidates()
+            .iter()
+            .map(|c| {
+                (
+                    c.package().as_str(),
+                    c.manifest_path().as_str(),
+                    c.claim().as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("zulu", "boxology.toml", "pkg/x/*.rs"),
+                ("zulu", "boxology.toml", "pkg/**"),
+                ("alpha", "pkg/x/boxology.toml", "f.rs"),
+            ]
+        );
+    }
+    /// Two distinct entries can render identically: a comma and a space are literal in the glob
+    /// dialect, so one candidate's pattern spells what two candidates render. The order must still
+    /// separate them, or a `BTreeSet` or `dedup` over a report would swallow one.
+    #[test]
+    fn identically_rendered_entries_stay_distinct() {
+        let entry = |named| Entry::Workspace(Finding::new(UNOWNED, path("a.rs"), None, named));
+        let one = entry(vec![claim("a,owner m.toml b")]);
+        let two = entry(vec![claim("a"), claim("b")]);
+        assert_eq!(one.to_string(), two.to_string());
+        assert_ne!(one, two);
+        assert_ne!(one.cmp(&two), Ordering::Equal);
+    }
+    /// D3's "exactly once" counts *packages*, not matches: `solo/y.rs` below is claimed by one
+    /// package under two of its own patterns and still classifies, while `a/x.rs` is claimed by
+    /// two packages and is the whole report. Within one package `owned` names precede `fixtures`.
+    #[test]
+    fn one_package_claiming_a_path_twice_is_one_claim() {
+        let owned = [MANIFEST, "a/*.rs", "solo/**"];
+        let zulu = owning("zulu", "platform", &owned, &["a/x.rs", "solo/*.rs"]);
+        let alpha = owning("alpha", "box", &[MANIFEST, "x.rs"], &[]);
+        let manifests = vec![("boxology.toml", zulu), ("a/boxology.toml", alpha)];
+        let inputs = listing(manifests, &["a/x.rs", "solo/y.rs"]);
+        let report = inputs.check().expect_err("only a/x.rs overlaps");
+        assert_eq!(
+            report.to_string(),
+            "BXW0045 a/x.rs package= candidates=[zulu boxology.toml a/*.rs,\
+             zulu boxology.toml a/x.rs,alpha a/boxology.toml x.rs]"
+        );
+    }
     #[test]
     fn public_seam_is_send_sync_static() {
         fn bounds<T: Send + Sync + 'static>() {}
         bounds::<(FileEntry, InputError, WorkspaceInputs, Package)>();
         bounds::<(Candidate, Finding, Entry, Findings)>();
+        bounds::<(Workspace, FileClassification)>();
     }
 }
