@@ -15,6 +15,7 @@ mod determinism_meta;
 mod determinism_publish;
 mod determinism_run;
 mod determinism_verify;
+mod generated_project_subject;
 mod generator_model_subject;
 mod links;
 mod records;
@@ -30,6 +31,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-generator-model",
     "boxology-generator-writer",
     "boxology-generator",
+    "boxology-init",
     "boxology-manifest",
     "boxology-schema",
     "boxology-classifier",

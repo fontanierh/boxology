@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = []
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+boxology = { version = "=0.0.0", path = "../boxology/crates/boxology" }
+boxology-contract = { version = "=0.0.0", path = "../boxology/crates/boxology-contract" }
+boxology-http = { version = "=0.0.0", path = "../boxology/crates/boxology-http" }
+boxology-runtime = { version = "=0.0.0", path = "../boxology/crates/boxology-runtime" }
