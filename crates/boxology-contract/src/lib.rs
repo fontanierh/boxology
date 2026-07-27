@@ -33,7 +33,7 @@ pub use descriptor::{
 };
 pub use dispatch::{ErasedCallTarget, ErasedTarget, call_guarded};
 pub use error::{CallError, Detail, ErasedCallError};
-pub use identifier::is_ordinary_rust_identifier;
+pub use identifier::{canonicalize_ordinary_rust_identifier, is_ordinary_rust_identifier};
 pub use identity::{BoxId, CapabilityId, CapabilityName, ContractRevision, IdentityError};
 pub use implementation::{
     ImplementationDescriptor, ImplementationDescriptorError, ImportDescriptor,

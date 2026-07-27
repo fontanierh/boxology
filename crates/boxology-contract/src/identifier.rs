@@ -1,5 +1,18 @@
 //! Rust identifier rules shared by contract producers and readers.
 
+use unicode_normalization::UnicodeNormalization;
+
+/// NFC-normalizes `value` and returns it when it is an ordinary, non-raw Rust
+/// 2024 identifier.
+///
+/// Validation uses the Rust 2024 lexical identifier profile described by
+/// [`is_ordinary_rust_identifier`]. Returning the NFC spelling gives source
+/// parsers the same canonical identity that compiler macro tokens carry.
+pub fn canonicalize_ordinary_rust_identifier(value: &str) -> Option<String> {
+    let canonical = value.nfc().collect::<String>();
+    is_normalized_ordinary_rust_identifier(&canonical).then_some(canonical)
+}
+
 /// Returns whether `value` is an ordinary, non-raw Rust 2024 identifier.
 ///
 /// This is the Rust 2024 lexical identifier profile: an `XID_Start` character
@@ -10,6 +23,10 @@
 /// as ordinary identifiers. The input is a Rust `&str`, so malformed UTF-8 and
 /// non-scalar Unicode values cannot reach this predicate.
 pub fn is_ordinary_rust_identifier(value: &str) -> bool {
+    canonicalize_ordinary_rust_identifier(value).is_some()
+}
+
+fn is_normalized_ordinary_rust_identifier(value: &str) -> bool {
     if value.is_empty() || value.starts_with("r#") || is_strict_or_reserved_keyword(value) {
         return false;
     }
@@ -19,7 +36,7 @@ pub fn is_ordinary_rust_identifier(value: &str) -> bool {
         return false;
     };
     if first == '_' {
-        if characters.next().is_none() {
+        if !characters.next().is_some_and(is_allowed_continue) {
             return false;
         }
     } else if !unicode_ident::is_xid_start(first) {
@@ -93,7 +110,23 @@ fn is_strict_or_reserved_keyword(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_ordinary_rust_identifier;
+    use super::{canonicalize_ordinary_rust_identifier, is_ordinary_rust_identifier};
+
+    #[test]
+    fn canonicalizer_returns_one_nfc_identity_for_equivalent_spellings() {
+        let canonical = Some("é".to_owned());
+        assert_eq!(canonicalize_ordinary_rust_identifier("e\u{301}"), canonical);
+        assert_eq!(canonicalize_ordinary_rust_identifier("é"), canonical);
+        assert!(is_ordinary_rust_identifier("e\u{301}"));
+        assert!(is_ordinary_rust_identifier("é"));
+    }
+
+    #[test]
+    fn invalid_spellings_remain_rejected_after_normalization() {
+        for value in ["gen", "r#gen", "\u{fffd}", "a\0b", "a\u{200c}"] {
+            assert_eq!(canonicalize_ordinary_rust_identifier(value), None);
+        }
+    }
 
     #[test]
     fn identifier_profile_has_exact_ascii_and_unicode_boundaries() {
@@ -116,6 +149,8 @@ mod tests {
             ("a\u{301}b", true),
             ("", false),
             ("_", false),
+            ("_😀", false),
+            ("_\u{200c}", false),
             ("9lives", false),
             ("\u{301}", false),
             ("0变量", false),
