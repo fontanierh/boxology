@@ -38,6 +38,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-classifier"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "boxology-schema",
+ "serde_json",
+]
+
+[[package]]
 name = "boxology-contract"
 version = "0.0.0"
 dependencies = [
