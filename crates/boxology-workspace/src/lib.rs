@@ -71,6 +71,23 @@ const CLAIMED_TEXT: &str = "at most one declared crate entry may match a Cargo w
 const CLAIMED: Rule = ("BXW0053", CLAIMED_TEXT);
 const ROLE_TEXT: &str = "a declared crate role must be one its package kind can host";
 const ROLE: Rule = ("BXW0054", ROLE_TEXT);
+/// The normative source of the role-pair edge table this crate's edge policy enforces.
+const EDGE_SOURCE: &str = "boxology-details/08-rust-build-topology.md edge table";
+/// A coded edge rule and the normative source that states it, carried together because the two do
+/// not agree across the block: 08's six-row table states BXW0055 and BXW0056 and *only* those two,
+/// and D4's fail-closed posture answers every pair it is silent about. Pointing BXW0059 at
+/// [`EDGE_SOURCE`] would send a reader to a table holding no row for any pair it reports.
+type EdgeRule = (Rule, &'static str);
+const CONTRACT_TEXT: &str = "a box contract crate must depend on no box implementation";
+const CONTRACT: EdgeRule = (("BXW0055", CONTRACT_TEXT), EDGE_SOURCE);
+const FOREIGN_TEXT: &str = "a box implementation must depend on no foreign box implementation";
+const FOREIGN: EdgeRule = (("BXW0056", FOREIGN_TEXT), EDGE_SOURCE);
+// The sentence admits *scope* because the verdict turns on it: same-package contract-to-contract is
+// reported and foreign contract-to-contract is not, so a role-only wording would tell a reader that
+// contract-to-contract is never legal, contradicting this checker and 08's own paragraph alike.
+const IMPOSSIBLE_TEXT: &str =
+    "no rule permits an edge between these crate roles at this package scope";
+const IMPOSSIBLE: EdgeRule = (("BXW0059", IMPOSSIBLE_TEXT), D4_SOURCE);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
@@ -88,7 +105,12 @@ const CARGO_MANIFEST: &str = "Cargo.toml";
 // unreadable `cargo metadata` document, BXW0051 an unmapped Cargo workspace member, BXW0052 an
 // unmatched `[[crates]]` entry, BXW0053 a member two entries claim, BXW0054 an impossible crate
 // role. That closes T2's block: nothing here is allocated and unlanded, and T3's edge policy opens
-// at BXW0055 exactly as recorded on the tracker.
+// at BXW0055 exactly as recorded on the tracker. T3 reserves BXW0055-BXW0060 and lands three of
+// them here: BXW0055 a box contract crate depending on a box implementation, BXW0056 a box
+// implementation depending on a foreign one, BXW0059 an edge between roles no rule can permit.
+// Allocated to the next slice, and unlanded until it merges: BXW0057 an undeclared foreign
+// contract, BXW0058 an unselected composition target, BXW0060 a non-platform path edge onto a
+// non-member. A slice's own codes are therefore non-contiguous while the block stays dense.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -178,7 +200,12 @@ impl WorkspaceInputs {
         // a BXW0052 per declared entry beside BXW0050 answers one located defect with a cascade.
         defects.extend(roles(&packages));
         if unreadable.is_empty() {
-            defects.extend(map(&packages, &cargo_members));
+            // The edge policy reads the association matching just computed, so it is gated on the
+            // same readable document and needs no second one: an unread document proves no member,
+            // and so no edge either.
+            let (roled, unmatched) = map(&packages, &cargo_members);
+            defects.extend(unmatched);
+            defects.extend(edges(&roled));
         }
         defects.extend(unreadable);
         if let Some(findings) = Findings::new(defects) {
@@ -387,19 +414,33 @@ fn spell(package: &Package, entry: &CrateEntry) -> String {
 /// resolves it. The owning platform package is *no* escape hatch: its kind hosts only `platform`, so
 /// mapping a fixture box implementation declares a false role. A member at the workspace root, or at
 /// a declaring package's own root, is likewise unmatchable: no `[[crates]].path` is empty or `.`.
-fn map(packages: &[Package], members: &[CargoMember]) -> Vec<Entry> {
+///
+/// The [`Mapped`] list is the other half of the answer: the association this function already
+/// computes, returned instead of discarded, because the edge policy judges roles and a role exists
+/// only where a member matched exactly one entry its package kind can host.
+fn map<'a>(packages: &'a [Package], members: &'a [CargoMember]) -> (Vec<Mapped<'a>>, Vec<Entry>) {
     let mut declared: Vec<(&Package, &CrateEntry)> = Vec::new();
     for package in packages {
         declared.extend(package.manifest.crates().iter().map(|e| (package, e)));
     }
-    let mut defects = Vec::new();
+    let (mut roled, mut defects) = (Vec::new(), Vec::new());
     for member in members {
         // Walk order, not sorted order: `check` sorts packages by identity only after this runs,
         // so the outermost claimant leads, exactly as a candidate list does.
         let claiming = |(p, e): &&(&Package, &CrateEntry)| maps(p, e, member);
         let claims: Vec<_> = declared.iter().filter(claiming).collect();
         let rule = match claims.as_slice() {
-            [_] => continue,
+            [claim] => {
+                let (package, entry) = **claim;
+                if hosts(package.manifest.kind(), entry.role()) {
+                    roled.push(Mapped {
+                        member,
+                        package,
+                        entry,
+                    });
+                }
+                continue;
+            }
             [] => UNMAPPED,
             _ => CLAIMED,
         };
@@ -418,7 +459,19 @@ fn map(packages: &[Package], members: &[CargoMember]) -> Vec<Entry> {
         let found = Finding::about(UNMATCHED, D4_SOURCE, at, owner, payload);
         defects.push(Entry::Workspace(found));
     }
-    defects
+    (roled, defects)
+}
+/// One Cargo member, the declared entry that maps it, and the package declaring that entry: the
+/// association [`map`] computes, retained for the edge policy alone. A member no entry maps
+/// (BXW0051), one two entries claim (BXW0053), and one whose entry declares a role its package kind
+/// cannot host (BXW0054) each yield **none** of these: every one of them is already a located
+/// finding naming the document to change, and an edge verdict about it would rest on a role that
+/// does not exist. The workspace-root member is the permanent case — no `[[crates]].path` spells it
+/// — so the edge policy never assumes role coverage and is total over whatever subset mapped.
+struct Mapped<'a> {
+    member: &'a CargoMember,
+    package: &'a Package,
+    entry: &'a CrateEntry,
 }
 /// Reports whether a package of `kind` can host a crate of `role`.
 ///
@@ -458,6 +511,96 @@ fn roles(packages: &[Package]) -> Vec<Entry> {
         }
     }
     defects
+}
+// ======================= The edge policy: BXW0055, BXW0056, BXW0059 =======================
+/// Judges every declared edge whose source and target are both roled members, and reports each one
+/// no rule of this slice permits — one finding per declared entry, located at the *source* member's
+/// own `Cargo.toml` and naming the target package, the target directory, and the kind word.
+///
+/// Three target shapes are skipped rather than judged, and each for its own reason.
+/// [`EdgeTarget::Root`] is the workspace-root crate, which no `[[crates]].path` can spell and which
+/// BXW0051 therefore names permanently: it is *inside* the workspace, so it is no BXW0060 candidate
+/// either, and it carries no role, so every sentence below is about something it does not have.
+/// Skipping it is the same per-member anti-cascade as any other unroled member, not a hole. That
+/// second net makes the first unobservable, so **no test of this slice can pin the `Root` skip**:
+/// PR1 pins the reading, and BXW0060 — the first rule treating `Root` and out-of-root differently
+/// — inherits the obligation to pin it.
+/// [`EdgeTarget::OutOfRoot`] and an in-root directory no member occupies are BXW0060's question,
+/// the next slice's, and are answered nowhere here.
+///
+/// **Known v0 limit, recorded in the code and not only in the task spec.** A crate that reaches
+/// another crate's source through `include!` declares no Cargo dependency, so that edge is absent
+/// from the `cargo metadata` document and invisible to every rule in this section. Three instances
+/// exist in this repository today — `crates/fixtures/hello/implementation/src/lib.rs`,
+/// `crates/boxology-http/src/binding.rs`, and `crates/boxology-generator/src/lib.rs` — so a
+/// forbidden dependency concealed that way passes. Closing it needs a source-level check, which is
+/// no part of reading one metadata document.
+fn edges(roled: &[Mapped]) -> Vec<Entry> {
+    let mut defects = Vec::new();
+    for source in roled {
+        for held in source.member.edges() {
+            let EdgeTarget::InRoot(at) = &held.target else {
+                continue;
+            };
+            let occupies = |other: &&Mapped| other.member.crate_dir() == Some(at);
+            let Some(target) = roled.iter().find(occupies) else {
+                continue;
+            };
+            let same = source.package.id() == target.package.id();
+            let Some((rule, stated)) = judged(source.entry.role(), target.entry.role(), same)
+            else {
+                continue;
+            };
+            // Two grammar-proofed values and one `&'static str` this crate chose: no Cargo package
+            // name, rename, cfg string, or absolute path is echoed, and none of them is even read.
+            let (kind, id) = (held.kind.word(), target.package.id());
+            let payload = format!("{id} {} {kind}", at.as_str());
+            let owner = Some(source.package.id().clone());
+            let located = source.member.manifest_path().clone();
+            defects.push(Entry::Workspace(Finding::about(
+                rule, stated, located, owner, payload,
+            )));
+        }
+    }
+    defects
+}
+/// Reports the rule an edge from a `source`-role crate onto a `target`-role crate breaks, and `None`
+/// for one this slice permits. `same` is owning-package identity — the only thing separating a box's
+/// own contract from a foreign one, and never role equality, since two packages host the same roles.
+///
+/// **What each answer rests on, counted cell by cell rather than asserted** — T2 shipped a slice
+/// claiming textual determination where it had inferred, so the whole grid is apportioned here.
+/// Eighteen cells: the 4x4 role grid, with the two same-role pairs split by package scope.
+///
+/// - **08's text, 2 cells.** Contract onto any implementation, either scope ("Box contract | Any
+///   box implementation | Forbidden"), and implementation onto a *foreign* implementation.
+/// - **D4's fail-closed posture, 7 cells**, cited as such by [`IMPOSSIBLE`]'s own source:
+///   same-package implementation pairs, contract and implementation onto a composition,
+///   composition onto a composition, and platform onto each of the other three roles.
+/// - **Inference, 1 cell, marked.** Contract onto a *same-package* sibling contract: no row states
+///   it and no recorded silence covers it, so it takes the answer the tracker gave every other
+///   unlisted pair — a false forbid surfaces loudly at adoption, a false allow never does.
+/// - **Deferred, 4 cells, not decided.** Implementation onto a contract, composition onto an
+///   implementation or a contract, contract onto a *foreign* contract: each is half allowed by 08
+///   and half BXW0057's or BXW0058's question, so this slice returns "allowed" and no report claims
+///   it checked them. BXW0060 is the third deferred rule and no cell of this grid at all — a
+///   non-member target has no role.
+/// - **The `#325` silence-1 resolution, 4 cells.** Every role onto platform, resting on **nothing
+///   08 states**: its one platform sentence in that section restricts platform crates as *sources*
+///   ("they cannot be used as passthroughs"), and permits nothing as a target.
+fn judged(source: CrateRole, target: CrateRole, same: bool) -> Option<EdgeRule> {
+    use CrateRole::{BoxContract as C, BoxImplementation as I, Composition as X, Platform as P};
+    match (source, target) {
+        // Allowed on the `#325` silence-1 resolution alone — 08 spells no such row.
+        (_, P) => None,
+        // Deferred to BXW0057 and BXW0058, which is not the same answer as allowed: see above.
+        (I, C) | (X, I) | (X, C) => None,
+        (C, C) if !same => None,
+        (C, I) => Some(CONTRACT),
+        (I, I) if !same => Some(FOREIGN),
+        (I, I) | (C, C) | (C, X) | (I, X) => Some(IMPOSSIBLE),
+        (X, X) | (P, I) | (P, C) | (P, X) => Some(IMPOSSIBLE),
+    }
 }
 /// Reads the workspace members of a `cargo metadata` document. `None` is BXW0050: the whole
 /// document is a defect, never a partial reading, so every `None` below — malformed JSON, a missing
@@ -502,7 +645,6 @@ enum EdgeKind {
 impl EdgeKind {
     /// Returns the `&'static str` this crate chose for the kind. A rendered report echoes it
     /// safely because it is this crate's own literal and no byte of the document.
-    #[allow(dead_code, reason = "the next slice judges these edges")]
     fn word(self) -> &'static str {
         match self {
             Self::Normal => "normal",
@@ -775,7 +917,6 @@ impl CargoMember {
     /// own shape and nothing outside this crate judges it. Registry dependencies are absent —
     /// they are no edge at all — and an edge appears once per declared entry, so one target
     /// reached twice under two `target` cfgs is two edges, as the document declares it.
-    #[allow(dead_code, reason = "the next slice judges these edges")]
     fn edges(&self) -> &[DeclaredEdge] {
         &self.edges
     }
@@ -1113,6 +1254,15 @@ mod tests {
         }
         text.into_bytes()
     }
+    /// A package manifest of `kind` owning its own manifest and declaring `entries`, plus the
+    /// `[composition]` section BXW0022 requires of a composition-kind package.
+    fn roled(id: &str, kind: &str, entries: &[(&str, &str, &str)]) -> Vec<u8> {
+        let mut base = owning(id, kind, &[MANIFEST], &[]);
+        if kind == "composition" {
+            base.extend_from_slice(b"[composition]\nboxes = [\"hello\"]\n");
+        }
+        crates(base, entries)
+    }
     /// Inputs whose listing tracks every named manifest as a plain file.
     fn workspace(manifests: Vec<(&str, Vec<u8>)>) -> WorkspaceInputs {
         listing(manifests, &[])
@@ -1185,7 +1335,7 @@ mod tests {
     /// loudly instead of going unproven.
     const ALL_CODES: &[&str] = &[
         "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
-        "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054",
+        "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054", "BXW0055", "BXW0056", "BXW0059",
     ];
     /// One minimal workspace per code, ordered as `ALL_CODES` is: each is a shape the suite above
     /// already exercises, reduced to the least input that provokes its code, so the golden below
@@ -1207,6 +1357,25 @@ mod tests {
         // Two manifests resolving one entry each onto the same member: what BXW0053 needs.
         let deep = crates(owning("deep", "box", &[MANIFEST], &[]), &inner);
         let twins = vec![(MANIFEST, mapping("sub/c")), ("sub/boxology.toml", deep)];
+        // Two crates of one box package, the first declaring a normal edge onto the second: only
+        // the source role separates the contract-to-implementation row from the same-package pair
+        // no role can permit. Both members map, so the edge finding is the whole report.
+        let near = edge("null", Some("/w/t"), "");
+        let sibling = |role: &str| {
+            let held: [(&str, &str, &str); 2] =
+                [("s", "s", role), ("t", "t", "box-implementation")];
+            let listed = [("s", "s", near.as_str()), ("t", "t", "")];
+            let two = solo(roled("solo", "box", &held));
+            mapped(two, &[], &depending(&listed, &[]))
+        };
+        // Two box packages, the first's implementation reaching the second's: foreign by identity.
+        let far = edge("\"dev\"", Some("/w/b/t"), "");
+        let sole = |name: &'static str| [(name, name, "box-implementation")];
+        let foreign = vec![
+            ("a/boxology.toml", roled("a", "box", &sole("s"))),
+            ("b/boxology.toml", roled("b", "box", &sole("t"))),
+        ];
+        let across = depending(&[("a/s", "s", far.as_str()), ("b/t", "t", "")], &[]);
         vec![
             (
                 "BXW0042",
@@ -1257,6 +1426,9 @@ mod tests {
                 mapped(twins, &[], &metadata(&[("sub/c", "c")], &[])),
             ),
             ("BXW0054", one(boxed, &one_member)),
+            ("BXW0055", sibling("box-contract")),
+            ("BXW0056", mapped(foreign, &[], &across)),
+            ("BXW0059", sibling("box-implementation")),
         ]
     }
     /// The rendered wording of every code, byte for byte, as `<code> <rule> <source>` per line in
@@ -1279,6 +1451,9 @@ BXW0051 every Cargo workspace member must match one declared crate entry boxolog
 BXW0052 every declared crate entry must match one Cargo workspace member specs/s5-manifest-and-validation.md D4
 BXW0053 at most one declared crate entry may match a Cargo workspace member boxology-details/02-packages.md crate roles
 BXW0054 a declared crate role must be one its package kind can host specs/s5-manifest-and-validation.md D4
+BXW0055 a box contract crate must depend on no box implementation boxology-details/08-rust-build-topology.md edge table
+BXW0056 a box implementation must depend on no foreign box implementation boxology-details/08-rust-build-topology.md edge table
+BXW0059 no rule permits an edge between these crate roles at this package scope specs/s5-manifest-and-validation.md D4
 ";
     #[test]
     fn rule_text_and_sources_are_locked() {
@@ -2355,6 +2530,209 @@ BXW0054 a declared crate role must be one its package kind can host specs/s5-man
             report.to_string(),
             "BXW0050 Cargo.toml package= candidates=[]\n\
              BXW0054 boxology.toml package=solo candidates=[c]"
+        );
+    }
+    /// The crate role one case letter spells, and the one package kind that hosts it.
+    fn plays(letter: &str) -> (&'static str, &'static str) {
+        match letter {
+            "i" => ("box", "box-implementation"),
+            "c" => ("box", "box-contract"),
+            "x" => ("composition", "composition"),
+            "p" => ("platform", "platform"),
+            other => panic!("unknown role {other:?}"),
+        }
+    }
+    /// Every judged cell of the role-pair table, the *permitted* ones included: two crates joined
+    /// by one plain edge, where nothing differs between cases but the two roles and whether one
+    /// package or two own them. A permitted cell is a workspace with no finding at all, so the
+    /// table is asserted in both directions rather than read back off the code that answers it.
+    /// Same-package cases are spelled only where one kind hosts both roles, which is what makes
+    /// "same package" observably different from "same role".
+    #[test]
+    fn role_pair_edges_are_judged() {
+        // "<source role> <target role> <same|foreign>", plus the code a forbidden pair reports.
+        let cases = "i i same BXW0059,i i foreign BXW0056,i c same,i c foreign,\
+                     i x foreign BXW0059,i p foreign,c i same BXW0055,c i foreign BXW0055,\
+                     c c same BXW0059,c c foreign,c x foreign BXW0059,c p foreign,\
+                     x i foreign,x c foreign,x x same BXW0059,x x foreign BXW0059,x p foreign,\
+                     p i foreign BXW0059,p c foreign BXW0059,p x foreign BXW0059,\
+                     p p same,p p foreign";
+        for case in cases.split(',') {
+            let field: Vec<&str> = case.split(' ').collect();
+            let [from, onto, scope, expected @ ..] = field.as_slice() else {
+                panic!("malformed case {case:?}");
+            };
+            let (same, (skind, srole), (tkind, trole)) =
+                (*scope == "same", plays(from), plays(onto));
+            let at = if same { "a/t" } else { "b/t" };
+            let target: [(&str, &str, &str); 1] = [("t", "t", trole)];
+            let mut first: Vec<(&str, &str, &str)> = vec![("s", "s", srole)];
+            let mut held = Vec::new();
+            if same {
+                first.push(target[0]);
+            } else {
+                held.push(("b/boxology.toml", roled("b", tkind, &target)));
+            }
+            held.insert(0, ("a/boxology.toml", roled("a", skind, &first)));
+            let one = edge("null", Some(&format!("/w/{at}")), "");
+            let listed = [("a/s", "s", one.as_str()), (at, "t", "")];
+            let checked = mapped(held, &[], &depending(&listed, &[])).check();
+            let owner = if same { "a" } else { "b" };
+            match (&checked, expected) {
+                (Ok(_), []) => continue,
+                (Err(report), [code]) => assert_eq!(
+                    report.to_string(),
+                    format!("{code} a/s/Cargo.toml package=a candidates=[{owner} {at} normal]"),
+                    "{case:?}"
+                ),
+                _ => panic!("{case:?} answered {checked:?}"),
+            }
+        }
+    }
+    /// Location, count and scope, all three provable at once — the shape S5-T2 lacked, where every
+    /// fixture was a one-package workspace at the root manifest. Three packages, two of them
+    /// *nested*, so a crate directory re-anchors under its own package root and a reading anchored
+    /// at the workspace root mislocates all four crates. The violating sources are neither the first
+    /// package in walk order nor the first member in the document's order. One source declares
+    /// **three** forbidden edges — two of which render identically, being one target reached twice
+    /// under two `cfg`s, so the pair is *countable* but not attributable: the only thing separating
+    /// them is the `target` string, deliberately never read — and a second source declares a fourth
+    /// from its own manifest, so a per-source dedupe, a first-violation-only reading, and a constant
+    /// location each lose a line. Beside them sit a legal implementation-to-own-contract edge, a
+    /// legal edge onto platform material, and a registry dependency: a rule that reports every edge
+    /// fails here. The two box packages' identities invert their Cargo names, so a report ordered by
+    /// the member order the findings are produced in comes out backwards, and all three edge kinds
+    /// are declared, so a kind-collapsing payload fails.
+    ///
+    /// The workspace also carries **one unmapped member and one unowned file**, so edge findings
+    /// interleave with a BXW0051 and a BXW0044 in one report. That asserts the per-member
+    /// anti-cascade instead of only documenting it: suppressing the whole edge phase under any
+    /// mapping or classification defect — the simpler alternative — would answer a workspace with
+    /// both a missing `[[crates]]` entry and a forbidden edge with only the first.
+    #[test]
+    fn edge_findings_locate_count_and_scope() {
+        let tools: [(&str, &str, &str); 1] = [("a-tools", "tools", "platform")];
+        let zulu: [(&str, &str, &str); 2] = [
+            ("aa-contract", "contract", "box-contract"),
+            ("aa-impl", "impl", "box-implementation"),
+        ];
+        let alpha: [(&str, &str, &str); 2] = [
+            ("zz-contract", "contract", "box-contract"),
+            ("zz-impl", "impl", "box-implementation"),
+        ];
+        let held = vec![
+            (MANIFEST, roled("root", "platform", &tools)),
+            ("pkg/zulu/boxology.toml", roled("zulu", "box", &zulu)),
+            ("pkg/alpha/boxology.toml", roled("alpha", "box", &alpha)),
+        ];
+        // The two `cfg` variants sit adjacent and render identically, as cargo emits them.
+        let unix = "\"target\":\"cfg(unix)\"";
+        let contract = [
+            edge("\"dev\"", Some("/w/pkg/alpha/impl"), ""),
+            edge("\"dev\"", Some("/w/pkg/alpha/impl"), unix),
+            edge("null", Some("/w/pkg/zulu/impl"), ""),
+        ];
+        let implementation = [
+            edge("\"build\"", Some("/w/pkg/zulu/impl"), ""),
+            edge("null", Some("/w/pkg/alpha/contract"), ""),
+            edge("null", Some("/w/tools"), ""),
+        ];
+        let (three, mixed) = (contract.join(","), implementation.join(","));
+        let registry = edge("null", None, "\"name\":\"serde\"");
+        let members = [
+            ("tools", "a-tools", ""),
+            ("orphan", "an-orphan", ""),
+            ("pkg/zulu/contract", "aa-contract", three.as_str()),
+            ("pkg/zulu/impl", "aa-impl", registry.as_str()),
+            ("pkg/alpha/contract", "zz-contract", ""),
+            ("pkg/alpha/impl", "zz-impl", mixed.as_str()),
+        ];
+        let report = mapped(held, &["stray.rs"], &depending(&members, &[]))
+            .check()
+            .expect_err("four declared edges break the table");
+        let at = "pkg/zulu/contract/Cargo.toml package=zulu";
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0051 orphan/Cargo.toml package= candidates=[]",
+                "BXW0044 stray.rs package= candidates=[]",
+                "BXW0056 pkg/alpha/impl/Cargo.toml package=alpha \
+                 candidates=[zulu pkg/zulu/impl build]",
+                &format!("BXW0055 {at} candidates=[alpha pkg/alpha/impl dev]"),
+                &format!("BXW0055 {at} candidates=[alpha pkg/alpha/impl dev]"),
+                &format!("BXW0055 {at} candidates=[zulu pkg/zulu/impl normal]"),
+            ]
+        );
+        let [_, _, Entry::Workspace(across), Entry::Workspace(down), ..] = report.as_slice() else {
+            panic!("six workspace findings: {report}");
+        };
+        // The literal texts, not the constants they guard.
+        let foreign = "a box implementation must depend on no foreign box implementation";
+        assert_eq!(across.rule(), foreign);
+        let forbidden = "a box contract crate must depend on no box implementation";
+        assert_eq!(down.rule(), forbidden);
+        let source = "boxology-details/08-rust-build-topology.md edge table";
+        assert_eq!(across.rule_source(), source);
+        assert_eq!(down.rule_source(), source);
+        assert_eq!(across.candidates(), [], "an edge names no glob claim");
+    }
+    /// No edge into or out of a member this checker cannot role is judged: the mapping finding
+    /// already names the document to change, and a verdict would rest on a role that does not
+    /// exist. All three ways of lacking one are here — a member no entry maps (BXW0051), one two
+    /// entries claim (BXW0053), and one whose declared role its package kind cannot host (BXW0054)
+    /// — and each is the source of an edge that would be forbidden under the role it is denied
+    /// *and* the target of one. The member at the workspace root is the permanent fourth: no
+    /// `[[crates]].path` spells it, so it is unroled by
+    /// construction, and the edge onto it is skipped rather than called an escape from the
+    /// workspace it sits inside. The last two edges are the next slice's business — an in-root
+    /// directory no member occupies, and one outside the root — and are permitted here rather than
+    /// judged. Four mapping lines, no fifth.
+    #[test]
+    fn unroled_members_produce_no_edge_findings() {
+        let outer: [(&str, &str, &str); 2] = [
+            ("bad", "bad", "box-contract"),
+            ("dup", "pkg/dup", "platform"),
+        ];
+        let inner: [(&str, &str, &str); 3] = [
+            ("bx-c", "contract", "box-contract"),
+            ("bx-i", "impl", "box-implementation"),
+            ("dup", "dup", "box-implementation"),
+        ];
+        let held = vec![
+            (MANIFEST, roled("root", "platform", &outer)),
+            ("pkg/boxology.toml", roled("bx", "box", &inner)),
+        ];
+        let onto = |at: &str| edge("null", Some(at), "");
+        let out = onto("/w/pkg/impl");
+        let listed = [
+            "/w/orphan",
+            "/w/bad",
+            "/w/pkg/dup",
+            "/w",
+            "/w/nowhere",
+            "/elsewhere/x",
+        ];
+        let six: Vec<String> = listed.iter().map(|at| onto(at)).collect();
+        let members = [
+            ("", "at-root", out.as_str()),
+            ("bad", "bad", out.as_str()),
+            ("orphan", "orphan", out.as_str()),
+            ("pkg/contract", "bx-c", &six.join(",")),
+            ("pkg/dup", "dup", out.as_str()),
+            ("pkg/impl", "bx-i", ""),
+        ];
+        let report = mapped(held, &[], &depending(&members, &[]))
+            .check()
+            .expect_err("three members earn no role, and the root member never can");
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0051 Cargo.toml package= candidates=[]",
+                "BXW0051 orphan/Cargo.toml package= candidates=[]",
+                "BXW0053 pkg/dup/Cargo.toml package= \
+                 candidates=[root boxology.toml pkg/dup,bx pkg/boxology.toml dup]",
+                "BXW0054 boxology.toml package=root candidates=[bad]",
+            ]
         );
     }
     #[test]
