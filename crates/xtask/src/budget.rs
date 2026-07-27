@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::process::{Command, Output};
-const LIMIT: u64 = 400;
+const LIMIT: u64 = 600;
 // Bootstrap registry: S7 replaces this with manifest-derived classification (S0 D10).
 const DERIVED_OUTPUT_PATHS: &[&str] = &["crates/fixtures/hello/generated/"];
 struct Entry {
@@ -45,7 +45,7 @@ impl Report {
             text.push_str(&format!("\n  {}", entry.path));
         }
         text.push_str(
-            "\nThe 400-line limit is absolute and has no override; split the PR or re-scope the task.",
+            "\nThe 600-line limit is absolute and has no override; split the PR or re-scope the task.",
         );
         text
     }
@@ -286,19 +286,83 @@ mod tests {
         ));
     }
     #[test]
-    fn limit_is_absolute_at_four_hundred() {
+    fn limit_is_absolute_at_six_hundred() {
         let repo = Repo::new();
         let base = repo.commit("base");
-        repo.write("lines.txt", lines(400));
+        repo.write("lines.txt", lines(600));
         repo.write("blob.bin", [0, 1, 2]);
-        repo.commit("400");
-        assert_eq!(command_result(&repo.0, &base).0, 0);
-        repo.write("lines.txt", lines(401));
-        repo.commit("401");
+        repo.commit("600");
+        assert_eq!(
+            command_result(&repo.0, &base),
+            (
+                0,
+                String::from("budget: PASS (600/600 hand-authored added lines)")
+            )
+        );
+        repo.write("lines.txt", lines(601));
+        repo.commit("601");
         let (code, report) = command_result(&repo.0, &base);
         assert_eq!(code, 1);
-        assert!(report.contains("401/400") && report.contains("no override"));
-        assert!(report.contains("binary paths (0 added lines):\n  blob.bin"));
+        assert_eq!(
+            report,
+            format!(
+                concat!(
+                    "budget: FAIL (601/600 hand-authored added lines)\n",
+                    "BASE: {base}\n",
+                    "MB: {base}\n",
+                    "counted files:\n",
+                    "   601  lines.txt\n",
+                    "excluded paths:\n",
+                    "binary paths (0 added lines):\n",
+                    "  blob.bin\n",
+                    "The 600-line limit is absolute and has no override; split the PR or re-scope the task."
+                ),
+                base = base
+            )
+        );
+    }
+    #[test]
+    fn configured_derived_outputs_are_excluded_from_budget() {
+        let repo = Repo::new();
+        let base = repo.commit("base");
+        let path = "crates/fixtures/hello/generated/large.rs";
+        repo.write(path, lines(601));
+        repo.commit("derived output");
+
+        let report = compute(&repo.0, &base).unwrap();
+        assert_eq!(report.total(), 0);
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(
+            (
+                report.entries[0].path.as_str(),
+                report.entries[0].added,
+                report.entries[0].excluded
+            ),
+            (path, 601, true)
+        );
+        assert_eq!(
+            report.failure(),
+            format!(
+                concat!(
+                    "budget: FAIL (0/600 hand-authored added lines)\n",
+                    "BASE: {base}\n",
+                    "MB: {base}\n",
+                    "counted files:\n",
+                    "excluded paths:\n",
+                    "  crates/fixtures/hello/generated/large.rs\n",
+                    "binary paths (0 added lines):\n",
+                    "The 600-line limit is absolute and has no override; split the PR or re-scope the task."
+                ),
+                base = base
+            )
+        );
+        assert_eq!(
+            command_result(&repo.0, &base),
+            (
+                0,
+                String::from("budget: PASS (0/600 hand-authored added lines)")
+            )
+        );
     }
     #[test]
     fn rename_lock_binary_and_errors_are_handled() {
