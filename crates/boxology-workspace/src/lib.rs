@@ -464,12 +464,14 @@ fn roles(packages: &[Package]) -> Vec<Entry> {
 /// or mistyped field, or a member path [`member`] cannot normalize — is that one coded answer and
 /// not a discarded failure.
 ///
-/// Exactly three top-level names are read, and exactly three of each package: D4's declaration-based
-/// reading is what makes purity over one document sound, and `resolve` — null under the `--no-deps`
-/// invocation T5 owns — is never consulted. A `packages[]` element whose id no `workspace_members`
-/// entry spells is a dependency of the workspace, not a member of it: it is skipped before its
-/// manifest path is normalized, so a registry package living outside the workspace root is no
-/// defect. Ids are matched as opaque strings, never parsed.
+/// Exactly three top-level names are read, and exactly four of each *member* package: D4's
+/// declaration-based reading is what makes purity over one document sound, and `resolve` — null
+/// under the `--no-deps` invocation T5 owns, so consulting it is impossible rather than merely
+/// forbidden — is never consulted. A `packages[]` element whose id no `workspace_members` entry
+/// spells is a dependency of the workspace, not a member of it: it is skipped before its manifest
+/// path is normalized and before its `dependencies` are read, so a registry package living outside
+/// the workspace root, or one an older document spells without that field, is no defect. Ids are
+/// matched as opaque strings, never parsed.
 fn read(document: &str) -> Option<Vec<CargoMember>> {
     let document: Value = serde_json::from_str(document).ok()?;
     let root = document.get("workspace_root")?.as_str()?;
@@ -483,10 +485,113 @@ fn read(document: &str) -> Option<Vec<CargoMember>> {
         let name = package.get("name")?.as_str()?;
         let at = package.get("manifest_path")?.as_str()?;
         if ids.contains(&id) {
-            members.push(member(root, at, name)?);
+            let edges = declared(root, package)?;
+            members.push(member(root, at, name, edges)?);
         }
     }
     Some(members)
+}
+/// The position a declared dependency takes in the manifest that declares it: the three values
+/// `dependencies[].kind` may hold, each carrying the word this crate — never the document — spells.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EdgeKind {
+    Normal,
+    Build,
+    Dev,
+}
+impl EdgeKind {
+    /// Returns the `&'static str` this crate chose for the kind. A rendered report echoes it
+    /// safely because it is this crate's own literal and no byte of the document.
+    #[allow(dead_code, reason = "the next slice judges these edges")]
+    fn word(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Build => "build",
+            Self::Dev => "dev",
+        }
+    }
+}
+/// Where one declared path dependency points, in this crate's own terms.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum EdgeTarget {
+    /// A directory strictly under `workspace_root`, re-validated as a workspace-relative path.
+    InRoot(RelativePath),
+    /// The workspace root's own directory: a Cargo member may occupy it, and `path = ".."` onto
+    /// that member is legal, so the document spells it. Kept distinct from
+    /// [`EdgeTarget::OutOfRoot`] because it is *inside* the workspace — no [`RelativePath`]
+    /// spells it, which is a property of that grammar and not of the workspace, and
+    /// [`CargoMember::crate_dir`] names the same directory `None` for exactly that reason.
+    /// Collapsing the two would let a later slice report an in-workspace member as lying outside
+    /// the workspace, and a unit variant destroys the distinction at read time beyond recovery.
+    Root,
+    /// A directory the workspace root does not contain: a sibling root whose name this one is a
+    /// prefix of, or any absolute path elsewhere. A unit variant on purpose — this is the one
+    /// value here no grammar has proved, so the type makes retaining any byte of it impossible.
+    OutOfRoot,
+}
+/// One declared dependency edge of a Cargo workspace member: how it is declared, and where it
+/// points. A registry dependency is not one of these — see [`declared`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeclaredEdge {
+    kind: EdgeKind,
+    target: EdgeTarget,
+}
+/// Reads one member package's declared dependency edges. `None` is BXW0050 like every other
+/// reading failure: `dependencies` is **required** — cargo emits it, empty or not — so its absence
+/// or a mistyped element is a defect of the whole document and never a silently empty edge list.
+/// An unknown or mistyped `kind`, a future kind included, is that same coded answer: fail-closed,
+/// because an unread edge is an unenforced rule.
+///
+/// **Exactly two things of each element are read, and that is the load-bearing decision here.**
+/// `name`, `rename`, `optional`, `features`, `target`, and `source` are deliberately never
+/// consulted: an entry is an edge whatever those attributes say, and a target's identity is its
+/// normalized path, which is injective over members because one directory holds one Cargo package.
+/// Renamed, optional, feature-activated, and target-specific dependencies are therefore covered
+/// *by construction* rather than by enumerating them — and it is why no unvalidated byte of the
+/// document is consulted at all, let alone echoed. Reading declarations rather than the resolved
+/// graph is the same decision seen from the other side: an optional dependency whose feature is
+/// unactivated is absent from `resolve` and present here.
+///
+/// A `path` key absent is a registry dependency: no crate role, allowed by every rule, so it is
+/// stored nowhere and its unvalidated `name` and `source` are never looked at. An element that is
+/// no object at all spells no `kind` either, so it is the same rejection and needs no second one.
+fn declared(root: &str, package: &Value) -> Option<Vec<DeclaredEdge>> {
+    let mut edges = Vec::new();
+    for entry in package.get("dependencies")?.as_array()? {
+        let kind = match entry.get("kind")? {
+            Value::Null => EdgeKind::Normal,
+            Value::String(word) if word == "build" => EdgeKind::Build,
+            Value::String(word) if word == "dev" => EdgeKind::Dev,
+            _ => return None,
+        };
+        let Some(at) = entry.get("path") else {
+            continue;
+        };
+        let target = points(root, at.as_str()?)?;
+        edges.push(DeclaredEdge { kind, target });
+    }
+    Some(edges)
+}
+/// Normalizes one declared dependency's absolute `path` — the target's *directory* — against the
+/// absolute `workspace_root`, exactly as [`member`] normalizes a member's manifest path.
+///
+/// The root must be followed by a separator, so a sibling root whose name this one is a prefix of
+/// is out of root rather than a bogus in-root remainder. The root spelled *exactly* is neither: a
+/// root package is an ordinary Cargo member, a `path = ".."` dependency onto it is legal and cargo
+/// emits that path as the root verbatim, so reading it as out of root would both reject nothing
+/// and let a later slice report an in-workspace member as lying outside the workspace. A remainder
+/// the [`RelativePath`] grammar refuses — a `..` segment, a backslash, a control byte — is `None`,
+/// which is BXW0050: the same posture [`member`] takes on a path it cannot re-validate, because
+/// this crate reports no path whose grammar it has not proved.
+fn points(root: &str, path: &str) -> Option<EdgeTarget> {
+    let Some(rest) = path.strip_prefix(root) else {
+        return Some(EdgeTarget::OutOfRoot);
+    };
+    match rest.strip_prefix('/') {
+        None if rest.is_empty() => Some(EdgeTarget::Root),
+        None => Some(EdgeTarget::OutOfRoot),
+        Some(under) => Some(EdgeTarget::InRoot(RelativePath::new(under).ok()?)),
+    }
 }
 /// Normalizes one member's absolute `manifest_path` against the absolute `workspace_root`.
 ///
@@ -496,7 +601,12 @@ fn read(document: &str) -> Option<Vec<CargoMember>> {
 /// Separators are `/` only: a drive-prefixed or backslash-separated document is BXW0050 rather than
 /// a second path dialect, because [`RelativePath`] admits neither and this crate reports no path it
 /// has not re-validated.
-fn member(root: &str, manifest_path: &str, name: &str) -> Option<CargoMember> {
+fn member(
+    root: &str,
+    manifest_path: &str,
+    name: &str,
+    edges: Vec<DeclaredEdge>,
+) -> Option<CargoMember> {
     let rest = manifest_path.strip_prefix(root)?.strip_prefix('/')?;
     let head = rest.strip_suffix(CARGO_MANIFEST)?;
     let directory = match head {
@@ -507,6 +617,7 @@ fn member(root: &str, manifest_path: &str, name: &str) -> Option<CargoMember> {
         manifest_path: RelativePath::new(rest).ok()?,
         directory,
         name: String::from(name),
+        edges,
     })
 }
 /// Reports whether `path`'s final segment is exactly `boxology.toml`.
@@ -643,9 +754,10 @@ impl Workspace {
     }
 }
 /// One Cargo workspace member the metadata document names, normalized into this repository's own
-/// terms: the crate's directory, its `Cargo.toml` re-validated as a workspace-relative path, and
-/// its Cargo package name. Only [`WorkspaceInputs::check`] builds one, so a value of this type is
-/// the proof the document was readable — and the absolute paths it carries reach nothing else.
+/// terms: the crate's directory, its `Cargo.toml` re-validated as a workspace-relative path, its
+/// Cargo package name, and every dependency edge it declares. Only [`WorkspaceInputs::check`]
+/// builds one, so a value of this type is the proof the document was readable — and the absolute
+/// paths it carries reach nothing else.
 ///
 /// This is the left-hand side of 02-packages' rule that every Cargo package match exactly one
 /// manifest `[[crates]]` entry by normalized manifest path and Cargo package name; a [`Workspace`]
@@ -655,8 +767,18 @@ pub struct CargoMember {
     manifest_path: RelativePath,
     directory: Option<RelativePath>,
     name: String,
+    edges: Vec<DeclaredEdge>,
 }
 impl CargoMember {
+    /// Returns every dependency edge this member declares, in declaration order: the left-hand
+    /// side of the edge policy. Crate-internal, because a [`DeclaredEdge`] holds the document's
+    /// own shape and nothing outside this crate judges it. Registry dependencies are absent —
+    /// they are no edge at all — and an edge appears once per declared entry, so one target
+    /// reached twice under two `target` cfgs is two edges, as the document declares it.
+    #[allow(dead_code, reason = "the next slice judges these edges")]
+    fn edges(&self) -> &[DeclaredEdge] {
+        &self.edges
+    }
     /// Returns the crate's workspace-relative directory. `None` is the workspace root itself, which
     /// no [`RelativePath`] can spell — and which no `[[crates]]` path can spell either, so a Cargo
     /// package sitting there is unmatchable and the next slice codes it.
@@ -1011,8 +1133,18 @@ mod tests {
     /// Cargo package name)` pair — the empty directory being the workspace root itself — plus
     /// `strangers`, raw `packages[]` elements that no `workspace_members` entry names.
     fn metadata(members: &[(&str, &str)], strangers: &[&str]) -> String {
-        let (mut ids, mut packages) = (Vec::new(), Vec::from(strangers).join(","));
+        let mut listed = Vec::new();
         for (at, name) in members {
+            listed.push((*at, *name, ""));
+        }
+        depending(&listed, strangers)
+    }
+    /// [`metadata`], each member also carrying the raw `dependencies[]` element list it declares —
+    /// which every member must spell, empty or not. Strangers stay raw, and none of them spells
+    /// the field at all: that is what makes the skip order observable.
+    fn depending(members: &[(&str, &str, &str)], strangers: &[&str]) -> String {
+        let (mut ids, mut packages) = (Vec::new(), Vec::from(strangers).join(","));
+        for (at, name, edges) in members {
             let head = if at.is_empty() {
                 String::new()
             } else {
@@ -1020,12 +1152,25 @@ mod tests {
             };
             let id = format!("path+file:///w/{head}#0.0.0");
             let one = format!("\"name\":{name:?},\"manifest_path\":\"/w/{head}Cargo.toml\"");
-            packages.push_str(&format!(",{{\"id\":{id:?},{one}}}"));
+            let held = format!("\"dependencies\":[{edges}]");
+            packages.push_str(&format!(",{{\"id\":{id:?},{one},{held}}}"));
             ids.push(format!("{id:?}"));
         }
         let listed = ids.join(",");
         let body = packages.trim_start_matches(',');
         format!(r#"{{"workspace_root":"/w","workspace_members":[{listed}],"packages":[{body}]}}"#)
+    }
+    /// One `dependencies[]` element: its `kind` value verbatim, the absolute `path` a path
+    /// dependency carries, and `extra` raw attributes the reader must never consult.
+    fn edge(kind: &str, path: Option<&str>, extra: &str) -> String {
+        let at = path.map(|at| format!(",\"path\":{at:?}"));
+        let more = if extra.is_empty() {
+            String::new()
+        } else {
+            format!(",{extra}")
+        };
+        let head = at.unwrap_or_default();
+        format!("{{\"kind\":{kind}{head}{more}}}")
     }
     /// The one diagnostic `OPAQUE` bytes provoke, as a report entry located at `at`.
     fn rejected(at: &str) -> Entry {
@@ -1778,7 +1923,7 @@ BXW0054 a declared crate role must be one its package kind can host specs/s5-man
         };
         let one = |at: &str| {
             named(&format!(
-                r#""id":"i","name":"solo-crate","manifest_path":{at:?}"#
+                r#""id":"i","name":"solo-crate","manifest_path":{at:?},"dependencies":[]"#
             ))
         };
         // Absolute `manifest_path` values, `!`-prefixed when the document is readable.
@@ -1805,7 +1950,7 @@ BXW0054 a declared crate role must be one its package kind can host specs/s5-man
                 &named(r#""id":7,"name":"n","manifest_path":"/w/a/Cargo.toml""#),
                 &named(r#""id":"i","name":"n","manifest_path":7"#),
                 r#"{"workspace_root":"/w/","workspace_members":["i"],"packages":[{"id":"i",
-                   "name":"n","manifest_path":"/w/a/Cargo.toml"}]}"#,
+                   "name":"n","manifest_path":"/w/a/Cargo.toml","dependencies":[]}]}"#,
             ]
             .map(String::from),
         );
@@ -1838,6 +1983,149 @@ BXW0054 a declared crate role must be one its package kind can host specs/s5-man
             assert_eq!(found.rule(), stated, "{case:?}");
             let source = "boxology-details/02-packages.md crate roles";
             assert_eq!(found.rule_source(), source, "{case:?}");
+            assert_eq!(
+                report.to_string(),
+                "BXW0050 Cargo.toml package= candidates=[]",
+                "{case:?} must yield one line, echoing no byte of the document"
+            );
+        }
+    }
+    /// The other half of the reading: every member carries the edges it *declares*, normalized
+    /// under `workspace_root`. The fixture is built so a wrong answer is reachable — the first
+    /// entry names its own source member and aliases a *third* member, so a `name`- or
+    /// `rename`-matcher attributes it to the wrong target; `crates/foo` is a strict prefix of
+    /// member `crates/foo-bar`, and `/w2` a strict prefix collision on the root itself, so a
+    /// separator-free normalizer either misattributes or invents `2/crates/foo`; one target sits
+    /// two directories deep inside another member's; the same target is declared twice under two
+    /// `target` cfgs, so a per-target dedupe loses one; a registry entry carries no `path` and must
+    /// vanish; a fifth member occupies the workspace root itself and is both the source of an edge
+    /// and the target of one, so reading the bare root as *out of* root would call an in-workspace
+    /// member outside the workspace; and two members declare nothing at all, which must be an
+    /// empty list and no defect.
+    #[test]
+    fn declared_edges_are_read_and_normalized() {
+        // Attributes the reader must never consult, spelled to make consulting them observable.
+        let lying = "\"name\":\"foo-bar\",\"rename\":\"deep\",\"optional\":true,\
+                     \"features\":[\"extra\"]";
+        let registry = "\"name\":\"serde\",\"source\":\"registry+https://example\"";
+        // The two `cfg` variants of one dependency sit *adjacent* and render identically, which is
+        // the order cargo emits — it sorts within each dependency table — so a `dedup` anywhere
+        // silently halves them. Separated by unrelated entries, that mutation is inert and the
+        // green means nothing.
+        let listed = [
+            edge("null", Some("/w/crates/foo"), lying),
+            edge("null", Some("/w/crates/foo"), "\"target\":\"cfg(windows)\""),
+            edge("\"build\"", Some("/w/crates/foo/deep"), ""),
+            edge("\"dev\"", Some("/w/tools"), "\"optional\":false"),
+            edge("null", None, registry),
+            edge("null", Some("/w2/crates/foo"), ""),
+            edge("\"dev\"", Some("/elsewhere/x"), ""),
+            edge("null", Some("/w"), ""),
+        ];
+        let many = listed.join(",");
+        let solo = edge("\"dev\"", Some("/w/crates/foo-bar"), "");
+        let members = [
+            ("crates/foo-bar", "foo-bar", many.as_str()),
+            ("crates/foo", "foo", solo.as_str()),
+            ("crates/foo/deep", "deep", ""),
+            ("tools", "tools", ""),
+            ("", "whole-workspace", solo.as_str()),
+        ];
+        let held = vec![(MANIFEST, owning("root", "platform", &[MANIFEST], &[]))];
+        let document = depending(&members, &[]);
+        // The reading alone, as above: this manifest maps none of the four members.
+        let (read, defects) = mapped(held, &[], &document).members();
+        assert!(defects.is_empty(), "the document is readable");
+        let spelled = |member: &CargoMember| {
+            let one = |held: &DeclaredEdge| {
+                let at = match &held.target {
+                    EdgeTarget::InRoot(dir) => dir.as_str(),
+                    EdgeTarget::Root => "root",
+                    EdgeTarget::OutOfRoot => "outside",
+                };
+                format!("{} {at}", held.kind.word())
+            };
+            let each: Vec<String> = member.edges().iter().map(one).collect();
+            format!("{} [{}]", member.cargo_package(), each.join(","))
+        };
+        let seen: Vec<String> = read.iter().map(spelled).collect();
+        assert_eq!(
+            seen,
+            [
+                "deep []",
+                "foo [dev crates/foo-bar]",
+                "foo-bar [normal crates/foo,normal crates/foo,build crates/foo/deep,\
+                 dev tools,normal outside,dev outside,normal root]",
+                "tools []",
+                "whole-workspace [dev crates/foo-bar]",
+            ]
+        );
+    }
+    /// BXW0050 codes every defect of a member's `dependencies[]` too, and every case below is the
+    /// *same* rendered line: a reading defect is one coded answer whatever spelled it, and no byte
+    /// of the document — least of all a dependency's absolute path — reaches the report. The field
+    /// is required of every member, and an unknown `kind` is fail-closed, because a dependency the
+    /// reader silently drops is an edge the policy silently permits. The stranger beside the member
+    /// spells the field not at all, so every readable case here is also the proof that a
+    /// `packages[]` element no `workspace_members` entry names is skipped *before* it is read.
+    #[test]
+    fn unreadable_dependency_declarations_are_coded() {
+        let out = r#"{"id":"s","name":"vendor","manifest_path":"/vendor/Cargo.toml"}"#;
+        let whole = |field: Option<&str>| {
+            let head = r#""id":"i","name":"solo-crate","manifest_path":"/w/c/Cargo.toml""#;
+            let held = field.map(|value| format!(",\"dependencies\":{value}"));
+            let one = format!("{{{head}{}}}", held.unwrap_or_default());
+            format!(
+                "{{\"workspace_root\":\"/w\",\"workspace_members\":[\"i\"],\
+                 \"packages\":[{one},{out}]}}",
+            )
+        };
+        // `dependencies` values, `-` for the field spelled not at all and `!`-prefixed when the
+        // document stays readable — which leaves the one member unmapped, BXW0051 and not this.
+        let cases = [
+            "-",
+            "7",
+            "{}",
+            r#""[]""#,
+            "[7]",
+            r#"["x"]"#,
+            "[[]]",
+            "[{}]",
+            r#"[{"kind":7}]"#,
+            r#"[{"kind":["dev"]}]"#,
+            r#"[{"kind":"future"}]"#,
+            r#"[{"kind":"Dev"}]"#,
+            r#"[{"kind":""}]"#,
+            r#"[{"kind":"normal"}]"#,
+            r#"[{"kind":null,"path":7}]"#,
+            r#"[{"kind":null,"path":null}]"#,
+            r#"[{"kind":null,"path":"/w/../x"}]"#,
+            r#"[{"kind":null,"path":"/w/a\\b"}]"#,
+            r#"[{"kind":null,"path":"/w/"}]"#,
+            r#"[{"kind":null,"path":"/w/a/./b"}]"#,
+            "![]",
+            r#"![{"kind":null,"path":"/w/c"}]"#,
+            r#"![{"kind":"dev"}]"#,
+            r#"![{"kind":"build","path":"/w2/c"}]"#,
+            r#"![{"kind":null,"path":"/w"}]"#,
+        ];
+        for case in cases {
+            let readable = case.strip_prefix('!');
+            let field = readable.unwrap_or(case);
+            let document = whole((field != "-").then_some(field));
+            let held = vec![(MANIFEST, owning("solo", "platform", &[MANIFEST], &[]))];
+            let report = mapped(held, &[], &document)
+                .check()
+                .expect_err("this manifest maps no member");
+            let [Entry::Workspace(found)] = report.as_slice() else {
+                panic!("{case:?} reported {report}");
+            };
+            if readable.is_some() {
+                assert_eq!(found.code(), "BXW0051", "{case:?}");
+                assert_eq!(found.path(), &path("c/Cargo.toml"), "{case:?}");
+                continue;
+            }
+            assert_eq!(found.code(), "BXW0050", "{case:?}");
             assert_eq!(
                 report.to_string(),
                 "BXW0050 Cargo.toml package= candidates=[]",

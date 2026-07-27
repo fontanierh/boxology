@@ -34,11 +34,18 @@ const OWNS: &str = "schema = 1\nid = \"root\"\nkind = \"platform\"\n\
                     inputs = [\"boxology.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 // A fixed `cargo metadata` document, so the subject covers the members read out of one: two whose
 // declaration order is not their sorted order, plus one `packages[]` element no `workspace_members`
-// entry names. No host path reaches it; `/w` is as fixed as the listing above.
+// entry names. No host path reaches it; `/w` is as fixed as the listing above. Each *member* spells
+// the required `dependencies` field — one of them a normal path edge onto the other — while the
+// stranger spells none, which is what keeps the skip order proven by this subject's greenness.
+// That edge adds no golden byte and is deliberately platform-to-platform, which the edge table
+// permits; the cost of carrying it is that a later change to *that* verdict would surface here as
+// a determinism failure rather than as the policy failure it is.
 const MEMBERS: &str = "{\"workspace_root\":\"/w\",\"workspace_members\":[\"a\",\"b\"],\
                        \"packages\":[{\"id\":\"a\",\"name\":\"zulu\",\
-                       \"manifest_path\":\"/w/z/Cargo.toml\"},{\"id\":\"b\",\"name\":\"alpha\",\
-                       \"manifest_path\":\"/w/z/a/Cargo.toml\"},{\"id\":\"c\",\"name\":\"vendor\",\
+                       \"manifest_path\":\"/w/z/Cargo.toml\",\"dependencies\":[{\"kind\":null,\
+                       \"path\":\"/w/z/a\"}]},{\"id\":\"b\",\"name\":\"alpha\",\
+                       \"manifest_path\":\"/w/z/a/Cargo.toml\",\"dependencies\":[]},\
+                       {\"id\":\"c\",\"name\":\"vendor\",\
                        \"manifest_path\":\"/vendor/Cargo.toml\"}]}";
 const NO_MEMBERS: &str = "{\"workspace_root\":\"/w\",\"workspace_members\":[],\"packages\":[]}";
 const TRACKED: [&str; 6] = [
