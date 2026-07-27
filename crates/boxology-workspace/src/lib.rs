@@ -2671,8 +2671,11 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             let listed = [("a/s", "s", one.as_str()), (at, "t", "")];
             let checked = mapped(held, &[], &depending(&listed, &[])).check();
             let owner = if same { "a" } else { "b" };
+            let packages: &[&str] = if same { &["a"] } else { &["a", "b"] };
             match (&checked, expected) {
-                (Ok(_), []) => continue,
+                (Ok(workspace), []) => {
+                    successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)
+                }
                 (Err(report), [code]) => assert_eq!(
                     report.to_string(),
                     format!("{code} a/s/Cargo.toml package=a candidates=[{owner} {at} normal]"),
@@ -2824,7 +2827,7 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         let held = vec![
             (
                 "a/boxology.toml",
-                importing("a", &[("ac", "c", "box-contract")], &["b"]),
+                importing("a", &[("ai", "i", "box-implementation")], &["b"]),
             ),
             (
                 "b/boxology.toml",
@@ -2832,11 +2835,11 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             ),
         ];
         let one = edge("null", Some("/w/b/c"), "");
-        let document = depending(&[("a/c", "ac", &one), ("b/c", "bc", "")], &[]);
+        let document = depending(&[("a/i", "ai", &one), ("b/c", "bc", "")], &[]);
         let checked = mapped(held, &[], &document)
             .check()
-            .expect("declared foreign C-to-C");
-        successful_edge(&checked, &["a", "b"], "ac", "a/c/Cargo.toml", "bc", "b/c");
+            .expect("declared foreign I-to-C");
+        successful_edge(&checked, &["a", "b"], "ai", "a/i/Cargo.toml", "bc", "b/c");
     }
     #[test]
     fn unselected_composition_edges_are_coded() {
@@ -2875,15 +2878,15 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             ("x/boxology.toml", selecting("x", &x, &["a", "d"], true)),
             (
                 "d/boxology.toml",
-                roled("d", "box", &[("c", "c", "box-contract")]),
+                roled("d", "box", &[("i", "i", "box-implementation")]),
             ),
         ];
-        let one = edge("null", Some("/w/d/c"), "");
-        let members = [("x/x", "x", one.as_str()), ("d/c", "c", "")];
+        let one = edge("null", Some("/w/d/i"), "");
+        let members = [("x/x", "x", one.as_str()), ("d/i", "i", "")];
         let checked = mapped(held, &[], &depending(&members, &[]))
             .check()
             .expect("selected edge");
-        successful_edge(&checked, &["d", "x"], "x", "x/x/Cargo.toml", "c", "d/c");
+        successful_edge(&checked, &["d", "x"], "x", "x/x/Cargo.toml", "i", "d/i");
     }
     #[test]
     fn non_member_path_edges_are_coded() {

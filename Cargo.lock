@@ -177,6 +177,7 @@ dependencies = [
  "boxology-contract",
  "boxology-manifest",
  "serde_json",
+ "syn 3.0.0",
 ]
 
 [[package]]
