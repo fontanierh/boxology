@@ -37,9 +37,10 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-runtime",
     "boxology-telegram",
     "hello-implementation",
+    "ping-implementation",
     "xtask",
 ];
-const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt", "hello-contract"];
+const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt", "hello-contract", "ping-contract"];
 const EDITOR_FIXTURE: &str = "crates/fixtures/hello/implementation";
 const EDITOR_CHECK_ARGS: &[&str] = &[
     "analysis-stats",
@@ -413,9 +414,8 @@ mod tests {
 
     #[test]
     fn format_registries_cover_every_crate_once() {
-        let owned: BTreeSet<_> = OWNED_FMT_PACKAGES.iter().copied().collect();
-        let excluded: BTreeSet<_> = FMT_EXCLUDED_PACKAGES.iter().copied().collect();
-        assert!(owned.is_disjoint(&excluded));
+        let (owned, excluded) = format_registry_sets(OWNED_FMT_PACKAGES, FMT_EXCLUDED_PACKAGES)
+            .expect("format registries contain no duplicates");
         let mut manifests = Vec::new();
         find_manifests(&root().join("crates"), &mut manifests);
         let found: BTreeSet<_> = manifests.iter().map(|path| manifest_name(path)).collect();
@@ -425,6 +425,25 @@ mod tests {
             .collect();
         assert_eq!(manifests.len(), found.len());
         assert_eq!(found, classified);
+    }
+
+    fn format_registry_sets<'a>(
+        owned: &[&'a str],
+        excluded: &[&'a str],
+    ) -> Option<(BTreeSet<&'a str>, BTreeSet<&'a str>)> {
+        let owned_set: BTreeSet<_> = owned.iter().copied().collect();
+        let excluded_set: BTreeSet<_> = excluded.iter().copied().collect();
+        (owned_set.len() == owned.len()
+            && excluded_set.len() == excluded.len()
+            && owned_set.is_disjoint(&excluded_set))
+        .then_some((owned_set, excluded_set))
+    }
+
+    #[test]
+    fn format_registry_duplicates_are_rejected() {
+        assert!(format_registry_sets(&["a", "a"], &["b"]).is_none());
+        assert!(format_registry_sets(&["a"], &["b", "b"]).is_none());
+        assert!(format_registry_sets(&["a"], &["a"]).is_none());
     }
 
     fn find_manifests(directory: &Path, found: &mut Vec<PathBuf>) {

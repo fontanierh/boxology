@@ -18,6 +18,8 @@ members = [
     "crates/fixtures/generated-style-fmt",
     "crates/fixtures/hello/generated/contract",
     "crates/fixtures/hello/implementation",
+    "crates/fixtures/ping/generated/contract",
+    "crates/fixtures/ping/implementation",
     "crates/xtask",
 ]
 
