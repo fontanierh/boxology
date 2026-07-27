@@ -182,6 +182,7 @@ fn run_ci(base: Option<&str>) -> u8 {
                 run_cargo(&["test", "--workspace", "--all-features"])
             }),
         ),
+        ("key-order", timed("key-order", run_key_order)),
         ("doc", timed("doc", run_doc)),
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
         ("links", timed("links", || links::check(&root()))),
@@ -319,6 +320,19 @@ fn run_doc() -> bool {
         .env("RUSTDOCFLAGS", "-D warnings")
         .status()
         .is_ok_and(|status| status.success())
+}
+
+/// Re-runs `boxology-schema`'s byte tests against `serde_json`'s insertion-ordered map backing,
+/// the one configuration that can tell whether the crate sorts document keys or inherits them
+/// from the default `BTreeMap`. Format 1's bytes depend on the answer.
+fn run_key_order() -> bool {
+    run_cargo(&[
+        "test",
+        "-p",
+        "boxology-schema",
+        "--features",
+        "preserve-order",
+    ])
 }
 
 fn run_cargo(args: &[&str]) -> bool {

@@ -4,6 +4,12 @@ version = "0.0.0"
 edition.workspace = true
 publish = false
 
+[features]
+# Test-only, never enabled by a dependent. A default `serde_json::Map` is a `BTreeMap`, so no
+# fixture can hold an unsorted object and `canonical_bytes`'s sorting is unfalsifiable; the
+# insertion-ordered backing is the one configuration where the byte tests can tell.
+preserve-order = ["serde_json/preserve_order"]
+
 [dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 serde_json = "=1.0.150"
