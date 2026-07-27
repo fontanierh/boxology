@@ -5,6 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-proc-macro2 = { version = "=1.0.107", default-features = false }
+boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
+proc-macro2 = { version = "=1.0.107", default-features = false, features = ["span-locations"] }
 sha2 = "=0.10.9"
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "printing"] }
