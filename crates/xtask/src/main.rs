@@ -28,6 +28,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-macros",
     "boxology-fixture-tests",
     "boxology-generator-model",
+    "boxology-generator-writer",
     "boxology-generator",
     "boxology-manifest",
     "boxology-schema",

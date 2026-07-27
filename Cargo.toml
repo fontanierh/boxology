@@ -7,6 +7,7 @@ members = [
     "crates/boxology-macros",
     "crates/boxology-generator",
     "crates/boxology-generator-model",
+    "crates/boxology-generator-writer",
     "crates/boxology-manifest",
     "crates/boxology-schema",
     "crates/boxology-workspace",
