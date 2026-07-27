@@ -60,6 +60,8 @@ struct DispatchTasksInner {
     next_id: AtomicU64,
     state: Mutex<DispatchState>,
     empty: tokio::sync::Notify,
+    #[cfg(test)]
+    before_state_lock: Mutex<Option<Arc<SpawnInterlude>>>,
 }
 
 #[derive(Default)]
@@ -71,6 +73,12 @@ struct DispatchState {
 struct TaskControl {
     cancellation: CancelToken,
     abort: tokio::task::AbortHandle,
+}
+
+#[cfg(test)]
+struct SpawnInterlude {
+    reached: std::sync::Barrier,
+    release: std::sync::Barrier,
 }
 
 struct RemoveTask {
@@ -94,6 +102,8 @@ impl DispatchTasks {
             next_id: AtomicU64::new(0),
             state: Mutex::new(DispatchState::default()),
             empty: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            before_state_lock: Mutex::new(None),
         }))
     }
 
@@ -113,17 +123,22 @@ impl DispatchTasks {
             let _ = started.await;
             future.await
         });
+        #[cfg(test)]
+        if let Some(interlude) = self.0.before_state_lock.lock().unwrap().clone() {
+            interlude.reached.wait();
+            interlude.release.wait();
+        }
         let mut state = self.0.state.lock().unwrap();
+        state.tasks.insert(
+            id,
+            TaskControl {
+                cancellation,
+                abort: task.abort_handle(),
+            },
+        );
         if state.closed {
             task.abort();
         } else {
-            state.tasks.insert(
-                id,
-                TaskControl {
-                    cancellation,
-                    abort: task.abort_handle(),
-                },
-            );
             let _ = start.send(());
         }
         task
@@ -163,6 +178,11 @@ impl DispatchTasks {
     #[cfg(test)]
     fn len(&self) -> usize {
         self.0.state.lock().unwrap().tasks.len()
+    }
+
+    #[cfg(test)]
+    fn interlude_before_state_lock(&self, interlude: Arc<SpawnInterlude>) {
+        *self.0.before_state_lock.lock().unwrap() = Some(interlude);
     }
 }
 
@@ -995,6 +1015,46 @@ mod tests {
         );
         tasks.wait_empty().await;
         assert_eq!((tasks.len(), tracker.len()), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn abort_racing_spawn_accounts_for_rejected_task_until_cleanup() {
+        let tracker = TransportTaskTracker::new();
+        let tasks = DispatchTasks::new(tracker.clone());
+        let interlude = Arc::new(SpawnInterlude {
+            reached: std::sync::Barrier::new(2),
+            release: std::sync::Barrier::new(2),
+        });
+        tasks.interlude_before_state_lock(interlude.clone());
+        let entered = Arc::new(AtomicUsize::new(0));
+        let handler_entered = entered.clone();
+        let spawning_tasks = tasks.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let spawn = std::thread::spawn(move || {
+            let _runtime = runtime.enter();
+            spawning_tasks.spawn(CancelToken::new(), async move {
+                handler_entered.fetch_add(1, Ordering::Relaxed);
+                std::future::pending::<()>().await;
+            })
+        });
+
+        interlude.reached.wait();
+        assert_eq!((tasks.len(), tracker.len()), (0, 1));
+        tasks.abort_all();
+        interlude.release.wait();
+        let rejected = spawn.join().unwrap();
+
+        // The closed-path task remains represented until its cleanup runs.
+        // This assertion precedes awaiting the handle so a missing insertion
+        // cannot be hidden by join completion.
+        assert_eq!((tasks.len(), tracker.len()), (1, 1));
+        assert_eq!(entered.load(Ordering::Relaxed), 0);
+        tokio::time::timeout(Duration::from_secs(1), tasks.wait_empty())
+            .await
+            .expect("rejected task cleanup must not hang");
+        assert!(rejected.await.unwrap_err().is_cancelled());
+        assert_eq!((tasks.len(), tracker.len()), (0, 0));
+        assert_eq!(entered.load(Ordering::Relaxed), 0);
     }
 
     fn dispatch_descriptor(

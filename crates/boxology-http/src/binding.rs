@@ -697,24 +697,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connection_abort_preserves_owned_handles_for_join() {
+    async fn handle_abort_aborts_and_joins_owned_connection() {
+        let tracker = TransportTaskTracker::new();
+        let tasks = DispatchTasks::new(tracker.clone());
         let connections = ConnectionTasks::default();
-        let connection = tokio::spawn(std::future::pending::<()>());
+        let connection = tracker.spawn(std::future::pending::<()>());
         assert!(!connection.is_finished());
         connections.register(connection);
+        let handle = HttpServerHandle {
+            intake: CancellationToken::new(),
+            abort: CancellationToken::new(),
+            tasks,
+            accept: Mutex::new(None),
+            connections,
+        };
+        assert_eq!(tracker.len(), 1);
 
-        connections.abort_all();
-        let registered = connections.take();
-        assert_eq!(registered.len(), 1);
-        let joined = tokio::time::timeout(
-            Duration::from_secs(1),
-            registered.into_iter().next().unwrap(),
-        )
-        .await
-        .expect("aborted connection join must not hang")
-        .unwrap_err();
-        assert!(joined.is_cancelled());
-        assert!(connections.take().is_empty());
+        handle.abort_tasks();
+        tokio::time::timeout(Duration::from_secs(1), Box::new(handle).join_tasks())
+            .await
+            .expect("handle must abort and join its retained connection")
+            .unwrap();
+        assert_eq!(tracker.len(), 0);
     }
 
     #[tokio::test]
