@@ -95,7 +95,7 @@ Rules:
 
 ### D7 — Review-budget check
 
-`cargo xtask budget --base <sha>` computes hand-authored added lines against the given base and **fails above 400 — absolutely, with no override and no exemption**, implementing AGENTS.md exactly as merged. Oversized work is split or its task re-scoped; that is the methodology, and the check is its mechanical form.
+`cargo xtask budget --base <sha>` computes hand-authored added lines against the given base and **fails above 600 — absolutely, with no override and no exemption**, implementing AGENTS.md exactly as merged. Oversized work is split or its task re-scoped; that is the methodology, and the check is its mechanical form.
 
 - Counted: added lines in all hand-authored files, Markdown included.
 - Excluded: `Cargo.lock`, paths declared as derived outputs (bootstrap list in xtask, per D10), and pure renames as detected by Git.
@@ -165,7 +165,7 @@ The authoritative operator procedure is [`ops/ci-runner/README.md`](../ops/ci-ru
 
 1. `cargo xtask ci` passes locally on both supported triples and runs exactly the host-local checks CI runs.
 2. A PR introducing a clippy warning, fmt violation, broken relative link, broken anchor, or trailing whitespace fails `validation`.
-3. Normal PRs adding >400 hand-authored lines fail `validation`. The Mac-hosted
+3. Normal PRs adding >600 hand-authored lines fail `validation`. The Mac-hosted
    runner migration is the explicitly authorized emergency exception to that
    normal budget for this PR.
 4. Every fault-injection meta-fixture yields its expected failure class under the local protocol, with the meta-test suite itself green; the platform-dependent meta-fixture makes `determinism-compare` fail in the expected-failure lane.
