@@ -290,12 +290,7 @@ fn meta_fixtures_are_canonical_and_outside_the_live_registry() {
     let registered = registry().unwrap();
     assert_eq!(
         registered.iter().map(|item| item.name).collect::<Vec<_>>(),
-        [
-            "generated-project",
-            "generator-model",
-            "trivial-tree",
-            "workspace-report",
-        ]
+        ["generator-model", "trivial-tree", "workspace-report"]
     );
     let fixtures = [
         subject("meta-absolute-path", path_argv),

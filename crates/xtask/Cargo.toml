@@ -8,7 +8,6 @@ publish = false
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-generator = { version = "=0.0.0", path = "../boxology-generator" }
 boxology-generator-model = { version = "=0.0.0", path = "../boxology-generator-model" }
-boxology-init = { version = "=0.0.0", path = "../boxology-init" }
 boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
 boxology-workspace = { version = "=0.0.0", path = "../boxology-workspace" }
 sha2 = "=0.10.9"

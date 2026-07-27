@@ -296,10 +296,8 @@ mod tests {
         assert!(is_excluded("generated/tree/nested.rs", &derived));
         assert!(!is_excluded("nested/Cargo.lock", &derived));
         assert!(!is_excluded("generated/treehouse/x", &derived));
-        assert!(!is_excluded(
-            "crates/fixtures/generated-style-fmt/src/lib.rs",
-            &derived
-        ));
+        let adjacent = parse_numstat(b"1\t0\tgoldens/other/hand.rs\0").unwrap();
+        assert_eq!((adjacent[0].added, adjacent[0].excluded), (1, false));
     }
     #[test]
     fn limit_is_absolute_at_six_hundred() {

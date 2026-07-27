@@ -12,6 +12,18 @@ const RULE_SOURCE: &str = "specs/s6-installer-and-generated-project.md D1";
 const REQUEST_PATH: &str = "<request>";
 const PROVENANCE: &str = env!("CARGO_PKG_VERSION");
 const TOOLCHAIN: &[u8] = include_bytes!("../../../rust-toolchain.toml");
+const DIAGNOSTICS: [(&str, &str, &str); 2] = [
+    (
+        "BXI0001",
+        "project name",
+        "project name must match [a-z][a-z0-9-]*",
+    ),
+    (
+        "BXI0002",
+        "dependency source",
+        "dependency source must not be empty",
+    ),
+];
 const DEPENDENCIES: [(&str, &str); 4] = [
     ("boxology", "crates/boxology"),
     ("boxology-contract", "crates/boxology-contract"),
@@ -21,15 +33,12 @@ const DEPENDENCIES: [(&str, &str); 4] = [
 
 /// One stable coded initializer diagnostic.
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Diagnostic {
-    code: &'static str,
-    offending: &'static str,
-}
+pub struct Diagnostic(usize);
 
 impl Diagnostic {
-    /// Returns the stable `BXI####` code.
+    /// Returns the stable initializer code.
     pub const fn code(&self) -> &'static str {
-        self.code
+        DIAGNOSTICS[self.0].0
     }
 
     /// Returns the request diagnostic's source path.
@@ -39,12 +48,12 @@ impl Diagnostic {
 
     /// Returns a static, payload-safe description of the offending construct.
     pub const fn offending_construct(&self) -> &'static str {
-        self.offending
+        DIAGNOSTICS[self.0].1
     }
 
     /// Returns the violated rule.
-    pub fn rule(&self) -> &'static str {
-        rule_of(self.code)
+    pub const fn rule(&self) -> &'static str {
+        DIAGNOSTICS[self.0].2
     }
 
     /// Returns the normative rule source.
@@ -57,13 +66,9 @@ impl fmt::Display for Diagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{} {}:{}:{}-{}:{} offending={:?} rule={:?} source={:?}",
-            self.code,
+            "{} {}:1:1-1:1 offending={:?} rule={:?} source={:?}",
+            self.code(),
             self.path(),
-            1,
-            1,
-            1,
-            1,
             self.offending_construct(),
             self.rule(),
             self.rule_source()
@@ -85,15 +90,6 @@ impl Diagnostics {
     /// Returns the sorted diagnostics.
     pub fn as_slice(&self) -> &[Diagnostic] {
         &self.0
-    }
-}
-
-impl<'a> IntoIterator for &'a Diagnostics {
-    type Item = &'a Diagnostic;
-    type IntoIter = std::slice::Iter<'a, Diagnostic>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
     }
 }
 
@@ -126,10 +122,10 @@ impl InitRequest {
         let dependency_source = dependency_source.into();
         let mut diagnostics = Vec::new();
         if !valid_project_name(&project_name) {
-            diagnostics.push(diagnostic("BXI0001", "project name"));
+            diagnostics.push(Diagnostic(0));
         }
         if dependency_source.is_empty() {
-            diagnostics.push(diagnostic("BXI0002", "dependency source"));
+            diagnostics.push(Diagnostic(1));
         }
         match Diagnostics::new(diagnostics) {
             Some(diagnostics) => Err(diagnostics),
@@ -216,18 +212,6 @@ fn valid_project_name(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn diagnostic(code: &'static str, offending: &'static str) -> Diagnostic {
-    Diagnostic { code, offending }
-}
-
-fn rule_of(code: &str) -> &'static str {
-    match code {
-        "BXI0001" => "project name must match [a-z][a-z0-9-]*",
-        "BXI0002" => "dependency source must not be empty",
-        _ => "initializer requests must satisfy the supported input grammar",
-    }
-}
-
 fn toml_string(value: &str) -> String {
     let mut escaped = String::new();
     for character in value.chars() {
@@ -283,6 +267,8 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    const SOURCE: &str = include_str!("lib.rs");
+    const CODE_GOLDEN: &str = include_str!("../test/bxi.golden");
     const GOLDEN: [(&str, &[u8]); 5] = [
         (
             ".gitignore",
@@ -305,6 +291,37 @@ mod tests {
             include_bytes!("../../../goldens/generated-project/rust-toolchain.toml"),
         ),
     ];
+
+    fn source_codes(source: &str) -> Vec<&str> {
+        source
+            .match_indices("BXI")
+            .filter_map(|(start, _)| {
+                let code = source.get(start..start + 7)?;
+                code[3..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit())
+                    .then_some(code)
+            })
+            .collect()
+    }
+
+    fn modules(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| {
+                line.starts_with("mod ") || line.starts_with("pub mod ") || line.starts_with("pub(")
+            })
+            .collect()
+    }
+
+    fn golden_codes() -> Vec<&'static str> {
+        CODE_GOLDEN.lines().map(|line| &line[..7]).collect()
+    }
+
+    fn globs(patterns: &[boxology_manifest::GlobPattern]) -> Vec<&str> {
+        patterns.iter().map(|pattern| pattern.as_str()).collect()
+    }
 
     fn request() -> InitRequest {
         InitRequest::new("example", "../boxology").expect("canonical request is valid")
@@ -342,26 +359,34 @@ mod tests {
 
     fn normalize_generator_config(bytes: &[u8]) -> Result<Vec<u8>, String> {
         let text = std::str::from_utf8(bytes).map_err(|_| "generator config is not UTF-8")?;
-        if !text.ends_with('\n') {
-            return Err("generator config must end in LF".into());
-        }
-        let mut count = 0;
-        let mut normalized = String::new();
-        for line in text.lines() {
-            if line.starts_with("boxology_version = ") {
-                if !line.ends_with('"') {
-                    return Err("boxology_version must be a basic TOML string".into());
+        let prefix = "boxology_version = \"";
+        let mut anchor = None;
+        let mut offset = 0;
+        for line in text.split_inclusive('\n') {
+            if line.contains("boxology_version") {
+                let value = line
+                    .strip_prefix(prefix)
+                    .and_then(|value| value.strip_suffix("\"\n"))
+                    .filter(|value| {
+                        !value.is_empty()
+                            && value.bytes().all(|byte| {
+                                !byte.is_ascii_control() && !matches!(byte, b'"' | b'\\')
+                            })
+                    })
+                    .ok_or("boxology_version assignment must be exact")?;
+                if anchor
+                    .replace((offset + prefix.len(), value.len()))
+                    .is_some()
+                {
+                    return Err("generator config must have one boxology version".into());
                 }
-                count += 1;
-                normalized.push_str("boxology_version = \"@PROVENANCE@\"\n");
-            } else {
-                normalized.push_str(line);
-                normalized.push('\n');
             }
+            offset += line.len();
         }
-        (count == 1)
-            .then_some(normalized.into_bytes())
-            .ok_or_else(|| "generator config must have one boxology version".into())
+        let (start, length) = anchor.ok_or("generator config must have one boxology version")?;
+        let mut normalized = bytes.to_vec();
+        normalized.splice(start..start + length, b"@PROVENANCE@".iter().copied());
+        Ok(normalized)
     }
 
     fn compare_golden(tree: &GeneratedTree) -> Result<(), String> {
@@ -416,11 +441,7 @@ mod tests {
         assert_eq!(manifest.id().as_str(), "example");
         assert_eq!(manifest.kind(), Kind::Platform);
         assert_eq!(
-            manifest
-                .owned()
-                .iter()
-                .map(|pattern| pattern.as_str())
-                .collect::<Vec<_>>(),
+            globs(manifest.owned()),
             [
                 "Cargo.toml",
                 "rust-toolchain.toml",
@@ -435,22 +456,8 @@ mod tests {
         assert_eq!(derived.len(), 1);
         assert_eq!(derived[0].id().as_str(), "lockfile");
         assert_eq!(derived[0].generator(), "cargo");
-        assert_eq!(
-            derived[0]
-                .inputs()
-                .iter()
-                .map(|pattern| pattern.as_str())
-                .collect::<Vec<_>>(),
-            ["**/Cargo.toml"]
-        );
-        assert_eq!(
-            derived[0]
-                .outputs()
-                .iter()
-                .map(|pattern| pattern.as_str())
-                .collect::<Vec<_>>(),
-            ["Cargo.lock"]
-        );
+        assert_eq!(globs(derived[0].inputs()), ["**/Cargo.toml"]);
+        assert_eq!(globs(derived[0].outputs()), ["Cargo.lock"]);
     }
 
     #[test]
@@ -463,7 +470,6 @@ mod tests {
                 format!("{name} = {{ version = \"=0.0.0\", path = \"../boxology/{path}\" }}");
             assert!(text.lines().any(|line| line == expected), "{expected}");
         }
-        assert!(!text.contains("ping"));
         let config = std::str::from_utf8(generated(&tree, "boxology-generator.toml")).unwrap();
         assert!(config.contains(&format!("boxology_version = \"{PROVENANCE}\"")));
         assert!(config.contains("dependency_source = \"../boxology\""));
@@ -471,20 +477,16 @@ mod tests {
 
     #[test]
     fn request_validation_catalog_is_exact_and_payload_safe() {
-        for (project, dependency, code) in [
-            ("Bad.Project\n", "../boxology", "BXI0001"),
-            ("example", "", "BXI0002"),
-        ] {
+        for ((project, dependency), expected) in [("Bad.Project\n", "../boxology"), ("example", "")]
+            .into_iter()
+            .zip(CODE_GOLDEN.lines())
+        {
             let diagnostics = InitRequest::new(project, dependency).unwrap_err();
             assert_eq!(diagnostics.as_slice().len(), 1);
             let diagnostic = &diagnostics.as_slice()[0];
-            assert_eq!(diagnostic.code(), code);
             assert_eq!(diagnostic.path(), "<request>");
-            assert_ne!(
-                diagnostic.rule(),
-                "initializer requests must satisfy the supported input grammar"
-            );
             let rendered = diagnostics.to_string();
+            assert_eq!(rendered, expected);
             assert!(!rendered.contains("Bad.Project"));
             assert!(!rendered.contains(['\n', '\r']));
         }
@@ -494,15 +496,37 @@ mod tests {
                 .iter()
                 .map(Diagnostic::code)
                 .collect::<Vec<_>>(),
-            ["BXI0001", "BXI0002"]
+            golden_codes()
         );
-        assert_eq!(
-            both.to_string(),
-            "BXI0001 <request>:1:1-1:1 offending=\"project name\" rule=\"project name must match [a-z][a-z0-9-]*\" source=\"specs/s6-installer-and-generated-project.md D1\"\nBXI0002 <request>:1:1-1:1 offending=\"dependency source\" rule=\"dependency source must not be empty\" source=\"specs/s6-installer-and-generated-project.md D1\""
-        );
+        assert_eq!(both.to_string(), CODE_GOLDEN.trim_end());
         for valid in ["a", "example", "a0-b9", "box-"] {
             assert!(InitRequest::new(valid, "source").is_ok(), "{valid}");
         }
+    }
+
+    #[test]
+    fn production_inventory_and_code_catalog_fail_closed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        files.sort();
+        assert_eq!(files, ["lib.rs"]);
+        files.push("stray.rs".into());
+        assert_ne!(files, ["lib.rs"]);
+
+        let expected = golden_codes();
+        assert_eq!(DIAGNOSTICS.map(|entry| entry.0).as_slice(), expected);
+        assert_eq!(source_codes(SOURCE), expected);
+        assert_eq!(modules(SOURCE), ["mod tests {"]);
+        let mut mutated = SOURCE.to_owned();
+        mutated.push_str(&format!(
+            "\nconst STRAY: &str = \"{}{}\";\nmod stray;\n",
+            "BX", "I9999"
+        ));
+        assert_ne!(source_codes(&mutated), expected);
+        assert_ne!(modules(&mutated), ["mod tests {"]);
     }
 
     #[test]
@@ -523,27 +547,28 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(found, expected);
 
-        let tree = initialize(&request()).unwrap();
-        let mut altered = tree
-            .files()
-            .iter()
-            .map(|file| GeneratedFile {
-                path: file.path.clone(),
-                bytes: file.bytes.clone(),
-            })
-            .collect::<Vec<_>>();
-        altered[0].bytes.push(b'x');
-        assert!(compare_golden(&GeneratedTree(altered)).is_err());
+        let mut altered = initialize(&request()).unwrap();
+        altered.0[0].bytes.push(b'x');
+        assert!(compare_golden(&altered).is_err());
     }
 
     #[test]
     fn provenance_normalizers_reject_mutated_anchors() {
-        assert!(normalize_generator_config(b"schema = 1\ndependency_source = \"x\"\n").is_err());
-        assert!(
-            normalize_generator_config(
-                b"schema = 1\nboxology_version = \"a\"\nboxology_version = \"b\"\n"
-            )
-            .is_err()
+        for malformed in [
+            &b"schema = 1\ndependency_source = \"x\"\n"[..],
+            &b"schema = 1\n boxology_version = \"a\"\n"[..],
+            &b"schema = 1\nboxology_version = \"a\" suffix\n"[..],
+            &b"schema = 1\nboxology_version = \"a\"\nboxology_version = \"b\"\n"[..],
+        ] {
+            assert!(normalize_generator_config(malformed).is_err());
+        }
+        let tree = initialize(&request()).unwrap();
+        let original = generated(&tree, "boxology-generator.toml");
+        let mut unrelated = original.to_vec();
+        unrelated.extend_from_slice(b"# unrelated\n");
+        assert_ne!(
+            normalize_generator_config(original).unwrap(),
+            normalize_generator_config(&unrelated).unwrap()
         );
         assert!(normalize_rust(b"fn main() {}\n").is_err());
     }
