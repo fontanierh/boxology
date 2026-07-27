@@ -12,6 +12,7 @@
 
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 /// The schema format this crate models and serializes.
 pub const SCHEMA_FORMAT: u64 = 1;
@@ -27,6 +28,11 @@ macro_rules! boundary_leaves {
         }
 
         impl BoundaryLeaf {
+            /// Every leaf in declaration order, so the vocabulary lock is exhaustive by
+            /// construction: a leaf added to the macro invocation lands here too.
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$variant,)*];
+
             /// Returns the leaf's canonical schema spelling.
             pub fn canonical_name(self) -> &'static str {
                 match self { $(Self::$variant => $spelling,)* }
@@ -163,16 +169,16 @@ impl SchemaDocument {
     /// The encoding is the one format 1 has always had: object keys sorted at every level,
     /// two-space pretty printing, LF line endings, and a trailing newline.
     ///
-    /// Key sorting is **not** guaranteed by this code. Every object below is written in model
-    /// order, not sorted order, and the sort comes from `serde_json::Map` being a `BTreeMap` —
-    /// which holds only while nothing in the dependency graph enables `serde_json/preserve_order`.
-    /// The emitter it replaces did not depend on that: `boxology-generator`'s `schema.rs` collects
-    /// through an explicit `BTreeMap` first, so its bytes survive the feature. S2 owes this codec
-    /// the same explicit ordering; until then this crate's fixture-bytes and key-order tests are
-    /// what catch a graph-wide `preserve_order`, loudly rather than silently.
+    /// Key sorting is guaranteed by this code, not by `serde_json::Map`'s backing. Every object —
+    /// the document's own, and every object nested anywhere inside the opaque provenance value —
+    /// is rebuilt through an explicit `BTreeMap` before serialization, so the emitted bytes are
+    /// identical whether or not something in the dependency graph enables
+    /// `serde_json/preserve_order`. That claim is checked, not merely asserted: the crate's
+    /// `preserve-order` feature builds that configuration and `cargo xtask ci` runs these tests in
+    /// it.
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut bytes =
-            serde_json::to_vec_pretty(&self.value()).expect("schema values are serializable");
+        let mut bytes = serde_json::to_vec_pretty(&sorted(self.value()))
+            .expect("schema values are serializable");
         bytes.push(b'\n');
         bytes
     }
@@ -258,6 +264,23 @@ fn deprecation(note: &Option<String>) -> Value {
     }
 }
 
+/// Rebuilds one JSON value with every object's entries collected through a `BTreeMap`, so key order
+/// is decided here instead of inherited from whichever map `serde_json::Map` happens to wrap.
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(entries) => Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, nested)| (key, sorted(nested)))
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        scalar => scalar,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,7 +342,13 @@ mod tests {
         SchemaDocument {
             box_id: BoxId::new("store").unwrap(),
             capabilities: vec![put, get],
-            provenance: Provenance::new(json!({"generator": "boxology-generator"})),
+            // Provenance is opaque to strictness but not to the encoding. Both levels are authored
+            // out of alphabetical order, which is the order `serde_json` emits under
+            // `preserve-order` and makes no difference at all under the default `BTreeMap`.
+            provenance: Provenance::new(json!({
+                "generator": "boxology-generator",
+                "environment": {"toolchain": "pinned", "arch": "any"},
+            })),
             revision: REVISION.to_owned(),
             types: vec![error_type("StoreError", &["Missing", "Denied"])],
         }
@@ -343,6 +372,96 @@ mod tests {
             .collect()
     }
 
+    /// The pinned Hello document, byte-identical to `boxology-generator`'s `SCHEMA` literal in
+    /// `cold_schema_has_exact_projection_revision_and_document`. It is the cross-crate anchor: the
+    /// generator asserts its emitted bytes against that literal, this crate asserts the same
+    /// literal against the serializer, and the two together say the codec did not fork.
+    const PINNED_HELLO: &[u8] = br#"{
+  "box_id": "hello",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "GreetError",
+      "id": "hello.greet",
+      "idempotency": "none",
+      "input": {
+        "name": "name",
+        "type": "String"
+      },
+      "max_exposure": "external",
+      "name": "greet",
+      "output": {
+        "type": "String"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "generator": "boxology-generator",
+    "generator_version": "0.0.0",
+    "semantic_digest": "sha256:545f142b0ced7670e3f9efc7bcaaf3b7a2a0b2b790e5b48acaa85e4901c89b18"
+  },
+  "revision": "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "GreetError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "EmptyName",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}
+"#;
+
+    #[test]
+    fn canonical_bytes_match_the_pinned_hello_document() {
+        // Authored in reverse key order: under `preserve-order` that is what `serde_json` would
+        // emit, so these sorted bytes are `canonical_bytes`'s doing wherever the orders can differ.
+        let provenance = json!({
+            "semantic_digest":
+                "sha256:545f142b0ced7670e3f9efc7bcaaf3b7a2a0b2b790e5b48acaa85e4901c89b18",
+            "generator_version": "0.0.0",
+            "generator": "boxology-generator",
+        });
+        assert_eq!(hello(provenance).canonical_bytes(), PINNED_HELLO);
+    }
+
+    /// Every spelling below is emitted verbatim into documents that other builds of this software
+    /// must read, which makes `canonical_name` a wire authority in its own right. A typo in a leaf
+    /// no fixture happens to use is invisible until it surfaces as a cross-version
+    /// incompatibility, so each of the 13 leaves, the one shape, and both closed vocabularies are
+    /// locked exactly — including the exposure and idempotency values the generator cannot reach
+    /// today but the strict reader is gated on (S4 D1, ruling B1).
+    #[test]
+    fn wire_vocabulary_spellings_are_locked() {
+        #[rustfmt::skip]
+        let leaves = [
+            "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
+            "f32", "f64", "String", "Blob",
+        ];
+        let spelled = BoundaryLeaf::ALL
+            .iter()
+            .map(|leaf| leaf.canonical_name())
+            .collect::<Vec<_>>();
+        assert_eq!(spelled, leaves);
+        assert_eq!(Shape::Unary.canonical_name(), "unary");
+        assert_eq!(exposure_name(ExposureLevel::CodeOnly), "code_only");
+        assert_eq!(exposure_name(ExposureLevel::Internal), "internal");
+        assert_eq!(exposure_name(ExposureLevel::External), "external");
+        assert_eq!(idempotency_name(Idempotency::None), "none");
+        assert_eq!(idempotency_name(Idempotency::Inherent), "inherent");
+    }
+
     #[test]
     fn provenance_token_document_serializes_to_the_checked_in_fixture_bytes() {
         const FIXTURE: &[u8] = include_bytes!("../../fixtures/hello/generated/schema.json");
@@ -359,7 +478,8 @@ mod tests {
             "max_exposure", "name", "output", "type", "shape",
             "deprecation", "docs", "error", "id", "idempotency", "input", "name", "type",
             "max_exposure", "name", "output", "type", "shape",
-            "provenance", "generator", "revision", "schema_format", "types",
+            "provenance", "environment", "arch", "toolchain", "generator",
+            "revision", "schema_format", "types",
             "deprecation", "docs", "kind", "name", "variants",
             "deprecation", "docs", "name", "payload",
             "deprecation", "docs", "name", "payload",
@@ -368,6 +488,17 @@ mod tests {
         let names = ["value", "put", "key", "get", "StoreError", "Missing", "Denied"];
         assert_eq!(keys(&text), expected_keys);
         assert_eq!(values(&text, "name"), names);
+    }
+
+    /// Guards the guard: the byte tests above only check sorting while the feature really reaches
+    /// `serde_json`, and if that wiring broke the `preserve-order` CI step would pass vacuously.
+    #[cfg(feature = "preserve-order")]
+    #[test]
+    fn the_preserve_order_build_really_holds_unsorted_objects() {
+        let Value::Object(map) = json!({"b": 1, "a": 2}) else {
+            panic!("object");
+        };
+        assert_eq!(map.keys().collect::<Vec<_>>(), ["b", "a"]);
     }
 
     #[test]
