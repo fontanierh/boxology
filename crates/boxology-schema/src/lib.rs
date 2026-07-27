@@ -6,9 +6,46 @@
 //! (`specs/s2-contract-generator.md` D3, D4): per `specs/s4-contract-change-classification.md` D1
 //! this is the relocated model the emitter and the classifier share, never a second authority, so
 //! it may only ever spell what S2 already spells.
+//!
+//! Rejections are payload-safe by construction, not by review: a [`Diagnostic`] stores a code and a
+//! location, its rule and attribution are `&'static str` derived from the code, and the location is
+//! built from static key names, array indices, and one gated helper admitting a document's own text
+//! only when it is plain, bounded identifier bytes. No other path leads from a document to a report.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+
+// `BXC####` allocation, recorded so S4's slices cannot collide or strand gaps. The strict reader
+// claims BXC0001–BXC0023, the whole format-1 read inventory: BXC0001–BXC0006 the document gates,
+// with unknown key, missing key, and wrong type generic across every level rather than repeated
+// per level (`boxology-manifest`'s shape, and the reason this block is 23 codes and not 30);
+// BXC0007 and BXC0008 the reader's two narrowings; BXC0009 the revision spelling; BXC0010–BXC0014
+// the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. The classifier
+// scaffold opens at BXC0024.
+//
+// The two narrowings are fail-closed and deliberate. `boxology-contract-syntax` hardcodes
+// `external` and `none` and rejects every other exposure and idempotency, so no document this
+// codec wrote can carry one, and admitting one would mean classifying a document no emitter
+// produced. The consequence: widening the emitted grammar must widen this reader in the same
+// change, or documents valid under the widened grammar are rejected here.
+//
+// Recorded non-goals and divergences, so that freezing the inventory does not bury them.
+// Duplicate JSON object keys are **not** detected: `serde_json` silently keeps the last, so two
+// byte-different documents parse alike and no code covers it. The location grammar here is a JSON
+// pointer, not S4 D6's identity path, because a rejection can precede identity — a document whose
+// `box_id` is malformed has no identity path to be reported at. BXC0009's rule already exists in
+// `boxology-generator-model` attributed to S2 D4 and pinned in that crate's golden; D6 is the
+// better home and is what this crate freezes, leaving one rule with two attributions to reconcile.
+//
+// The lock lands with the inventory rather than after the reader: `ALL_CODES`, the byte-compared
+// rule-text and attribution golden, and the compile-time exhaustiveness scan are all in this
+// slice. Its reachability half — `corpus_covers_every_code`, one minimal document provoking each
+// code — needs something that can parse a document, so it arrives with the reader, and **the
+// reader may not merge without it**. The field validators the reader composes were split out of
+// this slice for budget, not for scope: they add no code and change no entry above.
+mod read;
+
+pub use read::{Diagnostic, Diagnostics};
 
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use serde_json::{Value, json};
@@ -240,7 +277,9 @@ impl SchemaVariant {
     }
 }
 
-/// Returns the format-1 spelling of an exposure level: S2 D3's `exposure` grammar tokens.
+/// Returns an exposure level's S2 D3 grammar token. Spelling every level is not a claim that a
+/// format-1 document may carry every level: the serializer is total over `ExposureLevel`, the
+/// emitter builds only `External`, and the strict reader admits only that (BXC0007).
 fn exposure_name(level: ExposureLevel) -> &'static str {
     match level {
         ExposureLevel::CodeOnly => "code_only",
@@ -249,7 +288,8 @@ fn exposure_name(level: ExposureLevel) -> &'static str {
     }
 }
 
-/// Returns the format-1 spelling of an idempotency property: S2 D3's `idempotency` tokens.
+/// Returns an idempotency property's S2 D3 grammar token, under the same distinction between
+/// spelling a value and admitting one (BXC0008).
 fn idempotency_name(value: Idempotency) -> &'static str {
     match value {
         Idempotency::None => "none",
@@ -439,9 +479,9 @@ mod tests {
     /// Every spelling below is emitted verbatim into documents that other builds of this software
     /// must read, which makes `canonical_name` a wire authority in its own right. A typo in a leaf
     /// no fixture happens to use is invisible until it surfaces as a cross-version
-    /// incompatibility, so each of the 13 leaves, the one shape, and both closed vocabularies are
-    /// locked exactly — including the exposure and idempotency values the generator cannot reach
-    /// today but the strict reader is gated on (S4 D1, ruling B1).
+    /// incompatibility, so each of the 13 leaves, the one shape, and both enumerations are locked
+    /// exactly. Locking what `ExposureLevel::Internal` *spells* is not a claim that a format-1
+    /// document may hold it: no emitter writes it and the reader rejects it (BXC0007, BXC0008).
     #[test]
     fn wire_vocabulary_spellings_are_locked() {
         #[rustfmt::skip]
