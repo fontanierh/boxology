@@ -276,8 +276,13 @@ mod tests {
     }
     #[test]
     fn exclusions_are_exact_or_directory_prefixes() {
-        assert!(DERIVED_OUTPUT_PATHS.contains(&"crates/fixtures/hello/generated/"));
-        assert!(DERIVED_OUTPUT_PATHS.contains(&"crates/fixtures/ping/generated/"));
+        assert_eq!(
+            DERIVED_OUTPUT_PATHS,
+            &[
+                "crates/fixtures/hello/generated/",
+                "crates/fixtures/ping/generated/",
+            ]
+        );
         assert!(
             DERIVED_OUTPUT_PATHS.iter().all(|path| {
                 path.starts_with("crates/fixtures/") && path.ends_with("/generated/")

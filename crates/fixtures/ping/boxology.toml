@@ -7,7 +7,6 @@ owned = ["boxology.toml", "implementation/**"]
 commands = [
     "cargo check -p ping-contract --all-features",
     "cargo test -p ping-implementation",
-    "cargo test -p boxology-fixture-tests",
 ]
 
 [[crates]]

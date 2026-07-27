@@ -19,11 +19,7 @@
       "shape": "unary"
     }
   ],
-  "provenance": {
-    "generator": "boxology-generator",
-    "generator_version": "0.0.0",
-    "semantic_digest": "sha256:1ae6fa257308b7e30cb09c8005da2f406171abb36a411538c77b464223ae73e3"
-  },
+  "provenance": "@PROVENANCE@",
   "revision": "sha256:c89886aac818a0bb5e9f9b928e5590291c142c14430b658a4020480575d84970",
   "schema_format": 1,
   "types": [
