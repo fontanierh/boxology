@@ -73,21 +73,25 @@ const ROLE_TEXT: &str = "a declared crate role must be one its package kind can 
 const ROLE: Rule = ("BXW0054", ROLE_TEXT);
 /// The normative source of the role-pair edge table this crate's edge policy enforces.
 const EDGE_SOURCE: &str = "boxology-details/08-rust-build-topology.md edge table";
-/// A coded edge rule and the normative source that states it, carried together because the two do
-/// not agree across the block: 08's six-row table states BXW0055 and BXW0056 and *only* those two,
-/// and D4's fail-closed posture answers every pair it is silent about. Pointing BXW0059 at
-/// [`EDGE_SOURCE`] would send a reader to a table holding no row for any pair it reports.
+/// A coded edge rule paired with its authority. BXW0055–BXW0057 use 08 where directly stated;
+/// BXW0058 binds through S5 D4 because 08 supplies X→I while #325/S5-D4 supplies X→C.
+/// BXW0059/0060 also bind through S5 D4; S7 D4/#325 supports BXW0060's adoption inference.
 type EdgeRule = (Rule, &'static str);
 const CONTRACT_TEXT: &str = "a box contract crate must depend on no box implementation";
 const CONTRACT: EdgeRule = (("BXW0055", CONTRACT_TEXT), EDGE_SOURCE);
 const FOREIGN_TEXT: &str = "a box implementation must depend on no foreign box implementation";
 const FOREIGN: EdgeRule = (("BXW0056", FOREIGN_TEXT), EDGE_SOURCE);
-// The sentence admits *scope* because the verdict turns on it: same-package contract-to-contract is
-// reported and foreign contract-to-contract is not, so a role-only wording would tell a reader that
-// contract-to-contract is never legal, contradicting this checker and 08's own paragraph alike.
+const DECLARED_TEXT: &str = "a box crate's edge to a foreign contract must be a declared import";
+const DECLARED: EdgeRule = (("BXW0057", DECLARED_TEXT), EDGE_SOURCE);
+const SELECTED_TEXT: &str = "a composition edge must target a selected box";
+const SELECTED: EdgeRule = (("BXW0058", SELECTED_TEXT), D4_SOURCE);
+// Scope is load-bearing: inferred same-package C→C is BXW0059, while declared foreign C→C is legal.
 const IMPOSSIBLE_TEXT: &str =
     "no rule permits an edge between these crate roles at this package scope";
 const IMPOSSIBLE: EdgeRule = (("BXW0059", IMPOSSIBLE_TEXT), D4_SOURCE);
+const NON_MEMBER_TEXT: &str =
+    "a path dependency onto a non-member is allowed only from a platform crate";
+const NON_MEMBER: EdgeRule = (("BXW0060", NON_MEMBER_TEXT), D4_SOURCE);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
@@ -103,14 +107,9 @@ const CARGO_MANIFEST: &str = "Cargo.toml";
 // unowned path, BXW0045 overlapping ownership, BXW0046 rival derived outputs, BXW0047 derived and
 // non-derived at once, BXW0048 symlink escape, BXW0049 the workspace lockfile, BXW0050 an
 // unreadable `cargo metadata` document, BXW0051 an unmapped Cargo workspace member, BXW0052 an
-// unmatched `[[crates]]` entry, BXW0053 a member two entries claim, BXW0054 an impossible crate
-// role. That closes T2's block: nothing here is allocated and unlanded, and T3's edge policy opens
-// at BXW0055 exactly as recorded on the tracker. T3 reserves BXW0055-BXW0060 and lands three of
-// them here: BXW0055 a box contract crate depending on a box implementation, BXW0056 a box
-// implementation depending on a foreign one, BXW0059 an edge between roles no rule can permit.
-// Allocated to the next slice, and unlanded until it merges: BXW0057 an undeclared foreign
-// contract, BXW0058 an unselected composition target, BXW0060 a non-platform path edge onto a
-// non-member. A slice's own codes are therefore non-contiguous while the block stays dense.
+// unmatched `[[crates]]` entry, BXW0053 a member two entries claim, BXW0054 an impossible role.
+// T3 then closes densely at BXW0055–BXW0060: contract, foreign implementation, undeclared
+// contract, unselected composition, impossible role/scope, and non-member respectively.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -205,7 +204,7 @@ impl WorkspaceInputs {
             // and so no edge either.
             let (roled, unmatched) = map(&packages, &cargo_members);
             defects.extend(unmatched);
-            defects.extend(edges(&roled));
+            defects.extend(edges(&roled, &cargo_members));
         }
         defects.extend(unreadable);
         if let Some(findings) = Findings::new(defects) {
@@ -512,22 +511,6 @@ fn roles(packages: &[Package]) -> Vec<Entry> {
     }
     defects
 }
-// ======================= The edge policy: BXW0055, BXW0056, BXW0059 =======================
-/// Judges every declared edge whose source and target are both roled members, and reports each one
-/// no rule of this slice permits — one finding per declared entry, located at the *source* member's
-/// own `Cargo.toml` and naming the target package, the target directory, and the kind word.
-///
-/// Three target shapes are skipped rather than judged, and each for its own reason.
-/// [`EdgeTarget::Root`] is the workspace-root crate, which no `[[crates]].path` can spell and which
-/// BXW0051 therefore names permanently: it is *inside* the workspace, so it is no BXW0060 candidate
-/// either, and it carries no role, so every sentence below is about something it does not have.
-/// Skipping it is the same per-member anti-cascade as any other unroled member, not a hole. That
-/// second net makes the first unobservable, so **no test of this slice can pin the `Root` skip**:
-/// PR1 pins the reading, and BXW0060 — the first rule treating `Root` and out-of-root differently
-/// — inherits the obligation to pin it.
-/// [`EdgeTarget::OutOfRoot`] and an in-root directory no member occupies are BXW0060's question,
-/// the next slice's, and are answered nowhere here.
-///
 /// **Known v0 limit, recorded in the code and not only in the task spec.** A crate that reaches
 /// another crate's source through `include!` declares no Cargo dependency, so that edge is absent
 /// from the `cargo metadata` document and invisible to every rule in this section. Three instances
@@ -535,26 +518,53 @@ fn roles(packages: &[Package]) -> Vec<Entry> {
 /// `crates/boxology-http/src/binding.rs`, and `crates/boxology-generator/src/lib.rs` — so a
 /// forbidden dependency concealed that way passes. Closing it needs a source-level check, which is
 /// no part of reading one metadata document.
-fn edges(roled: &[Mapped]) -> Vec<Entry> {
+fn edges(roled: &[Mapped], members: &[CargoMember]) -> Vec<Entry> {
     let mut defects = Vec::new();
     for source in roled {
         for held in source.member.edges() {
-            let EdgeTarget::InRoot(at) = &held.target else {
+            let kind = held.kind.word();
+            let judged = match &held.target {
+                EdgeTarget::Root => None,
+                EdgeTarget::InRoot(at) => {
+                    let occupies = |other: &&Mapped| other.member.crate_dir() == Some(at);
+                    if let Some(target) = roled.iter().find(occupies) {
+                        let same = source.package.id() == target.package.id();
+                        let declared = source
+                            .package
+                            .manifest()
+                            .imports()
+                            .iter()
+                            .any(|import| import.package() == target.package.id());
+                        let selected = source
+                            .package
+                            .manifest()
+                            .composition()
+                            .is_some_and(|c| c.boxes().contains(target.package.id()));
+                        judged(
+                            source.entry.role(),
+                            target.entry.role(),
+                            same,
+                            declared,
+                            selected,
+                        )
+                        .map(|rule| {
+                            let id = target.package.id();
+                            (rule, format!("{id} {} {kind}", at.as_str()))
+                        })
+                    } else if members.iter().any(|member| member.crate_dir() == Some(at))
+                        || source.entry.role() == CrateRole::Platform
+                    {
+                        None
+                    } else {
+                        Some((NON_MEMBER, format!("{} {kind}", at.as_str())))
+                    }
+                }
+                EdgeTarget::OutOfRoot if source.entry.role() == CrateRole::Platform => None,
+                EdgeTarget::OutOfRoot => Some((NON_MEMBER, format!("outside {kind}"))),
+            };
+            let Some(((rule, stated), payload)) = judged else {
                 continue;
             };
-            let occupies = |other: &&Mapped| other.member.crate_dir() == Some(at);
-            let Some(target) = roled.iter().find(occupies) else {
-                continue;
-            };
-            let same = source.package.id() == target.package.id();
-            let Some((rule, stated)) = judged(source.entry.role(), target.entry.role(), same)
-            else {
-                continue;
-            };
-            // Two grammar-proofed values and one `&'static str` this crate chose: no Cargo package
-            // name, rename, cfg string, or absolute path is echoed, and none of them is even read.
-            let (kind, id) = (held.kind.word(), target.package.id());
-            let payload = format!("{id} {} {kind}", at.as_str());
             let owner = Some(source.package.id().clone());
             let located = source.member.manifest_path().clone();
             defects.push(Entry::Workspace(Finding::about(
@@ -565,37 +575,32 @@ fn edges(roled: &[Mapped]) -> Vec<Entry> {
     defects
 }
 /// Reports the rule an edge from a `source`-role crate onto a `target`-role crate breaks, and `None`
-/// for one this slice permits. `same` is owning-package identity — the only thing separating a box's
-/// own contract from a foreign one, and never role equality, since two packages host the same roles.
+/// for one it permits.
 ///
-/// **What each answer rests on, counted cell by cell rather than asserted** — T2 shipped a slice
-/// claiming textual determination where it had inferred, so the whole grid is apportioned here.
-/// Eighteen cells: the 4x4 role grid, with the two same-role pairs split by package scope.
-///
-/// - **08's text, 2 cells.** Contract onto any implementation, either scope ("Box contract | Any
-///   box implementation | Forbidden"), and implementation onto a *foreign* implementation.
-/// - **D4's fail-closed posture, 7 cells**, cited as such by [`IMPOSSIBLE`]'s own source:
-///   same-package implementation pairs, contract and implementation onto a composition,
-///   composition onto a composition, and platform onto each of the other three roles.
-/// - **Inference, 1 cell, marked.** Contract onto a *same-package* sibling contract: no row states
-///   it and no recorded silence covers it, so it takes the answer the tracker gave every other
-///   unlisted pair — a false forbid surfaces loudly at adoption, a false allow never does.
-/// - **Deferred, 4 cells, not decided.** Implementation onto a contract, composition onto an
-///   implementation or a contract, contract onto a *foreign* contract: each is half allowed by 08
-///   and half BXW0057's or BXW0058's question, so this slice returns "allowed" and no report claims
-///   it checked them. BXW0060 is the third deferred rule and no cell of this grid at all — a
-///   non-member target has no role.
-/// - **The `#325` silence-1 resolution, 4 cells.** Every role onto platform, resting on **nothing
-///   08 states**: its one platform sentence in that section restricts platform crates as *sources*
-///   ("they cannot be used as passthroughs"), and permits nothing as a target.
-fn judged(source: CrateRole, target: CrateRole, same: bool) -> Option<EdgeRule> {
+/// Authority is explicit: 08 supplies BXW0055–BXW0057 where stated. BXW0058 binds through S5 D4:
+/// 08 supplies composition→implementation, while #325's unlisted/S5-D4 ruling supplies
+/// composition→contract. S5 D4 also fail-closes unlisted role/scope cells as BXW0059. Both C→C
+/// rulings bind through S5 D4: sibling is fail-closed; declared foreign is allowed. 08's declared-
+/// contract/acyclicity paragraphs support the foreign allowance. Tracker #325 allows every role onto
+/// platform; platform as source remains fail-closed onto I/C/X. BXW0060 is outside this role grid
+/// and binds through S5 D4; S7 D4/#325 is the supporting adoption inference.
+fn judged(
+    source: CrateRole,
+    target: CrateRole,
+    same: bool,
+    declared: bool,
+    selected: bool,
+) -> Option<EdgeRule> {
     use CrateRole::{BoxContract as C, BoxImplementation as I, Composition as X, Platform as P};
     match (source, target) {
         // Allowed on the `#325` silence-1 resolution alone — 08 spells no such row.
         (_, P) => None,
-        // Deferred to BXW0057 and BXW0058, which is not the same answer as allowed: see above.
-        (I, C) | (X, I) | (X, C) => None,
-        (C, C) if !same => None,
+        (I, C) if same || declared => None,
+        (C, C) if !same && declared => None,
+        (I, C) => Some(DECLARED),
+        (C, C) if !same => Some(DECLARED),
+        (X, I) | (X, C) if selected => None,
+        (X, I) | (X, C) => Some(SELECTED),
         (C, I) => Some(CONTRACT),
         (I, I) if !same => Some(FOREIGN),
         (I, I) | (C, C) | (C, X) | (I, X) => Some(IMPOSSIBLE),
@@ -1263,6 +1268,72 @@ mod tests {
         }
         crates(base, entries)
     }
+    fn importing(id: &str, entries: &[(&str, &str, &str)], imports: &[&str]) -> Vec<u8> {
+        let mut text = String::from_utf8(roled(id, "box", entries)).expect("ASCII");
+        for package in imports {
+            text.push_str(&format!(
+                "[[imports]]\npackage = {package:?}\ncontract = {package:?}\n"
+            ));
+        }
+        text.into_bytes()
+    }
+    fn selecting(
+        id: &str,
+        entries: &[(&str, &str, &str)],
+        boxes: &[&str],
+        binding: bool,
+    ) -> Vec<u8> {
+        let named: Vec<String> = boxes.iter().map(|box_id| format!("{box_id:?}")).collect();
+        let mut base = owning(id, "composition", &[MANIFEST], &[]);
+        base.extend_from_slice(
+            format!("[composition]\nboxes = [{}]\n", named.join(", ")).as_bytes(),
+        );
+        if binding {
+            let first = boxes.first().expect("a binding needs one box");
+            base.extend_from_slice(
+                format!(
+                    "[[composition.bindings]]\nbox = {first:?}\n\
+                 capability = \"{first}.run\"\ntransport = \"in-process\"\n"
+                )
+                .as_bytes(),
+            );
+        }
+        crates(base, entries)
+    }
+    fn successful_edge(
+        checked: &Workspace,
+        packages: &[&str],
+        source: &str,
+        source_at: &str,
+        target: &str,
+        target_at: &str,
+    ) {
+        let ids: Vec<&str> = checked
+            .packages()
+            .iter()
+            .map(|package| package.id().as_str())
+            .collect();
+        assert_eq!(ids, packages);
+        let source = checked
+            .cargo_members()
+            .iter()
+            .find(|member| member.cargo_package() == source)
+            .unwrap();
+        let target = checked
+            .cargo_members()
+            .iter()
+            .find(|member| member.cargo_package() == target)
+            .unwrap();
+        assert_eq!(source.manifest_path(), &path(source_at));
+        assert_eq!(target.crate_dir(), Some(&path(target_at)));
+        assert_eq!(
+            source.edges(),
+            &[DeclaredEdge {
+                kind: EdgeKind::Normal,
+                target: EdgeTarget::InRoot(path(target_at)),
+            }]
+        );
+    }
     /// Inputs whose listing tracks every named manifest as a plain file.
     fn workspace(manifests: Vec<(&str, Vec<u8>)>) -> WorkspaceInputs {
         listing(manifests, &[])
@@ -1335,7 +1406,8 @@ mod tests {
     /// loudly instead of going unproven.
     const ALL_CODES: &[&str] = &[
         "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
-        "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054", "BXW0055", "BXW0056", "BXW0059",
+        "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054", "BXW0055", "BXW0056", "BXW0057",
+        "BXW0058", "BXW0059", "BXW0060",
     ];
     /// One minimal workspace per code, ordered as `ALL_CODES` is: each is a shape the suite above
     /// already exercises, reduced to the least input that provokes its code, so the golden below
@@ -1376,6 +1448,19 @@ mod tests {
             ("b/boxology.toml", roled("b", "box", &sole("t"))),
         ];
         let across = depending(&[("a/s", "s", far.as_str()), ("b/t", "t", "")], &[]);
+        let contract: [(&str, &str, &str); 1] = [("t", "t", "box-contract")];
+        let undeclared = vec![
+            ("a/boxology.toml", roled("a", "box", &sole("s"))),
+            ("b/boxology.toml", roled("b", "box", &contract)),
+        ];
+        let to_contract = depending(&[("a/s", "s", far.as_str()), ("b/t", "t", "")], &[]);
+        let composition: [(&str, &str, &str); 1] = [("s", "s", "composition")];
+        let unselected = vec![
+            ("a/boxology.toml", roled("a", "composition", &composition)),
+            ("b/boxology.toml", roled("b", "box", &sole("t"))),
+        ];
+        let non_member = vec![("a/boxology.toml", roled("a", "box", &sole("s")))];
+        let missing = edge("null", Some("/w/missing"), "");
         vec![
             (
                 "BXW0042",
@@ -1428,15 +1513,19 @@ mod tests {
             ("BXW0054", one(boxed, &one_member)),
             ("BXW0055", sibling("box-contract")),
             ("BXW0056", mapped(foreign, &[], &across)),
+            ("BXW0057", mapped(undeclared, &[], &to_contract)),
+            ("BXW0058", mapped(unselected, &[], &across)),
             ("BXW0059", sibling("box-implementation")),
+            (
+                "BXW0060",
+                mapped(
+                    non_member,
+                    &[],
+                    &depending(&[("a/s", "s", missing.as_str())], &[]),
+                ),
+            ),
         ]
     }
-    /// The rendered wording of every code, byte for byte, as `<code> <rule> <source>` per line in
-    /// `ALL_CODES` order. It is the only thing that pins either: the scattered assertions above
-    /// reach seven of the nine rule texts and compare every `rule_source` but one against the
-    /// constant it guards, and nothing there forces a *new* code to be pinned at all. Reword one of
-    /// those constants and the suite stays green; only *repointing* a code at a different constant
-    /// trips them. A wording change is a readable diff here instead of an invisible one.
     const EXPECTED: &str = "\
 BXW0042 one package identity must be declared by exactly one manifest boxology-details/02-packages.md discovery walk
 BXW0043 a fixtures pattern must not claim its own declaring manifest boxology-details/02-packages.md discovery walk
@@ -1453,7 +1542,10 @@ BXW0053 at most one declared crate entry may match a Cargo workspace member boxo
 BXW0054 a declared crate role must be one its package kind can host specs/s5-manifest-and-validation.md D4
 BXW0055 a box contract crate must depend on no box implementation boxology-details/08-rust-build-topology.md edge table
 BXW0056 a box implementation must depend on no foreign box implementation boxology-details/08-rust-build-topology.md edge table
+BXW0057 a box crate's edge to a foreign contract must be a declared import boxology-details/08-rust-build-topology.md edge table
+BXW0058 a composition edge must target a selected box specs/s5-manifest-and-validation.md D4
 BXW0059 no rule permits an edge between these crate roles at this package scope specs/s5-manifest-and-validation.md D4
+BXW0060 a path dependency onto a non-member is allowed only from a platform crate specs/s5-manifest-and-validation.md D4
 ";
     #[test]
     fn rule_text_and_sources_are_locked() {
@@ -2551,10 +2643,11 @@ BXW0059 no rule permits an edge between these crate roles at this package scope 
     #[test]
     fn role_pair_edges_are_judged() {
         // "<source role> <target role> <same|foreign>", plus the code a forbidden pair reports.
-        let cases = "i i same BXW0059,i i foreign BXW0056,i c same,i c foreign,\
+        let cases = "i i same BXW0059,i i foreign BXW0056,i c same,i c foreign BXW0057,\
                      i x foreign BXW0059,i p foreign,c i same BXW0055,c i foreign BXW0055,\
-                     c c same BXW0059,c c foreign,c x foreign BXW0059,c p foreign,\
-                     x i foreign,x c foreign,x x same BXW0059,x x foreign BXW0059,x p foreign,\
+                     c c same BXW0059,c c foreign BXW0057,c x foreign BXW0059,c p foreign,\
+                     x i foreign BXW0058,x c foreign BXW0058,\
+                     x x same BXW0059,x x foreign BXW0059,x p foreign,\
                      p i foreign BXW0059,p c foreign BXW0059,p x foreign BXW0059,\
                      p p same,p p foreign";
         for case in cases.split(',') {
@@ -2578,8 +2671,11 @@ BXW0059 no rule permits an edge between these crate roles at this package scope 
             let listed = [("a/s", "s", one.as_str()), (at, "t", "")];
             let checked = mapped(held, &[], &depending(&listed, &[])).check();
             let owner = if same { "a" } else { "b" };
+            let packages: &[&str] = if same { &["a"] } else { &["a", "b"] };
             match (&checked, expected) {
-                (Ok(_), []) => continue,
+                (Ok(workspace), []) => {
+                    successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)
+                }
                 (Err(report), [code]) => assert_eq!(
                     report.to_string(),
                     format!("{code} a/s/Cargo.toml package=a candidates=[{owner} {at} normal]"),
@@ -2676,6 +2772,172 @@ BXW0059 no rule permits an edge between these crate roles at this package scope 
         assert_eq!(down.rule_source(), source);
         assert_eq!(across.candidates(), [], "an edge names no glob claim");
     }
+    #[test]
+    fn undeclared_foreign_contract_edges_are_coded() {
+        let a = [
+            ("ai", "i", "box-implementation"),
+            ("ac", "c", "box-contract"),
+        ];
+        let b = [("bc", "c", "box-contract")];
+        let d = [
+            ("di", "i", "box-implementation"),
+            ("dc", "c", "box-contract"),
+        ];
+        let held = vec![
+            ("a/boxology.toml", importing("a", &a, &["b"])),
+            ("b/boxology.toml", roled("b", "box", &b)),
+            ("d/boxology.toml", roled("d", "box", &d)),
+        ];
+        let ai = [
+            edge("null", Some("/w/b/c"), ""),
+            edge("null", Some("/w/d/c"), ""),
+        ]
+        .join(",");
+        let ac = [
+            edge("null", Some("/w/b/c"), ""),
+            edge("\"build\"", Some("/w/d/c"), ""),
+        ]
+        .join(",");
+        let di = edge("\"dev\"", Some("/w/a/c"), "");
+        let members = [
+            ("a/i", "ai", ai.as_str()),
+            ("a/c", "ac", ac.as_str()),
+            ("b/c", "bc", ""),
+            ("d/i", "di", di.as_str()),
+            ("d/c", "dc", ""),
+        ];
+        let report = mapped(held, &[], &depending(&members, &[]))
+            .check()
+            .unwrap_err();
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0057 a/c/Cargo.toml package=a candidates=[d d/c build]",
+                "BXW0057 a/i/Cargo.toml package=a candidates=[d d/c normal]",
+                "BXW0057 d/i/Cargo.toml package=d candidates=[a a/c dev]",
+            ]
+        );
+        let Entry::Workspace(first) = &report.as_slice()[0] else {
+            panic!()
+        };
+        assert_eq!(
+            (first.rule(), first.rule_source()),
+            (DECLARED_TEXT, EDGE_SOURCE)
+        );
+        let held = vec![
+            (
+                "a/boxology.toml",
+                importing("a", &[("ai", "i", "box-implementation")], &["b"]),
+            ),
+            (
+                "b/boxology.toml",
+                roled("b", "box", &[("bc", "c", "box-contract")]),
+            ),
+        ];
+        let one = edge("null", Some("/w/b/c"), "");
+        let document = depending(&[("a/i", "ai", &one), ("b/c", "bc", "")], &[]);
+        let checked = mapped(held, &[], &document)
+            .check()
+            .expect("declared foreign I-to-C");
+        successful_edge(&checked, &["a", "b"], "ai", "a/i/Cargo.toml", "bc", "b/c");
+    }
+    #[test]
+    fn unselected_composition_edges_are_coded() {
+        let x = [("x", "x", "composition")];
+        let pair = |prefix| {
+            [
+                ("i", prefix, "box-implementation"),
+                ("c", "c", "box-contract"),
+            ]
+        };
+        let held = vec![
+            ("x/boxology.toml", selecting("x", &x, &["a"], false)),
+            ("a/boxology.toml", roled("a", "box", &pair("i"))),
+            ("d/boxology.toml", roled("d", "box", &pair("i"))),
+        ];
+        let paths = ["/w/a/i", "/w/a/c", "/w/d/i", "/w/d/c"];
+        let edges = paths.map(|at| edge("null", Some(at), "")).join(",");
+        let members = [
+            ("x/x", "x", edges.as_str()),
+            ("a/i", "i", ""),
+            ("a/c", "c", ""),
+            ("d/i", "i", ""),
+            ("d/c", "c", ""),
+        ];
+        let report = mapped(held, &[], &depending(&members, &[]))
+            .check()
+            .unwrap_err();
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0058 x/x/Cargo.toml package=x candidates=[d d/c normal]",
+                "BXW0058 x/x/Cargo.toml package=x candidates=[d d/i normal]",
+            ]
+        );
+        let held = vec![
+            ("x/boxology.toml", selecting("x", &x, &["a", "d"], true)),
+            (
+                "d/boxology.toml",
+                roled("d", "box", &[("i", "i", "box-implementation")]),
+            ),
+        ];
+        let one = edge("null", Some("/w/d/i"), "");
+        let members = [("x/x", "x", one.as_str()), ("d/i", "i", "")];
+        let checked = mapped(held, &[], &depending(&members, &[]))
+            .check()
+            .expect("selected edge");
+        successful_edge(&checked, &["d", "x"], "x", "x/x/Cargo.toml", "i", "d/i");
+    }
+    #[test]
+    fn non_member_path_edges_are_coded() {
+        let p = [("p", "p", "platform"), ("near", "prefix-more", "platform")];
+        let b = [("i", "i", "box-implementation")];
+        let held = vec![
+            (MANIFEST, roled("root", "platform", &p)),
+            ("b/boxology.toml", roled("b", "box", &b)),
+        ];
+        let paths = ["/w", "/w/missing", "/w/missing", "/w/prefix", "/outside"];
+        let mut edges: Vec<String> = paths
+            .iter()
+            .enumerate()
+            .map(|(n, at)| {
+                edge(
+                    "null",
+                    Some(at),
+                    if n == 2 {
+                        "\"target\":\"cfg(unix)\""
+                    } else {
+                        ""
+                    },
+                )
+            })
+            .collect();
+        edges.push(edge("null", None, "\"name\":\"registry\""));
+        let platform = paths
+            .iter()
+            .map(|at| edge("\"dev\"", Some(at), ""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let members = [
+            ("", "root-member", ""),
+            ("p", "p", platform.as_str()),
+            ("prefix-more", "near", ""),
+            ("b/i", "i", &edges.join(",")),
+        ];
+        let report = mapped(held, &[], &depending(&members, &[]))
+            .check()
+            .unwrap_err();
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0051 Cargo.toml package= candidates=[]",
+                "BXW0060 b/i/Cargo.toml package=b candidates=[missing normal]",
+                "BXW0060 b/i/Cargo.toml package=b candidates=[missing normal]",
+                "BXW0060 b/i/Cargo.toml package=b candidates=[outside normal]",
+                "BXW0060 b/i/Cargo.toml package=b candidates=[prefix normal]",
+            ]
+        );
+    }
     /// No edge into or out of a member this checker cannot role is judged: the mapping finding
     /// already names the document to change, and a verdict would rest on a role that does not
     /// exist. All three ways of lacking one are here — a member no entry maps (BXW0051), one two
@@ -2683,10 +2945,7 @@ BXW0059 no rule permits an edge between these crate roles at this package scope 
     /// — and each is the source of an edge that would be forbidden under the role it is denied
     /// *and* the target of one. The member at the workspace root is the permanent fourth: no
     /// `[[crates]].path` spells it, so it is unroled by
-    /// construction, and the edge onto it is skipped rather than called an escape from the
-    /// workspace it sits inside. The last two edges are the next slice's business — an in-root
-    /// directory no member occupies, and one outside the root — and are permitted here rather than
-    /// judged. Four mapping lines, no fifth.
+    /// construction, so its edge is skipped; the final non-member edges are BXW0060.
     #[test]
     fn unroled_members_produce_no_edge_findings() {
         let outer: [(&str, &str, &str); 2] = [
@@ -2731,6 +2990,8 @@ BXW0059 no rule permits an edge between these crate roles at this package scope 
                 "BXW0051 orphan/Cargo.toml package= candidates=[]",
                 "BXW0053 pkg/dup/Cargo.toml package= \
                  candidates=[root boxology.toml pkg/dup,bx pkg/boxology.toml dup]",
+                "BXW0060 pkg/contract/Cargo.toml package=bx candidates=[nowhere normal]",
+                "BXW0060 pkg/contract/Cargo.toml package=bx candidates=[outside normal]",
                 "BXW0054 boxology.toml package=root candidates=[bad]",
             ]
         );

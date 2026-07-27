@@ -8,3 +8,9 @@ publish = false
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+
+[[test]]
+name = "surface_lock"
+path = "tests/surface_lock.rs"
+[dev-dependencies]
+syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }
