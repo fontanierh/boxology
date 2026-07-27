@@ -1,0 +1,12 @@
+[package]
+name = "boxology-generator-writer"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+boxology-generator = { version = "=0.0.0", path = "../boxology-generator" }
+
+[dev-dependencies]
+boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
+boxology-generator-model = { version = "=0.0.0", path = "../boxology-generator-model" }

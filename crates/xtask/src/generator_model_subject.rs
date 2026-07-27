@@ -1,5 +1,5 @@
 use boxology_contract::BoxId;
-use boxology_generator::generate;
+use boxology_generator::{OUTPUTS, generate};
 use boxology_generator_model::{
     ContractDeclaration, ContractDeclarationShape, ContractDeclarationSyntax, ContractFields,
     GenerationRequest, Manifest, ParsedRustInputs,
@@ -676,12 +676,7 @@ impl HelloService {{
             ),
         ],
         vec![],
-        vec![
-            "generated/contract/src/lib.rs".into(),
-            "generated/contract/Cargo.toml".into(),
-            "generated/adapter/adapter.rs".into(),
-            "generated/schema.json".into(),
-        ],
+        OUTPUTS.iter().map(|path| (*path).into()).collect(),
     )
     .map_err(|error| format!("fixed cold request failed: {error}"))?;
     let cold_contract = ParsedRustInputs::parse(&cold_request)

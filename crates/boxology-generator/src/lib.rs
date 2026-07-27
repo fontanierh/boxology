@@ -7,7 +7,13 @@ use boxology_generator_model::{Diagnostics, GenerationRequest, ImportModel, Pars
 
 mod schema;
 
-const OUTPUTS: [&str; 4] = [
+/// The generator's complete declared output set, in emission order.
+///
+/// [`generate`] requires declared outputs to equal this set exactly — as a *set*, so this order is
+/// not [`GeneratedTree::files`] order, which is sorted by path bytes. Callers should consume this
+/// rather than a drifting copy; today's are tests and a determinism subject. Goldens keep literal
+/// copies on purpose: a test pinning the set must not be editable by editing what it pins.
+pub const OUTPUTS: [&str; 4] = [
     "generated/contract/Cargo.toml",
     "generated/contract/src/lib.rs",
     "generated/adapter/adapter.rs",

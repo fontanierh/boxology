@@ -92,6 +92,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxology-generator-writer"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "boxology-generator",
+ "boxology-generator-model",
+]
+
+[[package]]
 name = "boxology-http"
 version = "0.0.0"
 dependencies = [
