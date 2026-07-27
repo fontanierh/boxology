@@ -2,7 +2,10 @@ use std::path::Path;
 use std::process::{Command, Output};
 const LIMIT: u64 = 600;
 // Bootstrap registry: S7 replaces this with manifest-derived classification (S0 D10).
-const DERIVED_OUTPUT_PATHS: &[&str] = &["crates/fixtures/hello/generated/"];
+const DERIVED_OUTPUT_PATHS: &[&str] = &[
+    "crates/fixtures/hello/generated/",
+    "crates/fixtures/ping/generated/",
+];
 struct Entry {
     path: String,
     added: u64,
@@ -274,6 +277,12 @@ mod tests {
     #[test]
     fn exclusions_are_exact_or_directory_prefixes() {
         assert!(DERIVED_OUTPUT_PATHS.contains(&"crates/fixtures/hello/generated/"));
+        assert!(DERIVED_OUTPUT_PATHS.contains(&"crates/fixtures/ping/generated/"));
+        assert!(
+            DERIVED_OUTPUT_PATHS.iter().all(|path| {
+                path.starts_with("crates/fixtures/") && path.ends_with("/generated/")
+            })
+        );
         let derived = ["generated/exact.rs", "generated/tree/"];
         assert!(is_excluded("Cargo.lock", &derived));
         assert!(is_excluded("generated/exact.rs", &derived));

@@ -37,9 +37,10 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-runtime",
     "boxology-telegram",
     "hello-implementation",
+    "ping-implementation",
     "xtask",
 ];
-const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt", "hello-contract"];
+const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt", "hello-contract", "ping-contract"];
 const EDITOR_FIXTURE: &str = "crates/fixtures/hello/implementation";
 const EDITOR_CHECK_ARGS: &[&str] = &[
     "analysis-stats",
