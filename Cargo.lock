@@ -1519,6 +1519,7 @@ dependencies = [
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",
+ "boxology-init",
  "boxology-manifest",
  "boxology-workspace",
  "serde_json",

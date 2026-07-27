@@ -15,6 +15,7 @@ mod determinism_meta;
 mod determinism_publish;
 mod determinism_run;
 mod determinism_verify;
+mod generated_project_subject;
 mod generator_model_subject;
 mod links;
 mod records;
