@@ -1,0 +1,41 @@
+{
+  "box_id": "ping",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "HelloError",
+      "id": "ping.ping",
+      "idempotency": "none",
+      "input": {
+        "name": "nonce",
+        "type": "u64"
+      },
+      "max_exposure": "external",
+      "name": "ping",
+      "output": {
+        "type": "u64"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": "@PROVENANCE@",
+  "revision": "sha256:c89886aac818a0bb5e9f9b928e5590291c142c14430b658a4020480575d84970",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "HelloError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "EmptyName",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}
