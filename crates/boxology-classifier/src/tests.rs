@@ -42,16 +42,37 @@ fn document(box_id: &str) -> SchemaDocument {
     }
 }
 
-fn assert_unclassified(mutated: SchemaDocument) {
-    let base = document("hello");
-    assert_ne!(base, mutated);
-    let report = classify(Some(&base), Some(&mutated)).unwrap();
+fn assert_unclassified_pair(base: SchemaDocument, submitted: SchemaDocument) {
+    assert_ne!(base, submitted);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_eq!(report.findings().len(), 1);
     let finding = &report.findings()[0];
     assert_eq!(finding.code(), "BXC0028");
-    assert_eq!(finding.path(), "/");
+    assert_eq!(finding.path(), "hello");
     assert_eq!(finding.class(), Class::Incompatible);
     assert_eq!(report.verdict(), Class::Incompatible);
+}
+
+fn add_capability(document: &mut SchemaDocument) {
+    let mut capability = document.capabilities[0].clone();
+    capability.name = CapabilityName::new("wave").unwrap();
+    document.capabilities.push(capability);
+}
+fn add_type(document: &mut SchemaDocument) {
+    let mut schema_type = document.types[0].clone();
+    schema_type.name = "WaveError".to_owned();
+    document.types.push(schema_type);
+}
+
+fn shaped_document(capabilities: usize, types: usize) -> SchemaDocument {
+    let mut document = document("hello");
+    if capabilities == 2 {
+        add_capability(&mut document);
+    }
+    if types == 2 {
+        add_type(&mut document);
+    }
+    document
 }
 
 #[test]
@@ -154,9 +175,32 @@ fn every_effectively_mutable_comparable_field_fails_closed() {
     for mutate in mutations {
         let mut submitted = document("hello");
         mutate(&mut submitted);
-        assert_unclassified(submitted);
+        assert_unclassified_pair(document("hello"), submitted);
     }
     // Shape has only `Unary` in the current format-1 vocabulary, so it has no effective mutation.
+}
+
+#[test]
+fn collection_shape_changes_fail_closed() {
+    type Case = (usize, usize, fn(&mut SchemaDocument));
+    let cases: &[Case] = &[
+        (1, 1, add_capability),
+        (1, 1, |document| {
+            document.capabilities.pop();
+        }),
+        (2, 1, |document| document.capabilities.swap(0, 1)),
+        (1, 1, add_type),
+        (1, 1, |document| {
+            document.types.pop();
+        }),
+        (1, 2, |document| document.types.swap(0, 1)),
+    ];
+    for &(capabilities, types, mutate) in cases {
+        let base = shaped_document(capabilities, types);
+        let mut submitted = shaped_document(capabilities, types);
+        mutate(&mut submitted);
+        assert_unclassified_pair(base, submitted);
+    }
 }
 
 #[test]
@@ -178,7 +222,7 @@ fn maximum_severity_wins_in_both_finding_orders() {
     };
     let high = Finding {
         code: "BXC0028",
-        path: "/".to_owned(),
+        path: "hello".to_owned(),
         class: Class::Incompatible,
     };
     assert_eq!(report(vec![low, high]).verdict, Class::Incompatible);
@@ -190,7 +234,7 @@ fn maximum_severity_wins_in_both_finding_orders() {
     };
     let high = Finding {
         code: "BXC0028",
-        path: "/".to_owned(),
+        path: "hello".to_owned(),
         class: Class::Incompatible,
     };
     assert_eq!(report(vec![high, low]).verdict, Class::Incompatible);

@@ -115,9 +115,9 @@ pub fn classify(
         (Some(base), Some(submitted)) if equal_modulo_provenance(base, submitted) => {
             Ok(report(Vec::new()))
         }
-        (Some(_), Some(_)) => Ok(report(vec![Finding {
+        (Some(base), Some(_)) => Ok(report(vec![Finding {
             code: "BXC0028",
-            path: "/".to_owned(),
+            path: base.box_id.as_str().to_owned(),
             class: Class::Incompatible,
         }])),
     }

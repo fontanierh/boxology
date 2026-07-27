@@ -44,6 +44,7 @@ dependencies = [
  "boxology-contract",
  "boxology-schema",
  "serde_json",
+ "syn 3.0.0",
 ]
 
 [[package]]

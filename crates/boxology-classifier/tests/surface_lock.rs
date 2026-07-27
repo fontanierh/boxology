@@ -5,9 +5,40 @@ use boxology_schema::{
     SchemaVariant, Shape,
 };
 use serde_json::json;
+use std::fs;
+use syn::{Item, Meta, Visibility};
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 
+fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
+    let file = syn::parse_file(source).map_err(|_| "invalid Rust source")?;
+    let modules: Vec<_> = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Mod(module) => Some(module),
+            _ => None,
+        })
+        .collect();
+    if modules.len() != 1 {
+        return Err("expected exactly one module");
+    }
+    let module = modules[0];
+    let cfg_test = matches!(
+        &module.attrs[..],
+        [attribute]
+            if matches!(&attribute.meta, Meta::List(meta)
+                if meta.path.is_ident("cfg") && meta.tokens.to_string() == "test")
+    );
+    if module.ident != "tests"
+        || !matches!(module.vis, Visibility::Inherited)
+        || module.content.is_some()
+        || !cfg_test
+    {
+        return Err("unexpected module declaration");
+    }
+    Ok(())
+}
 fn document(box_id: &str) -> SchemaDocument {
     SchemaDocument {
         box_id: BoxId::new(box_id).unwrap(),
@@ -45,11 +76,14 @@ fn document(box_id: &str) -> SchemaDocument {
 #[test]
 fn production_inventory_and_code_anchors_are_fail_closed() {
     let source = include_str!("../src/lib.rs");
-    let modules: Vec<_> = source
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("mod "))
+    assert_eq!(require_allowed_modules(source), Ok(()));
+    let mut source_files: Vec<_> = fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".rs"))
         .collect();
-    assert_eq!(modules, ["tests;"]);
+    source_files.sort();
+    assert_eq!(source_files, ["lib.rs", "tests.rs"]);
     let anchors = [
         ("BXC0024", "Diagnostic::classification_requires_document()"),
         ("BXC0025", "Diagnostic::box_id_mismatch()"),
@@ -59,6 +93,22 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     ];
     for (code, anchor) in anchors {
         assert_eq!(source.matches(anchor).count(), 1, "{code} anchor count");
+    }
+}
+#[test]
+fn attributed_public_module_fails_the_ast_inventory() {
+    let source = include_str!("../src/lib.rs");
+    let attacks = [
+        "mod stray {}",
+        "pub mod stray {}",
+        "pub(crate) mod stray {}",
+        "#[allow(dead_code)] pub mod stray {}",
+    ];
+    for attack in attacks {
+        assert_eq!(
+            require_allowed_modules(&format!("{source}\n{attack}\n")),
+            Err("expected exactly one module")
+        );
     }
 }
 
