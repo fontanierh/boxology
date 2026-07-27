@@ -1,5 +1,8 @@
 use boxology_manifest::RelativePath;
-use boxology_workspace::{FileEntry, WorkspaceInputs};
+use boxology_workspace::{
+    CheckReport, Completion, ContractClassificationCompletion, FileEntry, SkipReason,
+    WorkspaceInputs,
+};
 use std::{fs, path::Path};
 
 // A fixed in-memory listing, deliberately out of report order. No host path, clock, environment
@@ -59,6 +62,24 @@ const TRACKED: [&str; 6] = [
 fn rel(path: &str) -> Result<RelativePath, String> {
     RelativePath::new(path).map_err(|_| format!("fixed path {path} is invalid"))
 }
+fn report_inputs() -> Result<WorkspaceInputs, String> {
+    let mut files = Vec::new();
+    for (path, target) in LISTING {
+        let path = rel(path)?;
+        files.push(match target {
+            Some(target) => FileEntry::symlink(path, String::from(target)),
+            None => FileEntry::file(path),
+        });
+    }
+    let mut manifests = Vec::new();
+    for (path, text) in MANIFESTS {
+        let path = rel(path)?;
+        files.push(FileEntry::file(path.clone()));
+        manifests.push((path, text.as_bytes().to_vec()));
+    }
+    WorkspaceInputs::new(files, manifests, NO_MEMBERS)
+        .map_err(|_| String::from("fixed listing rejected"))
+}
 fn classification() -> Result<String, String> {
     let mut files = Vec::new();
     for path in TRACKED {
@@ -79,28 +100,36 @@ fn classification() -> Result<String, String> {
     Ok(body)
 }
 fn report() -> Result<String, String> {
-    let mut files = Vec::new();
-    for (path, target) in LISTING {
-        let path = rel(path)?;
-        files.push(match target {
-            Some(target) => FileEntry::symlink(path, String::from(target)),
-            None => FileEntry::file(path),
-        });
-    }
-    let mut manifests = Vec::new();
-    for (path, text) in MANIFESTS {
-        let path = rel(path)?;
-        files.push(FileEntry::file(path.clone()));
-        manifests.push((path, text.as_bytes().to_vec()));
-    }
-    let inputs = WorkspaceInputs::new(files, manifests, NO_MEMBERS)
-        .map_err(|_| String::from("fixed listing rejected"))?;
-    let findings = inputs.check().err().ok_or("fixed listing is clean")?;
+    let findings = report_inputs()?
+        .check()
+        .err()
+        .ok_or("fixed listing is clean")?;
     Ok(format!("{findings}\n"))
+}
+fn check_report() -> Result<String, String> {
+    let report = CheckReport {
+        discovery: Completion::Failed(
+            report_inputs()?
+                .check()
+                .err()
+                .ok_or("fixed listing is clean")?,
+        ),
+        regeneration: Completion::Passed,
+        contract_classification: ContractClassificationCompletion::Skipped(
+            SkipReason::NoRepository,
+        ),
+        cargo_graph: Completion::Passed,
+        fmt: Completion::Passed,
+        clippy: Completion::Passed,
+        tests: Completion::Passed,
+        quality: Completion::Passed,
+    };
+    Ok(format!("{report}\n"))
 }
 pub(crate) fn run(out: &Path) -> Result<(), String> {
     let written = [
         ("workspace-report.txt", report()?),
+        ("workspace-check-report.txt", check_report()?),
         ("workspace-classification.txt", classification()?),
     ];
     for (name, body) in written {
@@ -139,6 +168,30 @@ mod tests {
              root z/b.rs derived=\n\
              alpha z/a\n\
              zulu z\n"
+        );
+    }
+    #[test]
+    fn subject_check_report_is_golden_and_repeatable() {
+        let again = super::check_report();
+        let rendered = super::check_report().expect("the fixed listing renders a check report");
+        assert_eq!(rendered, again.expect("it renders again"));
+        assert_eq!(
+            rendered,
+            r#"check discovery failed
+  BXW0048 a/b/escape package= candidates=[]
+  BXW0048 a/escape package= candidates=[]
+  BXW0002 b/boxology.toml:2:5-2:5 offending="manifest document" rule="boxology.toml must be well-formed TOML" source="specs/s5-manifest-and-validation.md D2"
+  BXW0048 z/escape package= candidates=[]
+check regeneration passed
+check contract-classification skipped
+  contract classification skipped: no repository is available
+check cargo-graph passed
+check fmt passed
+check clippy passed
+check tests passed
+check quality passed
+check result failed
+"#
         );
     }
 }

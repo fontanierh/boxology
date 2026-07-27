@@ -52,7 +52,7 @@ impl Lock {
 impl<'ast> Visit<'ast> for Lock {
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
         let allowed = if self.collect {
-            "doc deny forbid derive"
+            "doc deny forbid derive repr"
         } else {
             "doc deny forbid derive test"
         };
@@ -93,7 +93,7 @@ impl<'ast> Visit<'ast> for Lock {
         syn::visit::visit_item_type(self, item);
     }
     fn visit_impl_item_const(&mut self, item: &'ast syn::ImplItemConst) {
-        self.bad |= self.collect;
+        self.bad |= self.collect && item.ident != "ALL";
         syn::visit::visit_impl_item_const(self, item);
     }
     fn visit_trait_item_const(&mut self, item: &'ast syn::TraitItemConst) {
