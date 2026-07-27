@@ -38,8 +38,9 @@ fn prepare_call_context(
     trace: TraceContext,
     idempotency_key: Option<IdempotencyKey>,
 ) -> Result<CallContext, WireCallError> {
+    let timeout = timeout.map_or(default_timeout, |timeout| timeout.min(default_timeout));
     let deadline = head_received
-        .checked_add(timeout.unwrap_or(default_timeout))
+        .checked_add(timeout)
         .map(Deadline::at)
         .ok_or(WireCallError::Internal)?;
     Ok(CallContext::new(
@@ -57,8 +58,14 @@ pub(crate) struct DispatchTasks(Arc<DispatchTasksInner>);
 struct DispatchTasksInner {
     tracker: TransportTaskTracker,
     next_id: AtomicU64,
-    tasks: Mutex<BTreeMap<u64, TaskControl>>,
+    state: Mutex<DispatchState>,
     empty: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct DispatchState {
+    closed: bool,
+    tasks: BTreeMap<u64, TaskControl>,
 }
 
 struct TaskControl {
@@ -74,7 +81,7 @@ struct RemoveTask {
 impl Drop for RemoveTask {
     fn drop(&mut self) {
         if let Some(owner) = self.owner.upgrade() {
-            owner.tasks.lock().unwrap().remove(&self.id);
+            owner.state.lock().unwrap().tasks.remove(&self.id);
             owner.empty.notify_waiters();
         }
     }
@@ -85,7 +92,7 @@ impl DispatchTasks {
         Self(Arc::new(DispatchTasksInner {
             tracker,
             next_id: AtomicU64::new(0),
-            tasks: Mutex::new(BTreeMap::new()),
+            state: Mutex::new(DispatchState::default()),
             empty: tokio::sync::Notify::new(),
         }))
     }
@@ -106,14 +113,19 @@ impl DispatchTasks {
             let _ = started.await;
             future.await
         });
-        self.0.tasks.lock().unwrap().insert(
-            id,
-            TaskControl {
-                cancellation,
-                abort: task.abort_handle(),
-            },
-        );
-        let _ = start.send(());
+        let mut state = self.0.state.lock().unwrap();
+        if state.closed {
+            task.abort();
+        } else {
+            state.tasks.insert(
+                id,
+                TaskControl {
+                    cancellation,
+                    abort: task.abort_handle(),
+                },
+            );
+            let _ = start.send(());
+        }
         task
     }
 
@@ -123,13 +135,15 @@ impl DispatchTasks {
     }
 
     pub(crate) fn cancel_all(&self) {
-        for task in self.0.tasks.lock().unwrap().values() {
+        for task in self.0.state.lock().unwrap().tasks.values() {
             task.cancellation.cancel();
         }
     }
 
     pub(crate) fn abort_all(&self) {
-        for task in self.0.tasks.lock().unwrap().values() {
+        let mut state = self.0.state.lock().unwrap();
+        state.closed = true;
+        for task in state.tasks.values() {
             task.abort.abort();
         }
     }
@@ -139,7 +153,7 @@ impl DispatchTasks {
             let empty = self.0.empty.notified();
             tokio::pin!(empty);
             empty.as_mut().enable();
-            if self.0.tasks.lock().unwrap().is_empty() {
+            if self.0.state.lock().unwrap().tasks.is_empty() {
                 return;
             }
             empty.await;
@@ -148,7 +162,7 @@ impl DispatchTasks {
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.0.tasks.lock().unwrap().len()
+        self.0.state.lock().unwrap().tasks.len()
     }
 }
 
@@ -883,18 +897,30 @@ mod tests {
             Some(key.clone()),
         )
         .unwrap();
+        let clamped = prepare_call_context(
+            receipt,
+            Some(Duration::from_secs(12)),
+            Duration::from_secs(9),
+            trace.clone(),
+            None,
+        )
+        .unwrap();
         assert_eq!(first.caller(), Caller::Anonymous);
         assert_eq!(
             first.deadline().unwrap().instant(),
             receipt + Duration::from_secs(9)
         );
         assert_eq!(second.deadline().unwrap().instant(), receipt);
+        assert_eq!(
+            clamped.deadline().unwrap().instant(),
+            receipt + Duration::from_secs(9)
+        );
         assert_eq!(first.trace(), &trace);
         assert_eq!(first.idempotency_key(), Some(&key));
         first.cancellation().cancel();
         assert!(!second.cancellation().is_cancelled());
         assert!(matches!(
-            prepare_call_context(receipt, Some(Duration::MAX), Duration::ZERO, trace, None),
+            prepare_call_context(receipt, None, Duration::MAX, trace, None),
             Err(WireCallError::Internal)
         ));
     }
@@ -909,12 +935,34 @@ mod tests {
         assert_eq!((tasks.len(), tracker.len()), (2, 2));
         tasks.cancel_all();
         assert!(tokens.iter().all(CancelToken::is_cancelled));
+        assert!(!first.is_finished());
+        assert!(!second.is_finished());
         tasks.abort_all();
         assert!(first.await.unwrap_err().is_cancelled());
         assert!(second.await.unwrap_err().is_cancelled());
         tasks.wait_empty().await;
         assert_eq!((tasks.len(), tracker.len()), (0, 0));
 
+        let entered = Arc::new(AtomicUsize::new(0));
+        let post_abort_entered = entered.clone();
+        let post_abort = tasks.spawn(CancelToken::new(), async move {
+            post_abort_entered.fetch_add(1, Ordering::Relaxed);
+            std::future::pending::<()>().await;
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), post_abort)
+                .await
+                .unwrap()
+                .unwrap_err()
+                .is_cancelled()
+        );
+        tokio::time::timeout(Duration::from_secs(1), tasks.wait_empty())
+            .await
+            .unwrap();
+        assert_eq!(entered.load(Ordering::Relaxed), 0);
+        assert_eq!((tasks.len(), tracker.len()), (0, 0));
+
+        let tasks = DispatchTasks::new(tracker.clone());
         let registered = tasks.clone();
         tasks
             .spawn(CancelToken::new(), async move {
@@ -1403,6 +1451,43 @@ mod tests {
                 .unwrap()
                 .is_cancelled()
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn client_timeout_is_clamped_to_binding_policy_without_changing_wire_success() {
+        let exposures = [exposure("box", "call", ExposureLevel::External)];
+        let policy = Duration::from_secs(1);
+        for (header, expected) in [
+            ("2500", policy),
+            ("1000", policy),
+            ("500", Duration::from_millis(500)),
+        ] {
+            let received = tokio::time::Instant::now().into_std();
+            let mut request = rpc_request(TestBody::new([data(b"\"work\"")]));
+            request
+                .headers_mut()
+                .insert(TIMEOUT_HEADER, HeaderValue::from_static(header));
+            let response = handle_request_with(
+                request,
+                received,
+                &exposures,
+                policy,
+                body_limits(64),
+                move |_, context, _| async move {
+                    assert_eq!(context.deadline().unwrap().instant(), received + expected);
+                    DispatchOutcome::Response(EncodedResponse {
+                        status: 200,
+                        body: br#"{"result":{"value":"ok"}}"#.to_vec(),
+                    })
+                },
+            )
+            .await
+            .unwrap();
+            let (status, headers, body) = response_parts(response).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+            assert_eq!(body, br#"{"result":{"value":"ok"}}"#.as_slice());
+        }
     }
 
     #[tokio::test(start_paused = true)]

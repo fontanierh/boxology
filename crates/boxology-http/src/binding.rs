@@ -47,7 +47,7 @@ impl HttpServerConfig {
         }
     }
 
-    /// Replaces the deadline given to requests that carry no timeout header.
+    /// Replaces the default deadline and maximum accepted client deadline.
     pub fn with_default_timeout(mut self, default_timeout: Duration) -> Self {
         self.default_timeout = default_timeout;
         self
@@ -125,6 +125,13 @@ impl ConnectionTasks {
     /// Takes every registered handle, leaving the registry empty.
     fn take(&self) -> Vec<JoinHandle<()>> {
         std::mem::take(&mut *self.lock())
+    }
+
+    /// Aborts every registered connection without consuming its join handle.
+    fn abort_all(&self) {
+        for connection in self.lock().iter() {
+            connection.abort();
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
@@ -237,6 +244,7 @@ impl TransportHandle for HttpServerHandle {
     fn abort_tasks(&self) {
         self.abort.cancel();
         self.tasks.abort_all();
+        self.connections.abort_all();
         if let Some(accept) = self.accept_slot().as_ref() {
             accept.abort();
         }
@@ -312,6 +320,8 @@ pub(crate) async fn serve(
 ) {
     loop {
         tokio::select! {
+            biased;
+            () = context.shutdown.cancelled() => break,
             accepted = listener.accept() => {
                 let Ok((stream, _peer)) = accepted else {
                     continue;
@@ -323,7 +333,6 @@ pub(crate) async fn serve(
                         .spawn(serve_connection(stream, context.clone())),
                 );
             }
-            () = context.shutdown.cancelled() => break,
         }
     }
 }
@@ -358,15 +367,17 @@ async fn serve_connection(stream: TcpStream, context: ConnectionContext) {
     let connection = http1::Builder::new().serve_connection(TokioIo::new(stream), service);
     tokio::pin!(connection);
     tokio::select! {
-        _ = connection.as_mut() => {}
+        biased;
         () = abort.cancelled() => {}
         () = shutdown.cancelled() => {
             connection.as_mut().graceful_shutdown();
             tokio::select! {
-                _ = connection.as_mut() => {}
+                biased;
                 () = abort.cancelled() => {}
+                _ = connection.as_mut() => {}
             }
         }
+        _ = connection.as_mut() => {}
     }
 }
 
@@ -683,6 +694,27 @@ mod tests {
             .unwrap();
         stream.flush().await.unwrap();
         stream
+    }
+
+    #[tokio::test]
+    async fn connection_abort_preserves_owned_handles_for_join() {
+        let connections = ConnectionTasks::default();
+        let connection = tokio::spawn(std::future::pending::<()>());
+        assert!(!connection.is_finished());
+        connections.register(connection);
+
+        connections.abort_all();
+        let registered = connections.take();
+        assert_eq!(registered.len(), 1);
+        let joined = tokio::time::timeout(
+            Duration::from_secs(1),
+            registered.into_iter().next().unwrap(),
+        )
+        .await
+        .expect("aborted connection join must not hang")
+        .unwrap_err();
+        assert!(joined.is_cancelled());
+        assert!(connections.take().is_empty());
     }
 
     #[tokio::test]
