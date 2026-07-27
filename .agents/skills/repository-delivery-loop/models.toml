@@ -9,13 +9,13 @@ effort = "high"
 [roles.implement]
 [[roles.implement.candidates]]
 harness = "codex"
-model = "gpt-5.6-sol"
-effort = "medium"
+model = "gpt-5.6-luna"
+effort = "max"
 
 [roles.review]
 [[roles.review.candidates]]
 harness = "codex"
-model = "gpt-5.6-sol"
+model = "gpt-5.6-terra"
 effort = "high"
 
 [roles.repair]
