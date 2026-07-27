@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use boxology_contract::is_ordinary_rust_identifier;
 use proc_macro2::TokenStream;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -486,6 +487,12 @@ fn identifier(ident: &syn::Ident) -> syn::Result<String> {
     if value.starts_with("r#") {
         return Err(error(ident, "contract identifiers must not be raw"));
     }
+    if !is_ordinary_rust_identifier(&value) {
+        return Err(error(
+            ident,
+            "contract identifiers must be ordinary non-raw Rust identifiers",
+        ));
+    }
     Ok(value)
 }
 fn capability_name(value: &str) -> bool {
@@ -696,6 +703,40 @@ mod tests {
         assert_eq!(
             diagnostic.to_string(),
             "error variant name `Unknown` is reserved"
+        );
+    }
+    #[test]
+    fn shared_identifier_validator_is_the_final_gate_after_syn_lexing() {
+        let cases = [
+            ("hello", true, true),
+            ("Москва", true, true),
+            ("e\u{301}", true, true),
+            ("_name", true, true),
+            ("_", false, false),
+            ("9lives", false, false),
+            ("r#name", false, true),
+            ("gen", false, true),
+            ("async", false, false),
+            ("a\u{200c}", false, true),
+        ];
+        for (value, expected, syn_accepts) in cases {
+            assert_eq!(
+                is_ordinary_rust_identifier(value),
+                expected,
+                "shared validator classification for {value:?}"
+            );
+            assert_eq!(
+                syn::parse_str::<syn::Ident>(value).is_ok(),
+                syn_accepts,
+                "syn parser classification for {value:?}"
+            );
+        }
+
+        let source = format!("#[error] pub enum GreetError{{gen}} {CAP}");
+        let diagnostic = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(
+            diagnostic.to_string(),
+            "contract identifiers must be ordinary non-raw Rust identifiers"
         );
     }
     #[test]

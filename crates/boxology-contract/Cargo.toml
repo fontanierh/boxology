@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 tokio-util = { version = "0.7.18", default-features = false }
+unicode-ident = "=1.0.24"

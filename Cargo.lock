@@ -42,12 +42,14 @@ name = "boxology-contract"
 version = "0.0.0"
 dependencies = [
  "tokio-util",
+ "unicode-ident",
 ]
 
 [[package]]
 name = "boxology-contract-syntax"
 version = "0.0.0"
 dependencies = [
+ "boxology-contract",
  "proc-macro2",
  "sha2",
  "syn 3.0.0",
