@@ -1188,6 +1188,55 @@ impl fmt::Display for Findings {
         formatter.write_str(&lines.join("\n"))
     }
 }
+/// The canonical repository-owned validation workflow data from S5 D7.
+///
+/// S5 D7 owns these bytes and S6 D4 consumes them for generated projects while owning their
+/// placement. `fetch-depth: 0` guarantees that the pull request's base revision is available to
+/// `boxology check --base`. The accepted v0 provisioning deduction is that the runner provides
+/// `boxology` on `PATH` and a platform source checkout at the path recorded in the workspace's
+/// manifests; the first published release replaces that precondition with versioned installation.
+/// AC10's fixture execution remains deferred to the S6 placement and acceptance work.
+pub const CHECK_WORKFLOW: &str = r#"# The repository-owned Boxology validation workflow (S5 D7).
+#
+# This document is Boxology platform data: its content is owned by the
+# platform (specs/s5-manifest-and-validation.md D7) and written verbatim
+# into generated projects by the installer, which owns only its placement
+# (specs/s6-installer-and-generated-project.md D4). It runs the same
+# `boxology check` used by local development; there is no hidden CI-only
+# validation layer (boxology-details/08-rust-build-topology.md).
+#
+# V0 precondition: the Boxology platform is consumed from a source checkout
+# and nothing is published, so the runner must provide the `boxology`
+# binary on PATH and the platform source checkout at the path recorded in
+# this workspace's manifests. The first published release replaces this
+# precondition with a versioned installation step.
+
+name: check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # fetch-depth: 0 guarantees the pull request's base revision is
+      # locally available to `boxology check --base` (S5 D7).
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: boxology check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: boxology check --base "$BASE_SHA"
+"#;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1196,6 +1245,92 @@ mod tests {
     /// A `cargo metadata` document naming no workspace member: what a listing under test that is
     /// not about crate-role mapping supplies, so it reports only what it is about.
     const EMPTY: &str = r#"{"workspace_root":"/w","workspace_members":[],"packages":[]}"#;
+    const EXPECTED_CHECK_WORKFLOW: &str = r#"# The repository-owned Boxology validation workflow (S5 D7).
+#
+# This document is Boxology platform data: its content is owned by the
+# platform (specs/s5-manifest-and-validation.md D7) and written verbatim
+# into generated projects by the installer, which owns only its placement
+# (specs/s6-installer-and-generated-project.md D4). It runs the same
+# `boxology check` used by local development; there is no hidden CI-only
+# validation layer (boxology-details/08-rust-build-topology.md).
+#
+# V0 precondition: the Boxology platform is consumed from a source checkout
+# and nothing is published, so the runner must provide the `boxology`
+# binary on PATH and the platform source checkout at the path recorded in
+# this workspace's manifests. The first published release replaces this
+# precondition with a versioned installation step.
+
+name: check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # fetch-depth: 0 guarantees the pull request's base revision is
+      # locally available to `boxology check --base` (S5 D7).
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: boxology check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: boxology check --base "$BASE_SHA"
+"#;
+    #[test]
+    fn check_workflow_matches_the_independent_golden() {
+        assert_eq!(
+            CHECK_WORKFLOW.as_bytes(),
+            EXPECTED_CHECK_WORKFLOW.as_bytes()
+        );
+    }
+    #[test]
+    fn check_workflow_has_one_of_each_required_anchor() {
+        const ANCHORS: &[&str] = &[
+            "        run: boxology check --base \"$BASE_SHA\"",
+            "          BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+            "          fetch-depth: 0",
+            "          persist-credentials: false",
+            "    runs-on: ubuntu-latest",
+            "on:\n  pull_request:",
+            "permissions:\n  contents: read",
+            "        run: rustup toolchain install",
+        ];
+        for workflow in [CHECK_WORKFLOW, EXPECTED_CHECK_WORKFLOW] {
+            for anchor in ANCHORS {
+                assert_eq!(
+                    workflow.match_indices(anchor).count(),
+                    1,
+                    "anchor {anchor:?} must occur exactly once"
+                );
+            }
+            let uses: Vec<&str> = workflow
+                .lines()
+                .filter(|line| line.trim_start().starts_with("- uses:"))
+                .collect();
+            assert_eq!(uses.len(), 1);
+            assert_eq!(
+                uses[0].trim_start(),
+                "- uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0"
+            );
+        }
+    }
+    #[test]
+    fn check_workflow_has_exactly_one_trailing_newline() {
+        for workflow in [CHECK_WORKFLOW, EXPECTED_CHECK_WORKFLOW] {
+            assert!(workflow.ends_with('\n'));
+            assert!(!workflow.ends_with("\n\n"));
+        }
+    }
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("test literals are workspace-relative paths")
     }
