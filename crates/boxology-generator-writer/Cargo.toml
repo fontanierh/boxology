@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 boxology-generator = { version = "=0.0.0", path = "../boxology-generator" }
+boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
 
 [dev-dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
