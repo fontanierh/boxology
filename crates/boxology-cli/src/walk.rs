@@ -1,0 +1,130 @@
+use boxology_manifest::RelativePath;
+use boxology_workspace::FileEntry;
+use std::{
+    fmt, fs,
+    path::{Path, PathBuf},
+};
+// Current dense block begins at BXW0061; 02-packages discovery and S5-T4 #326 PR1 allocate it.
+type Rule = (&'static str, &'static str, &'static str);
+const RULE_SOURCE: &str =
+    "boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority";
+const ROOT_TEXT: &str = "workspace root must contain a regular Cargo.toml";
+const IO_TEXT: &str = "filesystem refused a directory, symlink, or manifest read";
+const PATH_TEXT: &str = "walked name/path is not a valid RelativePath";
+const ROOT: Rule = ("BXW0061", ROOT_TEXT, RULE_SOURCE);
+const IO: Rule = ("BXW0062", IO_TEXT, RULE_SOURCE);
+const PATH: Rule = ("BXW0063", PATH_TEXT, RULE_SOURCE);
+const CARGO: &str = "Cargo.toml";
+const MANIFEST: &str = "boxology.toml";
+/// A payload-safe failure while materializing raw workspace filesystem inputs.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WalkError(&'static str, PathBuf, &'static str);
+impl WalkError {
+    /// Returns the stable `BXW####` code.
+    pub fn code(&self) -> &'static str {
+        self.0
+    }
+
+    /// Returns the exact filesystem path at which the walk failed.
+    pub fn path(&self) -> &Path {
+        &self.1
+    }
+
+    /// Returns stable detail without an operating-system error payload.
+    pub fn detail(&self) -> &'static str {
+        self.2
+    }
+}
+impl fmt::Display for WalkError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} {:?}: {}", self.0, self.1, self.2)
+    }
+}
+impl std::error::Error for WalkError {}
+/// Raw filesystem material for `boxology-workspace`.
+#[derive(Debug, Eq, PartialEq)]
+pub struct WalkedWorkspace(Vec<FileEntry>, Vec<(RelativePath, Vec<u8>)>);
+impl WalkedWorkspace {
+    /// Returns regular files and symlinks in bytewise logical-path order.
+    pub fn files(&self) -> &[FileEntry] {
+        &self.0
+    }
+
+    /// Returns exact-final-name `boxology.toml` files and bytes in path order.
+    pub fn manifests(&self) -> &[(RelativePath, Vec<u8>)] {
+        &self.1
+    }
+}
+/// Walks `root` without following symlink entries. Real `.git` and `target` directories are
+/// pruned at every depth; every other entry must have a valid [`RelativePath`].
+///
+/// # Errors
+///
+/// Returns `BXW0061` for a missing or non-regular root manifest, `BXW0062` for a refused read,
+/// and `BXW0063` for an invalid logical path.
+pub fn walk(root: &Path) -> Result<WalkedWorkspace, WalkError> {
+    let cargo = root.join(CARGO);
+    if !fs::symlink_metadata(&cargo).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(failure(ROOT, cargo));
+    }
+    let mut files = Vec::new();
+    let mut manifests = Vec::new();
+    visit(root, root, &mut files, &mut manifests)?;
+    files.sort_unstable_by(|left, right| left.path().cmp(right.path()));
+    manifests.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    Ok(WalkedWorkspace(files, manifests))
+}
+fn visit(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<FileEntry>,
+    manifests: &mut Vec<(RelativePath, Vec<u8>)>,
+) -> Result<(), WalkError> {
+    let entries = fs::read_dir(directory).map_err(|_| failure(IO, directory.to_owned()))?;
+    for entry in entries {
+        let entry = entry.map_err(|_| failure(IO, directory.to_owned()))?;
+        let physical = entry.path();
+        let logical = logical_path(root, &physical)?;
+        let kind = entry
+            .file_type()
+            .map_err(|_| failure(IO, physical.clone()))?;
+        if kind.is_dir() {
+            if entry.file_name() == ".git" || entry.file_name() == "target" {
+                continue;
+            }
+            visit(root, &physical, files, manifests)?;
+        } else if kind.is_symlink() {
+            let target = fs::read_link(&physical).map_err(|_| failure(IO, physical.clone()))?;
+            let target = target
+                .to_str()
+                .ok_or_else(|| failure(PATH, physical.clone()))?;
+            files.push(FileEntry::symlink(logical, target.to_owned()));
+        } else if kind.is_file() {
+            if entry.file_name() == MANIFEST {
+                let bytes = fs::read(&physical).map_err(|_| failure(IO, physical.clone()))?;
+                manifests.push((logical.clone(), bytes));
+            }
+            files.push(FileEntry::file(logical));
+        }
+    }
+    Ok(())
+}
+fn logical_path(root: &Path, physical: &Path) -> Result<RelativePath, WalkError> {
+    let relative = physical
+        .strip_prefix(root)
+        .map_err(|_| failure(PATH, physical.to_owned()))?;
+    let spelling = relative
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| failure(PATH, physical.to_owned()))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join("/");
+    RelativePath::new(spelling).map_err(|_| failure(PATH, physical.to_owned()))
+}
+fn failure(rule: Rule, path: PathBuf) -> WalkError {
+    WalkError(rule.0, path, rule.1)
+}

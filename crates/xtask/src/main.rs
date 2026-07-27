@@ -33,6 +33,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-manifest",
     "boxology-schema",
     "boxology-workspace",
+    "boxology-cli",
     "boxology-http",
     "boxology-runtime",
     "boxology-telegram",
