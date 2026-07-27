@@ -19,6 +19,7 @@ const GOLDEN: &str = include_str!("bxw.golden");
 const CODES: &str = "BXW0061 BXW0062 BXW0063";
 const LIB_HASH: u64 = 12_341_571_629_853_580_944;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
+const HASHES: [u64; 2] = [LIB_HASH, WALK_HASH];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
@@ -173,30 +174,26 @@ fn source_surface_is_exact_and_mutation_resistant() {
     assert!(locked());
     let (production, module) = WALK.split_once("\n#[cfg(test)]").unwrap();
     let cases = vec![
-        format!("{LIB}\n#[cfg(test)] const STRAY: u8 = 0;"),
-        LIB.replace("mod walk;", "pub mod walk;"),
         format!("{WALK}\nconst AFTER_TESTS: u8 = 0;"),
-        WALK.replace("pub struct WalkError(", "pub struct WalkError(pub "),
-        WALK.replace("\"BXW0062\"", "\"BXC9999\""),
+        format!("{production}\nconst BAD: &str = \"BXC9999\";\n#[cfg(test)]{module}"),
+        WALK.replace("PR1 task authority", "mutant authority"),
         WALK.replace(
             "read_manifest(&physical, |path| fs::read(path))?",
             "Vec::new() /* unreachable IO */",
         ),
         format!("{production}\n#[cfg(test)]\nmod tests {{}}\n"),
         format!("#[cfg(test)]{module}\n{production}"),
-        format!("{WALK}\n{}", ANCHORS.lines().next().unwrap()),
+        format!("{WALK}\n// {}", ANCHORS.lines().next().unwrap()),
     ];
     for source in cases {
-        assert!(!locked_sources(&[
-            ("lib.rs", LIB),
-            ("walk.rs", source.as_str())
-        ]));
+        rejects(LIB, &source, [LIB_HASH, hash(&source)]);
     }
-    assert!(!locked_sources(&[
-        ("lib.rs", LIB),
-        ("walk.rs", WALK),
-        ("extra.rs", "const EXTRA: u8 = 0;"),
-    ]));
+    let mutant = format!("{LIB}// hash mutant\n");
+    rejects(&mutant, WALK, HASHES);
+    let mutant = format!("{WALK}// hash mutant\n");
+    rejects(LIB, &mutant, HASHES);
+    let extra = [("lib.rs", LIB), ("walk.rs", WALK), ("extra.rs", "")];
+    assert!(!locked_sources(&extra, HASHES));
     let files: Vec<_> = FILES.split_whitespace().map(str::to_owned).collect();
     for extra in ["build.rs", "src/bin/hidden.rs"] {
         let mut mutant = files.clone();
@@ -210,6 +207,10 @@ fn source_surface_is_exact_and_mutation_resistant() {
     ] {
         assert!(!package_is(&mutant, &files));
     }
+}
+fn rejects(lib: &str, walk: &str, hashes: [u64; 2]) {
+    let sources = [("lib.rs", lib), ("walk.rs", walk)];
+    assert!(!locked_sources(&sources, hashes));
 }
 #[derive(Default)]
 struct Lock {
@@ -274,7 +275,7 @@ fn locked() -> bool {
         && SOURCES.iter().all(|(name, source)| {
             fs::read_to_string(root.join("src").join(name)).is_ok_and(|text| text == *source)
         })
-        && locked_sources(SOURCES)
+        && locked_sources(SOURCES, HASHES)
 }
 fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool {
     let Ok(entries) = fs::read_dir(directory) else {
@@ -304,7 +305,7 @@ fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool
 fn package_is(manifest: &str, files: &[String]) -> bool {
     hash(manifest) == PACKAGE_HASH && files.join(" ") == FILES
 }
-fn locked_sources(sources: &[(&str, &str)]) -> bool {
+fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 2]) -> bool {
     if !sources
         .iter()
         .map(|(name, _)| *name)
@@ -312,7 +313,7 @@ fn locked_sources(sources: &[(&str, &str)]) -> bool {
     {
         return false;
     }
-    if hash(sources[0].1) != LIB_HASH || hash(sources[1].1) != WALK_HASH {
+    if hash(sources[0].1) != hashes[0] || hash(sources[1].1) != hashes[1] {
         return false;
     }
     let mut lock = Lock::default();
