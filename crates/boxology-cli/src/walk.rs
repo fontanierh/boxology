@@ -8,7 +8,7 @@ use std::{
 type Rule = (&'static str, &'static str, &'static str);
 const RULE_SOURCE: &str =
     "boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority";
-const ROOT_TEXT: &str = "workspace root must contain a regular Cargo.toml";
+const ROOT_TEXT: &str = "workspace root must be a real directory containing a regular Cargo.toml";
 const IO_TEXT: &str = "filesystem refused a directory, symlink, or manifest read";
 const PATH_TEXT: &str = "walked name/path is not a valid RelativePath";
 const ROOT: Rule = ("BXW0061", ROOT_TEXT, RULE_SOURCE);
@@ -60,9 +60,12 @@ impl WalkedWorkspace {
 ///
 /// # Errors
 ///
-/// Returns `BXW0061` for a missing or non-regular root manifest, `BXW0062` for a refused read,
-/// and `BXW0063` for an invalid logical path.
+/// Returns `BXW0061` unless the root is a real directory with a regular manifest, `BXW0062` for
+/// a refused read, and `BXW0063` for an invalid logical path.
 pub fn walk(root: &Path) -> Result<WalkedWorkspace, WalkError> {
+    if !fs::symlink_metadata(root).is_ok_and(|metadata| metadata.is_dir()) {
+        return Err(failure(ROOT, root.to_owned()));
+    }
     let cargo = root.join(CARGO);
     if !fs::symlink_metadata(&cargo).is_ok_and(|metadata| metadata.is_file()) {
         return Err(failure(ROOT, cargo));
@@ -101,13 +104,19 @@ fn visit(
             files.push(FileEntry::symlink(logical, target.to_owned()));
         } else if kind.is_file() {
             if entry.file_name() == MANIFEST {
-                let bytes = fs::read(&physical).map_err(|_| failure(IO, physical.clone()))?;
+                let bytes = read_manifest(&physical, |path| fs::read(path))?;
                 manifests.push((logical.clone(), bytes));
             }
             files.push(FileEntry::file(logical));
         }
     }
     Ok(())
+}
+fn read_manifest(
+    path: &Path,
+    reader: impl FnOnce(&Path) -> std::io::Result<Vec<u8>>,
+) -> Result<Vec<u8>, WalkError> {
+    reader(path).map_err(|_| failure(IO, path.to_owned()))
 }
 fn logical_path(root: &Path, physical: &Path) -> Result<RelativePath, WalkError> {
     let relative = physical
@@ -127,4 +136,24 @@ fn logical_path(root: &Path, physical: &Path) -> Result<RelativePath, WalkError>
 }
 fn failure(rule: Rule, path: PathBuf) -> WalkError {
     WalkError(rule.0, path, rule.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IO_TEXT, read_manifest};
+    use std::{io, path::Path};
+
+    #[test]
+    fn refused_manifest_read_is_stable_and_payload_safe() {
+        let path = Path::new("blocked/boxology.toml");
+        let error = read_manifest(path, |_| {
+            Err(io::Error::other("SECRET operating-system payload"))
+        })
+        .expect_err("injected refusal must map through the production helper");
+        assert_eq!(error.code(), "BXW0062");
+        assert_eq!(error.path(), path);
+        assert_eq!(error.detail(), IO_TEXT);
+        assert_eq!(error.to_string(), format!("BXW0062 {path:?}: {IO_TEXT}"));
+        assert!(!error.to_string().contains("SECRET"));
+    }
 }
