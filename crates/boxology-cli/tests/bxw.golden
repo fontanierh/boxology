@@ -1,5 +1,4 @@
 sources=lib.rs,walk.rs
-items=mod:walk,use:pub;use:private,use:private,use:private,type:Rule,const:RULE_SOURCE,const:ROOT_TEXT,const:IO_TEXT,const:PATH_TEXT,const:ROOT,const:IO,const:PATH,const:CARGO,const:MANIFEST,struct:WalkError,impl:WalkError,method:code,method:path,method:detail,impl:Display:WalkError,method:fmt,impl:Error:WalkError,struct:WalkedWorkspace,impl:WalkedWorkspace,method:files,method:manifests,fn:walk,fn:visit,fn:read_manifest,fn:logical_path,fn:failure
 BXW0061|workspace root must be a real directory containing a regular Cargo.toml|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0062|filesystem refused a directory, symlink, or manifest read|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0063|walked name/path is not a valid RelativePath|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority

@@ -8,16 +8,19 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use syn::visit::Visit;
-
 const NAMES: &str = "lib.rs walk.rs";
+const FILES: &str = "Cargo.toml src/lib.rs src/walk.rs tests/bxw.golden tests/surface_lock.rs";
+const PACKAGE: &str = include_str!("../Cargo.toml");
+const PACKAGE_HASH: u64 = 10_005_596_503_527_837_865;
 const LIB: &str = include_str!("../src/lib.rs");
 const WALK: &str = include_str!("../src/walk.rs");
 const SOURCES: &[(&str, &str)] = &[("lib.rs", LIB), ("walk.rs", WALK)];
 const GOLDEN: &str = include_str!("bxw.golden");
 const CODES: &str = "BXW0061 BXW0062 BXW0063";
-const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\" || entry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
+const LIB_HASH: u64 = 12_341_571_629_853_580_944;
+const WALK_HASH: u64 = 12_408_747_065_446_683_334;
+const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
 static NEXT: AtomicU64 = AtomicU64::new(0);
-
 struct Fixture(PathBuf);
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -51,7 +54,6 @@ fn error_is(error: boxology_cli::WalkError, code: &str, at: &Path, detail: &str)
     assert_eq!(error.detail(), detail);
     assert_eq!(error.to_string(), format!("{code} {at:?}: {detail}"));
 }
-
 #[test]
 fn root_gate_is_exact() {
     let fixture = fixture();
@@ -71,12 +73,10 @@ fn root_gate_is_exact() {
         "workspace root must be a real directory containing a regular Cargo.toml",
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn symlink_root_is_rejected_before_external_ingestion() {
     use std::os::unix::fs::symlink;
-
     let fixture = fixture();
     let external = fixture.0.join("external");
     put(&external, "Cargo.toml", b"cargo");
@@ -89,20 +89,28 @@ fn symlink_root_is_rejected_before_external_ingestion() {
         &root,
         "workspace root must be a real directory containing a regular Cargo.toml",
     );
+    let root = fixture.0.join("cargo-link-root");
+    fs::create_dir(&root).unwrap();
+    symlink(external.join("Cargo.toml"), root.join("Cargo.toml")).unwrap();
+    error_is(
+        walk(&root).expect_err("symlink root manifest must fail"),
+        "BXW0061",
+        &root.join("Cargo.toml"),
+        "workspace root must be a real directory containing a regular Cargo.toml",
+    );
 }
-
 #[test]
 fn walk_is_opaque_sorted_and_exact() {
     let fixture = fixture();
-    put(&fixture.0, "z.txt", b"z");
+    put(&fixture.0, "Zed.txt", b"zed");
     put(&fixture.0, "nested/boxology.toml", b"nested");
-    put(&fixture.0, "a/low.txt", b"low");
+    put(&fixture.0, "apple.txt", b"apple");
     put(&fixture.0, "a/boxology.toml", b"a");
     put(&fixture.0, "boxology.toml", b"root");
     put(&fixture.0, "docs/not-boxology.toml", b"near miss");
     put(&fixture.0, "boxology.toml.bak", b"near miss");
     put(&fixture.0, "Cargo.toml", b"cargo");
-    put(&fixture.0, ".git/objects/ignored", b"git");
+    put(&fixture.0, ".git", b"gitdir: ../linked-worktree");
     put(&fixture.0, "target/debug/ignored", b"target");
     put(&fixture.0, "nested/.git/ignored", b"nested git");
     put(&fixture.0, "nested/.git/boxology.toml", b"excluded git");
@@ -119,23 +127,22 @@ fn walk_is_opaque_sorted_and_exact() {
         put(&fixture.0, "real/hidden.txt", b"hidden");
         symlink("real", fixture.0.join("alias")).expect("symlink can be created");
     }
-
     let walked = walk(&fixture.0).expect("fixture is walkable");
     let mut expected = files(&[
         "Cargo.toml",
+        "Zed.txt",
         "a/boxology.toml",
-        "a/low.txt",
+        "apple.txt",
         "boxology.toml",
         "boxology.toml.bak",
         "docs/not-boxology.toml",
         "nested/boxology.toml",
-        "z.txt",
     ]);
     #[cfg(unix)]
     {
         expected.insert(3, FileEntry::symlink(path("alias"), "real".to_owned()));
-        expected.insert(8, FileEntry::file(path("real/boxology.toml")));
-        expected.insert(9, FileEntry::file(path("real/hidden.txt")));
+        expected.insert(9, FileEntry::file(path("real/boxology.toml")));
+        expected.insert(10, FileEntry::file(path("real/hidden.txt")));
     }
     assert_eq!(walked.files(), expected.as_slice());
     let mut manifests = vec![
@@ -147,7 +154,6 @@ fn walk_is_opaque_sorted_and_exact() {
     manifests.push((path("real/boxology.toml"), b"real".to_vec()));
     assert_eq!(walked.manifests(), manifests.as_slice());
 }
-
 #[cfg(unix)]
 #[test]
 fn invalid_path_is_not_skipped_on_unix() {
@@ -162,19 +168,22 @@ fn invalid_path_is_not_skipped_on_unix() {
         "walked name/path is not a valid RelativePath",
     );
 }
-
 #[test]
 fn source_surface_is_exact_and_mutation_resistant() {
     assert!(locked());
+    let (production, module) = WALK.split_once("\n#[cfg(test)]").unwrap();
     let cases = vec![
         format!("{LIB}\n#[cfg(test)] const STRAY: u8 = 0;"),
+        LIB.replace("mod walk;", "pub mod walk;"),
         format!("{WALK}\nconst AFTER_TESTS: u8 = 0;"),
+        WALK.replace("pub struct WalkError(", "pub struct WalkError(pub "),
         WALK.replace("\"BXW0062\"", "\"BXC9999\""),
         WALK.replace(
             "read_manifest(&physical, |path| fs::read(path))?",
             "Vec::new() /* unreachable IO */",
         ),
-        format!("#[cfg(test)] mod tests {{}}\n{WALK}"),
+        format!("{production}\n#[cfg(test)]\nmod tests {{}}\n"),
+        format!("#[cfg(test)]{module}\n{production}"),
         format!("{WALK}\n{}", ANCHORS.lines().next().unwrap()),
     ];
     for source in cases {
@@ -188,17 +197,27 @@ fn source_surface_is_exact_and_mutation_resistant() {
         ("walk.rs", WALK),
         ("extra.rs", "const EXTRA: u8 = 0;"),
     ]));
+    let files: Vec<_> = FILES.split_whitespace().map(str::to_owned).collect();
+    for extra in ["build.rs", "src/bin/hidden.rs"] {
+        let mut mutant = files.clone();
+        mutant.push(extra.to_owned());
+        mutant.sort_unstable();
+        assert!(!package_is(PACKAGE, &mutant));
+    }
+    for mutant in [
+        format!("{PACKAGE}\n[lib]\npath = \"src/walk.rs\"\n"),
+        format!("{PACKAGE}\n[[example]]\nname = \"escape\"\npath = \"src/lib.rs\"\n"),
+    ] {
+        assert!(!package_is(&mutant, &files));
+    }
 }
-
 #[derive(Default)]
 struct Lock {
     codes: Vec<String>,
     constants: BTreeMap<String, String>,
     rules: Vec<(String, String, String)>,
-    items: Vec<String>,
     bad: bool,
     tests: usize,
-    walks: usize,
 }
 impl<'ast> Visit<'ast> for Lock {
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
@@ -243,28 +262,47 @@ impl<'ast> Visit<'ast> for Lock {
     fn visit_use_glob(&mut self, _: &'ast syn::UseGlob) {
         self.bad = true;
     }
-    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        self.items.push(format!("method:{}", item.sig.ident));
-        syn::visit::visit_impl_item_fn(self, item);
-    }
 }
-
 fn locked() -> bool {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut names = fs::read_dir(&directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| name.ends_with(".rs"))
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names
-        .iter()
-        .map(String::as_str)
-        .eq(NAMES.split_whitespace())
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    let inventory = package_files(root, root, &mut files);
+    files.sort_unstable();
+    inventory
+        && package_is(PACKAGE, &files)
+        && fs::read_to_string(root.join("Cargo.toml")).is_ok_and(|text| text == PACKAGE)
         && SOURCES.iter().all(|(name, source)| {
-            fs::read_to_string(directory.join(name)).is_ok_and(|current| current == *source)
+            fs::read_to_string(root.join("src").join(name)).is_ok_and(|text| text == *source)
         })
         && locked_sources(SOURCES)
+}
+fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { return false };
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            return false;
+        };
+        if kind.is_dir() {
+            if !package_files(root, &path, files) {
+                return false;
+            }
+        } else if kind.is_file() {
+            let Some(name) = path.strip_prefix(root).ok().and_then(Path::to_str) else {
+                return false;
+            };
+            files.push(name.replace(std::path::MAIN_SEPARATOR, "/"));
+        } else {
+            return false;
+        }
+    }
+    true
+}
+fn package_is(manifest: &str, files: &[String]) -> bool {
+    hash(manifest) == PACKAGE_HASH && files.join(" ") == FILES
 }
 fn locked_sources(sources: &[(&str, &str)]) -> bool {
     if !sources
@@ -274,30 +312,21 @@ fn locked_sources(sources: &[(&str, &str)]) -> bool {
     {
         return false;
     }
+    if hash(sources[0].1) != LIB_HASH || hash(sources[1].1) != WALK_HASH {
+        return false;
+    }
     let mut lock = Lock::default();
-    for (name, source) in sources {
-        if !lock.items.is_empty() {
-            lock.items.push("|".to_owned());
-        }
-        let Ok(file) = syn::parse_file(source) else {
-            return false;
-        };
-        for attr in &file.attrs {
-            lock.visit_attribute(attr);
-        }
-        for item in &file.items {
-            if test_module(item) {
-                lock.tests += 1;
-            } else if *name == "lib.rs" && walk_module(item) {
-                lock.walks += 1;
-                lock.items.push("mod:walk".to_owned());
-            } else {
-                let Some(key) = item_key(item) else {
-                    return false;
-                };
-                lock.items.push(key);
-                lock.visit_item(item);
-            }
+    let Ok(file) = syn::parse_file(sources[1].1) else {
+        return false;
+    };
+    for attr in &file.attrs {
+        lock.visit_attribute(attr);
+    }
+    for (position, item) in file.items.iter().enumerate() {
+        if test_module(item) {
+            lock.tests += usize::from(position + 1 == file.items.len());
+        } else {
+            lock.visit_item(item);
         }
     }
     let codes = CODES
@@ -308,7 +337,6 @@ fn locked_sources(sources: &[(&str, &str)]) -> bool {
     lock.rules.sort_unstable();
     !lock.bad
         && lock.tests == 1
-        && lock.walks == 1
         && lock.codes == codes
         && render(&lock).is_some_and(|golden| golden == GOLDEN)
         && ANCHORS
@@ -318,11 +346,7 @@ fn locked_sources(sources: &[(&str, &str)]) -> bool {
         && sources[0].1.matches("#![forbid(unsafe_code)]").count() == 1
 }
 fn render(lock: &Lock) -> Option<String> {
-    let mut output = format!(
-        "sources={}\nitems={}\n",
-        NAMES.replace(' ', ","),
-        lock.items.join(",").replace(",|,", ";")
-    );
+    let mut output = format!("sources={}\n", NAMES.replace(' ', ","));
     for (code, text, source) in &lock.rules {
         output.push_str(&format!(
             "{code}|{}|{}\n",
@@ -332,38 +356,11 @@ fn render(lock: &Lock) -> Option<String> {
     }
     Some(output)
 }
-fn item_key(item: &syn::Item) -> Option<String> {
-    Some(match item {
-        syn::Item::Use(item) => format!("use:{}", visibility(&item.vis)),
-        syn::Item::Type(item) => format!("type:{}", item.ident),
-        syn::Item::Const(item) => format!("const:{}", item.ident),
-        syn::Item::Struct(item) => format!("struct:{}", item.ident),
-        syn::Item::Impl(item) => {
-            let own = type_ident(&item.self_ty)?;
-            item.trait_.as_ref().map_or_else(
-                || format!("impl:{own}"),
-                |(path, _)| format!("impl:{}:{own}", path.segments.last().unwrap().ident),
-            )
-        }
-        syn::Item::Fn(item) => format!("fn:{}", item.sig.ident),
-        _ => return None,
-    })
-}
-fn visibility(visibility: &syn::Visibility) -> &'static str {
-    if matches!(visibility, syn::Visibility::Public(_)) {
-        "pub"
-    } else {
-        "private"
-    }
-}
 fn type_ident(ty: &syn::Type) -> Option<String> {
     let syn::Type::Path(path) = ty else {
         return None;
     };
-    path.path
-        .segments
-        .last()
-        .map(|segment| segment.ident.to_string())
+    Some(path.path.segments.last()?.ident.to_string())
 }
 fn expression_ident(expression: &syn::Expr) -> Option<String> {
     let syn::Expr::Path(path) = expression else {
@@ -383,21 +380,30 @@ fn literal(expression: &syn::Expr) -> Option<String> {
 fn diagnostic(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 7
-        && bytes[0..2] == *b"BX"
+        && bytes.starts_with(b"BX")
         && bytes[2].is_ascii_uppercase()
         && bytes[3..].iter().all(u8::is_ascii_digit)
+}
+fn hash(value: &str) -> u64 {
+    value.bytes().fold(0xcbf29ce484222325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    })
 }
 fn test_module(item: &syn::Item) -> bool {
     let syn::Item::Mod(module) = item else {
         return false;
     };
+    let Some((_, items)) = &module.content else {
+        return false;
+    };
+    let [syn::Item::Use(_), syn::Item::Use(_), syn::Item::Fn(test)] = items.as_slice() else {
+        return false;
+    };
     module.ident == "tests"
-        && module.content.is_some()
         && module.attrs.len() == 1
         && matches!(&module.attrs[0].meta, syn::Meta::List(meta)
             if meta.path.is_ident("cfg") && meta.tokens.to_string() == "test")
-}
-fn walk_module(item: &syn::Item) -> bool {
-    matches!(item, syn::Item::Mod(module)
-        if module.ident == "walk" && module.attrs.is_empty() && module.content.is_none())
+        && test.sig.ident == "refused_manifest_read_is_stable_and_payload_safe"
+        && test.attrs.len() == 1
+        && test.attrs[0].path().is_ident("test")
 }

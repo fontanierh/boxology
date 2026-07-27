@@ -6,7 +6,5 @@
 //! slices.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
-
 mod walk;
-
 pub use walk::{WalkError, WalkedWorkspace, walk};

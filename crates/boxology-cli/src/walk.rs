@@ -24,12 +24,10 @@ impl WalkError {
     pub fn code(&self) -> &'static str {
         self.0
     }
-
     /// Returns the exact filesystem path at which the walk failed.
     pub fn path(&self) -> &Path {
         &self.1
     }
-
     /// Returns stable detail without an operating-system error payload.
     pub fn detail(&self) -> &'static str {
         self.2
@@ -49,7 +47,6 @@ impl WalkedWorkspace {
     pub fn files(&self) -> &[FileEntry] {
         &self.0
     }
-
     /// Returns exact-final-name `boxology.toml` files and bytes in path order.
     pub fn manifests(&self) -> &[(RelativePath, Vec<u8>)] {
         &self.1
@@ -86,13 +83,16 @@ fn visit(
     let entries = fs::read_dir(directory).map_err(|_| failure(IO, directory.to_owned()))?;
     for entry in entries {
         let entry = entry.map_err(|_| failure(IO, directory.to_owned()))?;
+        if entry.file_name() == ".git" {
+            continue;
+        }
         let physical = entry.path();
         let logical = logical_path(root, &physical)?;
         let kind = entry
             .file_type()
             .map_err(|_| failure(IO, physical.clone()))?;
         if kind.is_dir() {
-            if entry.file_name() == ".git" || entry.file_name() == "target" {
+            if entry.file_name() == "target" {
                 continue;
             }
             visit(root, &physical, files, manifests)?;
@@ -137,12 +137,10 @@ fn logical_path(root: &Path, physical: &Path) -> Result<RelativePath, WalkError>
 fn failure(rule: Rule, path: PathBuf) -> WalkError {
     WalkError(rule.0, path, rule.1)
 }
-
 #[cfg(test)]
 mod tests {
     use super::{IO_TEXT, read_manifest};
     use std::{io, path::Path};
-
     #[test]
     fn refused_manifest_read_is_stable_and_payload_safe() {
         let path = Path::new("blocked/boxology.toml");
