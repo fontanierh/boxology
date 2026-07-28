@@ -1,0 +1,2 @@
+BXI0001 <request>:1:1-1:1 offending="project name" rule="project name must match [a-z][a-z0-9-]*" source="specs/s6-installer-and-generated-project.md D1"
+BXI0002 <request>:1:1-1:1 offending="dependency source" rule="dependency source must not be empty" source="specs/s6-installer-and-generated-project.md D1"

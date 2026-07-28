@@ -9,6 +9,7 @@ members = [
     "crates/boxology-generator-model",
     "crates/boxology-generator-writer",
     "crates/boxology-manifest",
+    "crates/boxology-init",
     "crates/boxology-schema",
     "crates/boxology-classifier",
     "crates/boxology-workspace",

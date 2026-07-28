@@ -1,0 +1,10 @@
+schema = 1
+id = "example"
+kind = "platform"
+owned = ["Cargo.toml", "rust-toolchain.toml", "boxology.toml", ".gitignore", ".github/**"]
+
+[[derived]]
+id = "lockfile"
+generator = "cargo"
+inputs = ["**/Cargo.toml"]
+outputs = ["Cargo.lock"]

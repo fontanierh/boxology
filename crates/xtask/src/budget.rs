@@ -6,6 +6,7 @@ const DERIVED_OUTPUT_PATHS: &[&str] = &[
     "crates/fixtures/greeter/generated/",
     "crates/fixtures/hello/generated/",
     "crates/fixtures/ping/generated/",
+    "goldens/generated-project/",
 ];
 struct Entry {
     path: String,
@@ -283,12 +284,8 @@ mod tests {
                 "crates/fixtures/greeter/generated/",
                 "crates/fixtures/hello/generated/",
                 "crates/fixtures/ping/generated/",
+                "goldens/generated-project/",
             ]
-        );
-        assert!(
-            DERIVED_OUTPUT_PATHS.iter().all(|path| {
-                path.starts_with("crates/fixtures/") && path.ends_with("/generated/")
-            })
         );
         let derived = ["generated/exact.rs", "generated/tree/"];
         assert!(is_excluded("Cargo.lock", &derived));
@@ -296,10 +293,15 @@ mod tests {
         assert!(is_excluded("generated/tree/nested.rs", &derived));
         assert!(!is_excluded("nested/Cargo.lock", &derived));
         assert!(!is_excluded("generated/treehouse/x", &derived));
-        assert!(!is_excluded(
-            "crates/fixtures/generated-style-fmt/src/lib.rs",
-            &derived
+        assert!(is_excluded(
+            "goldens/generated-project/Cargo.toml",
+            DERIVED_OUTPUT_PATHS
         ));
+        assert!(!is_excluded(
+            "goldens/generated-project-adjacent/Cargo.toml",
+            DERIVED_OUTPUT_PATHS
+        ));
+        assert!(!is_excluded("goldens/other/hand.rs", DERIVED_OUTPUT_PATHS));
     }
     #[test]
     fn limit_is_absolute_at_six_hundred() {
