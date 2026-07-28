@@ -2,9 +2,9 @@ schema = 1
 
 [roles.spec]
 [[roles.spec.candidates]]
-harness = "claude"
-model = "claude-fable-5"
-effort = "high"
+harness = "codex"
+model = "gpt-5.6-sol"
+effort = "xhigh"
 
 [roles.implement]
 [[roles.implement.candidates]]
