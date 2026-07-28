@@ -5,6 +5,20 @@
 //! execution delegates its writes to the generator writer.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+
+use std::{path::Path, process::Command};
+
+/// The exact argv passed to the one Cargo metadata invocation owned by the CLI.
+pub const CARGO_METADATA_ARGS: [&str; 5] =
+    ["metadata", "--format-version", "1", "--locked", "--no-deps"];
+
+/// Builds the captured Cargo metadata command for `root`.
+pub fn cargo_metadata_command(root: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command.args(CARGO_METADATA_ARGS).current_dir(root);
+    command
+}
+
 mod execute;
 mod generate;
 mod walk;

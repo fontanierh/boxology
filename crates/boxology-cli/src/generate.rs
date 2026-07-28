@@ -83,6 +83,11 @@ impl PlanError {
     pub fn detail(&self) -> &'static str {
         self.2
     }
+
+    /// Returns whether this is the invocation-level unknown-package failure.
+    pub fn is_unknown_package(&self) -> bool {
+        self.0 == UNKNOWN_PACKAGE.0
+    }
 }
 impl fmt::Display for PlanError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
