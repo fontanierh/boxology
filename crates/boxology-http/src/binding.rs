@@ -736,8 +736,9 @@ X-Padding: ";
 
     #[tokio::test]
     async fn partial_request_head_closes_after_configured_timeout() {
+        let configured_timeout = Duration::from_millis(300);
         let config = HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
-            .with_header_read_timeout(Duration::from_millis(100));
+            .with_header_read_timeout(configured_timeout);
         let binding = Arc::new(HttpServerBinding::new(config));
         let composition = serve_hand_written_hello(&binding);
         let address = binding.local_addr().unwrap();
@@ -749,7 +750,7 @@ X-Padding: ";
 
         let mut byte = [0_u8; 1];
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), stream.read(&mut byte))
+            tokio::time::timeout(Duration::from_millis(225), stream.read(&mut byte))
                 .await
                 .is_err(),
             "partial head closed before the configured timeout"
