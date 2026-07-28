@@ -51,22 +51,26 @@ fn serve_generated_hello() -> (boxology_runtime::Composition, Arc<HttpServerBind
 }
 
 async fn round_trip(address: SocketAddr, target: &[u8], body: &[u8]) -> (u16, Vec<u8>) {
-    let mut stream = TcpStream::connect(address).await.unwrap();
-    let mut request = b"POST ".to_vec();
-    request.extend_from_slice(target);
-    request.extend_from_slice(
-        format!(
-            " HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\n\
-             Connection: close\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        )
-        .as_bytes(),
-    );
-    request.extend_from_slice(body);
-    stream.write_all(&request).await.unwrap();
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).await.unwrap();
-    split_response(&raw)
+    timeout(Duration::from_secs(5), async {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let mut request = b"POST ".to_vec();
+        request.extend_from_slice(target);
+        request.extend_from_slice(
+            format!(
+                " HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\n\
+                 Connection: close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        );
+        request.extend_from_slice(body);
+        stream.write_all(&request).await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        split_response(&raw)
+    })
+    .await
+    .expect("HTTP round trip exceeded five-second timeout")
 }
 
 fn split_response(raw: &[u8]) -> (u16, Vec<u8>) {
