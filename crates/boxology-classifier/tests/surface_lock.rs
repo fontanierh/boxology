@@ -63,6 +63,13 @@ fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
 }
 
 fn rust_source_inventory(root: &Path) -> Result<Vec<String>, &'static str> {
+    if fs::symlink_metadata(root)
+        .map_err(|_| "cannot inspect source root")?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("source root symlink is forbidden");
+    }
     fn visit(root: &Path, directory: &Path, sources: &mut Vec<String>) -> Result<(), &'static str> {
         for entry in fs::read_dir(directory).map_err(|_| "cannot read source directory")? {
             let entry = entry.map_err(|_| "cannot read source entry")?;
@@ -143,11 +150,7 @@ fn require_cargo_targets(metadata: &Value, manifest_dir: &Path) -> Result<(), &'
     let targets = package["targets"]
         .as_array()
         .ok_or("cargo metadata omitted targets")?;
-    let has_kind = |target: &Value, expected: &str| {
-        target["kind"]
-            .as_array()
-            .is_some_and(|kinds| kinds.iter().any(|kind| kind == expected))
-    };
+    let has_kind = |target: &Value, expected: &str| target["kind"] == json!([expected]);
     if targets
         .iter()
         .any(|target| has_kind(target, "custom-build"))
@@ -179,6 +182,13 @@ fn require_cargo_targets(metadata: &Value, manifest_dir: &Path) -> Result<(), &'
         .ok_or("test target omitted source path")?;
     if Path::new(source) != manifest_dir.join("tests/surface_lock.rs") {
         return Err("test target must be tests/surface_lock.rs");
+    }
+    if test["test"] != true
+        || test
+            .get("required-features")
+            .is_some_and(|features| features != &json!([]))
+    {
+        return Err("surface lock test target must execute");
     }
     Ok(())
 }
@@ -243,6 +253,19 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         assert_eq!(source.matches(anchor).count(), 1, "{code} anchor count");
     }
 }
+
+#[test]
+fn symlinked_source_root_fails_inventory() {
+    let link = std::env::temp_dir().join(format!("classifier-source-link-{}", std::process::id()));
+    let target = link.with_extension("target");
+    fs::create_dir(&target).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let result = rust_source_inventory(&link);
+    fs::remove_file(link).unwrap();
+    fs::remove_dir(target).unwrap();
+    assert_eq!(result, Err("source root symlink is forbidden"));
+}
+
 #[test]
 fn attributed_public_module_fails_the_ast_inventory() {
     let source = include_str!("../src/lib.rs");

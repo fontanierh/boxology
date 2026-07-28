@@ -8,6 +8,12 @@ use serde_json::json;
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 
+#[test]
+fn surface_lock_target_cannot_be_disabled_in_manifest() {
+    let manifest: String = include_str!("../Cargo.toml").split_whitespace().collect();
+    assert!(!manifest.contains("autotests=false") && !manifest.contains("[[test]]"));
+}
+
 fn document(box_id: &str) -> SchemaDocument {
     SchemaDocument {
         box_id: BoxId::new(box_id).unwrap(),
