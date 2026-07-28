@@ -429,7 +429,9 @@ mod tests {
     };
     use boxology_runtime::test_support::StubTransport;
     use boxology_runtime::{Composition, CompositionBuilder, TransportTaskTracker};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
 
     use super::*;
@@ -451,6 +453,78 @@ mod tests {
                 format!("Hello, {name}!")
                     .encode()
                     .map_err(|_| ErasedCallError::InvalidResponse(Detail::new("output_encode")))
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct DisconnectObserver {
+        entered: Arc<AtomicUsize>,
+        observed: Arc<AtomicUsize>,
+        entry_signal: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+        cancellation_signal: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+        release: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+    }
+
+    impl DisconnectObserver {
+        fn new() -> (
+            Self,
+            oneshot::Receiver<()>,
+            oneshot::Receiver<()>,
+            oneshot::Sender<()>,
+        ) {
+            let (entry_signal, entry) = oneshot::channel();
+            let (cancellation_signal, cancellation) = oneshot::channel();
+            let (release, release_gate) = oneshot::channel();
+            (
+                Self {
+                    entered: Arc::new(AtomicUsize::new(0)),
+                    observed: Arc::new(AtomicUsize::new(0)),
+                    entry_signal: Arc::new(Mutex::new(Some(entry_signal))),
+                    cancellation_signal: Arc::new(Mutex::new(Some(cancellation_signal))),
+                    release: Arc::new(Mutex::new(Some(release_gate))),
+                },
+                entry,
+                cancellation,
+                release,
+            )
+        }
+    }
+
+    impl ErasedTarget for DisconnectObserver {
+        fn call<'a>(
+            &'a self,
+            _capability: &'a CapabilityId,
+            context: CallContext,
+            _input: SlotValue,
+        ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            self.entry_signal
+                .lock()
+                .unwrap()
+                .take()
+                .expect("handler entered more than once")
+                .send(())
+                .expect("entry receiver dropped");
+            let observed = self.observed.clone();
+            let cancellation_signal = self
+                .cancellation_signal
+                .lock()
+                .unwrap()
+                .take()
+                .expect("cancellation observed more than once");
+            let release = self.release.lock().unwrap().take().unwrap();
+            Box::pin(async move {
+                context.cancellation().cancelled().await;
+                observed.fetch_add(1, Ordering::SeqCst);
+                cancellation_signal
+                    .send(())
+                    .expect("cancellation receiver dropped");
+                release.await.expect("handler release gate dropped");
+                "late"
+                    .to_owned()
+                    .encode()
+                    .map_err(|_| ErasedCallError::InvalidResponse(Detail::new("late_encode")))
             })
         }
     }
@@ -647,6 +721,94 @@ X-Padding: ";
         shutdown.cancel();
         server.await.unwrap();
         drop(composition);
+    }
+
+    async fn converge_tracker_len(tracker: &TransportTaskTracker, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if tracker.len() == expected {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("tracker count did not converge");
+        assert_eq!(tracker.len(), expected);
+    }
+
+    #[tokio::test]
+    async fn peer_full_close_cancels_dispatch_and_keeps_it_composition_owned() {
+        let (observer, entered, cancellation, release) = DisconnectObserver::new();
+        let stub = Arc::new(StubTransport::new());
+        let binding = Arc::new(HttpServerBinding::new(
+            HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
+                .with_default_timeout(Duration::from_secs(60)),
+        ));
+        let capability = greet_capability();
+        let mut builder = CompositionBuilder::new();
+        let target = observer.clone();
+        builder.add_box(hello_implementation(), move |_imports| target);
+        builder.expose(
+            BoxId::new("hello").unwrap(),
+            capability.clone(),
+            stub.clone(),
+            ExposureLevel::External,
+        );
+        builder.expose(
+            BoxId::new("hello").unwrap(),
+            capability,
+            binding.clone(),
+            ExposureLevel::External,
+        );
+        let composition = builder.start().unwrap();
+        let tracker = stub.runtime().unwrap().tracker().clone();
+        assert_eq!(tracker.len(), 1, "only the HTTP accept task is live");
+
+        let mut stream = TcpStream::connect(binding.local_addr().unwrap())
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\n\
+                  Content-Type: application/json\r\nContent-Length: 5\r\n\r\n\"Ada\"",
+            )
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), entered)
+            .await
+            .expect("handler did not enter")
+            .expect("handler entry signal dropped");
+        assert_eq!(
+            tracker.len(),
+            3,
+            "accept, connection, and dispatch are live"
+        );
+        assert_eq!(observer.entered.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.observed.load(Ordering::SeqCst), 0);
+
+        drop(stream);
+        tokio::time::timeout(Duration::from_secs(5), cancellation)
+            .await
+            .expect("full-close cancellation was not observed")
+            .expect("cancellation signal dropped");
+        converge_tracker_len(&tracker, 2).await;
+        assert_eq!(observer.entered.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.observed.load(Ordering::SeqCst), 1);
+
+        release.send(()).expect("handler release receiver dropped");
+        converge_tracker_len(&tracker, 1).await;
+        assert_eq!(observer.entered.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.observed.load(Ordering::SeqCst), 1);
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            composition.shutdown(Duration::from_millis(100)),
+        )
+        .await
+        .expect("composition shutdown exceeded one second")
+        .expect("composition shutdown failed");
     }
 
     #[tokio::test]
