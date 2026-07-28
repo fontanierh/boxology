@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use boxology_contract::{
     BoxId, CallContext, CallError, Caller, CancelToken, CapabilityDescriptor, CapabilityId,
-    CapabilityName, CapabilityShape, ContractDescriptor, ContractRevision, Deadline,
+    CapabilityName, CapabilityShape, ContractDescriptor, ContractRevision, Deadline, Detail,
     ErasedCallError, ErasedCallTarget, ErasedTarget, ExposureLevel, Idempotency, IdempotencyKey,
     ImportDescriptor, SlotValue, TraceContext, TypeDescriptor, VariantDescriptor, VariantPayload,
 };
 use boxology_generated_contract::HelloHandle;
 use boxology_http::{HttpClientConfig, HttpClientTarget, HttpServerBinding, HttpServerConfig};
-use boxology_runtime::{CompositionBuilder, ImportHandle, ImportTarget};
+use boxology_runtime::{AssemblyError, CompositionBuilder, ImportHandle, ImportTarget};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -50,18 +50,27 @@ fn serve_generated_hello() -> (boxology_runtime::Composition, Arc<HttpServerBind
     (composition, binding)
 }
 
-async fn round_trip(address: SocketAddr, path: &str, body: &[u8]) -> (u16, Vec<u8>) {
-    let mut stream = TcpStream::connect(address).await.unwrap();
-    let head = format!(
-        "POST {path} HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\n\
-         Connection: close\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes()).await.unwrap();
-    stream.write_all(body).await.unwrap();
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).await.unwrap();
-    split_response(&raw)
+async fn round_trip(address: SocketAddr, target: &[u8], body: &[u8]) -> (u16, Vec<u8>) {
+    timeout(Duration::from_secs(5), async {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let mut request = b"POST ".to_vec();
+        request.extend_from_slice(target);
+        request.extend_from_slice(
+            format!(
+                " HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\n\
+                 Connection: close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        );
+        request.extend_from_slice(body);
+        stream.write_all(&request).await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        split_response(&raw)
+    })
+    .await
+    .expect("HTTP round trip exceeded five-second timeout")
 }
 
 fn split_response(raw: &[u8]) -> (u16, Vec<u8>) {
@@ -228,13 +237,135 @@ async fn composed_hello_box_answers_typed_client_over_real_http() {
 async fn raw_hello_request_gets_canonical_bytes() {
     let (composition, binding) = serve_generated_hello();
     let address = binding.local_addr().unwrap();
-    let (status, body) = round_trip(address, "/rpc/hello/greet", br#""Ada""#).await;
+    let (status, body) = round_trip(address, b"/rpc/hello/greet", br#""Ada""#).await;
     assert_eq!(status, 200);
     assert_eq!(
         body.as_slice(),
         br#"{"result":{"value":"Hello, Ada!"}}"#.as_slice()
     );
     composition.shutdown(Duration::from_secs(1)).await.unwrap();
+}
+
+#[tokio::test]
+async fn s3_t3_literal_tcp_request_targets_are_not_normalized() {
+    let (composition, binding) = serve_generated_hello();
+    let address = binding.local_addr().unwrap();
+    let cases: [(&[u8], u16, &[u8]); 4] = [
+        (
+            b"/rpc/hello/greet",
+            200,
+            br#"{"result":{"value":"Hello, Ada!"}}"#,
+        ),
+        (
+            b"/rpc/h%65llo/greet",
+            404,
+            br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#,
+        ),
+        (
+            b"/rpc/hello/gr%65et",
+            404,
+            br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#,
+        ),
+        (
+            b"/rpc/hello/greet?probe=1",
+            400,
+            br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#,
+        ),
+    ];
+
+    for (target, expected_status, expected_body) in cases {
+        let (status, body) = round_trip(address, target, br#""Ada""#).await;
+        assert_eq!(status, expected_status, "target: {target:?}");
+        assert_eq!(body.as_slice(), expected_body, "target: {target:?}");
+    }
+
+    composition.shutdown(Duration::from_secs(1)).await.unwrap();
+}
+
+#[tokio::test]
+async fn s3_t3_occupied_http_address_fails_composition_start() {
+    let occupying = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = occupying.local_addr().unwrap();
+    let binding = Arc::new(HttpServerBinding::new(HttpServerConfig::new(address)));
+    let error = hello_builder(&binding)
+        .start()
+        .err()
+        .expect("occupied HTTP address unexpectedly started");
+
+    let [AssemblyError::TransportStartFailed { detail }] = error.errors() else {
+        panic!("expected one transport start failure, got {error:?}");
+    };
+    assert_eq!(detail.code(), "http_bind");
+    assert!(detail.message().is_some_and(|message| !message.is_empty()));
+    assert_eq!(binding.local_addr(), None);
+    assert!(TcpListener::bind(address).await.is_err());
+}
+
+#[tokio::test]
+async fn s3_t3_http_conformance_rejects_streaming_and_top_level_field() {
+    for (shape, input, expected_detail, expected_display) in [
+        (
+            CapabilityShape::ServerStreaming,
+            TypeDescriptor::string(),
+            Detail::new("http_non_unary").with_message("HTTP supports unary capabilities only"),
+            "transport conformance failed for capability hello.greet: http_non_unary: HTTP supports unary capabilities only",
+        ),
+        (
+            CapabilityShape::Unary,
+            TypeDescriptor::tri_state(TypeDescriptor::string()).unwrap(),
+            Detail::new("http_top_level_field")
+                .with_message("HTTP cannot represent top-level Field in input"),
+            "transport conformance failed for capability hello.greet: http_top_level_field: HTTP cannot represent top-level Field in input",
+        ),
+    ] {
+        let capability = CapabilityDescriptor::new(
+            hello_greet().id().clone(),
+            input,
+            hello_greet().output().clone(),
+            hello_greet().error().clone(),
+            shape,
+            hello_greet().max_exposure(),
+            hello_greet().idempotency(),
+            None,
+        );
+        let contract: &'static ContractDescriptor = Box::leak(Box::new(
+            ContractDescriptor::new(
+                BoxId::new("hello").unwrap(),
+                [capability],
+                ContractRevision::new("r1").unwrap(),
+            )
+            .unwrap(),
+        ));
+        let implementation =
+            boxology_contract::ImplementationDescriptor::new(contract, []).unwrap();
+        let binding = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+        )));
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(implementation, |imports| {
+            generated::factory(hello_implementation::HelloService, imports)
+        });
+        builder.expose(
+            BoxId::new("hello").unwrap(),
+            contract.capabilities()[0].id().clone(),
+            binding.clone(),
+            ExposureLevel::External,
+        );
+
+        let error = builder
+            .start()
+            .err()
+            .expect("invalid HTTP capability unexpectedly started");
+        assert_eq!(
+            error.errors(),
+            &[AssemblyError::TransportConformanceFailed {
+                capability: hello_greet().id().clone(),
+                detail: expected_detail,
+            }]
+        );
+        assert_eq!(error.to_string(), expected_display);
+        assert_eq!(binding.local_addr(), None);
+    }
 }
 
 #[tokio::test]
