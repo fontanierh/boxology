@@ -22,6 +22,7 @@ members = [
     "crates/fixtures/hello/implementation",
     "crates/fixtures/ping/generated/contract",
     "crates/fixtures/ping/implementation",
+    "crates/fixtures/ping-app/composition",
     "crates/xtask",
 ]
 

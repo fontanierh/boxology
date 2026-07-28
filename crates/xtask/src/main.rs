@@ -40,6 +40,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-telegram",
     "hello-implementation",
     "ping-implementation",
+    "ping-app",
     "xtask",
 ];
 const FMT_EXCLUDED_PACKAGES: &[&str] = &["generated-style-fmt", "hello-contract", "ping-contract"];
