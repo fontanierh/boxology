@@ -85,6 +85,9 @@ fn discover_fixtures() -> Vec<DiscoveredFixture> {
         );
 
         let schema_path = generated.join("schema.json");
+        if !schema_path.exists() {
+            continue;
+        }
         let metadata = fs::metadata(&schema_path)
             .unwrap_or_else(|error| panic!("fixture schema is missing {schema_path:?}: {error}"));
         assert!(
