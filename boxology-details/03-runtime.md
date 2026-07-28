@@ -235,9 +235,16 @@ Declared domain errors always return `422`; the structured error variant remains
 | `502` | Bound target returned an invalid contract response. |
 | `500` | Internal runtime failure. |
 
+HTTP/1 request-head framing can fail before the binding service runs. These responses are bare:
+
+| Status | Trigger | Wire response |
+| --- | --- | --- |
+| `400` | Malformed HTTP/1 request line. | Empty body; no `Content-Type`; no call-error envelope. |
+| `431` | Complete HTTP/1 request head (request line plus headers) exceeds the configured cap. | Empty body; no `Content-Type`; no call-error envelope. |
+
 Cancellation, disconnection, or transport failure that produces no valid HTTP response becomes a client-side `CallError`; it has no invented HTTP status.
 
-Every emitted error status carries the call-error envelope with one of the stable codes: `unknown_box`, `unknown_capability`, `invalid_request`, `method_not_allowed`, `payload_too_large`, `unsupported_media_type`, `deadline_exceeded`, `unavailable`, `invalid_upstream_response`, `internal`. These codes are wire contract; the S3 conformance suite asserts them.
+The server-observable invocation statuses (`400`, `404`, `405`, `413`, `415`, `422`, `500`, `502`, `503`, `504`) carry the call-error envelope with one of the stable codes: `unknown_box`, `unknown_capability`, `invalid_request`, `method_not_allowed`, `payload_too_large`, `unsupported_media_type`, `deadline_exceeded`, `unavailable`, `invalid_upstream_response`, `internal`. These codes are wire contract; the S3 conformance suite asserts them.
 
 The binding carries remaining deadline budget in `Boxology-Timeout-Ms`, W3C trace context in `traceparent` and `tracestate`, and a declared idempotency key in `Idempotency-Key`. Missing headers mean composition-default deadline, a newly created trace, and no idempotency key respectively. The foundation transports the idempotency key into `CallContext`; it does not provide a deduplication store or imply retry-safe replay by itself. Client disconnection requests advisory cancellation of the in-flight capability. The anonymous Hello endpoint constructs anonymous caller context inside the binding; v1 does not trust caller-supplied identity headers, and authenticated caller propagation remains part of the later authentication design.
 
