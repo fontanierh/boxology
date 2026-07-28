@@ -13,6 +13,7 @@ const MACROS: &str =
 const DERIVES: &str = "Clone Copy Debug Eq Ord PartialEq PartialOrd";
 const RULES: &str = "ESCAPE DUPLICATE SELF_CLAIM UNOWNED OVERLAP RIVALS BOTH LOCK DOCUMENT UNMAPPED UNMATCHED CLAIMED ROLE";
 const EDGE_RULES: &str = "CONTRACT FOREIGN DECLARED SELECTED IMPOSSIBLE NON_MEMBER";
+const RELATIVE: &str = "pub fn relative(&self, path: &RelativePath) -> Option<RelativePath>";
 const PROTECTED: &str =
     "Rule EdgeRule derive ref_getters assert assert_eq assert_ne format matches panic vec write";
 const RETAINED_EDGE_ASSERTION: &str = "assert_eq!(\n            source.edges(),\n            &[DeclaredEdge {\n                kind: EdgeKind::Normal,\n                target: EdgeTarget::InRoot(path(target_at)),\n            }]\n        )";
@@ -488,6 +489,7 @@ fn locked_sources<'a>(sources: impl IntoIterator<Item = &'a Source>) -> bool {
         && lock.all == 1
         && lock.codes.join(" ") == EXPECTED
         && lib.text.match_indices(edge).count() == 1
+        && lib.text.match_indices(RELATIVE).count() == 1
         && lib.text.match_indices(RETAINED_EDGE_ASSERTION).count() == 1
 }
 fn locked_document(document: &Value, files: &BTreeMap<PathBuf, String>) -> bool {
@@ -561,6 +563,7 @@ fn surface_and_live_evasions_are_locked() {
     ] {
         rejects(name, source, anchor, replacement);
     }
+    rejects("public relative seam", source, RELATIVE, &RELATIVE.replacen("pub ", "", 1));
     rejects("post-test registration", source, source, &format!("{source}\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"));
     for (name, anchor, replacement) in [
         ("macro registration", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(const X: Rule = (\"BXW9999\", \"x\");"),

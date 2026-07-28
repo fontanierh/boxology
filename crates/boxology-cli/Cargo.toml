@@ -5,6 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
 boxology-workspace = { version = "=0.0.0", path = "../boxology-workspace" }
 
