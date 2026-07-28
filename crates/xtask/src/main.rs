@@ -505,12 +505,33 @@ mod tests {
         assert!(root().join(EDITOR_FIXTURE).join("Cargo.toml").is_file());
     }
 
+    fn replace_once(source: &str, anchor: &str) -> String {
+        assert_eq!(
+            source.match_indices(anchor).count(),
+            1,
+            "anchor: {anchor:?}"
+        );
+        source.replacen(anchor, "", 1)
+    }
+
+    fn run_ci_body(source: &str) -> &str {
+        source
+            .split_once("fn run_ci(base: Option<&str>) -> u8 {")
+            .and_then(|(_, body)| body.split_once("\nfn timed<").map(|(body, _)| body))
+            .expect("run_ci body")
+    }
+
     #[test]
-    fn surface_lock_gate_invokes_the_explicit_test_target() {
+    fn surface_lock_registration_is_live_and_deletion_is_red() {
+        let source = include_str!("main.rs");
         assert_eq!(
             SURFACE_LOCK_TEST_ARGS,
             &["test", "-p", "boxology-workspace", "--test", "surface_lock"]
         );
+        let registration = "        (\n            \"surface-lock\",\n            timed(\"surface-lock\", || run_cargo(SURFACE_LOCK_TEST_ARGS)),\n        ),";
+        assert_eq!(run_ci_body(source).match_indices(registration).count(), 1);
+        let deleted = replace_once(source, registration);
+        assert_eq!(run_ci_body(&deleted).match_indices(registration).count(), 0);
     }
 
     #[test]

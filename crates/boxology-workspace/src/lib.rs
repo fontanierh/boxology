@@ -1469,6 +1469,14 @@ jobs:
             }]
         );
     }
+    fn retained_edge(checked: &Workspace, source: &str, kind: EdgeKind, target: EdgeTarget) {
+        let source = checked
+            .cargo_members()
+            .iter()
+            .find(|member| member.cargo_package() == source)
+            .unwrap();
+        assert_eq!(source.edges(), &[DeclaredEdge { kind, target }]);
+    }
     /// Inputs whose listing tracks every named manifest as a plain file.
     fn workspace(manifests: Vec<(&str, Vec<u8>)>) -> WorkspaceInputs {
         listing(manifests, &[])
@@ -1499,8 +1507,19 @@ jobs:
     /// which every member must spell, empty or not. Strangers stay raw, and none of them spells
     /// the field at all: that is what makes the skip order observable.
     fn depending(members: &[(&str, &str, &str)], strangers: &[&str]) -> String {
+        let members: Vec<_> = members
+            .iter()
+            .map(|&(at, name, edges)| (at, name, edges, ""))
+            .collect();
+        depending_with_package_fields(&members, strangers)
+    }
+    /// [`depending`], with raw package-level metadata fields beside `dependencies`.
+    fn depending_with_package_fields(
+        members: &[(&str, &str, &str, &str)],
+        strangers: &[&str],
+    ) -> String {
         let (mut ids, mut packages) = (Vec::new(), Vec::from(strangers).join(","));
-        for (at, name, edges) in members {
+        for (at, name, edges, fields) in members {
             let head = if at.is_empty() {
                 String::new()
             } else {
@@ -1508,7 +1527,12 @@ jobs:
             };
             let id = format!("path+file:///w/{head}#0.0.0");
             let one = format!("\"name\":{name:?},\"manifest_path\":\"/w/{head}Cargo.toml\"");
-            let held = format!("\"dependencies\":[{edges}]");
+            let fields = if fields.is_empty() {
+                String::new()
+            } else {
+                format!(",{fields}")
+            };
+            let held = format!("\"dependencies\":[{edges}]{fields}");
             packages.push_str(&format!(",{{\"id\":{id:?},{one},{held}}}"));
             ids.push(format!("{id:?}"));
         }
@@ -2761,55 +2785,82 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
     }
     // Cargo cannot represent dev × optional or dev × feature-activated dependencies, so those two
     // cells are vacuous. Every other applicable declaration form is a real metadata shape below.
-    const EDGE_FORMS: &[(&str, &str, &str, &str)] = &[
-        ("normal", "null", "normal", ""),
-        ("build", "\"build\"", "build", ""),
-        ("dev", "\"dev\"", "dev", ""),
+    const EDGE_FORMS: &[(&str, &str, EdgeKind, &str, &str)] = &[
+        ("normal", "null", EdgeKind::Normal, "", ""),
+        ("build", "\"build\"", EdgeKind::Build, "", ""),
+        ("dev", "\"dev\"", EdgeKind::Dev, "", ""),
         (
             "renamed-normal",
             "null",
-            "normal",
+            EdgeKind::Normal,
             "\"name\":\"t\",\"rename\":\"alias\"",
+            "",
         ),
         (
             "renamed-build",
             "\"build\"",
-            "build",
+            EdgeKind::Build,
             "\"name\":\"t\",\"rename\":\"alias\"",
+            "",
         ),
         (
             "renamed-dev",
             "\"dev\"",
-            "dev",
+            EdgeKind::Dev,
             "\"name\":\"t\",\"rename\":\"alias\"",
+            "",
         ),
-        ("optional-normal", "null", "normal", "\"optional\":true"),
-        ("optional-build", "\"build\"", "build", "\"optional\":true"),
+        (
+            "optional-normal",
+            "null",
+            EdgeKind::Normal,
+            "\"optional\":true",
+            "",
+        ),
+        (
+            "optional-build",
+            "\"build\"",
+            EdgeKind::Build,
+            "\"optional\":true",
+            "",
+        ),
+        // Real `cargo metadata --no-deps` puts activation on the source package and leaves the
+        // dependency's target-feature list empty. D4 reads the declaration independently of it.
         (
             "feature-normal",
             "null",
-            "normal",
-            "\"optional\":true,\"features\":[\"dep:t\"]",
+            EdgeKind::Normal,
+            "\"optional\":true,\"features\":[]",
+            "\"features\":{\"gated\":[\"dep:t\"]}",
         ),
         (
             "feature-build",
             "\"build\"",
-            "build",
-            "\"optional\":true,\"features\":[\"dep:t\"]",
+            EdgeKind::Build,
+            "\"optional\":true,\"features\":[]",
+            "\"features\":{\"gated\":[\"dep:t\"]}",
         ),
         (
             "target-normal",
             "null",
-            "normal",
+            EdgeKind::Normal,
             "\"target\":\"cfg(unix)\"",
+            "",
         ),
         (
             "target-build",
             "\"build\"",
-            "build",
+            EdgeKind::Build,
             "\"target\":\"cfg(unix)\"",
+            "",
         ),
-        ("target-dev", "\"dev\"", "dev", "\"target\":\"cfg(unix)\""),
+        (
+            "target-dev",
+            "\"dev\"",
+            EdgeKind::Dev,
+            "\"target\":\"cfg(unix)\"",
+            "",
+        ),
     ];
     /// The crate role one case letter spells, and the one package kind that hosts it.
     fn plays(letter: &str) -> (&'static str, &'static str) {
@@ -2827,6 +2878,7 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         declared: bool,
         selected: bool,
         edge: &str,
+        package_fields: &str,
     ) -> WorkspaceInputs {
         let (source_kind, source_role) = plays(source);
         let (target_kind, target_role) = plays(target);
@@ -2846,7 +2898,10 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 ("b/boxology.toml", roled("b", target_kind, &target_entry)),
             ],
             &[],
-            &depending(&[("a/s", "s", edge), ("b/t", "t", "")], &[]),
+            &depending_with_package_fields(
+                &[("a/s", "s", edge, package_fields), ("b/t", "t", "", "")],
+                &[],
+            ),
         )
     }
     /// Every judged cell of the role-pair table, the *permitted* ones included: two crates joined
@@ -2882,20 +2937,32 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 held.push(("b/boxology.toml", roled("b", tkind, &target)));
             }
             held.insert(0, ("a/boxology.toml", roled("a", skind, &first)));
-            for &(form, edge_kind, word, extra) in EDGE_FORMS {
+            for &(form, edge_kind, kind, extra, package_fields) in EDGE_FORMS {
                 let one = edge(edge_kind, Some(&format!("/w/{at}")), extra);
                 let listed = [("a/s", "s", one.as_str()), (at, "t", "")];
-                let checked = mapped(held.clone(), &[], &depending(&listed, &[])).check();
+                let document = depending_with_package_fields(
+                    &[
+                        (listed[0].0, listed[0].1, listed[0].2, package_fields),
+                        (listed[1].0, listed[1].1, listed[1].2, ""),
+                    ],
+                    &[],
+                );
+                let checked = mapped(held.clone(), &[], &document).check();
                 let owner = if same { "a" } else { "b" };
                 let packages: &[&str] = if same { &["a"] } else { &["a", "b"] };
                 match (&checked, expected) {
                     (Ok(workspace), []) if form == "normal" => {
                         successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)
                     }
-                    (Ok(_), []) => {}
+                    (Ok(workspace), []) => {
+                        retained_edge(workspace, "s", kind, EdgeTarget::InRoot(path(at)))
+                    }
                     (Err(report), [code]) => assert_eq!(
                         report.to_string(),
-                        format!("{code} a/s/Cargo.toml package=a candidates=[{owner} {at} {word}]"),
+                        format!(
+                            "{code} a/s/Cargo.toml package=a candidates=[{owner} {at} {}]",
+                            kind.word()
+                        ),
                         "{case} ({form})"
                     ),
                     _ => panic!("{case} ({form}) answered {checked:?}"),
@@ -2917,45 +2984,58 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             };
             let declared = condition == "declared";
             let selected = condition == "selected";
-            for &(form, edge_kind, word, extra) in EDGE_FORMS {
+            for &(form, edge_kind, kind, extra, package_fields) in EDGE_FORMS {
                 let one = edge(edge_kind, Some("/w/b/t"), extra);
-                let checked = policy_inputs(source, target, declared, selected, &one).check();
+                let checked =
+                    policy_inputs(source, target, declared, selected, &one, package_fields).check();
                 match (checked, expected) {
-                    (Ok(_), "-") => {}
+                    (Ok(workspace), "-") => {
+                        retained_edge(&workspace, "s", kind, EdgeTarget::InRoot(path("b/t")))
+                    }
                     (Err(report), code) => assert_eq!(
                         report.to_string(),
-                        format!("{code} a/s/Cargo.toml package=a candidates=[b b/t {word}]"),
+                        format!(
+                            "{code} a/s/Cargo.toml package=a candidates=[b b/t {}]",
+                            kind.word()
+                        ),
                         "{case} ({form})"
                     ),
                     (answer, _) => panic!("{case} ({form}) answered {answer:?}"),
                 }
             }
         }
-        for &(form, edge_kind, word, extra) in EDGE_FORMS {
+        for &(form, edge_kind, kind, extra, package_fields) in EDGE_FORMS {
             let one = edge(edge_kind, Some("/w/missing"), extra);
             let held = vec![(
                 "a/boxology.toml",
                 roled("a", "box", &[("s", "s", "box-implementation")]),
             )];
-            let checked = mapped(held, &[], &depending(&[("a/s", "s", &one)], &[]))
+            let document =
+                depending_with_package_fields(&[("a/s", "s", &one, package_fields)], &[]);
+            let checked = mapped(held, &[], &document)
                 .check()
                 .expect_err("a box edge onto a non-member is forbidden");
             assert_eq!(
                 checked.to_string(),
-                format!("BXW0060 a/s/Cargo.toml package=a candidates=[missing {word}]"),
+                format!(
+                    "BXW0060 a/s/Cargo.toml package=a candidates=[missing {}]",
+                    kind.word()
+                ),
                 "non-member ({form})"
             );
         }
-        for &(form, edge_kind, _, extra) in EDGE_FORMS {
+        for &(form, edge_kind, kind, extra, package_fields) in EDGE_FORMS {
             let one = edge(edge_kind, Some("/outside"), extra);
             let held = vec![(
                 MANIFEST,
                 roled("root", "platform", &[("s", "s", "platform")]),
             )];
-            let checked = mapped(held, &[], &depending(&[("s", "s", &one)], &[]))
+            let document = depending_with_package_fields(&[("s", "s", &one, package_fields)], &[]);
+            let checked = mapped(held, &[], &document)
                 .check()
                 .expect("a platform edge onto a non-member is allowed");
             assert_eq!(checked.cargo_members().len(), 1, "platform ({form})");
+            retained_edge(&checked, "s", kind, EdgeTarget::OutOfRoot);
         }
     }
     /// Location, count and scope, all three provable at once — the shape S5-T2 lacked, where every
