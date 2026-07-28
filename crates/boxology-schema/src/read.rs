@@ -1,10 +1,14 @@
-//! The coded rejection vocabulary of the strict format-1 reader.
-//!
-//! The reader entry point is deliberately absent: nothing tolerant ever ships, so this crate
-//! exposes no partial parser. What lands here is the complete inventory of rejections the reader
-//! may ever report, locked before the reader has a single consumer.
+//! The coded rejection vocabulary and strict reader for format-1 schema documents.
 
-use std::fmt;
+use crate::{
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SCHEMA_FORMAT, SchemaCapability,
+    SchemaDocument, SchemaType, SchemaVariant, Shape,
+};
+use boxology_contract::{
+    BoxId, CapabilityName, ExposureLevel, Idempotency, canonicalize_ordinary_rust_identifier,
+};
+use serde_json::{Map, Value};
+use std::{collections::BTreeSet, fmt};
 
 /// A stable `BXC####` diagnostic code, or one of the frozen texts a code renders.
 type Code = &'static str;
@@ -24,10 +28,6 @@ const GRAMMAR: Code = "specs/s2-contract-generator.md D3";
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Location(String);
 
-// The reader is the one consumer of the constructors and tables here and lands in a later slice.
-// Waived per item rather than per module, so the validators the next slice adds to this file are
-// still held to dead-code detection — an unwired validator is what a blanket waiver would hide.
-#[allow(dead_code)]
 impl Location {
     /// The document itself.
     pub(crate) fn root() -> Self {
@@ -69,7 +69,6 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     /// The rejection a code reports at a location.
-    #[allow(dead_code)]
     pub(crate) fn at(code: Code, location: Location) -> Self {
         Self { location, code }
     }
@@ -161,6 +160,307 @@ impl fmt::Display for Diagnostics {
     }
 }
 
+const ROOT_KEYS: &[&str] = &[
+    "schema_format",
+    "box_id",
+    "revision",
+    "provenance",
+    "capabilities",
+    "types",
+];
+const CAPABILITY_KEYS: &[&str] = &[
+    "name",
+    "id",
+    "docs",
+    "deprecation",
+    "error",
+    "input",
+    "output",
+    "shape",
+    "max_exposure",
+    "idempotency",
+];
+const INPUT_KEYS: &[&str] = &["name", "type"];
+const OUTPUT_KEYS: &[&str] = &["type"];
+const TYPE_KEYS: &[&str] = &["kind", "name", "docs", "deprecation", "variants"];
+const VARIANT_KEYS: &[&str] = &["name", "docs", "deprecation", "payload"];
+const DEPRECATION_KEYS: &[&str] = &["note"];
+
+#[rustfmt::skip]
+impl SchemaDocument {
+    /// Parses one complete, strict format-1 schema document.
+    pub fn parse(bytes: &[u8]) -> Result<Self, Diagnostics> {
+        let text = std::str::from_utf8(bytes).map_err(|_| single("BXC0001", Location::root()))?;
+        let value = serde_json::from_str::<Value>(text).map_err(|_| single("BXC0002", Location::root()))?;
+        let Value::Object(root) = value else {
+            return Err(single("BXC0005", Location::root()));
+        };
+        let Some(format) = root.get("schema_format") else {
+            return Err(single("BXC0004", Location::root()));
+        };
+        let Some(format) = format.as_u64() else {
+            return Err(single("BXC0005", Location::root().key("schema_format")));
+        };
+        if format != SCHEMA_FORMAT {
+            return Err(single("BXC0006", Location::root().key("schema_format")));
+        }
+        let mut reader = Reader::default();
+        let at = Location::root();
+        reader.unknown(&root, ROOT_KEYS, &at);
+        let box_id = reader.box_id(&root, &at);
+        let revision = reader.revision(&root, &at);
+        let provenance = reader.field(&root, "provenance", &at).cloned().map(Provenance::new);
+        let types = reader.types(&root, &at);
+        let type_names = types.as_ref().and_then(|parsed| parsed.names.as_deref());
+        let capabilities = reader.capabilities(&root, &at, box_id.as_ref(), type_names);
+        if let Some(diagnostics) = Diagnostics::new(reader.diagnostics) {
+            return Err(diagnostics);
+        }
+        let (Some(box_id), Some(revision), Some(provenance), Some(capabilities), Some(types)) = (box_id, revision, provenance, capabilities, types) else {
+            unreachable!("required schema fields report their own errors")
+        };
+        Ok(Self {
+            box_id,
+            capabilities,
+            provenance,
+            revision,
+            types: types.values,
+        })
+    }
+}
+
+#[rustfmt::skip]
+#[derive(Default)]
+struct Reader { diagnostics: Vec<Diagnostic> }
+#[rustfmt::skip]
+struct ParsedTypes { values: Vec<SchemaType>, names: Option<Vec<String>> }
+
+#[rustfmt::skip]
+impl Reader {
+    fn push(&mut self, code: Code, location: Location) { self.diagnostics.push(Diagnostic::at(code, location)); }
+    fn unknown(&mut self, object: &Map<String, Value>, known: &[&str], at: &Location) {
+        for key in object.keys().filter(|key| !known.contains(&key.as_str())) {
+            self.push("BXC0003", at.key(key));
+        }
+    }
+    fn field<'a>(&mut self, object: &'a Map<String, Value>, key: &str, at: &Location) -> Option<&'a Value> {
+        object.get(key).or_else(|| { self.push("BXC0004", at.clone()); None })
+    }
+    fn typed<'a, T, F: FnOnce(&'a Value) -> Option<T>>(&mut self, object: &'a Map<String, Value>, key: &str, at: &Location, parse: F) -> Option<T> {
+        let value = self.field(object, key, at)?;
+        parse(value).or_else(|| { self.push("BXC0005", at.key(key)); None })
+    }
+    fn string_field<'a>(&mut self, object: &'a Map<String, Value>, key: &str, at: &Location) -> Option<&'a str> { self.typed(object, key, at, Value::as_str) }
+    fn array_field<'a>(&mut self, object: &'a Map<String, Value>, key: &str, at: &Location) -> Option<&'a Vec<Value>> { self.typed(object, key, at, Value::as_array) }
+    fn object_field<'a>(&mut self, object: &'a Map<String, Value>, key: &str, at: &Location) -> Option<&'a Map<String, Value>> { self.typed(object, key, at, Value::as_object) }
+    fn object_value<'a>(&mut self, value: &'a Value, at: Location) -> Option<&'a Map<String, Value>> { value.as_object().or_else(|| { self.push("BXC0005", at); None }) }
+    fn check<T>(&mut self, value: Option<T>, code: Code, location: Location) -> Option<T> { if value.is_none() { self.push(code, location); } value }
+    fn box_id(&mut self, root: &Map<String, Value>, at: &Location) -> Option<BoxId> {
+        self.string_field(root, "box_id", at).and_then(|value| self.check(BoxId::new(value.to_owned()).ok(), "BXC0010", at.key("box_id")))
+    }
+    fn revision(&mut self, root: &Map<String, Value>, at: &Location) -> Option<String> {
+        self.string_field(root, "revision", at).and_then(|value| self.check(valid_revision(value).then(|| value.to_owned()), "BXC0009", at.key("revision")))
+    }
+    fn capability_name(&mut self, object: &Map<String, Value>, at: &Location) -> Option<CapabilityName> {
+        self.string_field(object, "name", at).and_then(|value| self.check(CapabilityName::new(value.to_owned()).ok(), "BXC0011", at.key("name")))
+    }
+    fn identifier(&mut self, object: &Map<String, Value>, key: &str, code: Code, at: &Location) -> Option<String> {
+        self.string_field(object, key, at).and_then(|value| self.check(canonicalize_ordinary_rust_identifier(value), code, at.key(key)))
+    }
+    fn exact<T>(&mut self, object: &Map<String, Value>, key: &str, expected: &str, code: Code, at: &Location, valid: T) -> Option<T> {
+        self.string_field(object, key, at).and_then(|value| self.check((value == expected).then_some(valid), code, at.key(key)))
+    }
+    fn docs(&mut self, object: &Map<String, Value>, key: &str, at: &Location) -> Option<Vec<String>> {
+        let values = self.array_field(object, key, at)?;
+        let mut valid = true;
+        let docs = values.iter().enumerate().filter_map(|(index, value)| match value {
+            Value::String(value) => Some(value.clone()),
+            _ => { valid = false; self.push("BXC0005", at.key(key).index(index)); None }
+        }).collect();
+        valid.then_some(docs)
+    }
+    fn deprecation(&mut self, object: &Map<String, Value>, key: &str, at: &Location) -> Option<Option<String>> {
+        let value = self.field(object, key, at)?;
+        let deprecation_at = at.key(key);
+        match value {
+            Value::Null => Some(None),
+            Value::Object(value) => {
+                self.unknown(value, DEPRECATION_KEYS, &deprecation_at);
+                self.string_field(value, "note", &deprecation_at).map(|note| Some(note.to_owned()))
+            }
+            _ => { self.push("BXC0005", deprecation_at); None }
+        }
+    }
+    fn types(&mut self, root: &Map<String, Value>, at: &Location) -> Option<ParsedTypes> {
+        let values = self.array_field(root, "types", at)?;
+        let types_at = at.key("types");
+        let mut types = Vec::new();
+        let mut names = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut names_complete = true;
+        for (index, value) in values.iter().enumerate() {
+            let item_at = types_at.index(index);
+            let Some(value) = self.object_value(value, item_at.clone()) else {
+                names_complete = false;
+                continue;
+            };
+            self.unknown(value, TYPE_KEYS, &item_at);
+            let name = self.identifier(value, "name", "BXC0013", &item_at);
+            if let Some(name) = name.as_ref() {
+                if !seen.insert(name.clone()) {
+                    self.push("BXC0017", item_at.key("name"));
+                }
+                names.push(name.clone());
+            } else {
+                names_complete = false;
+            }
+            let kind = self.exact(value, "kind", "error", "BXC0021", &item_at, ());
+            let docs = self.docs(value, "docs", &item_at);
+            let deprecation = self.deprecation(value, "deprecation", &item_at);
+            let variants = self.variants(value, &item_at);
+            if let (Some(name), Some(docs), Some(deprecation), Some(variants), Some(())) = (name, docs, deprecation, variants, kind) {
+                types.push(SchemaType {
+                    name,
+                    docs,
+                    deprecation,
+                    variants,
+                });
+            }
+        }
+        Some(ParsedTypes { values: types, names: names_complete.then_some(names) })
+    }
+    fn variants(&mut self, object: &Map<String, Value>, at: &Location) -> Option<Vec<SchemaVariant>> {
+        let values = self.array_field(object, "variants", at)?;
+        let variants_at = at.key("variants");
+        let mut variants = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (index, value) in values.iter().enumerate() {
+            let item_at = variants_at.index(index);
+            let Some(value) = self.object_value(value, item_at.clone()) else {
+                continue;
+            };
+            self.unknown(value, VARIANT_KEYS, &item_at);
+            let name = self.identifier(value, "name", "BXC0014", &item_at).and_then(|name| self.check((name != "Unknown").then_some(name), "BXC0014", item_at.key("name")));
+            if let Some(name) = name.as_ref() && !seen.insert(name.clone()) {
+                self.push("BXC0018", item_at.key("name"));
+            }
+            let docs = self.docs(value, "docs", &item_at);
+            let deprecation = self.deprecation(value, "deprecation", &item_at);
+            let payload = self.exact(value, "payload", "unit", "BXC0022", &item_at, ());
+            if let (Some(name), Some(docs), Some(deprecation), Some(())) = (name, docs, deprecation, payload) {
+                variants.push(SchemaVariant {
+                    name,
+                    docs,
+                    deprecation,
+                });
+            }
+        }
+        Some(variants)
+    }
+    fn capabilities(&mut self, root: &Map<String, Value>, at: &Location, box_id: Option<&BoxId>, type_names: Option<&[String]>) -> Option<Vec<SchemaCapability>> {
+        let values = self.array_field(root, "capabilities", at)?;
+        let capabilities_at = at.key("capabilities");
+        let mut capabilities = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (index, value) in values.iter().enumerate() {
+            let item_at = capabilities_at.index(index);
+            let Some(value) = self.object_value(value, item_at.clone()) else {
+                continue;
+            };
+            self.unknown(value, CAPABILITY_KEYS, &item_at);
+            let name = self.capability_name(value, &item_at);
+            if name.as_ref().is_some_and(|name| !seen.insert(name.as_str().to_owned())) {
+                self.push("BXC0016", item_at.key("name"));
+            }
+            let id = self.string_field(value, "id", &item_at).map(str::to_owned);
+            if let (Some(box_id), Some(name), Some(id)) = (box_id, name.as_ref(), id.as_deref()) && id != format!("{box_id}.{}", name.as_str()) {
+                self.push("BXC0012", item_at.key("id"));
+            }
+            let docs = self.docs(value, "docs", &item_at);
+            let deprecation = self.deprecation(value, "deprecation", &item_at);
+            let error = self.string_field(value, "error", &item_at).and_then(|error| {
+                let error = canonicalize_ordinary_rust_identifier(error);
+                match type_names {
+                    Some(names) => self.check(error.filter(|error| names.contains(error)), "BXC0023", item_at.key("error")),
+                    None => error,
+                }
+            });
+            let input = self.input(value, &item_at);
+            let output = self.output(value, &item_at);
+            let shape = self.shape(value, &item_at);
+            let max_exposure = self.max_exposure(value, &item_at);
+            let idempotency = self.idempotency(value, &item_at);
+            if let (Some(name), Some(docs), Some(deprecation), Some(error), Some(input), Some(output), Some(shape), Some(max_exposure), Some(idempotency)) = (name, docs, deprecation, error, input, output, shape, max_exposure, idempotency) {
+                capabilities.push(SchemaCapability {
+                    name,
+                    docs,
+                    deprecation,
+                    error,
+                    input,
+                    output,
+                    shape,
+                    max_exposure,
+                    idempotency,
+                });
+            }
+        }
+        Some(capabilities)
+    }
+    fn input(&mut self, object: &Map<String, Value>, at: &Location) -> Option<InputSlot> {
+        let input_at = at.key("input");
+        let value = self.object_field(object, "input", at)?;
+        self.unknown(value, INPUT_KEYS, &input_at);
+        let name = self.identifier(value, "name", "BXC0015", &input_at);
+        let leaf = self.leaf(value, &input_at);
+        name.zip(leaf).map(|(name, leaf)| InputSlot { name, leaf })
+    }
+    fn output(&mut self, object: &Map<String, Value>, at: &Location) -> Option<OutputSlot> {
+        let output_at = at.key("output");
+        let value = self.object_field(object, "output", at)?;
+        self.unknown(value, OUTPUT_KEYS, &output_at);
+        self.leaf(value, &output_at).map(|leaf| OutputSlot { leaf })
+    }
+    fn leaf(&mut self, object: &Map<String, Value>, at: &Location) -> Option<BoundaryLeaf> {
+        let value = self.string_field(object, "type", at).map(str::to_owned)?;
+        let leaf = match value.as_str() {
+            "bool" => Some(BoundaryLeaf::Bool),
+            "u8" => Some(BoundaryLeaf::U8),
+            "u16" => Some(BoundaryLeaf::U16),
+            "u32" => Some(BoundaryLeaf::U32),
+            "u64" => Some(BoundaryLeaf::U64),
+            "i8" => Some(BoundaryLeaf::I8),
+            "i16" => Some(BoundaryLeaf::I16),
+            "i32" => Some(BoundaryLeaf::I32),
+            "i64" => Some(BoundaryLeaf::I64),
+            "f32" => Some(BoundaryLeaf::F32),
+            "f64" => Some(BoundaryLeaf::F64),
+            "String" => Some(BoundaryLeaf::String),
+            "Blob" => Some(BoundaryLeaf::Blob),
+            _ => None,
+        };
+        self.check(leaf, "BXC0019", at.key("type"))
+    }
+    fn shape(&mut self, object: &Map<String, Value>, at: &Location) -> Option<Shape> {
+        self.exact(object, "shape", "unary", "BXC0020", at, Shape::Unary)
+    }
+    fn max_exposure(&mut self, object: &Map<String, Value>, at: &Location) -> Option<ExposureLevel> {
+        self.exact(object, "max_exposure", "external", "BXC0007", at, ExposureLevel::External)
+    }
+    fn idempotency(&mut self, object: &Map<String, Value>, at: &Location) -> Option<Idempotency> {
+        self.exact(object, "idempotency", "none", "BXC0008", at, Idempotency::None)
+    }
+}
+
+#[rustfmt::skip]
+fn valid_revision(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else { return false };
+    hex.len() == 64 && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn single(code: Code, location: Location) -> Diagnostics {
+    Diagnostics::new(vec![Diagnostic::at(code, location)]).expect("one diagnostic is nonempty")
+}
+
 /// The frozen rule text of every code. The unreachable fallback is coded text, not a panic.
 fn rule_of(code: Code) -> Code {
     match code {
@@ -212,6 +512,65 @@ fn source_of(code: Code) -> Code {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    const BASE_REVISION: &str =
+        "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
+
+    fn baseline() -> Value {
+        json!({
+            "schema_format": 1,
+            "box_id": "hello",
+            "revision": BASE_REVISION,
+            "provenance": {"generator": "test", "opaque": [null, true, 7]},
+            "capabilities": [{
+                "name": "greet",
+                "id": "hello.greet",
+                "docs": ["greet docs"],
+                "deprecation": null,
+                "error": "GreetError",
+                "input": {"name": "name", "type": "String"},
+                "output": {"type": "String"},
+                "shape": "unary",
+                "max_exposure": "external",
+                "idempotency": "none"
+            }],
+            "types": [{
+                "kind": "error",
+                "name": "GreetError",
+                "docs": ["error docs"],
+                "deprecation": null,
+                "variants": [{
+                    "name": "EmptyName",
+                    "docs": ["empty docs"],
+                    "deprecation": null,
+                    "payload": "unit"
+                }]
+            }]
+        })
+    }
+
+    fn bytes(value: &Value) -> Vec<u8> {
+        serde_json::to_vec(value).expect("test JSON is serializable")
+    }
+
+    fn assert_one(value: Value, code: Code, location: &str) {
+        let diagnostics = SchemaDocument::parse(&bytes(&value)).expect_err("invalid test document");
+        assert_eq!(
+            diagnostics.to_string(),
+            Diagnostic::at(code, Location(location.to_owned())).to_string()
+        );
+        assert_eq!(diagnostics.into_vec().len(), 1);
+    }
+
+    fn assert_one_bytes(value: &[u8], code: Code, location: &str) {
+        let diagnostics = SchemaDocument::parse(value).expect_err("invalid test bytes");
+        assert_eq!(
+            diagnostics.to_string(),
+            Diagnostic::at(code, Location(location.to_owned())).to_string()
+        );
+        assert_eq!(diagnostics.into_vec().len(), 1);
+    }
 
     /// Every code this crate emits, ascending; the golden below is driven from it. Its reachability
     /// half — `corpus_covers_every_code`, one minimal document provoking each code — cannot exist
@@ -293,6 +652,17 @@ BXC0025 base and submitted must declare the same box id specs/s4-contract-change
         }
         seen.sort_unstable();
         assert_eq!(seen, ALL_CODES);
+        let read = include_str!("read.rs");
+        let source_of = read.split_once("fn source_of").unwrap().1;
+        let source_of = source_of.split_once("#[cfg(test)]").unwrap().0;
+        let anchors = source_of
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|token| token.starts_with(&needle[1..]));
+        let (all, unique) = (
+            anchors.clone().count(),
+            anchors.collect::<BTreeSet<_>>().len(),
+        );
+        assert_eq!((all, unique), (7, 7), "source_of anchors must be unique");
         // Dense from BXC0001: ascending alone would let a gap open unnoticed.
         let spell = |n| format!("BX{}{n:04}", 'C');
         let dense: Vec<String> = (1..=ALL_CODES.len()).map(spell).collect();
@@ -362,6 +732,224 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
                  source=\"specs/s4-contract-change-classification.md D1\""
             );
         }
+    }
+
+    #[test]
+    fn reader_gates_are_solitary() {
+        assert_one_bytes(&[0xff], "BXC0001", "");
+        assert_one_bytes(b"{", "BXC0002", "");
+        assert_one_bytes(b"[]", "BXC0005", "");
+
+        let mut absent = baseline();
+        absent.as_object_mut().unwrap().remove("schema_format");
+        assert_one(absent, "BXC0004", "");
+
+        let mut wrong_type = baseline();
+        wrong_type["schema_format"] = json!("1");
+        assert_one(wrong_type, "BXC0005", "/schema_format");
+
+        let mut future = baseline();
+        future["schema_format"] = json!(2);
+        assert_one(future, "BXC0006", "/schema_format");
+    }
+
+    const CORPUS: &[(&str, &str)] = &[
+        ("BXC0001", ""),
+        ("BXC0002", ""),
+        ("BXC0003", "/future"),
+        ("BXC0004", ""),
+        ("BXC0005", "/box_id"),
+        ("BXC0006", "/schema_format"),
+        ("BXC0007", "/capabilities/0/max_exposure"),
+        ("BXC0008", "/capabilities/0/idempotency"),
+        ("BXC0009", "/revision"),
+        ("BXC0010", "/box_id"),
+        ("BXC0011", "/capabilities/0/name"),
+        ("BXC0012", "/capabilities/0/id"),
+        ("BXC0013", "/types/0/name"),
+        ("BXC0014", "/types/0/variants/0/name"),
+        ("BXC0015", "/capabilities/0/input/name"),
+        ("BXC0016", "/capabilities/1/name"),
+        ("BXC0017", "/types/1/name"),
+        ("BXC0018", "/types/0/variants/1/name"),
+        ("BXC0019", "/capabilities/0/input/type"),
+        ("BXC0020", "/capabilities/0/shape"),
+        ("BXC0021", "/types/0/kind"),
+        ("BXC0022", "/types/0/variants/0/payload"),
+        ("BXC0023", "/capabilities/0/error"),
+    ];
+
+    fn corpus_bytes(code: Code) -> Vec<u8> {
+        match code {
+            "BXC0001" => vec![0xff],
+            "BXC0002" => b"{".to_vec(),
+            _ => {
+                let mut value = baseline();
+                match code {
+                    "BXC0003" => {
+                        value
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("future".into(), json!(true));
+                    }
+                    "BXC0004" => {
+                        value.as_object_mut().unwrap().remove("box_id");
+                    }
+                    "BXC0005" => value["box_id"] = json!(1),
+                    "BXC0006" => value["schema_format"] = json!(2),
+                    "BXC0007" => value["capabilities"][0]["max_exposure"] = json!("code_only"),
+                    "BXC0008" => value["capabilities"][0]["idempotency"] = json!("inherent"),
+                    "BXC0009" => value["revision"] = json!("bad"),
+                    "BXC0010" => value["box_id"] = json!("Bad"),
+                    "BXC0011" => value["capabilities"][0]["name"] = json!("Bad"),
+                    "BXC0012" => value["capabilities"][0]["id"] = json!("hello.other"),
+                    "BXC0013" => value["types"][0]["name"] = json!("type"),
+                    "BXC0014" => value["types"][0]["variants"][0]["name"] = json!("Unknown"),
+                    "BXC0015" => value["capabilities"][0]["input"]["name"] = json!("async"),
+                    "BXC0016" => {
+                        let duplicate = value["capabilities"][0].clone();
+                        value["capabilities"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(duplicate);
+                    }
+                    "BXC0017" => {
+                        let duplicate = value["types"][0].clone();
+                        value["types"].as_array_mut().unwrap().push(duplicate);
+                    }
+                    "BXC0018" => {
+                        let duplicate = value["types"][0]["variants"][0].clone();
+                        value["types"][0]["variants"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(duplicate);
+                    }
+                    "BXC0019" => value["capabilities"][0]["input"]["type"] = json!("Never"),
+                    "BXC0020" => value["capabilities"][0]["shape"] = json!("streaming"),
+                    "BXC0021" => value["types"][0]["kind"] = json!("struct"),
+                    "BXC0022" => value["types"][0]["variants"][0]["payload"] = json!("value"),
+                    "BXC0023" => value["capabilities"][0]["error"] = json!("MissingError"),
+                    _ => unreachable!("the reader corpus has no unregistered code"),
+                }
+                bytes(&value)
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_covers_every_code() {
+        let covered: Vec<&str> = CORPUS.iter().map(|(code, _)| *code).collect();
+        assert_eq!(covered.as_slice(), &ALL_CODES[..23]);
+        let valid = SchemaDocument::parse(&bytes(&baseline())).expect("corpus baseline");
+        assert_eq!((valid.capabilities.len(), valid.types.len()), (1, 1));
+        assert_eq!(valid.box_id.as_str(), "hello");
+        assert_eq!(valid.capabilities[0].input.name, "name");
+        assert_eq!(valid.capabilities[0].docs[0], "greet docs");
+        assert_eq!(valid.types[0].docs[0], "error docs");
+        assert_eq!(valid.types[0].variants[0].docs[0], "empty docs");
+        assert_eq!(valid.types[0].variants[0].name, "EmptyName");
+        assert_eq!(valid.provenance.value()["opaque"][2], 7);
+        for &(code, location) in CORPUS {
+            assert_one_bytes(&corpus_bytes(code), code, location);
+        }
+    }
+
+    #[test]
+    fn every_unemitted_exposure_and_idempotency_spelling_is_rejected() {
+        for spelling in ["code_only", "internal"] {
+            let mut value = baseline();
+            value["capabilities"][0]["max_exposure"] = json!(spelling);
+            assert_one(value, "BXC0007", "/capabilities/0/max_exposure");
+        }
+        let mut value = baseline();
+        value["capabilities"][0]["idempotency"] = json!("inherent");
+        assert_one(value, "BXC0008", "/capabilities/0/idempotency");
+    }
+
+    #[test]
+    fn reserved_unknown_and_keyword_variant_names_are_rejected() {
+        for name in ["Unknown", "gen"] {
+            let mut value = baseline();
+            value["types"][0]["variants"][0]["name"] = json!(name);
+            assert_one(value, "BXC0014", "/types/0/variants/0/name");
+        }
+    }
+
+    #[test]
+    fn decomposed_identifiers_and_error_references_are_stored_in_nfc_form() {
+        let mut value = baseline();
+        value["types"][0]["name"] = json!("GreetE\u{301}rror");
+        value["capabilities"][0]["error"] = json!("GreetÉrror");
+        value["types"][0]["variants"][0]["name"] = json!("EmptyNa\u{301}me");
+        value["capabilities"][0]["input"]["name"] = json!("na\u{301}me");
+        let parsed = SchemaDocument::parse(&bytes(&value)).expect("canonicalizable identifiers");
+        assert_eq!(parsed.types[0].name, "GreetÉrror");
+        assert_eq!(parsed.types[0].variants[0].name, "EmptyNáme");
+        assert_eq!(parsed.capabilities[0].input.name, "náme");
+
+        let mut reference = baseline();
+        reference["types"][0]["name"] = json!("GreetE\u{301}rror");
+        reference["capabilities"][0]["error"] = json!("GreetE\u{301}rror");
+        let parsed = SchemaDocument::parse(&bytes(&reference)).expect("canonicalizable reference");
+        assert_eq!(parsed.capabilities[0].error, "GreetÉrror");
+
+        let mut invalid = baseline();
+        invalid["capabilities"][0]["error"] = json!("type");
+        assert_one(invalid, "BXC0023", "/capabilities/0/error");
+    }
+
+    #[test]
+    fn diagnostics_accumulate_and_sort_after_the_gate() {
+        let mut value = baseline();
+        value["future"] = json!(true);
+        value["revision"] = json!("bad");
+        value["capabilities"][0]["docs"] = json!(true);
+        value["capabilities"][0]["shape"] = json!("streaming");
+        value["types"][0]["variants"][0]["payload"] = json!("value");
+        let diagnostics = SchemaDocument::parse(&bytes(&value)).expect_err("accumulated defects");
+        let found = diagnostics.into_vec();
+        let actual: Vec<(&str, &str)> = found
+            .iter()
+            .map(|diagnostic| (diagnostic.code(), diagnostic.location()))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                ("BXC0005", "/capabilities/0/docs"),
+                ("BXC0020", "/capabilities/0/shape"),
+                ("BXC0003", "/future"),
+                ("BXC0009", "/revision"),
+                ("BXC0022", "/types/0/variants/0/payload"),
+            ]
+        );
+    }
+
+    #[test]
+    fn multiple_capabilities_and_types_and_empty_collections_are_valid() {
+        let mut value = baseline();
+        let mut capability = value["capabilities"][0].clone();
+        capability["name"] = json!("store");
+        capability["id"] = json!("hello.store");
+        capability["error"] = json!("StoreError");
+        capability["input"]["name"] = json!("value");
+        capability["output"]["type"] = json!("bool");
+        value["capabilities"]
+            .as_array_mut()
+            .unwrap()
+            .push(capability);
+        let mut schema_type = value["types"][0].clone();
+        schema_type["name"] = json!("StoreError");
+        schema_type["variants"][0]["name"] = json!("Denied");
+        value["types"].as_array_mut().unwrap().push(schema_type);
+        let parsed = SchemaDocument::parse(&bytes(&value)).expect("multi-document");
+        assert_eq!(parsed.capabilities.len(), 2);
+        assert_eq!(parsed.types.len(), 2);
+
+        value["capabilities"] = json!([]);
+        value["types"] = json!([]);
+        let empty = SchemaDocument::parse(&bytes(&value)).expect("empty collections");
+        assert!(empty.capabilities.is_empty());
+        assert!(empty.types.is_empty());
     }
 
     #[test]
