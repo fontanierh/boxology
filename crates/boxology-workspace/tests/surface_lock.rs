@@ -191,8 +191,46 @@ struct Lock {
     module_attrs: bool,
     nested: bool,
     bad: bool,
+    repr: usize,
+    exit_repr: usize,
+    all: usize,
+    check_step: bool,
 }
 impl Lock {
+    fn repr(attr: &syn::Attribute) -> bool {
+        matches!(&attr.meta, syn::Meta::List(meta)
+            if meta.path.is_ident("repr") && meta.tokens.to_string() == "u8")
+    }
+    fn all(item: &syn::ImplItemConst) -> bool {
+        let syn::Type::Array(ty) = &item.ty else {
+            return false;
+        };
+        let syn::Expr::Array(value) = &item.expr else {
+            return false;
+        };
+        let names =
+            "Discovery Regeneration ContractClassification CargoGraph Fmt Clippy Tests Quality";
+        let length = matches!(&ty.len, syn::Expr::Lit(lit)
+            if matches!(&lit.lit, syn::Lit::Int(value)
+                if value.suffix().is_empty() && value.base10_digits() == "8"));
+        matches!(item.vis, syn::Visibility::Public(_))
+            && item.ident == "ALL"
+            && matches!(ty.elem.as_ref(), syn::Type::Path(path)
+                if path.qself.is_none() && path.path.is_ident("Self"))
+            && length
+            && value.elems.len() == 8
+            && value
+                .elems
+                .iter()
+                .zip(names.split(' '))
+                .all(|(expr, name)| {
+                    matches!(expr, syn::Expr::Path(path)
+                    if path.qself.is_none() && path.path.leading_colon.is_none()
+                        && path.path.segments.len() == 2
+                        && path.path.segments.first().is_some_and(|part| part.ident == "Self")
+                        && path.path.segments.last().is_some_and(|part| part.ident == name))
+                })
+    }
     fn tokens(&mut self, text: String) {
         self.bad |= text.contains("BXW")
             || text.contains('\\')
@@ -243,7 +281,9 @@ impl<'ast> Visit<'ast> for Lock {
         } else {
             "doc deny forbid derive test"
         };
-        self.bad |= !allowed.split(' ').any(|name| attr.path().is_ident(name));
+        let repr = self.collect && Self::repr(attr);
+        self.repr += usize::from(repr);
+        self.bad |= !repr && !allowed.split(' ').any(|name| attr.path().is_ident(name));
         if self.collect && attr.path().is_ident("derive") {
             let valid = attr.meta.require_list().ok().and_then(|meta| {
                 syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
@@ -289,8 +329,26 @@ impl<'ast> Visit<'ast> for Lock {
         self.bad |= self.collect && item.ident != "Rule" && item.ident != "EdgeRule";
         syn::visit::visit_item_type(self, item);
     }
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        if self.collect && item.ident == "ExitCode" {
+            self.exit_repr += item.attrs.iter().filter(|attr| Self::repr(attr)).count();
+        }
+        syn::visit::visit_item_enum(self, item);
+    }
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let check_step = item.trait_.is_none()
+            && matches!(item.self_ty.as_ref(), syn::Type::Path(path)
+                if path.qself.is_none() && path.path.is_ident("CheckStep"));
+        let previous = std::mem::replace(&mut self.check_step, check_step);
+        syn::visit::visit_item_impl(self, item);
+        self.check_step = previous;
+    }
     fn visit_impl_item_const(&mut self, item: &'ast syn::ImplItemConst) {
-        self.bad |= self.collect;
+        if self.collect {
+            let all = self.check_step && Self::all(item);
+            self.all += usize::from(all);
+            self.bad |= !all;
+        }
         syn::visit::visit_impl_item_const(self, item);
     }
     fn visit_trait_item_const(&mut self, item: &'ast syn::TraitItemConst) {
@@ -425,6 +483,9 @@ fn locked_sources<'a>(sources: impl IntoIterator<Item = &'a Source>) -> bool {
     lock.codes.sort_unstable();
     let edge = r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#;
     !lock.bad
+        && lock.repr == 1
+        && lock.exit_repr == 1
+        && lock.all == 1
         && lock.codes.join(" ") == EXPECTED
         && lib.text.match_indices(edge).count() == 1
         && lib.text.match_indices(RETAINED_EDGE_ASSERTION).count() == 1
@@ -479,6 +540,8 @@ fn surface_and_live_evasions_are_locked() {
         ("qualified rule", "const HIDDEN: crate::Rule = (ROLE.0, \"different text\");\n"),
         ("aliased edge rule", "use crate::EdgeRule as HiddenRule;\nconst HIDDEN: HiddenRule = DECLARED;\n"),
         ("associated rule", "struct Hidden;\nimpl Hidden { const RULE: crate::Rule = (ROLE.0, \"different text\"); }\n"),
+        ("repr escape", "#[repr(C)] pub struct Escape(u8);\n"),
+        ("associated ALL escape", "pub struct Escape;\nimpl Escape { pub const ALL: u8 = 0; }\n"),
         ("qualified derive", "#[hidden::derive(BXW9999)] struct Hidden;\n"),
         ("aliased derive", "use hidden::derive;\n#[derive(BXW9999)] struct Hidden;\n"),
         ("proc derive", "#[derive(hidden::Inject)] struct Hidden;\n"),

@@ -1188,6 +1188,246 @@ impl fmt::Display for Findings {
         formatter.write_str(&lines.join("\n"))
     }
 }
+/// One of the eight validation steps in the exact order prescribed by the 08 baseline.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CheckStep {
+    /// 08-rust-build-topology.md step 1: discover and validate the workspace.
+    Discovery,
+    /// 08-rust-build-topology.md step 2: compare regenerated derived artifacts.
+    Regeneration,
+    /// 08-rust-build-topology.md step 3: classify contract changes against the base.
+    ContractClassification,
+    /// 08-rust-build-topology.md step 4: validate the Cargo graph and lockfile.
+    CargoGraph,
+    /// 08-rust-build-topology.md step 5: run the selected formatting check.
+    Fmt,
+    /// 08-rust-build-topology.md step 6: run clippy with denied warnings.
+    Clippy,
+    /// 08-rust-build-topology.md step 7: run the workspace tests.
+    Tests,
+    /// 08-rust-build-topology.md step 8: run declared quality commands.
+    Quality,
+}
+impl CheckStep {
+    /// The frozen eight-step order from 08-rust-build-topology.md's validation baseline.
+    pub const ALL: [Self; 8] = [
+        Self::Discovery,
+        Self::Regeneration,
+        Self::ContractClassification,
+        Self::CargoGraph,
+        Self::Fmt,
+        Self::Clippy,
+        Self::Tests,
+        Self::Quality,
+    ];
+    /// Returns the stable human and future JSON identifier for this step.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Discovery => "discovery",
+            Self::Regeneration => "regeneration",
+            Self::ContractClassification => "contract-classification",
+            Self::CargoGraph => "cargo-graph",
+            Self::Fmt => "fmt",
+            Self::Clippy => "clippy",
+            Self::Tests => "tests",
+            Self::Quality => "quality",
+        }
+    }
+}
+impl fmt::Display for CheckStep {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.id())
+    }
+}
+/// A completed ordinary validation step.
+#[derive(Debug, Eq, PartialEq)]
+pub enum Completion {
+    /// The step completed without validation findings.
+    Passed,
+    /// The step completed and reported its deterministically ordered findings.
+    Failed(Findings),
+}
+impl Completion {
+    fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+}
+/// Why the base-relative contract-classification step could not run.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SkipReason {
+    /// No repository exists from which to obtain a base revision.
+    NoRepository,
+    /// The repository has no merge base with the configured `main` branch.
+    NoMergeBase,
+}
+impl SkipReason {
+    /// Returns the frozen, deterministic human sentence for this skip reason.
+    pub const fn sentence(self) -> &'static str {
+        match self {
+            Self::NoRepository => "contract classification skipped: no repository is available",
+            Self::NoMergeBase => {
+                "contract classification skipped: no merge base with main is available"
+            }
+        }
+    }
+}
+impl fmt::Display for SkipReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.sentence())
+    }
+}
+/// The contract-classification outcome, whose only additional state is a typed base-unavailable
+/// skip. Classification findings are report-only and do not make the repository validation fail.
+#[derive(Debug, Eq, PartialEq)]
+pub enum ContractClassificationCompletion {
+    /// The base-relative classification found no contract changes.
+    Passed,
+    /// The classification report contains findings for the harness to interpret.
+    Failed(Findings),
+    /// The base-relative classification could not run for the named deterministic reason.
+    Skipped(SkipReason),
+}
+/// The public exit vocabulary reserved by `boxology check`.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ExitCode {
+    /// Validation completed with no validation-step failure: process code 0.
+    Success = 0,
+    /// At least one validation step failed: process code 1.
+    ValidationFailed = 1,
+    /// Invocation or configuration prevented validation: process code 2, reserved for the CLI.
+    Invocation = 2,
+}
+impl ExitCode {
+    /// Returns the numeric process code represented by this vocabulary value.
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+/// The final validation status of a check report.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CheckStatus {
+    /// No validation step failed.
+    Passed,
+    /// At least one validation step failed.
+    Failed,
+}
+impl fmt::Display for CheckStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        })
+    }
+}
+/// The pure, complete eight-step `boxology check` report.
+///
+/// The named field types make a skip constructible only in the contract-classification field. The
+/// eight fields mirror 08-rust-build-topology.md's baseline rather than a positional outcome array,
+/// so a report cannot omit a step or attach a base skip to an ordinary validation step.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CheckReport {
+    /// The discovery/ownership/role validation outcome.
+    pub discovery: Completion,
+    /// The regeneration comparison outcome.
+    pub regeneration: Completion,
+    /// The base-relative contract-classification outcome.
+    pub contract_classification: ContractClassificationCompletion,
+    /// The Cargo graph and lockfile outcome.
+    pub cargo_graph: Completion,
+    /// The explicit hand-authored formatting outcome.
+    pub fmt: Completion,
+    /// The denied-warning clippy outcome.
+    pub clippy: Completion,
+    /// The workspace test outcome.
+    pub tests: Completion,
+    /// The manifest-declared quality-command outcome.
+    pub quality: Completion,
+}
+impl CheckReport {
+    /// Returns the final status, ignoring contract-classification findings because S5 D6 makes
+    /// those findings report-only. Every other validation field participates explicitly.
+    pub fn status(&self) -> CheckStatus {
+        if self.discovery.is_failed()
+            || self.regeneration.is_failed()
+            || self.cargo_graph.is_failed()
+            || self.fmt.is_failed()
+            || self.clippy.is_failed()
+            || self.tests.is_failed()
+            || self.quality.is_failed()
+        {
+            CheckStatus::Failed
+        } else {
+            CheckStatus::Passed
+        }
+    }
+    /// Returns process code 0 when no validation step failed, or 1 otherwise. The CLI-only code 2
+    /// is intentionally not emitted by a report composed entirely of check outcomes.
+    pub fn exit_code(&self) -> u8 {
+        match self.status() {
+            CheckStatus::Passed => ExitCode::Success.as_u8(),
+            CheckStatus::Failed => ExitCode::ValidationFailed.as_u8(),
+        }
+    }
+    /// Renders the deterministic human report in the frozen eight-step order.
+    pub fn render_human(&self) -> String {
+        let mut lines = Vec::new();
+        for step in CheckStep::ALL {
+            self.render_step(step, &mut lines);
+        }
+        lines.push(format!("check result {}", self.status()));
+        lines.join("\n")
+    }
+    fn render_step(&self, step: CheckStep, lines: &mut Vec<String>) {
+        match step {
+            CheckStep::Discovery => self.render_completion(step, &self.discovery, lines),
+            CheckStep::Regeneration => self.render_completion(step, &self.regeneration, lines),
+            CheckStep::ContractClassification => {
+                lines.push(format!("check {step} {}", self.contract_status()));
+                match &self.contract_classification {
+                    ContractClassificationCompletion::Passed => {}
+                    ContractClassificationCompletion::Failed(findings) => {
+                        render_findings(lines, findings)
+                    }
+                    ContractClassificationCompletion::Skipped(reason) => {
+                        lines.push(format!("  {reason}"))
+                    }
+                }
+            }
+            CheckStep::CargoGraph => self.render_completion(step, &self.cargo_graph, lines),
+            CheckStep::Fmt => self.render_completion(step, &self.fmt, lines),
+            CheckStep::Clippy => self.render_completion(step, &self.clippy, lines),
+            CheckStep::Tests => self.render_completion(step, &self.tests, lines),
+            CheckStep::Quality => self.render_completion(step, &self.quality, lines),
+        }
+    }
+    fn render_completion(&self, step: CheckStep, completion: &Completion, lines: &mut Vec<String>) {
+        let status = if completion.is_failed() {
+            CheckStatus::Failed
+        } else {
+            CheckStatus::Passed
+        };
+        lines.push(format!("check {step} {status}"));
+        if let Completion::Failed(findings) = completion {
+            render_findings(lines, findings);
+        }
+    }
+    fn contract_status(&self) -> &'static str {
+        match &self.contract_classification {
+            ContractClassificationCompletion::Passed => "passed",
+            ContractClassificationCompletion::Failed(_) => "failed",
+            ContractClassificationCompletion::Skipped(_) => "skipped",
+        }
+    }
+}
+impl fmt::Display for CheckReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.render_human())
+    }
+}
+fn render_findings(lines: &mut Vec<String>, findings: &Findings) {
+    lines.extend(findings.into_iter().map(|entry| format!("  {entry}")));
+}
 /// The canonical repository-owned validation workflow data from S5 D7.
 ///
 /// S5 D7 owns these bytes and S6 D4 consumes them for generated projects while owning their
@@ -1330,6 +1570,227 @@ jobs:
             assert!(workflow.ends_with('\n'));
             assert!(!workflow.ends_with("\n\n"));
         }
+    }
+    fn report_findings() -> Findings {
+        Findings::new(vec![
+            Entry::Workspace(Finding::new(ESCAPE, path("z.rs"), None, Vec::new())),
+            Entry::Workspace(Finding::new(ESCAPE, path("a.rs"), None, Vec::new())),
+        ])
+        .expect("the report fixture has findings")
+    }
+    fn all_pass_report() -> CheckReport {
+        CheckReport {
+            discovery: Completion::Passed,
+            regeneration: Completion::Passed,
+            contract_classification: ContractClassificationCompletion::Passed,
+            cargo_graph: Completion::Passed,
+            fmt: Completion::Passed,
+            clippy: Completion::Passed,
+            tests: Completion::Passed,
+            quality: Completion::Passed,
+        }
+    }
+    fn skipped_report(reason: SkipReason) -> CheckReport {
+        CheckReport {
+            contract_classification: ContractClassificationCompletion::Skipped(reason),
+            ..all_pass_report()
+        }
+    }
+    fn failed_skipped_report(reason: SkipReason) -> CheckReport {
+        CheckReport {
+            discovery: Completion::Failed(report_findings()),
+            contract_classification: ContractClassificationCompletion::Skipped(reason),
+            ..all_pass_report()
+        }
+    }
+    #[test]
+    fn check_step_all_and_ids_are_frozen() {
+        assert_eq!(
+            CheckStep::ALL,
+            [
+                CheckStep::Discovery,
+                CheckStep::Regeneration,
+                CheckStep::ContractClassification,
+                CheckStep::CargoGraph,
+                CheckStep::Fmt,
+                CheckStep::Clippy,
+                CheckStep::Tests,
+                CheckStep::Quality,
+            ]
+        );
+        assert_eq!(
+            CheckStep::ALL.map(CheckStep::id),
+            [
+                "discovery",
+                "regeneration",
+                "contract-classification",
+                "cargo-graph",
+                "fmt",
+                "clippy",
+                "tests",
+                "quality",
+            ]
+        );
+    }
+    #[test]
+    fn check_report_human_rendering_is_an_exact_full_report_golden() {
+        let rendered = failed_skipped_report(SkipReason::NoMergeBase).render_human();
+        assert_eq!(
+            rendered,
+            "check discovery failed\n\
+             \x20 BXW0048 a.rs package= candidates=[]\n\
+             \x20 BXW0048 z.rs package= candidates=[]\n\
+             check regeneration passed\n\
+             check contract-classification skipped\n\
+             \x20 contract classification skipped: no merge base with main is available\n\
+             check cargo-graph passed\n\
+             check fmt passed\n\
+             check clippy passed\n\
+             check tests passed\n\
+             check quality passed\n\
+             check result failed"
+        );
+    }
+    #[test]
+    fn check_report_headers_are_each_exactly_once_in_order() {
+        let rendered = failed_skipped_report(SkipReason::NoRepository).render_human();
+        let lines: Vec<&str> = rendered.lines().collect();
+        let mut previous = None;
+        for step in CheckStep::ALL {
+            let header = format!("check {} ", step.id());
+            let matches: Vec<usize> = lines
+                .iter()
+                .enumerate()
+                .filter_map(|(index, line)| line.starts_with(&header).then_some(index))
+                .collect();
+            assert_eq!(matches.len(), 1, "header {header:?}");
+            assert!(previous.is_none_or(|index| index < matches[0]));
+            previous = Some(matches[0]);
+        }
+    }
+    #[test]
+    fn skip_sentences_are_frozen_and_absent_from_non_skipped_reports() {
+        let passed = all_pass_report().render_human();
+        let reasons = [
+            (
+                SkipReason::NoRepository,
+                "contract classification skipped: no repository is available",
+            ),
+            (
+                SkipReason::NoMergeBase,
+                "contract classification skipped: no merge base with main is available",
+            ),
+        ];
+        for (reason, sentence) in reasons {
+            assert_eq!(passed.matches(sentence).count(), 0);
+            let rendered = skipped_report(reason).render_human();
+            assert_eq!(rendered.matches(sentence).count(), 1);
+            assert_eq!(
+                rendered
+                    .lines()
+                    .filter(|line| *line == format!("  {sentence}"))
+                    .count(),
+                1
+            );
+        }
+    }
+    #[test]
+    fn exit_vocabulary_and_all_pass_or_skipped_reports_are_zero() {
+        assert_eq!(ExitCode::Success.as_u8(), 0);
+        assert_eq!(ExitCode::ValidationFailed.as_u8(), 1);
+        assert_eq!(ExitCode::Invocation.as_u8(), 2);
+        assert_eq!(all_pass_report().status(), CheckStatus::Passed);
+        assert_eq!(all_pass_report().exit_code(), 0);
+        assert_eq!(skipped_report(SkipReason::NoRepository).exit_code(), 0);
+        assert_eq!(skipped_report(SkipReason::NoMergeBase).exit_code(), 0);
+    }
+    #[test]
+    fn each_step_failure_has_explicit_exit_mapping() {
+        let failed = || Completion::Failed(report_findings());
+        let cases = [
+            (
+                "discovery",
+                CheckReport {
+                    discovery: failed(),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "regeneration",
+                CheckReport {
+                    regeneration: failed(),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "contract-classification",
+                CheckReport {
+                    contract_classification: ContractClassificationCompletion::Failed(
+                        report_findings(),
+                    ),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "cargo-graph",
+                CheckReport {
+                    cargo_graph: failed(),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "fmt",
+                CheckReport {
+                    fmt: failed(),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "clippy",
+                CheckReport {
+                    clippy: failed(),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "tests",
+                CheckReport {
+                    tests: failed(),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "quality",
+                CheckReport {
+                    quality: failed(),
+                    ..all_pass_report()
+                },
+            ),
+        ];
+        for (id, report) in cases {
+            let expected = if id == "contract-classification" {
+                (CheckStatus::Passed, 0)
+            } else {
+                (CheckStatus::Failed, 1)
+            };
+            assert_eq!(report.status(), expected.0, "{id}");
+            assert_eq!(report.exit_code(), expected.1, "{id}");
+        }
+    }
+    #[test]
+    fn contract_classification_findings_are_report_only() {
+        let report = CheckReport {
+            contract_classification: ContractClassificationCompletion::Failed(report_findings()),
+            ..all_pass_report()
+        };
+        assert_eq!(report.status(), CheckStatus::Passed);
+        assert_eq!(report.exit_code(), 0);
+        assert!(
+            report
+                .render_human()
+                .contains("check contract-classification failed")
+        );
+        assert!(report.render_human().ends_with("check result passed"));
     }
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("test literals are workspace-relative paths")
