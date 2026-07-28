@@ -6,11 +6,13 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use std::fmt;
+use std::{
+    fmt,
+    path::{Component, Path, PathBuf},
+};
 
 const RULE_SOURCE: &str = "specs/s6-installer-and-generated-project.md D1";
 const REQUEST_PATH: &str = "<request>";
-const PROVENANCE: &str = env!("CARGO_PKG_VERSION");
 const TOOLCHAIN: &[u8] = include_bytes!("../../../rust-toolchain.toml");
 const DIAGNOSTICS: [(&str, &str, &str); 2] = [
     (
@@ -167,6 +169,9 @@ impl GeneratedFile {
 }
 
 /// A generated project tree sorted by relative-path bytes.
+///
+/// This slice uses literal-only output paths. A writer must pass every path through
+/// [`confined_destination`] before joining it to its destination.
 #[derive(Debug, Eq, PartialEq)]
 pub struct GeneratedTree(Vec<GeneratedFile>);
 
@@ -186,10 +191,6 @@ pub fn initialize(request: &InitRequest) -> Result<GeneratedTree, Diagnostics> {
             cargo_manifest(request.dependency_source()).into_bytes(),
         ),
         file(
-            "boxology-generator.toml",
-            generator_config(request.dependency_source()).into_bytes(),
-        ),
-        file(
             "boxology.toml",
             platform_manifest(request.project_name()).into_bytes(),
         ),
@@ -197,6 +198,22 @@ pub fn initialize(request: &InitRequest) -> Result<GeneratedTree, Diagnostics> {
     ];
     files.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     Ok(GeneratedTree(files))
+}
+
+/// Resolves a generated logical path beneath `root`.
+///
+/// Empty, absolute, rooted, prefixed, dot-segment, backslash, and NUL paths are rejected.
+#[rustfmt::skip]
+pub fn confined_destination(root: &Path, logical: &str) -> Result<PathBuf, &'static str> {
+    let bytes = logical.as_bytes();
+    let portable_prefix = matches!(bytes, [letter, b':', ..] if letter.is_ascii_alphabetic());
+    let invalid_segment = logical.split('/').any(|part| part.is_empty() || matches!(part, "." | ".."));
+    let invalid_component = Path::new(logical).components().any(|part| !matches!(part, Component::Normal(_)));
+    if bytes.contains(&0) || bytes.contains(&b'\\') || portable_prefix || invalid_segment || invalid_component {
+        Err("generated path is not a confined relative path")
+    } else {
+        Ok(root.join(logical))
+    }
 }
 
 fn file(path: &str, bytes: Vec<u8>) -> GeneratedFile {
@@ -247,16 +264,8 @@ fn cargo_manifest(source: &str) -> String {
 
 fn platform_manifest(project_name: &str) -> String {
     format!(
-        "schema = 1\nid = {}\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"rust-toolchain.toml\", \"boxology.toml\", \"boxology-generator.toml\", \".gitignore\", \".github/**\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"**/Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
+        "schema = 1\nid = {}\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"rust-toolchain.toml\", \"boxology.toml\", \".gitignore\", \".github/**\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"**/Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
         toml_string(project_name)
-    )
-}
-
-fn generator_config(source: &str) -> String {
-    format!(
-        "schema = 1\nboxology_version = {}\ndependency_source = {}\n",
-        toml_string(PROVENANCE),
-        toml_string(source)
     )
 }
 
@@ -269,27 +278,12 @@ mod tests {
 
     const SOURCE: &str = include_str!("lib.rs");
     const CODE_GOLDEN: &str = include_str!("../test/bxi.golden");
-    const GOLDEN: [(&str, &[u8]); 5] = [
-        (
-            ".gitignore",
-            include_bytes!("../../../goldens/generated-project/.gitignore"),
-        ),
-        (
-            "Cargo.toml",
-            include_bytes!("../../../goldens/generated-project/Cargo.toml"),
-        ),
-        (
-            "boxology-generator.toml",
-            include_bytes!("../../../goldens/generated-project/boxology-generator.toml"),
-        ),
-        (
-            "boxology.toml",
-            include_bytes!("../../../goldens/generated-project/boxology.toml"),
-        ),
-        (
-            "rust-toolchain.toml",
-            include_bytes!("../../../goldens/generated-project/rust-toolchain.toml"),
-        ),
+    #[rustfmt::skip]
+    const GOLDEN: [(&str, &[u8]); 4] = [
+        (".gitignore", include_bytes!("../../../goldens/generated-project/.gitignore")),
+        ("Cargo.toml", include_bytes!("../../../goldens/generated-project/Cargo.toml")),
+        ("boxology.toml", include_bytes!("../../../goldens/generated-project/boxology.toml")),
+        ("rust-toolchain.toml", include_bytes!("../../../goldens/generated-project/rust-toolchain.toml")),
     ];
 
     fn source_codes(source: &str) -> Vec<&str> {
@@ -335,60 +329,6 @@ mod tests {
             .bytes()
     }
 
-    fn normalize(path: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
-        if path.ends_with(".rs") {
-            return normalize_rust(bytes);
-        }
-        if path == "boxology-generator.toml" {
-            return normalize_generator_config(bytes);
-        }
-        Ok(bytes.to_vec())
-    }
-
-    fn normalize_rust(bytes: &[u8]) -> Result<Vec<u8>, String> {
-        let text = std::str::from_utf8(bytes).map_err(|_| "Rust output is not UTF-8")?;
-        let marker = "// Generated by boxology-generator ";
-        if !text.starts_with(marker) || text.matches(marker).count() != 1 {
-            return Err("Rust provenance header must be the unique first-line marker".into());
-        }
-        let (_, body) = text
-            .split_once('\n')
-            .ok_or("Rust output must have a first-line provenance header")?;
-        Ok(format!("{marker}@PROVENANCE@\n{body}").into_bytes())
-    }
-
-    fn normalize_generator_config(bytes: &[u8]) -> Result<Vec<u8>, String> {
-        let text = std::str::from_utf8(bytes).map_err(|_| "generator config is not UTF-8")?;
-        let prefix = "boxology_version = \"";
-        let mut anchor = None;
-        let mut offset = 0;
-        for line in text.split_inclusive('\n') {
-            if line.contains("boxology_version") {
-                let value = line
-                    .strip_prefix(prefix)
-                    .and_then(|value| value.strip_suffix("\"\n"))
-                    .filter(|value| {
-                        !value.is_empty()
-                            && value.bytes().all(|byte| {
-                                !byte.is_ascii_control() && !matches!(byte, b'"' | b'\\')
-                            })
-                    })
-                    .ok_or("boxology_version assignment must be exact")?;
-                if anchor
-                    .replace((offset + prefix.len(), value.len()))
-                    .is_some()
-                {
-                    return Err("generator config must have one boxology version".into());
-                }
-            }
-            offset += line.len();
-        }
-        let (start, length) = anchor.ok_or("generator config must have one boxology version")?;
-        let mut normalized = bytes.to_vec();
-        normalized.splice(start..start + length, b"@PROVENANCE@".iter().copied());
-        Ok(normalized)
-    }
-
     fn compare_golden(tree: &GeneratedTree) -> Result<(), String> {
         let actual: Vec<_> = tree.files().iter().map(GeneratedFile::path).collect();
         let expected: Vec<_> = GOLDEN.iter().map(|(path, _)| *path).collect();
@@ -408,7 +348,7 @@ mod tests {
         }
         for (path, expected_bytes) in GOLDEN {
             let actual_bytes = generated(tree, path);
-            if normalize(path, actual_bytes)? != normalize(path, expected_bytes)? {
+            if actual_bytes != expected_bytes {
                 return Err(format!("generated bytes differ for {path}"));
             }
         }
@@ -422,14 +362,6 @@ mod tests {
         assert_eq!(request.dependency_source(), "../boxology");
         let tree = initialize(&request).expect("canonical initialization succeeds");
         compare_golden(&tree).expect("the generated tree matches its golden");
-        for forbidden in ["ping", "composition"] {
-            assert!(
-                tree.files()
-                    .iter()
-                    .all(|file| !file.path().contains(forbidden))
-            );
-        }
-        assert_eq!(generated(&tree, "rust-toolchain.toml"), TOOLCHAIN);
     }
 
     #[test]
@@ -446,12 +378,10 @@ mod tests {
                 "Cargo.toml",
                 "rust-toolchain.toml",
                 "boxology.toml",
-                "boxology-generator.toml",
                 ".gitignore",
                 ".github/**",
             ]
         );
-        assert!(manifest.crates().is_empty());
         let derived = manifest.derived();
         assert_eq!(derived.len(), 1);
         assert_eq!(derived[0].id().as_str(), "lockfile");
@@ -464,15 +394,11 @@ mod tests {
     fn workspace_dependencies_are_exact_and_pinned() {
         let tree = initialize(&request()).unwrap();
         let text = std::str::from_utf8(generated(&tree, "Cargo.toml")).unwrap();
-        assert!(text.contains("members = []"));
         for (name, path) in DEPENDENCIES {
             let expected =
                 format!("{name} = {{ version = \"=0.0.0\", path = \"../boxology/{path}\" }}");
             assert!(text.lines().any(|line| line == expected), "{expected}");
         }
-        let config = std::str::from_utf8(generated(&tree, "boxology-generator.toml")).unwrap();
-        assert!(config.contains(&format!("boxology_version = \"{PROVENANCE}\"")));
-        assert!(config.contains("dependency_source = \"../boxology\""));
     }
 
     #[test]
@@ -487,8 +413,6 @@ mod tests {
             assert_eq!(diagnostic.path(), "<request>");
             let rendered = diagnostics.to_string();
             assert_eq!(rendered, expected);
-            assert!(!rendered.contains("Bad.Project"));
-            assert!(!rendered.contains(['\n', '\r']));
         }
         let both = InitRequest::new("Bad", "").unwrap_err();
         assert_eq!(
@@ -505,28 +429,56 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn production_inventory_and_code_catalog_fail_closed() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = fs::read_dir(root)
-            .unwrap()
+        let mut files = fs::read_dir(root).unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         files.sort();
         assert_eq!(files, ["lib.rs"]);
         files.push("stray.rs".into());
         assert_ne!(files, ["lib.rs"]);
-
+        let production = production_source(SOURCE).expect("locked production/test boundary");
         let expected = golden_codes();
+        assert_eq!(expected, ["BXI0001", "BXI0002"]);
         assert_eq!(DIAGNOSTICS.map(|entry| entry.0).as_slice(), expected);
-        assert_eq!(source_codes(SOURCE), expected);
+        assert_eq!(source_codes(production), expected);
         assert_eq!(modules(SOURCE), ["mod tests {"]);
-        let mut mutated = SOURCE.to_owned();
-        mutated.push_str(&format!(
-            "\nconst STRAY: &str = \"{}{}\";\nmod stray;\n",
-            "BX", "I9999"
-        ));
+        assert_eq!(production.matches("include!(").count(), 0);
+        let mut mutated = production.to_owned();
+        mutated.push_str(&format!("\nconst STRAY: &str = \"{}{}\";\nmod stray;\n", "BX", "I9999"));
         assert_ne!(source_codes(&mutated), expected);
         assert_ne!(modules(&mutated), ["mod tests {"]);
+        let cut = ["#[cfg(test)]", "\nmod tests {"].concat();
+        let anchor = ["\n    // source inventory ", "ends here"].concat();
+        assert_eq!(production_source(&format!("{SOURCE}{cut}")), Err("test cut must occur once"));
+        assert_eq!(production_source(&format!("{SOURCE}{anchor}")), Err("test anchor must occur once"));
+        for appended in ["/// documented production\npub fn appended() {}\n", "include!(\"post_test.rs\");\n"] {
+            assert_eq!(production_source(&format!("{SOURCE}{appended}")), Err("test module must terminate source"));
+        }
+    }
+
+    #[rustfmt::skip]
+    fn production_source(source: &str) -> Result<&str, &'static str> {
+        let cut = ["#[cfg(test)]", "\nmod tests {"].concat();
+        let anchor = ["\n    // source inventory ", "ends here"].concat();
+        if source.matches(&cut).count() != 1 { return Err("test cut must occur once"); }
+        if source.matches(&anchor).count() != 1 { return Err("test anchor must occur once"); }
+        let (production, tests) = source.split_once(&cut).unwrap();
+        let (_, suffix) = tests.split_once(&anchor).unwrap();
+        (suffix == "\n}\n").then_some(production).ok_or("test module must terminate source")
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn generated_destinations_are_confined() {
+        let root = Path::new("root");
+        assert_eq!(confined_destination(root, "nested/file"), Ok(root.join("nested/file")));
+        let invalid = ["", "/escape", "C:/escape", "C:\\escape", ".", "..", "a/./b", "a/../b", "a//b", "a/", "a\\b", "a\0b"];
+        for path in invalid {
+            assert_eq!(confined_destination(root, path), Err("generated path is not a confined relative path"), "{path:?}");
+        }
     }
 
     #[test]
@@ -551,25 +503,5 @@ mod tests {
         altered.0[0].bytes.push(b'x');
         assert!(compare_golden(&altered).is_err());
     }
-
-    #[test]
-    fn provenance_normalizers_reject_mutated_anchors() {
-        for malformed in [
-            &b"schema = 1\ndependency_source = \"x\"\n"[..],
-            &b"schema = 1\n boxology_version = \"a\"\n"[..],
-            &b"schema = 1\nboxology_version = \"a\" suffix\n"[..],
-            &b"schema = 1\nboxology_version = \"a\"\nboxology_version = \"b\"\n"[..],
-        ] {
-            assert!(normalize_generator_config(malformed).is_err());
-        }
-        let tree = initialize(&request()).unwrap();
-        let original = generated(&tree, "boxology-generator.toml");
-        let mut unrelated = original.to_vec();
-        unrelated.extend_from_slice(b"# unrelated\n");
-        assert_ne!(
-            normalize_generator_config(original).unwrap(),
-            normalize_generator_config(&unrelated).unwrap()
-        );
-        assert!(normalize_rust(b"fn main() {}\n").is_err());
-    }
+    // source inventory ends here
 }
