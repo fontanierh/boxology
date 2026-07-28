@@ -16,6 +16,8 @@ Record the reconciliation in the pull request or closing issue comment. The full
 
 Dated situation reports, process reviews, retrospectives, and calibration notes live in [`records/`](records/README.md), one file per record, named `YYYY-MM-DD-topic.md`. Records are historical and never rewritten; corrections are new records citing the old. Decisions bind through the normative documents they cite or amend, not through the record itself. The naming, index, and append-only rules are enforced mechanically by `cargo xtask records` as part of repository validation. To create a record from a conversation, use the [`record` skill](.agents/skills/record/SKILL.md) — a portable Agent Skills-format skill in `.agents/skills/`, usable by any agent — which defers to the conventions in [`records/README.md`](records/README.md).
 
+Every discipline relaxation lands with a dated `mechanical` or `semantic` entry in [`ops/friction-log.md`](ops/friction-log.md); an uncategorized relaxation is a process violation. Periodic records summarize and cite the log.
+
 ## Issue deliverable kinds
 
 Every issue declares its deliverable kind at creation. Issues resolved by modifying or adding markdown carry the `design-docs` label. Issues resolved in code carry no deliverable label; code is the default in the implementation era. The `post-mvp` and `factory` labels remain the sequencing and product axes.
