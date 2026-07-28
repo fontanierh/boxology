@@ -16,8 +16,7 @@ const POINT: Span = Span {
     end: ORIGIN,
 };
 /// The complete schema-1 key inventory. Every key outside it rejects, at every nesting level.
-const TOP_KEYS: &str =
-    "schema id kind owned display_name fixtures quality crates derived imports composition";
+const TOP_KEYS: &str = "schema id kind owned display_name fixtures protected quality crates derived imports composition";
 /// The only key `[quality]` models; nesting inherits the same fail-closed inventory rule.
 const QUALITY_KEYS: &str = "commands";
 /// `[composition]`'s own keys: an array of tables nested in a table is still that table's key.
@@ -201,6 +200,7 @@ pub struct Manifest {
     owned: Vec<GlobPattern>,
     display_name: Option<String>,
     fixtures: Vec<GlobPattern>,
+    protected: Vec<GlobPattern>,
     quality_commands: Vec<String>,
     crates: Vec<CrateEntry>,
     derived: Vec<DerivedOutput>,
@@ -287,6 +287,21 @@ impl Manifest {
                 parser.patterns("fixtures", item)
             }
         };
+        // Protected control-plane paths are a platform-package privilege, so the key is judged
+        // against the declared kind; an already-rejected kind adds no second complaint here.
+        let protected = match root.get("protected") {
+            None => Vec::new(),
+            Some(item) => {
+                let span = key_span(source, root, "protected");
+                if matches!(kind, Some(Kind::Box | Kind::Composition)) {
+                    parser.key("BXW0074", span, "protected");
+                }
+                if item.as_array().is_some_and(|array| array.is_empty()) {
+                    parser.key("BXW0034", span, "protected");
+                }
+                parser.patterns("protected", item)
+            }
+        };
         let quality_commands = match root.get("quality") {
             Some(item) => parser.quality(item),
             None => Vec::new(),
@@ -304,6 +319,7 @@ impl Manifest {
                 owned,
                 display_name,
                 fixtures,
+                protected,
                 quality_commands,
                 crates,
                 derived,
@@ -329,6 +345,7 @@ impl Manifest {
         #[doc = "Returns the validated package id."] id: &BoxId = id;
         #[doc = "Returns the declared owned patterns, in declaration order."] owned: &[GlobPattern] = owned;
         #[doc = "Returns the declared fixture patterns; always empty off a platform package."] fixtures: &[GlobPattern] = fixtures;
+        #[doc = "Returns the declared protected control-plane patterns, in declaration order."] protected: &[GlobPattern] = protected;
         #[doc = "Returns the declared quality commands, in declaration order."] quality_commands: &[String] = quality_commands;
         #[doc = "Returns the declared Cargo crates, in declaration order."] crates: &[CrateEntry] = crates;
         #[doc = "Returns the declared derived outputs, in declaration order."] derived: &[DerivedOutput] = derived;
@@ -758,6 +775,7 @@ fn rule_of(code: Code) -> Code {
         "BXW0039" => "binding exposure must be code_only, internal, or external",
         "BXW0040" => "every binding must reference a selected box",
         "BXW0041" => "a binding capability must be qualified by its own box",
+        "BXW0074" => "only a platform package may declare protected control-plane paths",
         _ => "the manifest must satisfy schema 1",
     }
 }
@@ -837,6 +855,9 @@ mod tests {
         let path = RelativePath::new("boxology.toml").expect("test literal is a valid path");
         Manifest::parse(path, text.as_bytes())
     }
+    fn path(value: &str) -> RelativePath {
+        RelativePath::new(value).expect("test literal is a valid manifest-relative path")
+    }
     /// Returns the codes of a rejected document in report order, which is span order per document.
     fn codes(text: &str) -> Vec<Code> {
         match parse(text) {
@@ -857,8 +878,24 @@ mod tests {
         "BXW0017", "BXW0018", "BXW0019", "BXW0020", "BXW0021", "BXW0022", "BXW0023", "BXW0024",
         "BXW0025", "BXW0026", "BXW0027", "BXW0028", "BXW0029", "BXW0030", "BXW0031", "BXW0032",
         "BXW0033", "BXW0034", "BXW0035", "BXW0036", "BXW0037", "BXW0038", "BXW0039", "BXW0040",
-        "BXW0041",
+        "BXW0041", "BXW0074",
     ];
+    const TOP_KEY_NAMES: &[&str] = &[
+        "schema",
+        "id",
+        "kind",
+        "owned",
+        "display_name",
+        "fixtures",
+        "protected",
+        "quality",
+        "crates",
+        "derived",
+        "imports",
+        "composition",
+    ];
+    /// The one unregistered literal used to prove the rule-table fallback is not a real code.
+    const FALLBACK_PROBE: Code = "BXW9999";
     /// One minimal document per code, spelled `<code> <base> <body>` and ordered as `ALL_CODES`
     /// is. Each document provokes its code, so every code is reachable from a real document.
     const CORPUS: &[&str] = &[
@@ -903,6 +940,7 @@ mod tests {
         r#"BXW0039 bind box = "hello"|capability = "hello.a"|transport = "http"|exposure = "x""#,
         r#"BXW0040 bind box = "other"|capability = "other.a"|transport = "http""#,
         r#"BXW0041 bind box = "hello"|capability = "other.a"|transport = "http""#,
+        r#"BXW0074 head protected = ["p"]"#,
     ];
     /// The document a corpus entry names: `raw` is the whole of it, `head`, `kind`, `owned`,
     /// `boxes`, and `bind` fill one hole in an otherwise valid one, `utf8` is not text at all,
@@ -967,13 +1005,14 @@ BXW0038 binding transport must be in-process or http specs/s5-manifest-and-valid
 BXW0039 binding exposure must be code_only, internal, or external specs/s5-manifest-and-validation.md D2
 BXW0040 every binding must reference a selected box specs/s5-manifest-and-validation.md D2
 BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-and-validation.md D2
+BXW0074 only a platform package may declare protected control-plane paths specs/s5-manifest-and-validation.md D2
 ";
     #[test]
     fn rule_text_and_sources_are_locked() {
         // The glob dialect keeps its own rule table in `glob.rs`, so `rule_of` has no arm for
         // BXW0013-BXW0019: locking what each code actually reports covers both tables at once,
         // and rejects the generic fallback a code with no arm of its own would render.
-        let generic = rule_of("BXW9999");
+        let generic = rule_of(FALLBACK_PROBE);
         let mut rendered = String::new();
         for spec in CORPUS {
             let (code, rest) = spec.split_once(' ').expect("a corpus entry names its code");
@@ -999,49 +1038,290 @@ BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-
         assert_eq!(covered, ALL_CODES);
         assert!(ALL_CODES.windows(2).all(|pair| pair[0] < pair[1]));
     }
+    fn production_rust_sources(root: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+        let mut pending = vec![root.join("crates")];
+        let mut sources = Vec::new();
+        while let Some(directory) = pending.pop() {
+            let entries = std::fs::read_dir(&directory)
+                .unwrap_or_else(|error| panic!("cannot read {directory:?}: {error}"));
+            for entry in entries {
+                let entry = entry.expect("a crate source directory entry is readable");
+                let path = entry.path();
+                let kind = entry
+                    .file_type()
+                    .expect("a crate source directory entry has a type");
+                if kind.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "rs")
+                    && path
+                        .components()
+                        .any(|component| component.as_os_str() == "src")
+                {
+                    let source = std::fs::read_to_string(&path)
+                        .unwrap_or_else(|error| panic!("cannot read {path:?}: {error}"));
+                    sources.push((path, source));
+                }
+            }
+        }
+        sources.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        sources
+    }
+    fn bxw0074_is_exclusive(
+        sources: &[(std::path::PathBuf, String)],
+        allowed: &std::path::Path,
+    ) -> bool {
+        let needle = format!("{}BXW0074{}", '"', '"');
+        sources
+            .iter()
+            .filter(|(_, source)| source.contains(&needle))
+            .map(|(path, _)| path.as_path())
+            .eq([allowed])
+    }
+    fn reserved_codes_are(source: &str, reserved: &[String], expected: &[String]) -> bool {
+        let needle = format!("{}BXW", '"');
+        let mut actual = Vec::new();
+        for line in source
+            .lines()
+            .filter(|line| line.trim_start().starts_with("const "))
+        {
+            for (at, _) in line.match_indices(&needle) {
+                let Some(code) = line.get(at + 1..at + 8) else {
+                    return false;
+                };
+                if line.as_bytes().get(at + 8) == Some(&b'"')
+                    && reserved.iter().any(|reserved| reserved == code)
+                {
+                    actual.push(code);
+                }
+            }
+        }
+        actual.sort_unstable();
+        actual
+            .iter()
+            .copied()
+            .eq(expected.iter().map(String::as_str))
+    }
+    fn cli_allocations_are_exact(owners: &[(&str, &str)], reserved: &[String]) -> bool {
+        let expected = [
+            ("walk.rs", &reserved[19..22]),
+            ("generate.rs", &reserved[22..28]),
+            ("execute.rs", &reserved[28..32]),
+        ];
+        owners.len() == expected.len()
+            && owners
+                .iter()
+                .zip(expected)
+                .all(|((name, source), (expected_name, codes))| {
+                    name == &expected_name && reserved_codes_are(source, reserved, codes)
+                })
+    }
+    #[test]
+    fn repository_bxw_allocations_are_disjoint() {
+        // Workspace owns 0042-0060; CLI walk owns 0061-0063, generation planning 0064-0069,
+        // and execution 0070-0073. The manifest may resume only at 0074.
+        let reserved: Vec<String> = (42..=73)
+            .map(|number| format!("BX{}{number:04}", 'W'))
+            .collect();
+        assert!(
+            ALL_CODES
+                .iter()
+                .all(|code| !reserved.iter().any(|reserved| reserved == code))
+        );
+        assert_eq!(ALL_CODES.last(), Some(&"BXW0074"));
+
+        let workspace = include_str!("../../boxology-workspace/src/lib.rs");
+        assert!(reserved_codes_are(workspace, &reserved, &reserved[..19]));
+        let cli = [
+            ("walk.rs", include_str!("../../boxology-cli/src/walk.rs")),
+            (
+                "generate.rs",
+                include_str!("../../boxology-cli/src/generate.rs"),
+            ),
+            (
+                "execute.rs",
+                include_str!("../../boxology-cli/src/execute.rs"),
+            ),
+        ];
+        assert!(
+            cli_allocations_are_exact(&cli, &reserved),
+            "CLI BXW allocation owners or ranges changed"
+        );
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("the manifest crate is under the repository's crates directory");
+        let allowed = manifest.join("src/parse.rs");
+        let sources = production_rust_sources(root);
+        assert!(
+            bxw0074_is_exclusive(&sources, &allowed),
+            "a production Rust source outside the manifest parser claims BXW0074"
+        );
+    }
+    #[test]
+    fn cli_allocation_owner_mutations_are_rejected() {
+        let reserved: Vec<String> = (42..=73)
+            .map(|number| format!("BX{}{number:04}", 'W'))
+            .collect();
+        let walk = include_str!("../../boxology-cli/src/walk.rs");
+        let generate = include_str!("../../boxology-cli/src/generate.rs");
+        let execute = include_str!("../../boxology-cli/src/execute.rs");
+        let wrong_walk = format!(
+            "{walk}\nconst WRONG_OWNER: Rule = (\"{}\", ROOT_TEXT, RULE_SOURCE);\n",
+            reserved[22]
+        );
+        assert!(
+            !cli_allocations_are_exact(
+                &[
+                    ("walk.rs", wrong_walk.as_str()),
+                    ("generate.rs", generate),
+                    ("execute.rs", execute),
+                ],
+                &reserved,
+            ),
+            "a generation code allocated by walk.rs survived"
+        );
+        assert!(
+            !cli_allocations_are_exact(&[("walk.rs", walk), ("execute.rs", execute)], &reserved,),
+            "a missing generate.rs owner survived"
+        );
+    }
+    #[test]
+    fn repository_bxw_allocation_scan_catches_third_crate_mutation() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("the manifest crate is under the repository's crates directory");
+        let allowed = manifest.join("src/parse.rs");
+        let mut sources = production_rust_sources(root);
+        sources.push((
+            root.join("crates/third/src/lib.rs"),
+            String::from(r#"const COLLISION: &str = "BXW0074";"#),
+        ));
+        assert!(
+            !bxw0074_is_exclusive(&sources, &allowed),
+            "a third-crate allocation collision survived the repository scan"
+        );
+    }
+    fn module_names(source: &str) -> Vec<&str> {
+        let mut tokens = source
+            .split(|character: char| {
+                !(character.is_alphanumeric() || matches!(character, '_' | '#'))
+            })
+            .filter(|token| !token.is_empty());
+        let mut modules = Vec::new();
+        while let Some(token) = tokens.next() {
+            if token == "mod" {
+                modules.push(tokens.next().unwrap_or(""));
+            }
+        }
+        modules
+    }
+    fn inventory_matches(actual: &str, expected: &[&str]) -> bool {
+        actual.split(' ').eq(expected.iter().copied())
+    }
     #[test]
     fn all_codes_is_exhaustive() {
-        // Both rule tables' own source text, read at compile time: a code emitted anywhere in the
-        // crate but registered nowhere above fails here rather than drifting in unproven. The test
-        // module is split off so this module's own probe literals do not count as emissions.
-        //
-        // Both halves of that split are pinned, because either one narrows the scan *silently*.
-        // The text before the first `#[cfg(test)]` is the production half only when that
-        // occurrence is the test module itself: a `#[cfg(test)]` above it — a test-only `use`,
-        // helper module, or `impl` — would truncate the scan there and hide every code below.
-        // `glob.rs` carries no test module at all, so its cut is absent rather than wrong. And
-        // this list of files is the whole crate only while the crate root declares exactly them,
-        // which is asserted rather than assumed: a fourth source file must join the scan or fail.
-        let production = |whole: &'static str| match whole.split_once("#[cfg(test)]") {
-            Some((source, rest)) => {
-                assert!(
-                    rest.starts_with("\nmod tests"),
-                    "a cut missed a test module"
-                );
-                source
-            }
-            None => whole,
-        };
+        // Every source file's whole text, read at compile time: a code emitted anywhere in the
+        // crate but registered nowhere above fails here rather than drifting in unproven. There is
+        // no test-module cut, so production appended below a test module remains visible; the one
+        // fallback probe is excluded by name rather than by narrowing the scanned source.
+        // The module inventory scans Rust-like tokens, so visibility and whitespace cannot hide a
+        // declaration. Comments or literals that spell a standalone `mod` fail loudly too.
         let root = include_str!("lib.rs");
-        let named = |(at, _): (usize, &str)| root[at + 5..].split([';', ' ']).next().unwrap_or("");
-        let declared: Vec<&str> = root.match_indices("\nmod ").map(named).collect();
+        let declared = module_names(root);
         assert_eq!(
             declared,
             ["glob", "parse", "tests"],
-            "an unscanned source file"
+            "the crate's source inventory changed"
         );
-        let sources = [include_str!("parse.rs"), include_str!("glob.rs"), root].map(production);
+        let sources = [
+            ("lib", root),
+            ("parse", include_str!("parse.rs")),
+            ("glob", include_str!("glob.rs")),
+        ];
+        let source_names: Vec<&str> = sources.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            source_names,
+            ["lib", "parse", "glob"],
+            "the source-file inventory changed"
+        );
+        for (index, (_, source)) in sources.iter().enumerate() {
+            assert!(
+                !sources[..index]
+                    .iter()
+                    .any(|(_, previous)| previous == source),
+                "a source file appears more than once"
+            );
+        }
+        let needle = format!("{}BXW", '"');
         let mut seen: Vec<&str> = Vec::new();
-        for source in sources {
-            for (at, _) in source.match_indices("\"BXW") {
+        for (_, source) in sources {
+            for (at, _) in source.match_indices(needle.as_str()) {
                 let code = &source[at + 1..at + 8];
-                if !seen.contains(&code) {
+                if code != FALLBACK_PROBE && !seen.contains(&code) {
                     seen.push(code);
                 }
             }
         }
         seen.sort_unstable();
         assert_eq!(seen, ALL_CODES);
+    }
+    #[test]
+    fn module_inventory_catches_public_extra_mutation() {
+        let root = include_str!("lib.rs");
+        let mutated = root.replacen("\nmod parse;", "\npub mod extra;", 1);
+        assert_eq!(
+            module_names(&mutated),
+            ["glob", "extra", "tests"],
+            "a visibility-qualified module must remain in the source inventory"
+        );
+    }
+    #[test]
+    fn module_inventory_catches_multiline_extra_mutation() {
+        let root = include_str!("lib.rs");
+        let mutated = root.replacen("\nmod parse;", "\nmod\nextra;", 1);
+        assert_eq!(
+            module_names(&mutated),
+            ["glob", "extra", "tests"],
+            "whitespace between `mod` and its name must not narrow the source inventory"
+        );
+    }
+    #[test]
+    fn manifest_key_inventories_are_exact() {
+        let inventories: &[(&str, &str, &[&str])] = &[
+            ("TOP_KEYS", TOP_KEYS, TOP_KEY_NAMES),
+            ("QUALITY_KEYS", QUALITY_KEYS, &["commands"]),
+            ("COMPOSITION_KEYS", COMPOSITION_KEYS, &["boxes", "bindings"]),
+            ("CRATE_KEYS", CRATE_KEYS, &["cargo_package", "path", "role"]),
+            (
+                "DERIVED_KEYS",
+                DERIVED_KEYS,
+                &["id", "generator", "inputs", "outputs"],
+            ),
+            ("IMPORT_KEYS", IMPORT_KEYS, &["package", "contract"]),
+            (
+                "BINDING_KEYS",
+                BINDING_KEYS,
+                &["box", "capability", "transport", "exposure"],
+            ),
+        ];
+        for (name, actual, expected) in inventories {
+            assert!(
+                inventory_matches(actual, expected),
+                "{name} changed: {actual:?}"
+            );
+        }
+    }
+    #[test]
+    fn manifest_key_inventory_catches_duplicate_protected_mutation() {
+        let duplicated = TOP_KEYS.replacen("protected", "protected protected", 1);
+        assert!(
+            !inventory_matches(&duplicated, TOP_KEY_NAMES),
+            "a duplicate protected entry must change the inventory"
+        );
     }
     #[test]
     fn hello_fixture_parses_green() {
@@ -1183,6 +1463,95 @@ BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-
         assert_eq!(codes(&repeated), ["BXW0020"]);
         let escaping = format!("{platform}fixtures = [\"../x\"]\n");
         assert_eq!(codes(&escaping), ["BXW0016"]);
+    }
+    #[test]
+    fn protected_control_plane_declarations_are_platform_only_and_glob_validated() {
+        let platform = "schema = 1\nid = \"p\"\nkind = \"platform\"\nowned = [\"a\"]\n";
+        let declared =
+            format!("{platform}protected = [\".github/workflows/pr.yml\", \"crates/xtask/**\"]\n");
+        let valid = parse(&declared).expect("platform protected declarations are valid");
+        let protected = valid.protected();
+        assert_eq!(
+            protected
+                .iter()
+                .map(GlobPattern::as_str)
+                .collect::<Vec<_>>(),
+            vec![".github/workflows/pr.yml", "crates/xtask/**"]
+        );
+        assert!(protected[0].matches(&path(".github/workflows/pr.yml")));
+        assert!(!protected[0].matches(&path(".github/workflows/other.yml")));
+        assert!(protected[1].matches(&path("crates/xtask/src/main.rs")));
+        assert!(!protected[1].matches(&path("crates/xtask")));
+        assert!(
+            parse(platform)
+                .expect("protected is optional")
+                .protected()
+                .is_empty()
+        );
+
+        let box_head = "schema = 1\nid = \"b\"\nkind = \"box\"\nowned = [\"a\"]\n";
+        assert_eq!(
+            codes(&format!("{box_head}protected = [\"p\"]\n")),
+            ["BXW0074"]
+        );
+        let composition =
+            format!("{COMPOSED}protected = [\"p\"]\n[composition]\nboxes = [\"hello\"]\n");
+        assert_eq!(codes(&composition), ["BXW0074"]);
+        let rendered = parse(&format!("{box_head}protected = [\"p\"]\n"))
+            .expect_err("box protected declaration")
+            .to_string();
+        assert!(
+            rendered
+                .starts_with("BXW0074 boxology.toml:5:1-5:10 offending=\"manifest key protected\""),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with(&format!("source={D2_SOURCE:?}")),
+            "{rendered}"
+        );
+
+        let empty_box = format!("{box_head}protected = []\n");
+        assert_eq!(codes(&empty_box), ["BXW0034", "BXW0074"]);
+        let empty_composition =
+            format!("{COMPOSED}protected = []\n[composition]\nboxes = [\"hello\"]\n");
+        assert_eq!(codes(&empty_composition), ["BXW0034", "BXW0074"]);
+        assert_eq!(codes(&format!("{platform}protected = []\n")), ["BXW0034"]);
+        let empty_rendered = parse(&empty_box)
+            .expect_err("empty protected declaration")
+            .to_string();
+        for code in ["BXW0034", "BXW0074"] {
+            assert!(
+                empty_rendered.contains(&format!("{code} boxology.toml:5:1-5:10")),
+                "{empty_rendered}"
+            );
+        }
+
+        assert_eq!(codes(&format!("{platform}protected = 7\n")), ["BXW0011"]);
+        assert_eq!(
+            codes(&format!("{platform}protected = [\"a\", \"a\"]\n")),
+            ["BXW0020"]
+        );
+        for (literal, code) in [
+            (r#""/a""#, "BXW0014"),
+            (r#""../a""#, "BXW0016"),
+            (r#""a\u001bx""#, "BXW0017"),
+            (r#""a?""#, "BXW0018"),
+            (r#""a[b]""#, "BXW0018"),
+            (r#""!a""#, "BXW0018"),
+            (r#""a**b""#, "BXW0019"),
+        ] {
+            assert_eq!(
+                codes(&format!("{platform}protected = [{literal}]\n")),
+                [code],
+                "{literal}"
+            );
+        }
+        let upward = format!("{platform}protected = [\"../x\"]\n");
+        let rendered = parse(&upward).expect_err("protected glob span").to_string();
+        assert!(
+            rendered.starts_with("BXW0016 boxology.toml:5:14-5:20 offending=\"glob pattern\""),
+            "{rendered}"
+        );
     }
     #[test]
     fn quality_commands_reject_empty_and_blank() {
