@@ -12,6 +12,7 @@ type Code = &'static str;
 /// Where each rule is written down: the narrowing gates are the strict reader's own, so S4's; the
 /// identity namespaces, the contract grammar, and the revision spelling are S2's.
 const READER: Code = "specs/s4-contract-change-classification.md D1";
+const CLASSIFICATION: Code = "specs/s4-contract-change-classification.md D2";
 const FINGERPRINT: Code = "specs/s2-contract-generator.md D6";
 const IDENTITY: Code = "specs/s2-contract-generator.md D4";
 const GRAMMAR: Code = "specs/s2-contract-generator.md D3";
@@ -91,6 +92,16 @@ impl Diagnostic {
     /// Returns the normative source of the rule.
     pub fn rule_source(&self) -> &'static str {
         source_of(self.code)
+    }
+
+    /// Constructs the D2 error for a classification call with neither document present.
+    pub fn classification_requires_document() -> Self {
+        Self::at("BXC0024", Location::root())
+    }
+
+    /// Constructs the D2 error for a classification call whose documents have different box ids.
+    pub fn box_id_mismatch() -> Self {
+        Self::at("BXC0025", Location::root().key("box_id"))
     }
 }
 
@@ -176,6 +187,8 @@ fn rule_of(code: Code) -> Code {
         "BXC0021" => "format 1 declares error types only",
         "BXC0022" => "format 1's only variant payload is unit",
         "BXC0023" => "a capability error must name a declared type",
+        "BXC0024" => "classification requires a base or a submitted document",
+        "BXC0025" => "base and submitted must declare the same box id",
         _ => "a schema document must satisfy format 1",
     }
 }
@@ -185,8 +198,10 @@ fn rule_of(code: Code) -> Code {
 /// there would point a reader at text saying the opposite. BXC0009 is D6's fingerprint spelling,
 /// BXC0010-BXC0014 D4's identity namespaces, BXC0015-BXC0023 D3's grammar — where the uniqueness
 /// rules are actually written (D4 states none) and the only text reaching an input parameter name.
+/// BXC0024-BXC0025 are D2's classifier pairing errors; the classifier owns their reachability.
 fn source_of(code: Code) -> Code {
     match code {
+        "BXC0024" | "BXC0025" => CLASSIFICATION,
         "BXC0009" => FINGERPRINT,
         _ if ("BXC0010"..="BXC0014").contains(&code) => IDENTITY,
         _ if ("BXC0015"..="BXC0023").contains(&code) => GRAMMAR,
@@ -206,7 +221,8 @@ mod tests {
     const ALL_CODES: &[Code] = &[
         "BXC0001", "BXC0002", "BXC0003", "BXC0004", "BXC0005", "BXC0006", "BXC0007", "BXC0008",
         "BXC0009", "BXC0010", "BXC0011", "BXC0012", "BXC0013", "BXC0014", "BXC0015", "BXC0016",
-        "BXC0017", "BXC0018", "BXC0019", "BXC0020", "BXC0021", "BXC0022", "BXC0023",
+        "BXC0017", "BXC0018", "BXC0019", "BXC0020", "BXC0021", "BXC0022", "BXC0023", "BXC0024",
+        "BXC0025",
     ];
 
     /// The unregistered code that probes the table's fallback, and the only quoted `BXC` literal in
@@ -239,6 +255,8 @@ BXC0020 format 1's only capability shape is unary specs/s2-contract-generator.md
 BXC0021 format 1 declares error types only specs/s2-contract-generator.md D3
 BXC0022 format 1's only variant payload is unit specs/s2-contract-generator.md D3
 BXC0023 a capability error must name a declared type specs/s2-contract-generator.md D3
+BXC0024 classification requires a base or a submitted document specs/s4-contract-change-classification.md D2
+BXC0025 base and submitted must declare the same box id specs/s4-contract-change-classification.md D2
 ";
 
     #[test]
