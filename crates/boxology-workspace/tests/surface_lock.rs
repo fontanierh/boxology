@@ -1,13 +1,48 @@
+use syn::parse::Parser;
 use syn::visit::Visit;
 const SOURCE: &str = include_str!("../src/lib.rs");
 const EXPECTED: &str = "BXW0042 BXW0043 BXW0044 BXW0045 BXW0046 BXW0047 BXW0048 BXW0049 BXW0050 BXW0051 BXW0052 BXW0053 BXW0054 BXW0055 BXW0056 BXW0057 BXW0058 BXW0059 BXW0060";
 const DANGEROUS: &str = "mod include include_str concat stringify cfg cfg_attr test";
 const MACROS: &str =
     "macro_rules ref_getters assert assert_eq assert_ne format matches panic vec write";
+const DERIVES: &str = "Clone Copy Debug Eq Ord PartialEq PartialOrd";
 const RULES: &str = "ESCAPE DUPLICATE SELF_CLAIM UNOWNED OVERLAP RIVALS BOTH LOCK DOCUMENT UNMAPPED UNMATCHED CLAIMED ROLE";
 const EDGE_RULES: &str = "CONTRACT FOREIGN DECLARED SELECTED IMPOSSIBLE NON_MEMBER";
 const PROTECTED: &str =
     "Rule EdgeRule derive ref_getters assert assert_eq assert_ne format matches panic vec write";
+const RETAINED_EDGE_ASSERTION: &str = r#"assert_eq!(
+            source.edges(),
+            &[DeclaredEdge {
+                kind: EdgeKind::Normal,
+                target: EdgeTarget::InRoot(path(target_at)),
+            }]
+        )"#;
+const RETAINED_EDGE_HELPER_BODY: &str = r#"        let ids: Vec<&str> = checked
+            .packages()
+            .iter()
+            .map(|package| package.id().as_str())
+            .collect();
+        assert_eq!(ids, packages);
+        let source = checked
+            .cargo_members()
+            .iter()
+            .find(|member| member.cargo_package() == source)
+            .unwrap();
+        let target = checked
+            .cargo_members()
+            .iter()
+            .find(|member| member.cargo_package() == target)
+            .unwrap();
+        assert_eq!(source.manifest_path(), &path(source_at));
+        assert_eq!(target.crate_dir(), Some(&path(target_at)));
+        assert_eq!(
+            source.edges(),
+            &[DeclaredEdge {
+                kind: EdgeKind::Normal,
+                target: EdgeTarget::InRoot(path(target_at)),
+            }]
+        );
+"#;
 #[derive(Default)]
 struct Lock {
     codes: Vec<String>,
@@ -48,6 +83,16 @@ impl Lock {
     fn protected(ident: &syn::Ident) -> bool {
         PROTECTED.split(' ').any(|name| ident == name)
     }
+    fn builtin_derive(path: &syn::Path) -> bool {
+        path.leading_colon.is_none()
+            && path.segments.len() == 1
+            && matches!(
+                path.segments.first(),
+                Some(segment)
+                    if matches!(&segment.arguments, syn::PathArguments::None)
+                        && DERIVES.split(' ').any(|name| segment.ident == name)
+            )
+    }
 }
 impl<'ast> Visit<'ast> for Lock {
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
@@ -58,9 +103,17 @@ impl<'ast> Visit<'ast> for Lock {
         };
         self.bad |= !allowed.split(' ').any(|name| attr.path().is_ident(name));
         if self.collect && attr.path().is_ident("derive") {
-            let tokens = attr.meta.require_list().map(|meta| meta.tokens.to_string());
-            self.bad |= tokens.is_err();
-            self.tokens(tokens.unwrap_or_default());
+            let valid = attr.meta.require_list().ok().and_then(|meta| {
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
+                    .parse2(meta.tokens.clone())
+                    .ok()
+            });
+            self.bad |= !valid
+                .as_ref()
+                .is_some_and(|paths| !paths.is_empty() && paths.iter().all(Self::builtin_derive));
+            if let Ok(meta) = attr.meta.require_list() {
+                self.tokens(meta.tokens.to_string());
+            }
         }
     }
     fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
@@ -187,7 +240,10 @@ fn locked(source: &str) -> bool {
     body.iter().for_each(|item| lock.visit_item(item));
     lock.codes.sort_unstable();
     let edge = r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#;
-    !lock.bad && lock.codes.join(" ") == EXPECTED && source.match_indices(edge).count() == 1
+    !lock.bad
+        && lock.codes.join(" ") == EXPECTED
+        && source.match_indices(edge).count() == 1
+        && source.match_indices(RETAINED_EDGE_ASSERTION).count() == 1
 }
 #[rustfmt::skip]
 fn once(source: &str, anchor: &str, replacement: &str) -> String {
@@ -203,7 +259,7 @@ fn rejects(name: &str, anchor: &str, replacement: &str) {
 #[rustfmt::skip]
 #[test]
 fn surface_and_live_evasions_are_locked() {
-    assert!(locked(SOURCE) && include_str!("../Cargo.toml").contains("[[test]]\nname = \"surface_lock\"\npath = \"tests/surface_lock.rs\""));
+    assert!(locked(SOURCE));
     let header = "#[cfg(test)]\nmod tests {";
     let early = "#[cfg(test)] mod tests {}\nconst X: &str = \"BXW9999\";\n#[cfg(test)] mod tests {";
     let inject = |name, text: &str| rejects(name, header, &format!("{text}{header}"));
@@ -228,6 +284,7 @@ fn surface_and_live_evasions_are_locked() {
         ("associated rule", "struct Hidden;\nimpl Hidden { const RULE: crate::Rule = (ROLE.0, \"different text\"); }\n"),
         ("qualified derive", "#[hidden::derive(BXW9999)] struct Hidden;\n"),
         ("aliased derive", "use hidden::derive;\n#[derive(BXW9999)] struct Hidden;\n"),
+        ("proc derive", "#[derive(hidden::Inject)] struct Hidden;\n"),
         ("test attribute", "#[test]\nfn hidden() {}\n"),
         ("cfg attribute", "#[cfg(test)]\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"),
         ("nested module", "fn hidden() { #[path = \"hidden.rs\"] mod nested; }\n"),
@@ -238,6 +295,8 @@ fn surface_and_live_evasions_are_locked() {
         inject(name, mutation);
     }
     rejects("retained edge assertion", r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#, "assert_eq!(workspace.edges(), workspace.edges())");
+    rejects("retained edge helper no-op", RETAINED_EDGE_HELPER_BODY, "");
+    rejects("retained edge assertion body", RETAINED_EDGE_ASSERTION, "{}");
     rejects("post-test registration", SOURCE, &format!("{SOURCE}\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"));
     rejects("macro registration", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(const X: Rule = (\"BXW9999\", \"x\");");
     rejects("macro self-disable", "#[$meta] pub fn $name(&self) -> $return { &self.$field }", "#[cfg(test)] #[$meta] pub fn $name(&self) -> $return { &self.$field }");

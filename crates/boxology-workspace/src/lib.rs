@@ -2759,6 +2759,58 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
              BXW0054 boxology.toml package=solo candidates=[c]"
         );
     }
+    // Cargo cannot represent dev × optional or dev × feature-activated dependencies, so those two
+    // cells are vacuous. Every other applicable declaration form is a real metadata shape below.
+    const EDGE_FORMS: &[(&str, &str, &str, &str)] = &[
+        ("normal", "null", "normal", ""),
+        ("build", "\"build\"", "build", ""),
+        ("dev", "\"dev\"", "dev", ""),
+        (
+            "renamed-normal",
+            "null",
+            "normal",
+            "\"name\":\"t\",\"rename\":\"alias\"",
+        ),
+        (
+            "renamed-build",
+            "\"build\"",
+            "build",
+            "\"name\":\"t\",\"rename\":\"alias\"",
+        ),
+        (
+            "renamed-dev",
+            "\"dev\"",
+            "dev",
+            "\"name\":\"t\",\"rename\":\"alias\"",
+        ),
+        ("optional-normal", "null", "normal", "\"optional\":true"),
+        ("optional-build", "\"build\"", "build", "\"optional\":true"),
+        (
+            "feature-normal",
+            "null",
+            "normal",
+            "\"optional\":true,\"features\":[\"dep:t\"]",
+        ),
+        (
+            "feature-build",
+            "\"build\"",
+            "build",
+            "\"optional\":true,\"features\":[\"dep:t\"]",
+        ),
+        (
+            "target-normal",
+            "null",
+            "normal",
+            "\"target\":\"cfg(unix)\"",
+        ),
+        (
+            "target-build",
+            "\"build\"",
+            "build",
+            "\"target\":\"cfg(unix)\"",
+        ),
+        ("target-dev", "\"dev\"", "dev", "\"target\":\"cfg(unix)\""),
+    ];
     /// The crate role one case letter spells, and the one package kind that hosts it.
     fn plays(letter: &str) -> (&'static str, &'static str) {
         match letter {
@@ -2768,6 +2820,34 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             "p" => ("platform", "platform"),
             other => panic!("unknown role {other:?}"),
         }
+    }
+    fn policy_inputs(
+        source: &str,
+        target: &str,
+        declared: bool,
+        selected: bool,
+        edge: &str,
+    ) -> WorkspaceInputs {
+        let (source_kind, source_role) = plays(source);
+        let (target_kind, target_role) = plays(target);
+        let source_entry = [("s", "s", source_role)];
+        let source_manifest = if source == "x" {
+            let boxes = if selected { ["b"] } else { ["other"] };
+            selecting("a", &source_entry, &boxes, false)
+        } else if declared {
+            importing("a", &source_entry, &["b"])
+        } else {
+            roled("a", source_kind, &source_entry)
+        };
+        let target_entry = [("t", "t", target_role)];
+        mapped(
+            vec![
+                ("a/boxology.toml", source_manifest),
+                ("b/boxology.toml", roled("b", target_kind, &target_entry)),
+            ],
+            &[],
+            &depending(&[("a/s", "s", edge), ("b/t", "t", "")], &[]),
+        )
     }
     /// Every judged cell of the role-pair table, the *permitted* ones included: two crates joined
     /// by one plain edge, where nothing differs between cases but the two roles and whether one
@@ -2802,22 +2882,80 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 held.push(("b/boxology.toml", roled("b", tkind, &target)));
             }
             held.insert(0, ("a/boxology.toml", roled("a", skind, &first)));
-            let one = edge("null", Some(&format!("/w/{at}")), "");
-            let listed = [("a/s", "s", one.as_str()), (at, "t", "")];
-            let checked = mapped(held, &[], &depending(&listed, &[])).check();
-            let owner = if same { "a" } else { "b" };
-            let packages: &[&str] = if same { &["a"] } else { &["a", "b"] };
-            match (&checked, expected) {
-                (Ok(workspace), []) => {
-                    successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)
+            for &(form, edge_kind, word, extra) in EDGE_FORMS {
+                let one = edge(edge_kind, Some(&format!("/w/{at}")), extra);
+                let listed = [("a/s", "s", one.as_str()), (at, "t", "")];
+                let checked = mapped(held.clone(), &[], &depending(&listed, &[])).check();
+                let owner = if same { "a" } else { "b" };
+                let packages: &[&str] = if same { &["a"] } else { &["a", "b"] };
+                match (&checked, expected) {
+                    (Ok(workspace), []) if form == "normal" => {
+                        successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)
+                    }
+                    (Ok(_), []) => {}
+                    (Err(report), [code]) => assert_eq!(
+                        report.to_string(),
+                        format!("{code} a/s/Cargo.toml package=a candidates=[{owner} {at} {word}]"),
+                        "{case} ({form})"
+                    ),
+                    _ => panic!("{case} ({form}) answered {checked:?}"),
                 }
-                (Err(report), [code]) => assert_eq!(
-                    report.to_string(),
-                    format!("{code} a/s/Cargo.toml package=a candidates=[{owner} {at} normal]"),
-                    "{case:?}"
-                ),
-                _ => panic!("{case:?} answered {checked:?}"),
             }
+        }
+    }
+    /// Every declaration-dependent allowed and forbidden rule is crossed with each metadata form;
+    /// the assertion is the policy verdict, not merely retention of an edge in the reader.
+    #[test]
+    fn declaration_policy_matrix_crosses_edge_forms() {
+        let cases = "i c undeclared BXW0057,i c declared -,c c undeclared BXW0057,\
+                     c c declared -,x i unselected BXW0058,x i selected -,\
+                     x c unselected BXW0058,x c selected -";
+        for case in cases.split(',') {
+            let [source, target, condition, expected] = case.split(' ').collect::<Vec<_>>()[..]
+            else {
+                panic!("malformed case {case:?}");
+            };
+            let declared = condition == "declared";
+            let selected = condition == "selected";
+            for &(form, edge_kind, word, extra) in EDGE_FORMS {
+                let one = edge(edge_kind, Some("/w/b/t"), extra);
+                let checked = policy_inputs(source, target, declared, selected, &one).check();
+                match (checked, expected) {
+                    (Ok(_), "-") => {}
+                    (Err(report), code) => assert_eq!(
+                        report.to_string(),
+                        format!("{code} a/s/Cargo.toml package=a candidates=[b b/t {word}]"),
+                        "{case} ({form})"
+                    ),
+                    (answer, _) => panic!("{case} ({form}) answered {answer:?}"),
+                }
+            }
+        }
+        for &(form, edge_kind, word, extra) in EDGE_FORMS {
+            let one = edge(edge_kind, Some("/w/missing"), extra);
+            let held = vec![(
+                "a/boxology.toml",
+                roled("a", "box", &[("s", "s", "box-implementation")]),
+            )];
+            let checked = mapped(held, &[], &depending(&[("a/s", "s", &one)], &[]))
+                .check()
+                .expect_err("a box edge onto a non-member is forbidden");
+            assert_eq!(
+                checked.to_string(),
+                format!("BXW0060 a/s/Cargo.toml package=a candidates=[missing {word}]"),
+                "non-member ({form})"
+            );
+        }
+        for &(form, edge_kind, _, extra) in EDGE_FORMS {
+            let one = edge(edge_kind, Some("/outside"), extra);
+            let held = vec![(
+                MANIFEST,
+                roled("root", "platform", &[("s", "s", "platform")]),
+            )];
+            let checked = mapped(held, &[], &depending(&[("s", "s", &one)], &[]))
+                .check()
+                .expect("a platform edge onto a non-member is allowed");
+            assert_eq!(checked.cargo_members().len(), 1, "platform ({form})");
         }
     }
     /// Location, count and scope, all three provable at once — the shape S5-T2 lacked, where every

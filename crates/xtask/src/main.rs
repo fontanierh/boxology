@@ -49,6 +49,8 @@ const EDITOR_CHECK_ARGS: &[&str] = &[
     "--no-test",
     EDITOR_FIXTURE,
 ];
+const SURFACE_LOCK_TEST_ARGS: &[&str] =
+    &["test", "-p", "boxology-workspace", "--test", "surface_lock"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -183,6 +185,10 @@ fn run_ci(base: Option<&str>) -> u8 {
             timed("test", || {
                 run_cargo(&["test", "--workspace", "--all-features"])
             }),
+        ),
+        (
+            "surface-lock",
+            timed("surface-lock", || run_cargo(SURFACE_LOCK_TEST_ARGS)),
         ),
         ("key-order", timed("key-order", run_key_order)),
         ("doc", timed("doc", run_doc)),
@@ -495,6 +501,14 @@ mod tests {
         assert!(!EDITOR_CHECK_ARGS.contains(&"--parallel"));
         assert!(!EDITOR_CHECK_ARGS.contains(&"--with-deps"));
         assert!(root().join(EDITOR_FIXTURE).join("Cargo.toml").is_file());
+    }
+
+    #[test]
+    fn surface_lock_gate_invokes_the_explicit_test_target() {
+        assert_eq!(
+            SURFACE_LOCK_TEST_ARGS,
+            &["test", "-p", "boxology-workspace", "--test", "surface_lock"]
+        );
     }
 
     #[test]
