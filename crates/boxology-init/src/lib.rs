@@ -1,7 +1,8 @@
 //! Pure assembly of the deterministic Boxology project tree.
 //!
-//! This first slice emits only the root platform files. It performs no filesystem, environment,
-//! network, clock, or process access; the writer and the later project packages are separate work.
+//! The initializer emits the root platform files, including the workspace and generator
+//! manifests, pinned toolchain, and ignore rules. It performs no filesystem, runtime environment,
+//! network, clock, or process access; the writer and later project packages are separate work.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -191,6 +192,10 @@ pub fn initialize(request: &InitRequest) -> Result<GeneratedTree, Diagnostics> {
             cargo_manifest(request.dependency_source()).into_bytes(),
         ),
         file(
+            "boxology-generator.toml",
+            generator_manifest(request.dependency_source()).into_bytes(),
+        ),
+        file(
             "boxology.toml",
             platform_manifest(request.project_name()).into_bytes(),
         ),
@@ -262,9 +267,17 @@ fn cargo_manifest(source: &str) -> String {
     text
 }
 
+fn generator_manifest(dependency_source: &str) -> String {
+    format!(
+        "boxology-version = {}\ndependency-source = {}\n",
+        toml_string(env!("CARGO_PKG_VERSION")),
+        toml_string(dependency_source)
+    )
+}
+
 fn platform_manifest(project_name: &str) -> String {
     format!(
-        "schema = 1\nid = {}\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"rust-toolchain.toml\", \"boxology.toml\", \".gitignore\", \".github/**\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"**/Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
+        "schema = 1\nid = {}\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"rust-toolchain.toml\", \"boxology.toml\", \"boxology-generator.toml\", \".gitignore\", \".github/**\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"**/Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
         toml_string(project_name)
     )
 }
@@ -279,9 +292,13 @@ mod tests {
     const SOURCE: &str = include_str!("lib.rs");
     const CODE_GOLDEN: &str = include_str!("../test/bxi.golden");
     #[rustfmt::skip]
-    const GOLDEN: [(&str, &[u8]); 4] = [
+    const GOLDEN: [(&str, &[u8]); 5] = [
         (".gitignore", include_bytes!("../../../goldens/generated-project/.gitignore")),
         ("Cargo.toml", include_bytes!("../../../goldens/generated-project/Cargo.toml")),
+        (
+            "boxology-generator.toml",
+            include_bytes!("../../../goldens/generated-project/boxology-generator.toml"),
+        ),
         ("boxology.toml", include_bytes!("../../../goldens/generated-project/boxology.toml")),
         ("rust-toolchain.toml", include_bytes!("../../../goldens/generated-project/rust-toolchain.toml")),
     ];
@@ -378,6 +395,7 @@ mod tests {
                 "Cargo.toml",
                 "rust-toolchain.toml",
                 "boxology.toml",
+                "boxology-generator.toml",
                 ".gitignore",
                 ".github/**",
             ]
@@ -398,6 +416,32 @@ mod tests {
             let expected =
                 format!("{name} = {{ version = \"=0.0.0\", path = \"../boxology/{path}\" }}");
             assert!(text.lines().any(|line| line == expected), "{expected}");
+        }
+    }
+
+    #[test]
+    fn noncanonical_dependency_source_is_escaped_in_both_manifests() {
+        let source = r#"../boxology/"quoted"\checkout"#;
+        let request = InitRequest::new("example", source).unwrap();
+        let tree = initialize(&request).unwrap();
+
+        assert_eq!(
+            generated(&tree, "boxology-generator.toml"),
+            b"boxology-version = \"0.0.0\"\ndependency-source = \"../boxology/\\\"quoted\\\"\\\\checkout\"\n"
+        );
+        let cargo = std::str::from_utf8(generated(&tree, "Cargo.toml")).unwrap();
+        let expected = [
+            r#"boxology = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology" }"#,
+            r#"boxology-contract = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology-contract" }"#,
+            r#"boxology-http = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology-http" }"#,
+            r#"boxology-runtime = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology-runtime" }"#,
+        ];
+        for expected in expected {
+            assert_eq!(
+                cargo.lines().filter(|line| *line == expected).count(),
+                1,
+                "{expected}"
+            );
         }
     }
 
