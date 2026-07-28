@@ -324,6 +324,38 @@ fn variant_addition_with_type_deprecation_drift_is_incompatible() {
 }
 
 #[test]
+fn variant_addition_with_existing_variant_docs_drift_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0]
+        .docs
+        .push("Different variant docs.".to_owned());
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn variant_addition_with_existing_variant_deprecation_drift_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].deprecation = Some("use another variant".to_owned());
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn variant_addition_with_existing_variant_name_drift_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].name = "Renamed".to_owned();
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
 fn variant_addition_with_other_type_name_drift_is_incompatible() {
     let base = two_error_document();
     let mut submitted = base.clone();

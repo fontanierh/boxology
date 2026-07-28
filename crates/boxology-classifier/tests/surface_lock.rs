@@ -4,9 +4,10 @@ use boxology_schema::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument,
     SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use syn::visit::{self, Visit};
 use syn::{Item, Meta, Visibility};
 
@@ -21,7 +22,11 @@ struct IncludeDetector {
 
 impl<'ast> Visit<'ast> for IncludeDetector {
     fn visit_macro(&mut self, item: &'ast syn::Macro) {
-        self.found |= item.path.is_ident("include");
+        self.found |= item
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "include");
         visit::visit_macro(self, item);
     }
 }
@@ -106,6 +111,69 @@ fn production_source(root: &Path) -> Result<String, &'static str> {
     Ok(source)
 }
 
+fn cargo_metadata(manifest_dir: &Path) -> Result<Value, &'static str> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args([
+            "metadata",
+            "--locked",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(manifest_dir.join("Cargo.toml"))
+        .output()
+        .map_err(|_| "cannot run cargo metadata")?;
+    if !output.status.success() {
+        return Err("cargo metadata failed");
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| "cargo metadata was not JSON")
+}
+
+fn require_cargo_targets(metadata: &Value, manifest_dir: &Path) -> Result<(), &'static str> {
+    let manifest = manifest_dir.join("Cargo.toml");
+    let packages = metadata["packages"]
+        .as_array()
+        .ok_or("cargo metadata omitted packages")?;
+    let package = packages
+        .iter()
+        .find(|package| {
+            package["manifest_path"]
+                .as_str()
+                .is_some_and(|path| Path::new(path) == manifest)
+        })
+        .ok_or("cargo metadata omitted classifier package")?;
+    let targets = package["targets"]
+        .as_array()
+        .ok_or("cargo metadata omitted targets")?;
+    let has_kind = |target: &Value, expected: &str| {
+        target["kind"]
+            .as_array()
+            .is_some_and(|kinds| kinds.iter().any(|kind| kind == expected))
+    };
+    if targets
+        .iter()
+        .any(|target| has_kind(target, "custom-build"))
+    {
+        return Err("build hooks are forbidden");
+    }
+    let libraries: Vec<_> = targets
+        .iter()
+        .filter(|target| has_kind(target, "lib"))
+        .collect();
+    if libraries.len() != 1 {
+        return Err("expected exactly one library target");
+    }
+    let source = libraries[0]["src_path"]
+        .as_str()
+        .ok_or("library target omitted source path")?;
+    if Path::new(source) != manifest_dir.join("src/lib.rs") {
+        return Err("library target must be src/lib.rs");
+    }
+    Ok(())
+}
+
 fn document(box_id: &str) -> SchemaDocument {
     SchemaDocument {
         box_id: BoxId::new(box_id).unwrap(),
@@ -143,10 +211,15 @@ fn document(box_id: &str) -> SchemaDocument {
 
 #[test]
 fn production_inventory_and_code_anchors_are_fail_closed() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir.join("src");
     assert_eq!(rust_source_inventory(&root).unwrap(), RUST_SOURCES);
     let root_source = fs::read_to_string(root.join("lib.rs")).unwrap();
     assert_eq!(require_allowed_modules(&root_source), Ok(()));
+    assert_eq!(
+        require_cargo_targets(&cargo_metadata(manifest_dir).unwrap(), manifest_dir),
+        Ok(())
+    );
     let source = production_source(&root).unwrap();
     let anchors = [
         ("BXC0024", "Diagnostic::classification_requires_document()"),
@@ -182,9 +255,44 @@ fn attributed_public_module_fails_the_ast_inventory() {
 #[test]
 fn descendant_include_fails_the_production_inventory() {
     let source = include_str!("../src/lib.rs");
+    for attack in [
+        "include!(\"hidden/probe.rs\");",
+        "std::include!(\"../review_external_include.rs\");",
+    ] {
+        assert_eq!(
+            require_allowed_modules(&format!("{source}\n{attack}\n")),
+            Err("production include macros are forbidden")
+        );
+    }
+}
+
+#[test]
+fn alternate_root_and_build_hook_fail_cargo_target_lock() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("Cargo.toml");
+    let alternate = manifest_dir.join("review_alt_root.rs");
+    let metadata = |targets: Value| {
+        json!({"packages": [{
+            "manifest_path": manifest,
+            "targets": targets,
+        }]})
+    };
     assert_eq!(
-        require_allowed_modules(&format!("{source}\ninclude!(\"hidden/probe.rs\");\n")),
-        Err("production include macros are forbidden")
+        require_cargo_targets(
+            &metadata(json!([{"kind": ["lib"], "src_path": alternate}])),
+            manifest_dir,
+        ),
+        Err("library target must be src/lib.rs")
+    );
+    assert_eq!(
+        require_cargo_targets(
+            &metadata(json!([
+                {"kind": ["lib"], "src_path": manifest_dir.join("src/lib.rs")},
+                {"kind": ["custom-build"], "src_path": manifest_dir.join("build.rs")},
+            ])),
+            manifest_dir,
+        ),
+        Err("build hooks are forbidden")
     );
 }
 
