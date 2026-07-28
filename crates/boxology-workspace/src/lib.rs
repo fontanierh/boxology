@@ -513,10 +513,11 @@ fn roles(packages: &[Package]) -> Vec<Entry> {
 }
 /// **Known v0 limit, recorded in the code and not only in the task spec.** A crate that reaches
 /// another crate's source through `include!` declares no Cargo dependency, so that edge is absent
-/// from the `cargo metadata` document and invisible to every rule in this section. Four instances
-/// exist in this repository today — `crates/fixtures/hello/implementation/src/lib.rs`,
-/// `crates/fixtures/ping/implementation/src/lib.rs`, `crates/boxology-http/src/binding.rs`, and
-/// `crates/boxology-generator/src/lib.rs` — so a forbidden dependency concealed that way passes.
+/// from the `cargo metadata` document and invisible to every rule in this section. Five instances
+/// exist in this repository today — `crates/fixtures/greeter/implementation/src/lib.rs`,
+/// `crates/fixtures/hello/implementation/src/lib.rs`, `crates/fixtures/ping/implementation/src/lib.rs`,
+/// `crates/boxology-http/src/binding.rs`, and `crates/boxology-generator/src/lib.rs` — so a forbidden
+/// dependency concealed that way passes.
 /// Closing it needs a source-level check, which is no part of reading one metadata document.
 fn edges(roled: &[Mapped], members: &[CargoMember]) -> Vec<Entry> {
     let mut defects = Vec::new();

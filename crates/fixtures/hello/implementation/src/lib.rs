@@ -27,7 +27,7 @@ impl HelloService {
 }
 
 #[allow(dead_code)]
-mod generated {
+pub mod generated {
     include!("../../generated/adapter/adapter.rs");
 }
 

@@ -18,6 +18,8 @@ members = [
     "crates/boxology-telegram",
     "crates/fixtures/fixture-tests",
     "crates/fixtures/generated-style-fmt",
+    "crates/fixtures/greeter/generated/contract",
+    "crates/fixtures/greeter/implementation",
     "crates/fixtures/hello/generated/contract",
     "crates/fixtures/hello/implementation",
     "crates/fixtures/ping/generated/contract",

@@ -8,6 +8,9 @@ publish = false
 boxology-contract = { version = "=0.0.0", path = "../../boxology-contract" }
 boxology-generator = { version = "=0.0.0", path = "../../boxology-generator" }
 boxology-generator-model = { version = "=0.0.0", path = "../../boxology-generator-model" }
+boxology-runtime = { version = "=0.0.0", path = "../../boxology-runtime", features = ["test-support"] }
+greeter-contract = { version = "=0.0.0", path = "../greeter/generated/contract" }
+greeter-implementation = { version = "=0.0.0", path = "../greeter/implementation" }
 hello-contract = { version = "=0.0.0", path = "../hello/generated/contract", features = ["test-support"] }
 hello-implementation = { version = "=0.0.0", path = "../hello/implementation" }
 serde_json = "=1.0.150"
