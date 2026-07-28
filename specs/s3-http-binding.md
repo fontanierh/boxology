@@ -54,7 +54,7 @@ Promised-but-unnamed codes are named; these are wire contract, in the call-error
 - **`Accept` is ignored** — responses are always `application/json`; no content negotiation in v0. Unlisted request headers are ignored (proxies add headers freely; only the contractual headers have grammar-enforced semantics).
 - **`Idempotency-Key` is descriptor-independent transport pass-through**: accepted and carried into `CallContext` whether the capability declares `None` or `Inherent`; it is metadata for future dedup, never consulted in v0.
 - Request `Content-Type`: `application/json` with optional `charset=utf-8` parameter (case-insensitive), single occurrence; anything else → `415`; duplicates → `400`. Responses: `Content-Type: application/json` only.
-- Method/media table completed: non-POST on a valid path → `405` with `Allow: POST` (OPTIONS included — no CORS in v0); empty body → `400`; trailing bytes after the JSON document → `400`; maximum header block size configured explicitly (default 16 KiB) — a header-read timeout alone is not a resource bound.
+- Method/media table completed: non-POST on a valid path → `405` with `Allow: POST` (OPTIONS included — no CORS in v0); empty body → `400`; trailing bytes after the JSON document → `400`; maximum complete HTTP/1 request-head size (request line plus headers) configured explicitly (default 16 KiB), with an over-cap head returning bare `431`; values below Hyper's 8192-byte minimum use the 8192-byte floor — a header-read timeout alone is not a resource bound.
 
 ### D7 — Request lifecycle, deadline coverage, and task ownership
 

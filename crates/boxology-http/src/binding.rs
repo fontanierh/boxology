@@ -15,7 +15,7 @@ use boxology_runtime::{
 };
 use http::Request;
 use hyper::{body::Incoming, server::conn::http1, service::service_fn};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +28,12 @@ use crate::syntax::{DEFAULT_DEPTH_LIMIT, SyntaxLimits};
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// The inclusive request body cap, mirroring the client's response cap.
 const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// The default complete HTTP/1 request-head cap, including its request line.
+const DEFAULT_MAX_REQUEST_HEAD_BYTES: usize = 16 * 1024;
+/// Hyper's minimum accepted `max_buf_size`; lower configured values use this.
+const MIN_MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
+/// The default time allowed to receive one complete HTTP/1 request head.
+const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Configuration for an HTTP server binding.
 #[derive(Clone)]
@@ -35,6 +41,8 @@ pub struct HttpServerConfig {
     bind_addr: SocketAddr,
     default_timeout: Duration,
     limits: SyntaxLimits,
+    max_request_head_bytes: usize,
+    header_read_timeout: Duration,
 }
 
 impl HttpServerConfig {
@@ -44,6 +52,8 @@ impl HttpServerConfig {
             bind_addr,
             default_timeout: DEFAULT_REQUEST_TIMEOUT,
             limits: SyntaxLimits(DEFAULT_MAX_BODY_BYTES, DEFAULT_DEPTH_LIMIT),
+            max_request_head_bytes: DEFAULT_MAX_REQUEST_HEAD_BYTES,
+            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
         }
     }
 
@@ -56,6 +66,20 @@ impl HttpServerConfig {
     /// Replaces the inclusive request byte and syntax-depth limits.
     pub fn with_request_limits(mut self, max_body_bytes: usize, max_decode_depth: usize) -> Self {
         self.limits = SyntaxLimits(max_body_bytes, max_decode_depth);
+        self
+    }
+
+    /// Replaces the complete HTTP/1 request-head cap, including the request
+    /// line and all header fields. Values below Hyper's 8192-byte minimum are
+    /// silently floored to 8192 rather than panicking in Hyper's builder.
+    pub fn with_max_request_head_bytes(mut self, max_request_head_bytes: usize) -> Self {
+        self.max_request_head_bytes = max_request_head_bytes.max(MIN_MAX_REQUEST_HEAD_BYTES);
+        self
+    }
+
+    /// Replaces the timeout for receiving a complete HTTP/1 request head.
+    pub fn with_header_read_timeout(mut self, header_read_timeout: Duration) -> Self {
+        self.header_read_timeout = header_read_timeout;
         self
     }
 }
@@ -214,6 +238,8 @@ impl TransportBinding for HttpServerBinding {
                         tasks,
                         default_timeout: config.default_timeout,
                         limits: config.limits,
+                        max_request_head_bytes: config.max_request_head_bytes,
+                        header_read_timeout: config.header_read_timeout,
                         shutdown: intake,
                         abort,
                     },
@@ -304,6 +330,8 @@ pub(crate) struct ConnectionContext {
     tasks: DispatchTasks,
     default_timeout: Duration,
     limits: SyntaxLimits,
+    max_request_head_bytes: usize,
+    header_read_timeout: Duration,
     shutdown: CancellationToken,
     abort: CancellationToken,
 }
@@ -345,6 +373,8 @@ async fn serve_connection(stream: TcpStream, context: ConnectionContext) {
         tasks,
         default_timeout,
         limits,
+        max_request_head_bytes,
+        header_read_timeout,
         shutdown,
         abort,
     } = context;
@@ -364,7 +394,12 @@ async fn serve_connection(stream: TcpStream, context: ConnectionContext) {
             .map_err(|_| Abandoned)
         }
     });
-    let connection = http1::Builder::new().serve_connection(TokioIo::new(stream), service);
+    let mut builder = http1::Builder::new();
+    builder
+        .max_buf_size(max_request_head_bytes)
+        .timer(TokioTimer::new())
+        .header_read_timeout(header_read_timeout);
+    let connection = builder.serve_connection(TokioIo::new(stream), service);
     tokio::pin!(connection);
     tokio::select! {
         biased;
@@ -501,6 +536,8 @@ mod tests {
                 tasks: DispatchTasks::new(TransportTaskTracker::new()),
                 default_timeout: Duration::from_secs(5),
                 limits: SyntaxLimits(64 * 1024, DEFAULT_DEPTH_LIMIT),
+                max_request_head_bytes: DEFAULT_MAX_REQUEST_HEAD_BYTES,
+                header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
                 shutdown: shutdown.clone(),
                 abort: CancellationToken::new(),
             },
@@ -511,20 +548,33 @@ mod tests {
 
     /// Sends one closing request and returns the parsed status code and body.
     async fn round_trip(address: SocketAddr, path: &str, body: &[u8]) -> (u16, Vec<u8>) {
-        let mut stream = TcpStream::connect(address).await.unwrap();
         let head = format!(
             "POST {path} HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\n\
              Connection: close\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );
-        stream.write_all(head.as_bytes()).await.unwrap();
-        stream.write_all(body).await.unwrap();
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).await.unwrap();
+        let mut request = head.into_bytes();
+        request.extend_from_slice(body);
+        let raw = raw_request(address, &request).await;
         split_response(&raw)
     }
 
+    async fn raw_request(address: SocketAddr, request: &[u8]) -> Vec<u8> {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        stream.write_all(request).await.unwrap();
+        let mut raw = Vec::new();
+        if let Err(error) = stream.read_to_end(&mut raw).await {
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+        }
+        raw
+    }
+
     fn split_response(raw: &[u8]) -> (u16, Vec<u8>) {
+        let (status, _headers, body) = split_response_parts(raw);
+        (status, body.to_vec())
+    }
+
+    fn split_response_parts(raw: &[u8]) -> (u16, &[u8], &[u8]) {
         let line_end = raw
             .windows(2)
             .position(|window| window == b"\r\n")
@@ -539,7 +589,47 @@ mod tests {
             .windows(4)
             .position(|window| window == b"\r\n\r\n")
             .expect("response is missing a header/body boundary");
-        (status, raw[boundary + 4..].to_vec())
+        (status, &raw[line_end + 2..boundary], &raw[boundary + 4..])
+    }
+
+    fn has_header(headers: &[u8], name: &[u8]) -> bool {
+        headers.split(|byte| *byte == b'\n').any(|line| {
+            let line = line.strip_suffix(&[b'\r']).unwrap_or(line);
+            line.get(..name.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                && line.get(name.len()) == Some(&b':')
+        })
+    }
+
+    fn padded_request_head(length: usize) -> Vec<u8> {
+        let prefix = b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\n\
+Content-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\
+X-Padding: ";
+        let suffix = b"\r\n\r\n";
+        assert!(length >= prefix.len() + suffix.len());
+        let mut head = Vec::with_capacity(length);
+        head.extend_from_slice(prefix);
+        head.extend(std::iter::repeat_n(
+            b'x',
+            length - prefix.len() - suffix.len(),
+        ));
+        head.extend_from_slice(suffix);
+        assert_eq!(head.len(), length);
+        head
+    }
+
+    #[test]
+    fn server_head_limits_have_explicit_defaults_and_hyper_floor() {
+        let address = "127.0.0.1:0".parse().unwrap();
+        let defaults = HttpServerConfig::new(address);
+        assert_eq!(defaults.max_request_head_bytes, 16 * 1024);
+        assert_eq!(defaults.header_read_timeout, Duration::from_secs(30));
+        assert_eq!(
+            HttpServerConfig::new(address)
+                .with_max_request_head_bytes(1)
+                .max_request_head_bytes,
+            8192
+        );
     }
 
     #[tokio::test]
@@ -570,6 +660,16 @@ mod tests {
         assert_eq!(status, unknown.status());
         assert_eq!(body.as_slice(), unknown.body());
 
+        let framing = raw_request(
+            address,
+            b"POST /rpc/hello/greet\r\nHost: boxology\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        let (status, headers, body) = split_response_parts(&framing);
+        assert_eq!(status, 400);
+        assert!(body.is_empty());
+        assert!(!has_header(headers, b"content-type"));
+
         let invalid = WireCallError::InvalidRequest.encode();
         let (status, body) = round_trip(address, "/rpc/hello/greet", b"{").await;
         assert_eq!(status, 400);
@@ -581,6 +681,89 @@ mod tests {
         drop(composition);
     }
 
+    #[tokio::test]
+    async fn default_request_head_cap_accepts_16384_and_rejects_16385_bare() {
+        let binding = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+        )));
+        let composition = serve_hand_written_hello(&binding);
+        let address = binding.local_addr().unwrap();
+
+        let mut exact = padded_request_head(16 * 1024);
+        exact.extend_from_slice(br#""Ada""#);
+        let response = raw_request(address, &exact).await;
+        let (status, _headers, body) = split_response_parts(&response);
+        assert_eq!(status, 200);
+        assert_eq!(body, br#"{"result":{"value":"Hello, Ada!"}}"#);
+
+        let mut over = padded_request_head(16 * 1024 + 1);
+        over.extend_from_slice(br#""Ada""#);
+        let response = raw_request(address, &over).await;
+        let (status, headers, body) = split_response_parts(&response);
+        assert_eq!(status, 431);
+        assert!(body.is_empty());
+        assert!(!has_header(headers, b"content-type"));
+
+        composition.shutdown(Duration::from_secs(1)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn configured_one_byte_request_head_cap_uses_hyper_floor() {
+        let config =
+            HttpServerConfig::new("127.0.0.1:0".parse().unwrap()).with_max_request_head_bytes(1);
+        assert_eq!(config.max_request_head_bytes, 8192);
+        let binding = Arc::new(HttpServerBinding::new(config));
+        let composition = serve_hand_written_hello(&binding);
+        let address = binding.local_addr().unwrap();
+
+        let mut request = padded_request_head(8192);
+        request.extend_from_slice(br#""Ada""#);
+        let response = raw_request(address, &request).await;
+        let (status, _headers, body) = split_response_parts(&response);
+        assert_eq!(status, 200);
+        assert_eq!(body, br#"{"result":{"value":"Hello, Ada!"}}"#);
+
+        let mut over = padded_request_head(8193);
+        over.extend_from_slice(br#""Ada""#);
+        let response = raw_request(address, &over).await;
+        let (status, headers, body) = split_response_parts(&response);
+        assert_eq!(status, 431);
+        assert!(body.is_empty());
+        assert!(!has_header(headers, b"content-type"));
+
+        composition.shutdown(Duration::from_secs(1)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn partial_request_head_closes_after_configured_timeout() {
+        let config = HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
+            .with_header_read_timeout(Duration::from_millis(100));
+        let binding = Arc::new(HttpServerBinding::new(config));
+        let composition = serve_hand_written_hello(&binding);
+        let address = binding.local_addr().unwrap();
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\n")
+            .await
+            .unwrap();
+
+        let mut byte = [0_u8; 1];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), stream.read(&mut byte))
+                .await
+                .is_err(),
+            "partial head closed before the configured timeout"
+        );
+        let mut rest = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(1), stream.read_to_end(&mut rest))
+            .await
+            .expect("header-read timeout did not close the connection")
+            .unwrap();
+        assert_eq!(read, 0);
+        assert!(rest.is_empty());
+
+        composition.shutdown(Duration::from_secs(1)).await.unwrap();
+    }
     #[test]
     fn conform_and_prepare_reject_unroutable_exposures() {
         let binding = HttpServerBinding::new(HttpServerConfig::new("127.0.0.1:0".parse().unwrap()));
