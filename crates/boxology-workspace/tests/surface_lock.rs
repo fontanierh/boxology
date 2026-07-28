@@ -1,17 +1,194 @@
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde_json::Value;
+use syn::parse::Parser;
 use syn::visit::Visit;
-const SOURCE: &str = include_str!("../src/lib.rs");
 const EXPECTED: &str = "BXW0042 BXW0043 BXW0044 BXW0045 BXW0046 BXW0047 BXW0048 BXW0049 BXW0050 BXW0051 BXW0052 BXW0053 BXW0054 BXW0055 BXW0056 BXW0057 BXW0058 BXW0059 BXW0060";
 const DANGEROUS: &str = "mod include include_str concat stringify cfg cfg_attr test";
 const MACROS: &str =
     "macro_rules ref_getters assert assert_eq assert_ne format matches panic vec write";
+const DERIVES: &str = "Clone Copy Debug Eq Ord PartialEq PartialOrd";
 const RULES: &str = "ESCAPE DUPLICATE SELF_CLAIM UNOWNED OVERLAP RIVALS BOTH LOCK DOCUMENT UNMAPPED UNMATCHED CLAIMED ROLE";
 const EDGE_RULES: &str = "CONTRACT FOREIGN DECLARED SELECTED IMPOSSIBLE NON_MEMBER";
 const PROTECTED: &str =
     "Rule EdgeRule derive ref_getters assert assert_eq assert_ne format matches panic vec write";
+const RETAINED_EDGE_ASSERTION: &str = "assert_eq!(\n            source.edges(),\n            &[DeclaredEdge {\n                kind: EdgeKind::Normal,\n                target: EdgeTarget::InRoot(path(target_at)),\n            }]\n        )";
+const RETAINED_EDGE_HELPER_BODY: &str = "        let ids: Vec<&str> = checked\n            .packages()\n            .iter()\n            .map(|package| package.id().as_str())\n            .collect();\n        assert_eq!(ids, packages);\n        let source = checked\n            .cargo_members()\n            .iter()\n            .find(|member| member.cargo_package() == source)\n            .unwrap();\n        let target = checked\n            .cargo_members()\n            .iter()\n            .find(|member| member.cargo_package() == target)\n            .unwrap();\n        assert_eq!(source.manifest_path(), &path(source_at));\n        assert_eq!(target.crate_dir(), Some(&path(target_at)));\n        assert_eq!(\n            source.edges(),\n            &[DeclaredEdge {\n                kind: EdgeKind::Normal,\n                target: EdgeTarget::InRoot(path(target_at)),\n            }]\n        );\n";
+struct Source {
+    text: String,
+    lib: bool,
+}
+fn metadata() -> Value {
+    let output = Command::new("cargo")
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+        ])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .output()
+        .expect("cargo metadata");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("valid cargo metadata")
+}
+fn targets(document: &Value) -> Option<Vec<(PathBuf, bool)>> {
+    let package = document["packages"]
+        .as_array()?
+        .iter()
+        .find(|package| package["name"].as_str() == Some(env!("CARGO_PKG_NAME")))?;
+    let targets = package["targets"]
+        .as_array()?
+        .iter()
+        .filter_map(|target| {
+            let kinds = target["kind"].as_array()?;
+            let lib = kinds.iter().any(|kind| kind.as_str() == Some("lib"));
+            (lib || kinds
+                .iter()
+                .any(|kind| matches!(kind.as_str(), Some("bin" | "example"))))
+            .then(|| {
+                target["src_path"]
+                    .as_str()
+                    .map(|path| (PathBuf::from(path), lib))
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!targets.is_empty()).then_some(targets)
+}
+fn cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        matches!(&attr.meta, syn::Meta::List(meta)
+            if meta.path.is_ident("cfg") && meta.tokens.to_string() == "test")
+    })
+}
+fn module_candidates(item: &syn::ItemMod, base: &Path) -> Option<Vec<PathBuf>> {
+    let paths = item
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("path"))
+        .map(|attr| {
+            let syn::Meta::NameValue(value) = &attr.meta else {
+                return None;
+            };
+            let syn::Expr::Lit(lit) = &value.value else {
+                return None;
+            };
+            let syn::Lit::Str(path) = &lit.lit else {
+                return None;
+            };
+            Some(PathBuf::from(path.value()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    match paths.as_slice() {
+        [path] => Some(vec![base.join(path)]),
+        [] => {
+            let stem = base.join(item.ident.to_string());
+            Some(vec![stem.with_extension("rs"), stem.join("mod.rs")])
+        }
+        _ => None,
+    }
+}
+struct ModuleFinder {
+    base: PathBuf,
+    refs: Vec<Vec<PathBuf>>,
+    blocks: usize,
+    bad: bool,
+}
+impl<'ast> Visit<'ast> for ModuleFinder {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if self.blocks != 0 {
+            self.bad = true;
+        } else if !cfg_test(&item.attrs) {
+            if let Some((_, body)) = &item.content {
+                let child = self.base.join(item.ident.to_string());
+                let previous = std::mem::replace(&mut self.base, child);
+                body.iter().for_each(|item| self.visit_item(item));
+                self.base = previous;
+            } else if let Some(candidates) = module_candidates(item, &self.base) {
+                self.refs.push(candidates);
+            } else {
+                self.bad = true;
+            }
+        }
+    }
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.blocks += 1;
+        syn::visit::visit_block(self, block);
+        self.blocks -= 1;
+    }
+}
+fn module_refs(file: &syn::File, base: &Path) -> Option<Vec<Vec<PathBuf>>> {
+    let mut finder = ModuleFinder {
+        base: base.to_path_buf(),
+        refs: Vec::new(),
+        blocks: 0,
+        bad: false,
+    };
+    file.items.iter().for_each(|item| finder.visit_item(item));
+    (!finder.bad).then_some(finder.refs)
+}
+fn module_dir(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?.to_path_buf();
+    if path.file_name().is_some_and(|name| name == "mod.rs") {
+        Some(parent)
+    } else {
+        Some(parent.join(path.file_stem()?))
+    }
+}
+fn collect_source(
+    path: &Path,
+    lib: bool,
+    root: bool,
+    sources: &mut BTreeMap<PathBuf, Source>,
+    read: &impl Fn(&Path) -> Option<String>,
+) -> Option<()> {
+    if let Some(source) = sources.get_mut(path) {
+        source.lib |= lib;
+        return Some(());
+    }
+    let text = read(path)?;
+    let file = syn::parse_file(&text).ok()?;
+    sources.insert(path.to_path_buf(), Source { text, lib });
+    let base = if root {
+        path.parent()?.to_path_buf()
+    } else {
+        module_dir(path)?
+    };
+    for candidates in module_refs(&file, &base)? {
+        let present: Vec<_> = candidates
+            .iter()
+            .filter(|candidate| read(candidate).is_some())
+            .collect();
+        if present.len() != 1 {
+            return None;
+        }
+        collect_source(present[0], false, false, sources, read)?;
+    }
+    Some(())
+}
+fn source_inventory(
+    document: &Value,
+    read: &impl Fn(&Path) -> Option<String>,
+) -> Option<BTreeMap<PathBuf, Source>> {
+    let mut sources = BTreeMap::new();
+    for (path, lib) in targets(document)? {
+        collect_source(&path, lib, true, &mut sources, read)?;
+    }
+    Some(sources)
+}
 #[derive(Default)]
 struct Lock {
     codes: Vec<String>,
     collect: bool,
+    module_attrs: bool,
     nested: bool,
     bad: bool,
 }
@@ -48,19 +225,39 @@ impl Lock {
     fn protected(ident: &syn::Ident) -> bool {
         PROTECTED.split(' ').any(|name| ident == name)
     }
+    fn builtin_derive(path: &syn::Path) -> bool {
+        path.leading_colon.is_none()
+            && path.segments.len() == 1
+            && path.segments.first().is_some_and(|segment| {
+                matches!(&segment.arguments, syn::PathArguments::None)
+                    && DERIVES.split(' ').any(|name| segment.ident == name)
+            })
+    }
 }
 impl<'ast> Visit<'ast> for Lock {
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        let allowed = if self.collect {
+        let allowed = if self.module_attrs {
+            "doc deny forbid derive path cfg"
+        } else if self.collect {
             "doc deny forbid derive"
         } else {
             "doc deny forbid derive test"
         };
         self.bad |= !allowed.split(' ').any(|name| attr.path().is_ident(name));
         if self.collect && attr.path().is_ident("derive") {
-            let tokens = attr.meta.require_list().map(|meta| meta.tokens.to_string());
-            self.bad |= tokens.is_err();
-            self.tokens(tokens.unwrap_or_default());
+            let valid = attr.meta.require_list().ok().and_then(|meta| {
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
+                    .parse2(meta.tokens.clone())
+                    .ok()
+            });
+            self.bad |= !valid
+                .as_ref()
+                .is_some_and(|paths| !paths.is_empty() && paths.iter().all(Self::builtin_derive));
+            self.tokens(
+                attr.meta
+                    .require_list()
+                    .map_or_else(|_| String::new(), |meta| meta.tokens.to_string()),
+            );
         }
     }
     fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
@@ -114,8 +311,20 @@ impl<'ast> Visit<'ast> for Lock {
         self.visit_macro(&item.mac);
     }
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        self.bad = true;
-        syn::visit::visit_item_mod(self, item);
+        if self.nested
+            || (cfg_test(&item.attrs) && !(item.ident == "tests" && item.attrs.len() == 1))
+        {
+            self.bad = true;
+            return;
+        }
+        let previous = std::mem::replace(&mut self.module_attrs, true);
+        item.attrs
+            .iter()
+            .for_each(|attr| self.visit_attribute(attr));
+        self.module_attrs = previous;
+        if let Some((_, body)) = &item.content {
+            body.iter().for_each(|item| self.visit_item(item));
+        }
     }
     fn visit_use_glob(&mut self, _: &'ast syn::UseGlob) {
         self.bad |= self.collect;
@@ -161,33 +370,68 @@ impl<'ast> Visit<'ast> for Lock {
     }
 }
 fn locked(source: &str) -> bool {
-    let Ok(file) = syn::parse_file(source) else {
+    locked_sources([&Source {
+        text: source.to_owned(),
+        lib: true,
+    }])
+}
+fn test_module(item: &syn::Item) -> Option<&syn::ItemMod> {
+    let syn::Item::Mod(module) = item else {
+        return None;
+    };
+    (module.ident == "tests" && module.attrs.len() == 1 && cfg_test(&module.attrs))
+        .then_some(module)
+}
+fn scan_source(source: &Source, lock: &mut Lock) -> bool {
+    let Ok(file) = syn::parse_file(&source.text) else {
         return false;
     };
-    let Some((syn::Item::Mod(tests), production)) = file.items.split_last() else {
-        return false;
-    };
-    let cfg = |attr: &syn::Attribute| {
-        matches!(&attr.meta, syn::Meta::List(meta)
-            if meta.path.is_ident("cfg") && meta.tokens.to_string() == "test")
-    };
-    let Some((_, body)) = &tests.content else {
-        return false;
-    };
-    if tests.ident != "tests" || tests.attrs.len() != 1 || !cfg(&tests.attrs[0]) {
-        return false;
-    }
-    let mut lock = Lock::default();
+    lock.collect = true;
     file.attrs
         .iter()
         .for_each(|attr| lock.visit_attribute(attr));
-    lock.collect = true;
-    production.iter().for_each(|item| lock.visit_item(item));
-    lock.collect = false;
-    body.iter().for_each(|item| lock.visit_item(item));
+    let mut test_modules = 0;
+    for item in &file.items {
+        if let Some(module) = test_module(item) {
+            test_modules += 1;
+            let Some((_, body)) = &module.content else {
+                lock.bad = true;
+                continue;
+            };
+            lock.collect = false;
+            body.iter().for_each(|item| lock.visit_item(item));
+        } else {
+            lock.collect = true;
+            lock.visit_item(item);
+        }
+    }
+    if source.lib && test_modules != 1 {
+        lock.bad = true;
+    }
+    true
+}
+fn locked_sources<'a>(sources: impl IntoIterator<Item = &'a Source>) -> bool {
+    let mut lock = Lock::default();
+    let mut lib = None;
+    for source in sources {
+        if source.lib && lib.replace(source).is_some() {
+            return false;
+        }
+        if !scan_source(source, &mut lock) {
+            return false;
+        }
+    }
+    let Some(lib) = lib else { return false };
     lock.codes.sort_unstable();
     let edge = r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#;
-    !lock.bad && lock.codes.join(" ") == EXPECTED && source.match_indices(edge).count() == 1
+    !lock.bad
+        && lock.codes.join(" ") == EXPECTED
+        && lib.text.match_indices(edge).count() == 1
+        && lib.text.match_indices(RETAINED_EDGE_ASSERTION).count() == 1
+}
+fn locked_document(document: &Value, files: &BTreeMap<PathBuf, String>) -> bool {
+    source_inventory(document, &|path| files.get(path).cloned())
+        .is_some_and(|sources| locked_sources(sources.values()))
 }
 #[rustfmt::skip]
 fn once(source: &str, anchor: &str, replacement: &str) -> String {
@@ -197,19 +441,28 @@ fn once(source: &str, anchor: &str, replacement: &str) -> String {
     changed
 }
 #[rustfmt::skip]
-fn rejects(name: &str, anchor: &str, replacement: &str) {
-    assert!(!locked(&once(SOURCE, anchor, replacement)), "mutation survived: {name}");
+fn rejects(name: &str, source: &str, anchor: &str, replacement: &str) {
+    assert!(!locked(&once(source, anchor, replacement)), "mutation survived: {name}");
 }
 #[rustfmt::skip]
 #[test]
 fn surface_and_live_evasions_are_locked() {
-    assert!(locked(SOURCE) && include_str!("../Cargo.toml").contains("[[test]]\nname = \"surface_lock\"\npath = \"tests/surface_lock.rs\""));
+    let mut document = metadata();
+    let sources = source_inventory(&document, &|path| fs::read_to_string(path).ok())
+        .expect("production Rust source inventory");
+    let source = &sources.values().find(|source| source.lib).unwrap().text;
+    assert!(locked_sources(sources.values()));
     let header = "#[cfg(test)]\nmod tests {";
     let early = "#[cfg(test)] mod tests {}\nconst X: &str = \"BXW9999\";\n#[cfg(test)] mod tests {";
-    let inject = |name, text: &str| rejects(name, header, &format!("{text}{header}"));
-    rejects("early boundary", header, early);
-    rejects("crate self-disable", SOURCE, &format!("#![cfg(not(test))]\n{SOURCE}"));
-    rejects("boundary self-disable", header, "#[cfg(any())]\n#[cfg(test)]\nmod tests {");
+    let inject = |name, text: &str| rejects(name, source, header, &format!("{text}{header}"));
+    rejects("early boundary", source, header, early);
+    rejects("crate self-disable", source, source, &format!("#![cfg(not(test))]\n{source}"));
+    rejects(
+        "boundary self-disable",
+        source,
+        header,
+        "#[cfg(any())]\n#[cfg(test)]\nmod tests {",
+    );
     let mutations = [
         ("include", "const HIDDEN: &str = include_str!(\"hidden.rs\");\n"),
         ("renamed macro", "use hidden_macros::emit_rule as format;\nconst HIDDEN: EdgeRule = format!();\n"),
@@ -228,6 +481,7 @@ fn surface_and_live_evasions_are_locked() {
         ("associated rule", "struct Hidden;\nimpl Hidden { const RULE: crate::Rule = (ROLE.0, \"different text\"); }\n"),
         ("qualified derive", "#[hidden::derive(BXW9999)] struct Hidden;\n"),
         ("aliased derive", "use hidden::derive;\n#[derive(BXW9999)] struct Hidden;\n"),
+        ("proc derive", "#[derive(hidden::Inject)] struct Hidden;\n"),
         ("test attribute", "#[test]\nfn hidden() {}\n"),
         ("cfg attribute", "#[cfg(test)]\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"),
         ("nested module", "fn hidden() { #[path = \"hidden.rs\"] mod nested; }\n"),
@@ -237,8 +491,33 @@ fn surface_and_live_evasions_are_locked() {
     for (name, mutation) in mutations {
         inject(name, mutation);
     }
-    rejects("retained edge assertion", r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#, "assert_eq!(workspace.edges(), workspace.edges())");
-    rejects("post-test registration", SOURCE, &format!("{SOURCE}\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"));
-    rejects("macro registration", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(const X: Rule = (\"BXW9999\", \"x\");");
-    rejects("macro self-disable", "#[$meta] pub fn $name(&self) -> $return { &self.$field }", "#[cfg(test)] #[$meta] pub fn $name(&self) -> $return { &self.$field }");
+    for (name, anchor, replacement) in [
+        ("retained edge assertion", r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#, "assert_eq!(workspace.edges(), workspace.edges())"),
+        ("retained edge helper no-op", RETAINED_EDGE_HELPER_BODY, ""),
+        ("retained edge assertion body", RETAINED_EDGE_ASSERTION, "{}"),
+    ] {
+        rejects(name, source, anchor, replacement);
+    }
+    rejects("post-test registration", source, source, &format!("{source}\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"));
+    for (name, anchor, replacement) in [
+        ("macro registration", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(const X: Rule = (\"BXW9999\", \"x\");"),
+        ("macro self-disable", "#[$meta] pub fn $name(&self) -> $return { &self.$field }", "#[cfg(test)] #[$meta] pub fn $name(&self) -> $return { &self.$field }"),
+    ] {
+        rejects(name, source, anchor, replacement);
+    }
+    let mut files: BTreeMap<_, _> = sources.iter().map(|(path, source)| (path.clone(), source.text.clone())).collect();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/surface_escape.rs");
+    files.insert(path.clone(), "fn main() { let _ = \"BXW9999\"; }\n".into());
+    let package = document["packages"].as_array_mut().unwrap().iter_mut().find(|package| {
+        package["name"].as_str() == Some(env!("CARGO_PKG_NAME"))
+    }).unwrap();
+    let targets = package["targets"].as_array_mut().unwrap();
+    targets.push(serde_json::json!({
+        "kind": ["bin"],
+        "crate_types": ["bin"],
+        "name": "surface_escape",
+        "src_path": path.to_string_lossy().to_string(),
+    }));
+    assert_eq!(targets.iter().filter(|target| target["name"].as_str() == Some("surface_escape")).count(), 1);
+    assert!(!locked_document(&document, &files));
 }
