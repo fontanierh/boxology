@@ -1,0 +1,41 @@
+{
+  "box_id": "greeter",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "GreetLoudlyError",
+      "id": "greeter.greet_loudly",
+      "idempotency": "none",
+      "input": {
+        "name": "name",
+        "type": "String"
+      },
+      "max_exposure": "external",
+      "name": "greet_loudly",
+      "output": {
+        "type": "String"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": "@PROVENANCE@",
+  "revision": "sha256:a45a70dacfc5e3ea7911944d3f4fd385da1de2cdabfac86d554d4a321e3244cc",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "GreetLoudlyError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Refused",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}

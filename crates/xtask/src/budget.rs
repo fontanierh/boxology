@@ -3,6 +3,7 @@ use std::process::{Command, Output};
 const LIMIT: u64 = 600;
 // Bootstrap registry: S7 replaces this with manifest-derived classification (S0 D10).
 const DERIVED_OUTPUT_PATHS: &[&str] = &[
+    "crates/fixtures/greeter/generated/",
     "crates/fixtures/hello/generated/",
     "crates/fixtures/ping/generated/",
 ];
@@ -279,6 +280,7 @@ mod tests {
         assert_eq!(
             DERIVED_OUTPUT_PATHS,
             &[
+                "crates/fixtures/greeter/generated/",
                 "crates/fixtures/hello/generated/",
                 "crates/fixtures/ping/generated/",
             ]

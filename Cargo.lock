@@ -86,6 +86,9 @@ dependencies = [
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",
+ "boxology-runtime",
+ "greeter-contract",
+ "greeter-implementation",
  "hello-contract",
  "hello-implementation",
  "serde_json",
@@ -426,6 +429,23 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
+]
+
+[[package]]
+name = "greeter-contract"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
+
+[[package]]
+name = "greeter-implementation"
+version = "0.0.0"
+dependencies = [
+ "boxology",
+ "boxology-contract",
+ "boxology-runtime",
+ "greeter-contract",
 ]
 
 [[package]]
