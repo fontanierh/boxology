@@ -6,12 +6,33 @@ use boxology_schema::{
 };
 use serde_json::json;
 use std::fs;
+use std::path::Path;
+use syn::visit::{self, Visit};
 use syn::{Item, Meta, Visibility};
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
+const RUST_SOURCES: &[&str] = &["lib.rs", "tests.rs"];
+const PRODUCTION_RUST_SOURCES: &[&str] = &["lib.rs"];
+
+#[derive(Default)]
+struct IncludeDetector {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for IncludeDetector {
+    fn visit_macro(&mut self, item: &'ast syn::Macro) {
+        self.found |= item.path.is_ident("include");
+        visit::visit_macro(self, item);
+    }
+}
 
 fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
     let file = syn::parse_file(source).map_err(|_| "invalid Rust source")?;
+    let mut includes = IncludeDetector::default();
+    includes.visit_file(&file);
+    if includes.found {
+        return Err("production include macros are forbidden");
+    }
     let modules: Vec<_> = file
         .items
         .iter()
@@ -39,6 +60,52 @@ fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+fn rust_source_inventory(root: &Path) -> Result<Vec<String>, &'static str> {
+    fn visit(root: &Path, directory: &Path, sources: &mut Vec<String>) -> Result<(), &'static str> {
+        for entry in fs::read_dir(directory).map_err(|_| "cannot read source directory")? {
+            let entry = entry.map_err(|_| "cannot read source entry")?;
+            let file_type = entry
+                .file_type()
+                .map_err(|_| "cannot read source entry type")?;
+            if file_type.is_symlink() {
+                return Err("source symlinks are forbidden");
+            }
+            let path = entry.path();
+            if file_type.is_dir() {
+                visit(root, &path, sources)?;
+            } else if file_type.is_file() && path.extension().is_some_and(|value| value == "rs") {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|_| "source escaped source root")?;
+                let parts: Result<Vec<_>, _> = relative
+                    .iter()
+                    .map(|part| part.to_str().ok_or("source path is not UTF-8"))
+                    .collect();
+                sources.push(parts?.join("/"));
+            }
+        }
+        Ok(())
+    }
+
+    let mut sources = Vec::new();
+    visit(root, root, &mut sources)?;
+    sources.sort();
+    Ok(sources)
+}
+
+fn production_source(root: &Path) -> Result<String, &'static str> {
+    let mut source = String::new();
+    for relative in PRODUCTION_RUST_SOURCES {
+        source.push_str(
+            &fs::read_to_string(root.join(relative))
+                .map_err(|_| "cannot read production source")?,
+        );
+        source.push('\n');
+    }
+    Ok(source)
+}
+
 fn document(box_id: &str) -> SchemaDocument {
     SchemaDocument {
         box_id: BoxId::new(box_id).unwrap(),
@@ -76,15 +143,11 @@ fn document(box_id: &str) -> SchemaDocument {
 
 #[test]
 fn production_inventory_and_code_anchors_are_fail_closed() {
-    let source = include_str!("../src/lib.rs");
-    assert_eq!(require_allowed_modules(source), Ok(()));
-    let mut source_files: Vec<_> = fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| name.ends_with(".rs"))
-        .collect();
-    source_files.sort();
-    assert_eq!(source_files, ["lib.rs", "tests.rs"]);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    assert_eq!(rust_source_inventory(&root).unwrap(), RUST_SOURCES);
+    let root_source = fs::read_to_string(root.join("lib.rs")).unwrap();
+    assert_eq!(require_allowed_modules(&root_source), Ok(()));
+    let source = production_source(&root).unwrap();
     let anchors = [
         ("BXC0024", "Diagnostic::classification_requires_document()"),
         ("BXC0025", "Diagnostic::box_id_mismatch()"),
@@ -92,6 +155,7 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0027", "\"BXC0027\""),
         ("BXC0028", "\"BXC0028\""),
         ("BXC0029", "\"BXC0029\""),
+        ("BXC0029 condition", "\"unknown-variant tolerance\""),
     ];
     for (code, anchor) in anchors {
         assert_eq!(source.matches(anchor).count(), 1, "{code} anchor count");
@@ -102,6 +166,7 @@ fn attributed_public_module_fails_the_ast_inventory() {
     let source = include_str!("../src/lib.rs");
     let attacks = [
         "mod stray {}",
+        "mod probe;",
         "pub mod stray {}",
         "pub(crate) mod stray {}",
         "#[allow(dead_code)] pub mod stray {}",
@@ -112,6 +177,15 @@ fn attributed_public_module_fails_the_ast_inventory() {
             Err("expected exactly one module")
         );
     }
+}
+
+#[test]
+fn descendant_include_fails_the_production_inventory() {
+    let source = include_str!("../src/lib.rs");
+    assert_eq!(
+        require_allowed_modules(&format!("{source}\ninclude!(\"hidden/probe.rs\");\n")),
+        Err("production include macros are forbidden")
+    );
 }
 
 #[test]

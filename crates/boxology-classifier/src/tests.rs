@@ -302,6 +302,38 @@ fn variant_addition_with_another_change_is_incompatible() {
 }
 
 #[test]
+fn variant_addition_with_type_docs_drift_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.types[0]
+        .docs
+        .push("Different type docs.".to_owned());
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn variant_addition_with_type_deprecation_drift_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.types[0].deprecation = Some("use another error".to_owned());
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn variant_addition_with_other_type_name_drift_is_incompatible() {
+    let base = two_error_document();
+    let mut submitted = base.clone();
+    submitted.types[1].variants.push(variant("Other"));
+    submitted.types[0].name = "RenamedError".to_owned();
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
 fn unreferenced_type_variant_addition_is_incompatible() {
     let mut base = document("hello");
     let mut unreferenced = base.types[0].clone();
