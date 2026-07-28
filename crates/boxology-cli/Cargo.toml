@@ -1,0 +1,16 @@
+[package]
+name = "boxology-cli"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
+boxology-workspace = { version = "=0.0.0", path = "../boxology-workspace" }
+
+[[test]]
+name = "surface_lock"
+path = "tests/surface_lock.rs"
+
+[dev-dependencies]
+syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }

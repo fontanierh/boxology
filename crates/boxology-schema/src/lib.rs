@@ -20,8 +20,9 @@
 // with unknown key, missing key, and wrong type generic across every level rather than repeated
 // per level (`boxology-manifest`'s shape, and the reason this block is 23 codes and not 30);
 // BXC0007 and BXC0008 the reader's two narrowings; BXC0009 the revision spelling; BXC0010–BXC0014
-// the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. The classifier
-// scaffold opens at BXC0024.
+// the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. D2's BXC0024–BXC0025
+// are registered here, but emitted and reachability-proven by the classifier. The classifier owns
+// BXC0026–BXC0028; T2 opens at BXC0029.
 //
 // The two narrowings are fail-closed and deliberate. `boxology-contract-syntax` hardcodes
 // `external` and `none` and rejects every other exposure and idempotency, so no document this
