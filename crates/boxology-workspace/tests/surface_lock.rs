@@ -6,6 +6,7 @@ const MACROS: &str =
     "macro_rules ref_getters assert assert_eq assert_ne format matches panic vec write";
 const RULES: &str = "ESCAPE DUPLICATE SELF_CLAIM UNOWNED OVERLAP RIVALS BOTH LOCK DOCUMENT UNMAPPED UNMATCHED CLAIMED ROLE";
 const EDGE_RULES: &str = "CONTRACT FOREIGN DECLARED SELECTED IMPOSSIBLE NON_MEMBER";
+const RELATIVE: &str = "pub fn relative(&self, path: &RelativePath) -> Option<RelativePath>";
 const PROTECTED: &str =
     "Rule EdgeRule derive ref_getters assert assert_eq assert_ne format matches panic vec write";
 #[derive(Default)]
@@ -187,7 +188,10 @@ fn locked(source: &str) -> bool {
     body.iter().for_each(|item| lock.visit_item(item));
     lock.codes.sort_unstable();
     let edge = r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#;
-    !lock.bad && lock.codes.join(" ") == EXPECTED && source.match_indices(edge).count() == 1
+    !lock.bad
+        && lock.codes.join(" ") == EXPECTED
+        && source.match_indices(edge).count() == 1
+        && source.match_indices(RELATIVE).count() == 1
 }
 #[rustfmt::skip]
 fn once(source: &str, anchor: &str, replacement: &str) -> String {
@@ -238,6 +242,7 @@ fn surface_and_live_evasions_are_locked() {
         inject(name, mutation);
     }
     rejects("retained edge assertion", r#"successful_edge(workspace, packages, "s", "a/s/Cargo.toml", "t", at)"#, "assert_eq!(workspace.edges(), workspace.edges())");
+    rejects("public relative seam", RELATIVE, &RELATIVE.replacen("pub ", "", 1));
     rejects("post-test registration", SOURCE, &format!("{SOURCE}\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"));
     rejects("macro registration", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(const X: Rule = (\"BXW9999\", \"x\");");
     rejects("macro self-disable", "#[$meta] pub fn $name(&self) -> $return { &self.$field }", "#[cfg(test)] #[$meta] pub fn $name(&self) -> $return { &self.$field }");

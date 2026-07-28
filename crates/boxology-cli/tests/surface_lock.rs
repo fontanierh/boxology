@@ -8,19 +8,26 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use syn::visit::Visit;
-const NAMES: &str = "lib.rs walk.rs";
-const FILES: &str = "Cargo.toml src/lib.rs src/walk.rs tests/bxw.golden tests/surface_lock.rs";
+const NAMES: &str = "lib.rs walk.rs generate.rs";
+const FILES: &str = "Cargo.toml src/generate.rs src/lib.rs src/walk.rs tests/bxw.golden tests/generation_plan.rs tests/surface_lock.rs";
 const PACKAGE: &str = include_str!("../Cargo.toml");
-const PACKAGE_HASH: u64 = 10_005_596_503_527_837_865;
+const PACKAGE_HASH: u64 = 4_279_509_777_551_567_809;
 const LIB: &str = include_str!("../src/lib.rs");
 const WALK: &str = include_str!("../src/walk.rs");
-const SOURCES: &[(&str, &str)] = &[("lib.rs", LIB), ("walk.rs", WALK)];
+const GENERATE: &str = include_str!("../src/generate.rs");
+const SOURCES: &[(&str, &str)] = &[
+    ("lib.rs", LIB),
+    ("walk.rs", WALK),
+    ("generate.rs", GENERATE),
+];
 const GOLDEN: &str = include_str!("bxw.golden");
-const CODES: &str = "BXW0061 BXW0062 BXW0063";
-const LIB_HASH: u64 = 12_341_571_629_853_580_944;
+const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0068 BXW0069";
+const LIB_HASH: u64 = 6_740_560_798_264_643_201;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
-const HASHES: [u64; 2] = [LIB_HASH, WALK_HASH];
+const GENERATE_HASH: u64 = 14_709_840_700_825_217_752;
+const HASHES: [u64; 3] = [LIB_HASH, WALK_HASH, GENERATE_HASH];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
+const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.generator() == CONTRACT_GENERATOR\nclassification.package() == package.id()\nclassification.derived_output().is_none()\nentry.role() == CrateRole::BoxImplementation\npackage.relative(classification.path())?";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Drop for Fixture {
@@ -186,13 +193,42 @@ fn source_surface_is_exact_and_mutation_resistant() {
         format!("{WALK}\n// {}", ANCHORS.lines().next().unwrap()),
     ];
     for source in cases {
-        rejects(LIB, &source, [LIB_HASH, hash(&source)]);
+        rejects(
+            LIB,
+            &source,
+            GENERATE,
+            [LIB_HASH, hash(&source), GENERATE_HASH],
+        );
     }
     let mutant = format!("{LIB}// hash mutant\n");
-    rejects(&mutant, WALK, HASHES);
+    rejects(&mutant, WALK, GENERATE, HASHES);
     let mutant = format!("{WALK}// hash mutant\n");
-    rejects(LIB, &mutant, HASHES);
-    let extra = [("lib.rs", LIB), ("walk.rs", WALK), ("extra.rs", "")];
+    rejects(LIB, &mutant, GENERATE, HASHES);
+    let mutant = format!("{GENERATE}// hash mutant\n");
+    rejects(LIB, WALK, &mutant, HASHES);
+    for (anchor, replacement) in [
+        (
+            "output.generator() == CARGO_GENERATOR",
+            "output.generator() == CONTRACT_GENERATOR",
+        ),
+        (
+            "classification.package() == package.id()",
+            "classification.package() != package.id()",
+        ),
+        (
+            "classification.derived_output().is_none()",
+            "classification.derived_output().is_some()",
+        ),
+    ] {
+        let changed = GENERATE.replace(anchor, replacement);
+        rejects(LIB, WALK, &changed, HASHES);
+    }
+    let extra = [
+        ("lib.rs", LIB),
+        ("walk.rs", WALK),
+        ("generate.rs", GENERATE),
+        ("extra.rs", ""),
+    ];
     assert!(!locked_sources(&extra, HASHES));
     let files: Vec<_> = FILES.split_whitespace().map(str::to_owned).collect();
     for extra in ["build.rs", "src/bin/hidden.rs"] {
@@ -208,8 +244,12 @@ fn source_surface_is_exact_and_mutation_resistant() {
         assert!(!package_is(&mutant, &files));
     }
 }
-fn rejects(lib: &str, walk: &str, hashes: [u64; 2]) {
-    let sources = [("lib.rs", lib), ("walk.rs", walk)];
+fn rejects(lib: &str, walk: &str, generate: &str, hashes: [u64; 3]) {
+    let sources = [
+        ("lib.rs", lib),
+        ("walk.rs", walk),
+        ("generate.rs", generate),
+    ];
     assert!(!locked_sources(&sources, hashes));
 }
 #[derive(Default)]
@@ -257,7 +297,7 @@ impl<'ast> Visit<'ast> for Lock {
         }
     }
     fn visit_macro(&mut self, called: &'ast syn::Macro) {
-        self.bad |= !called.path.is_ident("write");
+        self.bad |= !called.path.is_ident("write") && !called.path.is_ident("format");
         syn::visit::visit_macro(self, called);
     }
     fn visit_use_glob(&mut self, _: &'ast syn::UseGlob) {
@@ -305,7 +345,7 @@ fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool
 fn package_is(manifest: &str, files: &[String]) -> bool {
     hash(manifest) == PACKAGE_HASH && files.join(" ") == FILES
 }
-fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 2]) -> bool {
+fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 3]) -> bool {
     if !sources
         .iter()
         .map(|(name, _)| *name)
@@ -313,21 +353,26 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 2]) -> bool {
     {
         return false;
     }
-    if hash(sources[0].1) != hashes[0] || hash(sources[1].1) != hashes[1] {
+    if hash(sources[0].1) != hashes[0]
+        || hash(sources[1].1) != hashes[1]
+        || hash(sources[2].1) != hashes[2]
+    {
         return false;
     }
     let mut lock = Lock::default();
-    let Ok(file) = syn::parse_file(sources[1].1) else {
-        return false;
-    };
-    for attr in &file.attrs {
-        lock.visit_attribute(attr);
-    }
-    for (position, item) in file.items.iter().enumerate() {
-        if test_module(item) {
-            lock.tests += usize::from(position + 1 == file.items.len());
-        } else {
-            lock.visit_item(item);
+    for (name, source) in [sources[1], sources[2]] {
+        let Ok(file) = syn::parse_file(source) else {
+            return false;
+        };
+        for attr in &file.attrs {
+            lock.visit_attribute(attr);
+        }
+        for (position, item) in file.items.iter().enumerate() {
+            if name == "walk.rs" && test_module(item) {
+                lock.tests += usize::from(position + 1 == file.items.len());
+            } else {
+                lock.visit_item(item);
+            }
         }
     }
     let codes = CODES
@@ -343,6 +388,9 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 2]) -> bool {
         && ANCHORS
             .lines()
             .all(|anchor| sources[1].1.matches(anchor).count() == 1)
+        && GENERATE_ANCHORS
+            .lines()
+            .all(|anchor| sources[2].1.matches(anchor).count() == 1)
         && sources[0].1.matches("#![deny(missing_docs)]").count() == 1
         && sources[0].1.matches("#![forbid(unsafe_code)]").count() == 1
 }

@@ -1,10 +1,11 @@
 //! Effectful filesystem inputs for the future `boxology` command.
 //!
-//! This first CLI slice stops at the boundary between the filesystem and the pure
-//! [`boxology_workspace`] checker: it walks a workspace and returns its raw files and manifest
-//! bytes. Argument parsing, Cargo metadata, generation, and command execution belong to later
-//! slices.
+//! The CLI's effectful boundary walks a workspace, while pure planning selects and describes
+//! contract-generation candidates. Byte reads, Cargo metadata, generation, and writes belong to
+//! later slices.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+mod generate;
 mod walk;
+pub use generate::{GenerationPlan, PlanError, plan};
 pub use walk::{WalkError, WalkedWorkspace, walk};

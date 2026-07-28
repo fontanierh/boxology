@@ -391,7 +391,7 @@ fn every_claim(rivals: &[&Package], path: &RelativePath) -> Vec<Candidate> {
 /// root — as every pattern of that manifest does — and a member outside the package, at the
 /// workspace root, or at the package's own root re-anchors to nothing.
 fn maps(package: &Package, entry: &CrateEntry, member: &CargoMember) -> bool {
-    let at = member.crate_dir().and_then(|dir| package.under(dir));
+    let at = member.crate_dir().and_then(|dir| package.relative(dir));
     entry.cargo_package() == member.cargo_package() && at.as_ref() == Some(entry.path())
 }
 /// Names one claiming entry: its package identity, its declaring manifest, and the package-relative
@@ -805,7 +805,7 @@ impl Package {
     }
     /// Re-anchors a workspace-relative path at this package's own root: `None` when the path lies
     /// outside the package, which no pattern of this manifest can reach.
-    fn under(&self, path: &RelativePath) -> Option<RelativePath> {
+    pub fn relative(&self, path: &RelativePath) -> Option<RelativePath> {
         let Some(root) = &self.root else {
             return Some(path.clone());
         };
@@ -815,7 +815,7 @@ impl Package {
     /// Returns every pattern of `declared` claiming `path`, in declaration order. Matching is
     /// [`GlobPattern::matches`], the single definition of the frozen dialect.
     fn matching<'a>(&self, at: &RelativePath, list: &'a [GlobPattern]) -> Vec<&'a GlobPattern> {
-        let Some(under) = self.under(at) else {
+        let Some(under) = self.relative(at) else {
             return Vec::new();
         };
         let hit = |pattern: &&GlobPattern| pattern.matches(&under);

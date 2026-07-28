@@ -1,4 +1,10 @@
-sources=lib.rs,walk.rs
+sources=lib.rs,walk.rs,generate.rs
 BXW0061|workspace root must be a real directory containing a regular Cargo.toml|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0062|filesystem refused a directory, symlink, or manifest read|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0063|walked name/path is not a valid RelativePath|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
+BXW0064|only the boxology-contract generator is supported by generate|specs/s5-manifest-and-validation.md D5
+BXW0065|the requested package must be a discovered workspace package|specs/s5-manifest-and-validation.md D5
+BXW0066|the selected package must declare a contract-generation output|specs/s5-manifest-and-validation.md D5
+BXW0067|a generation candidate must declare exactly one box-implementation crate|specs/s5-manifest-and-validation.md D5
+BXW0068|generation candidates must not declare imports outside their package inputs|specs/s5-manifest-and-validation.md D5
+BXW0069|a package must declare at most one contract-generation output|specs/s5-manifest-and-validation.md D5
