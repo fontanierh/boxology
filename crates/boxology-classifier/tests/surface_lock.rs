@@ -91,6 +91,7 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0026", "\"BXC0026\""),
         ("BXC0027", "\"BXC0027\""),
         ("BXC0028", "\"BXC0028\""),
+        ("BXC0029", "\"BXC0029\""),
     ];
     for (code, anchor) in anchors {
         assert_eq!(source.matches(anchor).count(), 1, "{code} anchor count");
@@ -124,6 +125,15 @@ fn every_classifier_code_is_reachable() {
     let mut changed = document("hello");
     changed.revision.push('x');
     let unclassified = classify(Some(&document("hello")), Some(&changed)).unwrap();
+    let mut variant_addition = document("hello");
+    variant_addition.types[0].variants.push(SchemaVariant {
+        name: "Other".to_owned(),
+        docs: Vec::new(),
+        deprecation: None,
+        payload: SchemaPayload::Unit,
+    });
+    variant_addition.revision.push('x');
+    let conditional = classify(Some(&document("hello")), Some(&variant_addition)).unwrap();
     assert_eq!(
         [
             missing[0].code(),
@@ -131,7 +141,10 @@ fn every_classifier_code_is_reachable() {
             introduced.findings()[0].code(),
             removed.findings()[0].code(),
             unclassified.findings()[0].code(),
+            conditional.findings()[0].code(),
         ],
-        ["BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028"]
+        [
+            "BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028", "BXC0029",
+        ]
     );
 }

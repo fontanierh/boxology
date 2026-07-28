@@ -69,15 +69,39 @@ fn named_fields(document: &mut SchemaDocument) -> &mut [SchemaField] {
     fields
 }
 
+fn variant(name: &str) -> SchemaVariant {
+    SchemaVariant {
+        name: name.to_owned(),
+        docs: Vec::new(),
+        deprecation: None,
+        payload: SchemaPayload::Unit,
+    }
+}
+
+fn assert_exact_report(
+    report: &ClassificationReport,
+    expected: &[(&str, &str, Class, Option<&str>)],
+    verdict: Class,
+) {
+    assert_eq!(report.findings().len(), expected.len());
+    for (finding, expected) in report.findings().iter().zip(expected) {
+        let (code, path, class, condition) = *expected;
+        assert_eq!(finding.code(), code);
+        assert_eq!(finding.path(), path);
+        assert_eq!(finding.class(), class);
+        assert_eq!(finding.condition(), condition);
+    }
+    assert_eq!(report.verdict(), verdict);
+}
+
 fn assert_unclassified_pair(base: SchemaDocument, submitted: SchemaDocument) {
     assert_ne!(base, submitted);
     let report = classify(Some(&base), Some(&submitted)).unwrap();
-    assert_eq!(report.findings().len(), 1);
-    let finding = &report.findings()[0];
-    assert_eq!(finding.code(), "BXC0028");
-    assert_eq!(finding.path(), "hello");
-    assert_eq!(finding.class(), Class::Incompatible);
-    assert_eq!(report.verdict(), Class::Incompatible);
+    assert_exact_report(
+        &report,
+        &[("BXC0028", "hello", Class::Incompatible, None)],
+        Class::Incompatible,
+    );
 }
 
 fn add_capability(document: &mut SchemaDocument) {
@@ -89,6 +113,20 @@ fn add_type(document: &mut SchemaDocument) {
     let mut schema_type = document.types[0].clone();
     schema_type.name = "WaveError".to_owned();
     document.types.push(schema_type);
+}
+
+fn two_error_document() -> SchemaDocument {
+    let mut document = document("hello");
+    let mut capability = document.capabilities[0].clone();
+    capability.name = CapabilityName::new("wave").unwrap();
+    capability.error = "WaveError".to_owned();
+    document.capabilities.push(capability);
+
+    let greet_type = document.types[0].clone();
+    let mut wave_type = greet_type.clone();
+    wave_type.name = "WaveError".to_owned();
+    document.types = vec![wave_type, greet_type];
+    document
 }
 
 fn shaped_document(capabilities: usize, types: usize) -> SchemaDocument {
@@ -129,9 +167,10 @@ fn introduced_and_removed_are_exact() {
             finding.code(),
             finding.path(),
             finding.class(),
+            finding.condition(),
             introduced.verdict()
         ),
-        ("BXC0026", "hello", Class::Additive, Class::Additive)
+        ("BXC0026", "hello", Class::Additive, None, Class::Additive)
     );
 
     let removed = classify(Some(&document("hello")), None).unwrap();
@@ -141,9 +180,16 @@ fn introduced_and_removed_are_exact() {
             finding.code(),
             finding.path(),
             finding.class(),
+            finding.condition(),
             removed.verdict()
         ),
-        ("BXC0027", "hello", Class::Incompatible, Class::Incompatible)
+        (
+            "BXC0027",
+            "hello",
+            Class::Incompatible,
+            None,
+            Class::Incompatible
+        )
     );
 }
 
@@ -166,6 +212,119 @@ fn provenance_only_difference_is_unchanged() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert!(report.findings().is_empty());
     assert_eq!(report.verdict(), Class::Unchanged);
+}
+
+#[test]
+fn single_referenced_error_variant_addition_is_conditional() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.revision.push('x');
+
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[(
+            "BXC0029",
+            "hello/type/GreetError/variant/Other",
+            Class::CompatibleWithConditions,
+            Some("unknown-variant tolerance"),
+        )],
+        Class::CompatibleWithConditions,
+    );
+}
+
+#[test]
+fn multiple_referenced_error_variant_additions_are_sorted() {
+    let base = two_error_document();
+    let mut submitted = base.clone();
+    submitted.types[1].variants.push(variant("GreetOther"));
+    submitted.types[0].variants.push(variant("WaveOther"));
+    submitted.revision.push('x');
+
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            (
+                "BXC0029",
+                "hello/type/GreetError/variant/GreetOther",
+                Class::CompatibleWithConditions,
+                Some("unknown-variant tolerance"),
+            ),
+            (
+                "BXC0029",
+                "hello/type/WaveError/variant/WaveOther",
+                Class::CompatibleWithConditions,
+                Some("unknown-variant tolerance"),
+            ),
+        ],
+        Class::CompatibleWithConditions,
+    );
+}
+
+#[test]
+fn variant_removal_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.pop();
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn variant_rename_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].name = "Other".to_owned();
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn variant_reorder_is_incompatible() {
+    let mut base = document("hello");
+    base.types[0].variants.push(variant("Other"));
+    let mut submitted = base.clone();
+    submitted.types[0].variants.swap(0, 1);
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn variant_addition_with_another_change_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.capabilities[0].docs.push("More docs.".to_owned());
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn unreferenced_type_variant_addition_is_incompatible() {
+    let mut base = document("hello");
+    let mut unreferenced = base.types[0].clone();
+    unreferenced.name = "UnusedError".to_owned();
+    base.types.push(unreferenced);
+    let mut submitted = base.clone();
+    submitted.types[1].variants.push(variant("Other"));
+    submitted.revision.push('x');
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn equal_revision_variant_addition_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0028", "hello", Class::Incompatible, None)],
+        Class::Incompatible,
+    );
 }
 
 #[test]
@@ -199,20 +358,14 @@ fn every_effectively_mutable_comparable_field_fails_closed() {
             }
         },
         |document| document.types[0].variants[0].payload = SchemaPayload::Named(Vec::new()),
-        |document| {
-            document.types[0].variants.push(SchemaVariant {
-                name: "Other".to_owned(),
-                docs: Vec::new(),
-                deprecation: None,
-                payload: SchemaPayload::Unit,
-            })
-        },
     ];
     for mutate in mutations {
         let mut submitted = document("hello");
         mutate(&mut submitted);
         assert_unclassified_pair(document("hello"), submitted);
     }
+    // Variant-list additions are the one named conditional carve-out; their negative controls
+    // remain explicit below rather than being hidden in this fail-closed mutation table.
     // Shape has only `Unary` in the current format-1 vocabulary, so it has no effective mutation.
 }
 
@@ -272,11 +425,13 @@ fn maximum_severity_wins_in_both_finding_orders() {
         code: "BXC0026",
         path: "hello".to_owned(),
         class: Class::Additive,
+        condition: None,
     };
     let high = Finding {
         code: "BXC0028",
         path: "hello".to_owned(),
         class: Class::Incompatible,
+        condition: None,
     };
     assert_eq!(report(vec![low, high]).verdict, Class::Incompatible);
 
@@ -284,11 +439,13 @@ fn maximum_severity_wins_in_both_finding_orders() {
         code: "BXC0026",
         path: "hello".to_owned(),
         class: Class::Additive,
+        condition: None,
     };
     let high = Finding {
         code: "BXC0028",
         path: "hello".to_owned(),
         class: Class::Incompatible,
+        condition: None,
     };
     assert_eq!(report(vec![high, low]).verdict, Class::Incompatible);
 }
