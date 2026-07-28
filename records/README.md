@@ -12,6 +12,7 @@ The strategy review of 2026-07-18 predates this directory and remains at [`boxol
 
 ## Index
 
+- [2026-07-27 — S4 ordinary Rust identifiers and the reserved `Unknown` variant](2026-07-27-s4-identifier-prerequisite.md)
 - [2026-07-27 — Opening the S4 lane, and a ledger of the decisions taken to do it](2026-07-27-overnight-s4-lane-and-decision-ledger.md)
 - [2026-07-25 — S5 implementation start and the test-integrity sweep](2026-07-25-s5-implementation-and-test-integrity.md)
 - [2026-07-25 — V0 planning completion and the spec review round](2026-07-25-v0-planning-and-spec-review-round.md)

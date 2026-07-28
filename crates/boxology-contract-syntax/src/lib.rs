@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use boxology_contract::canonicalize_ordinary_rust_identifier;
 use proc_macro2::TokenStream;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -321,7 +322,7 @@ fn parse_capability(
     let Some(input_type) = leaf(&arg.ty) else {
         return Err(error(&arg.ty, "input type must be a canonical scalar leaf"));
     };
-    let Some((output_type, error_name)) = result_error(&output) else {
+    let Some((output_type, error_name)) = result_error(&output)? else {
         return Err(error(
             &output,
             "output must be unqualified Result<Leaf, Error>",
@@ -447,20 +448,22 @@ fn leaf(ty: &Type) -> Option<CanonicalType> {
         _ => return None,
     })
 }
-fn result_error(ty: &Type) -> Option<(CanonicalType, String)> {
+fn result_error(ty: &Type) -> syn::Result<Option<(CanonicalType, String)>> {
     let Type::Path(result) = ty else {
-        return None;
+        return Ok(None);
     };
-    let segment = result.path.segments.first()?;
+    let Some(segment) = result.path.segments.first() else {
+        return Ok(None);
+    };
     if result.qself.is_some()
         || result.path.leading_colon.is_some()
         || result.path.segments.len() != 1
         || segment.ident != "Result"
     {
-        return None;
+        return Ok(None);
     }
     let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
-        return None;
+        return Ok(None);
     };
     let mut values = args.args.iter();
     let (
@@ -469,14 +472,18 @@ fn result_error(ty: &Type) -> Option<(CanonicalType, String)> {
         None,
     ) = (values.next(), values.next(), values.next())
     else {
-        return None;
+        return Ok(None);
     };
-    let name = error.path.get_ident()?;
-    let output_type = leaf(ok)?;
-    (error.qself.is_none())
-        .then(|| identifier(name).ok())
-        .flatten()
-        .map(|name| (output_type, name))
+    let Some(name) = error.path.get_ident() else {
+        return Ok(None);
+    };
+    let Some(output_type) = leaf(ok) else {
+        return Ok(None);
+    };
+    if error.qself.is_some() {
+        return Ok(None);
+    }
+    Ok(Some((output_type, identifier(name)?)))
 }
 fn error(node: &impl Spanned, message: &str) -> syn::Error {
     syn::Error::new(node.span(), message)
@@ -486,7 +493,12 @@ fn identifier(ident: &syn::Ident) -> syn::Result<String> {
     if value.starts_with("r#") {
         return Err(error(ident, "contract identifiers must not be raw"));
     }
-    Ok(value)
+    canonicalize_ordinary_rust_identifier(&value).ok_or_else(|| {
+        error(
+            ident,
+            "contract identifiers must be ordinary non-raw Rust identifiers",
+        )
+    })
 }
 fn capability_name(value: &str) -> bool {
     let mut bytes = value.bytes();
@@ -497,6 +509,7 @@ fn capability_name(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxology_contract::is_ordinary_rust_identifier;
 
     const ERROR: &str = "#[error] pub enum GreetError { EmptyName }";
     const CAP: &str = "#[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>;";
@@ -696,6 +709,81 @@ mod tests {
         assert_eq!(
             diagnostic.to_string(),
             "error variant name `Unknown` is reserved"
+        );
+    }
+    #[test]
+    fn nfc_equivalent_spellings_have_one_identity_and_cannot_duplicate() {
+        let source = "#[error] pub enum Cafe\u{301}Error { EmptyName }
+            #[capability(exposure=external)]
+            pub async fn greet(name:String)->Result<String,CaféError>;";
+        let contract = parse(source.parse().unwrap()).unwrap();
+        assert_eq!(contract.error.name, "CaféError");
+        assert_eq!(contract.capabilities[0].error, "CaféError");
+
+        let duplicate = format!("#[error] pub enum GreetError{{Café,Cafe\u{301}}} {CAP}");
+        let diagnostic = parse(duplicate.parse().unwrap()).unwrap_err();
+        assert_eq!(diagnostic.to_string(), "error variant names must be unique");
+    }
+    #[test]
+    fn result_error_identifier_failures_own_their_diagnostic_span() {
+        for (name, message) in [
+            (
+                "gen",
+                "contract identifiers must be ordinary non-raw Rust identifiers",
+            ),
+            ("r#gen", "contract identifiers must not be raw"),
+        ] {
+            let source = format!(
+                "{ERROR} {}",
+                CAP.replace("GreetError>", &format!("{name}>"))
+            );
+            let diagnostic = parse(source.parse().unwrap()).unwrap_err();
+            assert_eq!(diagnostic.to_string(), message);
+            assert_eq!(&source[diagnostic.span().byte_range()], name);
+        }
+
+        let source = format!(
+            "{ERROR} {}",
+            CAP.replace("Result<String,GreetError>", "Result<Vec<u8>,gen>")
+        );
+        let diagnostic = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(
+            diagnostic.to_string(),
+            "output must be unqualified Result<Leaf, Error>"
+        );
+    }
+    #[test]
+    fn shared_identifier_validator_is_the_final_gate_after_syn_lexing() {
+        let cases = [
+            ("hello", true, true),
+            ("Москва", true, true),
+            ("e\u{301}", true, true),
+            ("_name", true, true),
+            ("_", false, false),
+            ("9lives", false, false),
+            ("r#name", false, true),
+            ("gen", false, true),
+            ("async", false, false),
+            ("a\u{200c}", false, true),
+        ];
+        for (value, expected, syn_accepts) in cases {
+            assert_eq!(
+                is_ordinary_rust_identifier(value),
+                expected,
+                "shared validator classification for {value:?}"
+            );
+            assert_eq!(
+                syn::parse_str::<syn::Ident>(value).is_ok(),
+                syn_accepts,
+                "syn parser classification for {value:?}"
+            );
+        }
+
+        let source = format!("#[error] pub enum GreetError{{gen}} {CAP}");
+        let diagnostic = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(
+            diagnostic.to_string(),
+            "contract identifiers must be ordinary non-raw Rust identifiers"
         );
     }
     #[test]
