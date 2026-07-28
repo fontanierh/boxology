@@ -1,0 +1,15 @@
+[package]
+name = "ping-app"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+boxology-contract = { version = "=0.0.0", path = "../../../boxology-contract" }
+boxology-http = { version = "=0.0.0", path = "../../../boxology-http" }
+boxology-runtime = { version = "=0.0.0", path = "../../../boxology-runtime", features = ["test-support"] }
+ping-implementation = { version = "=0.0.0", path = "../../ping/implementation" }
+
+[dev-dependencies]
+boxology-manifest = { version = "=0.0.0", path = "../../../boxology-manifest" }
+tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }
