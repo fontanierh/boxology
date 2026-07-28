@@ -51,6 +51,8 @@ const EDITOR_CHECK_ARGS: &[&str] = &[
     "--no-test",
     EDITOR_FIXTURE,
 ];
+const SURFACE_LOCK_TEST_ARGS: &[&str] =
+    &["test", "-p", "boxology-workspace", "--test", "surface_lock"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -185,6 +187,10 @@ fn run_ci(base: Option<&str>) -> u8 {
             timed("test", || {
                 run_cargo(&["test", "--workspace", "--all-features"])
             }),
+        ),
+        (
+            "surface-lock",
+            timed("surface-lock", || run_cargo(SURFACE_LOCK_TEST_ARGS)),
         ),
         ("key-order", timed("key-order", run_key_order)),
         ("doc", timed("doc", run_doc)),
@@ -497,6 +503,35 @@ mod tests {
         assert!(!EDITOR_CHECK_ARGS.contains(&"--parallel"));
         assert!(!EDITOR_CHECK_ARGS.contains(&"--with-deps"));
         assert!(root().join(EDITOR_FIXTURE).join("Cargo.toml").is_file());
+    }
+
+    fn replace_once(source: &str, anchor: &str) -> String {
+        assert_eq!(
+            source.match_indices(anchor).count(),
+            1,
+            "anchor: {anchor:?}"
+        );
+        source.replacen(anchor, "", 1)
+    }
+
+    fn run_ci_body(source: &str) -> &str {
+        source
+            .split_once("fn run_ci(base: Option<&str>) -> u8 {")
+            .and_then(|(_, body)| body.split_once("\nfn timed<").map(|(body, _)| body))
+            .expect("run_ci body")
+    }
+
+    #[test]
+    fn surface_lock_registration_is_live_and_deletion_is_red() {
+        let source = include_str!("main.rs");
+        assert_eq!(
+            SURFACE_LOCK_TEST_ARGS,
+            &["test", "-p", "boxology-workspace", "--test", "surface_lock"]
+        );
+        let registration = "        (\n            \"surface-lock\",\n            timed(\"surface-lock\", || run_cargo(SURFACE_LOCK_TEST_ARGS)),\n        ),";
+        assert_eq!(run_ci_body(source).match_indices(registration).count(), 1);
+        let deleted = replace_once(source, registration);
+        assert_eq!(run_ci_body(&deleted).match_indices(registration).count(), 0);
     }
 
     #[test]
