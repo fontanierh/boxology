@@ -4,6 +4,10 @@ version = "0.0.0"
 edition.workspace = true
 publish = false
 
+[[bin]]
+name = "boxology"
+path = "src/main.rs"
+
 [dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-generator = { version = "=0.0.0", path = "../boxology-generator" }
