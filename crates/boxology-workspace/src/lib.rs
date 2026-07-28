@@ -1596,6 +1596,13 @@ jobs:
             ..all_pass_report()
         }
     }
+    fn failed_skipped_report(reason: SkipReason) -> CheckReport {
+        CheckReport {
+            discovery: Completion::Failed(report_findings()),
+            contract_classification: ContractClassificationCompletion::Skipped(reason),
+            ..all_pass_report()
+        }
+    }
     #[test]
     fn check_step_all_and_ids_are_frozen() {
         assert_eq!(
@@ -1627,19 +1634,7 @@ jobs:
     }
     #[test]
     fn check_report_human_rendering_is_an_exact_full_report_golden() {
-        let rendered = CheckReport {
-            discovery: Completion::Failed(report_findings()),
-            regeneration: Completion::Passed,
-            contract_classification: ContractClassificationCompletion::Skipped(
-                SkipReason::NoMergeBase,
-            ),
-            cargo_graph: Completion::Passed,
-            fmt: Completion::Passed,
-            clippy: Completion::Passed,
-            tests: Completion::Passed,
-            quality: Completion::Passed,
-        }
-        .render_human();
+        let rendered = failed_skipped_report(SkipReason::NoMergeBase).render_human();
         assert_eq!(
             rendered,
             "check discovery failed\n\
@@ -1658,19 +1653,7 @@ jobs:
     }
     #[test]
     fn check_report_headers_are_each_exactly_once_in_order() {
-        let rendered = CheckReport {
-            discovery: Completion::Failed(report_findings()),
-            regeneration: Completion::Passed,
-            contract_classification: ContractClassificationCompletion::Skipped(
-                SkipReason::NoRepository,
-            ),
-            cargo_graph: Completion::Passed,
-            fmt: Completion::Passed,
-            clippy: Completion::Passed,
-            tests: Completion::Passed,
-            quality: Completion::Passed,
-        }
-        .render_human();
+        let rendered = failed_skipped_report(SkipReason::NoRepository).render_human();
         let lines: Vec<&str> = rendered.lines().collect();
         let mut previous = None;
         for step in CheckStep::ALL {
@@ -1729,106 +1712,58 @@ jobs:
                 "discovery",
                 CheckReport {
                     discovery: failed(),
-                    regeneration: Completion::Passed,
-                    contract_classification: ContractClassificationCompletion::Passed,
-                    cargo_graph: Completion::Passed,
-                    fmt: Completion::Passed,
-                    clippy: Completion::Passed,
-                    tests: Completion::Passed,
-                    quality: Completion::Passed,
+                    ..all_pass_report()
                 },
             ),
             (
                 "regeneration",
                 CheckReport {
-                    discovery: Completion::Passed,
                     regeneration: failed(),
-                    contract_classification: ContractClassificationCompletion::Passed,
-                    cargo_graph: Completion::Passed,
-                    fmt: Completion::Passed,
-                    clippy: Completion::Passed,
-                    tests: Completion::Passed,
-                    quality: Completion::Passed,
+                    ..all_pass_report()
                 },
             ),
             (
                 "contract-classification",
                 CheckReport {
-                    discovery: Completion::Passed,
-                    regeneration: Completion::Passed,
                     contract_classification: ContractClassificationCompletion::Failed(
                         report_findings(),
                     ),
-                    cargo_graph: Completion::Passed,
-                    fmt: Completion::Passed,
-                    clippy: Completion::Passed,
-                    tests: Completion::Passed,
-                    quality: Completion::Passed,
+                    ..all_pass_report()
                 },
             ),
             (
                 "cargo-graph",
                 CheckReport {
-                    discovery: Completion::Passed,
-                    regeneration: Completion::Passed,
-                    contract_classification: ContractClassificationCompletion::Passed,
                     cargo_graph: failed(),
-                    fmt: Completion::Passed,
-                    clippy: Completion::Passed,
-                    tests: Completion::Passed,
-                    quality: Completion::Passed,
+                    ..all_pass_report()
                 },
             ),
             (
                 "fmt",
                 CheckReport {
-                    discovery: Completion::Passed,
-                    regeneration: Completion::Passed,
-                    contract_classification: ContractClassificationCompletion::Passed,
-                    cargo_graph: Completion::Passed,
                     fmt: failed(),
-                    clippy: Completion::Passed,
-                    tests: Completion::Passed,
-                    quality: Completion::Passed,
+                    ..all_pass_report()
                 },
             ),
             (
                 "clippy",
                 CheckReport {
-                    discovery: Completion::Passed,
-                    regeneration: Completion::Passed,
-                    contract_classification: ContractClassificationCompletion::Passed,
-                    cargo_graph: Completion::Passed,
-                    fmt: Completion::Passed,
                     clippy: failed(),
-                    tests: Completion::Passed,
-                    quality: Completion::Passed,
+                    ..all_pass_report()
                 },
             ),
             (
                 "tests",
                 CheckReport {
-                    discovery: Completion::Passed,
-                    regeneration: Completion::Passed,
-                    contract_classification: ContractClassificationCompletion::Passed,
-                    cargo_graph: Completion::Passed,
-                    fmt: Completion::Passed,
-                    clippy: Completion::Passed,
                     tests: failed(),
-                    quality: Completion::Passed,
+                    ..all_pass_report()
                 },
             ),
             (
                 "quality",
                 CheckReport {
-                    discovery: Completion::Passed,
-                    regeneration: Completion::Passed,
-                    contract_classification: ContractClassificationCompletion::Passed,
-                    cargo_graph: Completion::Passed,
-                    fmt: Completion::Passed,
-                    clippy: Completion::Passed,
-                    tests: Completion::Passed,
                     quality: failed(),
+                    ..all_pass_report()
                 },
             ),
         ];
