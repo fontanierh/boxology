@@ -516,8 +516,8 @@ fn roles(packages: &[Package]) -> Vec<Entry> {
 /// from the `cargo metadata` document and invisible to every rule in this section. Five instances
 /// exist in this repository today — `crates/fixtures/greeter/implementation/src/lib.rs`,
 /// `crates/fixtures/hello/implementation/src/lib.rs`, `crates/fixtures/ping/implementation/src/lib.rs`,
-/// `crates/boxology-http/src/binding.rs`, and `crates/boxology-generator/src/lib.rs` — so a forbidden
-/// dependency concealed that way passes.
+/// `crates/fixtures/fixture-tests/tests/hello_http.rs`, and
+/// `crates/boxology-generator/src/lib.rs` — so a forbidden dependency concealed that way passes.
 /// Closing it needs a source-level check, which is no part of reading one metadata document.
 fn edges(roled: &[Mapped], members: &[CargoMember]) -> Vec<Entry> {
     let mut defects = Vec::new();

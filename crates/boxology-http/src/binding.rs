@@ -400,11 +400,6 @@ mod tests {
     use super::*;
     use crate::encoder::WireCallError;
 
-    /// The real generated Hello adapter, included read-only from the fixture.
-    mod generated {
-        include!("../../fixtures/hello/generated/adapter/adapter.rs");
-    }
-
     /// A hand-written provider target that greets its decoded string input.
     struct Greeter;
 
@@ -475,6 +470,22 @@ mod tests {
             .cloned()
             .collect();
         (composition, exposures)
+    }
+
+    fn hand_written_hello_builder(binding: &Arc<HttpServerBinding>) -> CompositionBuilder {
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(hello_implementation(), |_imports| Greeter);
+        builder.expose(
+            BoxId::new("hello").unwrap(),
+            greet_capability(),
+            binding.clone(),
+            ExposureLevel::External,
+        );
+        builder
+    }
+
+    fn serve_hand_written_hello(binding: &Arc<HttpServerBinding>) -> Composition {
+        hand_written_hello_builder(binding).start().unwrap()
     }
 
     async fn start_serving(
@@ -570,104 +581,38 @@ mod tests {
         drop(composition);
     }
 
-    /// Returns the one capability of the real generated Hello contract.
-    fn hello_greet() -> &'static CapabilityDescriptor {
-        &boxology_generated_contract::contract_descriptor().capabilities()[0]
-    }
-
-    /// Composes the real generated Hello box behind `binding`.
-    fn hello_builder(binding: &Arc<HttpServerBinding>) -> CompositionBuilder {
-        let mut builder = CompositionBuilder::new();
-        builder.add_box(generated::implementation_descriptor(), |imports| {
-            generated::factory(::hello_implementation::HelloService, imports)
-        });
-        builder.expose(
-            BoxId::new("hello").unwrap(),
-            hello_greet().id().clone(),
-            binding.clone(),
-            ExposureLevel::External,
-        );
-        builder
-    }
-
-    /// Starts the composed Hello box on an ephemeral loopback port.
-    fn serve_generated_hello() -> (Composition, Arc<HttpServerBinding>) {
-        let binding = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
-            "127.0.0.1:0".parse().unwrap(),
-        )));
-        let composition = hello_builder(&binding).start().unwrap();
-        (composition, binding)
-    }
-
-    #[cfg(feature = "client")]
-    #[tokio::test]
-    async fn composed_hello_box_answers_typed_client_over_real_http() {
-        use boxology_contract::{Caller, CancelToken, TraceContext};
-        use boxology_generated_contract::HelloHandle;
-
-        let (composition, binding) = serve_generated_hello();
-        let address = binding.local_addr().unwrap();
-        let target = crate::HttpClientTarget::new(
-            crate::HttpClientConfig::new(format!("http://{address}")).unwrap(),
-            [hello_greet()],
-        )
-        .unwrap();
-        let context = CallContext::new(
-            Caller::Anonymous,
-            None,
-            CancelToken::new(),
-            TraceContext::empty(),
-            None,
-        );
-
-        let greeting = HelloHandle::from_erased(Arc::new(target))
-            .greet(context, "Ada".into())
-            .await;
-        assert_eq!(greeting.unwrap(), "Hello, Ada!");
-
-        composition.shutdown(Duration::from_secs(1)).await.unwrap();
-        assert!(TcpStream::connect(address).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn raw_hello_request_gets_canonical_bytes() {
-        let (composition, binding) = serve_generated_hello();
-        let address = binding.local_addr().unwrap();
-        let (status, body) = round_trip(address, "/rpc/hello/greet", br#""Ada""#).await;
-        assert_eq!(status, 200);
-        assert_eq!(
-            body.as_slice(),
-            br#"{"result":{"value":"Hello, Ada!"}}"#.as_slice()
-        );
-        composition.shutdown(Duration::from_secs(1)).await.unwrap();
-    }
-
     #[test]
     fn conform_and_prepare_reject_unroutable_exposures() {
         let binding = HttpServerBinding::new(HttpServerConfig::new("127.0.0.1:0".parse().unwrap()));
         assert!(binding.local_addr().is_none());
+        let descriptor = hello_implementation()
+            .contract()
+            .capabilities()
+            .first()
+            .unwrap();
         for level in [ExposureLevel::Internal, ExposureLevel::External] {
-            assert!(binding.conform(hello_greet(), level).is_ok());
+            assert!(binding.conform(descriptor, level).is_ok());
         }
         let detail = binding
-            .conform(hello_greet(), ExposureLevel::CodeOnly)
+            .conform(descriptor, ExposureLevel::CodeOnly)
             .unwrap_err();
         assert_eq!(detail.code(), "http_code_only_exposure");
 
-        assert!(binding.prepare(&[hello_greet()]).is_ok());
-        let detail = binding
-            .prepare(&[hello_greet(), hello_greet()])
-            .unwrap_err();
+        assert!(binding.prepare(&[descriptor]).is_ok());
+        let detail = binding.prepare(&[descriptor, descriptor]).unwrap_err();
         assert_eq!(detail.code(), "http_duplicate_capability");
     }
 
     #[tokio::test]
     async fn shutdown_stops_intake_and_refuses_new_connections() {
-        let (composition, binding) = serve_generated_hello();
+        let binding = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+        )));
+        let composition = serve_hand_written_hello(&binding);
         let address = binding.local_addr().unwrap();
         let idle = TcpStream::connect(address).await.unwrap();
 
-        let Err(errors) = hello_builder(&binding).start() else {
+        let Err(errors) = hand_written_hello_builder(&binding).start() else {
             panic!("a started binding accepted a second startup")
         };
         assert_eq!(
@@ -723,7 +668,10 @@ mod tests {
 
     #[tokio::test]
     async fn drain_timeout_aborts_and_joins_a_parked_connection() {
-        let (composition, binding) = serve_generated_hello();
+        let binding = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+        )));
+        let composition = serve_hand_written_hello(&binding);
         let address = binding.local_addr().unwrap();
         let parked = park_connection(address).await;
         // Let the server read the head and park on the missing body.
