@@ -594,7 +594,7 @@ mod tests {
 
     fn has_header(headers: &[u8], name: &[u8]) -> bool {
         headers.split(|byte| *byte == b'\n').any(|line| {
-            let line = line.strip_suffix(&[b'\r']).unwrap_or(line);
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
             line.get(..name.len())
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
                 && line.get(name.len()) == Some(&b':')
