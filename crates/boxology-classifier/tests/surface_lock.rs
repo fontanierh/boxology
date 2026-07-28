@@ -16,27 +16,23 @@ const RUST_SOURCES: &[&str] = &["lib.rs", "tests.rs"];
 const PRODUCTION_RUST_SOURCES: &[&str] = &["lib.rs"];
 
 #[derive(Default)]
-struct IncludeDetector {
+struct MacroDetector {
     found: bool,
 }
 
-impl<'ast> Visit<'ast> for IncludeDetector {
+impl<'ast> Visit<'ast> for MacroDetector {
     fn visit_macro(&mut self, item: &'ast syn::Macro) {
-        self.found |= item
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "include");
+        self.found = true;
         visit::visit_macro(self, item);
     }
 }
 
 fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
     let file = syn::parse_file(source).map_err(|_| "invalid Rust source")?;
-    let mut includes = IncludeDetector::default();
-    includes.visit_file(&file);
-    if includes.found {
-        return Err("production include macros are forbidden");
+    let mut macros = MacroDetector::default();
+    macros.visit_file(&file);
+    if macros.found {
+        return Err("production macros are forbidden");
     }
     let modules: Vec<_> = file
         .items
@@ -171,6 +167,19 @@ fn require_cargo_targets(metadata: &Value, manifest_dir: &Path) -> Result<(), &'
     if Path::new(source) != manifest_dir.join("src/lib.rs") {
         return Err("library target must be src/lib.rs");
     }
+    if targets.len() != 2 {
+        return Err("unexpected cargo target inventory");
+    }
+    let test = targets
+        .iter()
+        .find(|target| has_kind(target, "test"))
+        .ok_or("surface lock test target is missing")?;
+    let source = test["src_path"]
+        .as_str()
+        .ok_or("test target omitted source path")?;
+    if Path::new(source) != manifest_dir.join("tests/surface_lock.rs") {
+        return Err("test target must be tests/surface_lock.rs");
+    }
     Ok(())
 }
 
@@ -258,10 +267,11 @@ fn descendant_include_fails_the_production_inventory() {
     for attack in [
         "include!(\"hidden/probe.rs\");",
         "std::include!(\"../review_external_include.rs\");",
+        "macro_rules! hidden { () => { include!(\"../hidden.rs\"); } }\nhidden!();",
     ] {
         assert_eq!(
             require_allowed_modules(&format!("{source}\n{attack}\n")),
-            Err("production include macros are forbidden")
+            Err("production macros are forbidden")
         );
     }
 }
@@ -293,6 +303,17 @@ fn alternate_root_and_build_hook_fail_cargo_target_lock() {
             manifest_dir,
         ),
         Err("build hooks are forbidden")
+    );
+    assert_eq!(
+        require_cargo_targets(
+            &metadata(json!([
+                {"kind": ["lib"], "src_path": manifest_dir.join("src/lib.rs")},
+                {"kind": ["test"], "src_path": manifest_dir.join("tests/surface_lock.rs")},
+                {"kind": ["bin"], "src_path": manifest_dir.join("hidden_bin.rs")},
+            ])),
+            manifest_dir,
+        ),
+        Err("unexpected cargo target inventory")
     );
 }
 

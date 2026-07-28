@@ -100,24 +100,26 @@ pub fn classify(
     submitted: Option<&SchemaDocument>,
 ) -> Result<ClassificationReport, Diagnostics> {
     match (base, submitted) {
-        (None, None) => Err(
-            Diagnostics::new(vec![Diagnostic::classification_requires_document()])
-                .expect("one classification diagnostic"),
-        ),
-        (None, Some(document)) => Ok(report(vec![Finding {
+        (None, None) => {
+            Err(
+                Diagnostics::new(Vec::from([Diagnostic::classification_requires_document()]))
+                    .expect("one classification diagnostic"),
+            )
+        }
+        (None, Some(document)) => Ok(report(Vec::from([Finding {
             code: "BXC0026",
             path: document.box_id.as_str().to_owned(),
             class: Class::Additive,
             condition: None,
-        }])),
-        (Some(document), None) => Ok(report(vec![Finding {
+        }]))),
+        (Some(document), None) => Ok(report(Vec::from([Finding {
             code: "BXC0027",
             path: document.box_id.as_str().to_owned(),
             class: Class::Incompatible,
             condition: None,
-        }])),
+        }]))),
         (Some(base), Some(submitted)) if base.box_id != submitted.box_id => {
-            Err(Diagnostics::new(vec![Diagnostic::box_id_mismatch()])
+            Err(Diagnostics::new(Vec::from([Diagnostic::box_id_mismatch()]))
                 .expect("one classification diagnostic"))
         }
         (Some(base), Some(submitted)) if equal_modulo_provenance(base, submitted) => {
@@ -127,12 +129,12 @@ pub fn classify(
             if let Some(findings) = variant_addition_findings(base, submitted) {
                 Ok(report(findings))
             } else {
-                Ok(report(vec![Finding {
+                Ok(report(Vec::from([Finding {
                     code: "BXC0028",
                     path: base.box_id.as_str().to_owned(),
                     class: Class::Incompatible,
                     condition: None,
-                }]))
+                }])))
             }
         }
     }
@@ -171,16 +173,20 @@ fn variant_addition_findings(
             return None;
         }
 
-        findings.extend(added_variants.into_iter().map(|variant| Finding {
-            code: "BXC0029",
-            path: format!(
-                "{}/type/{}/variant/{}",
-                base.box_id.as_str(),
-                submitted_type.name,
-                variant.name
-            ),
-            class: Class::CompatibleWithConditions,
-            condition: Some("unknown-variant tolerance"),
+        findings.extend(added_variants.into_iter().map(|variant| {
+            Finding {
+                code: "BXC0029",
+                path: [
+                    base.box_id.as_str(),
+                    "/type/",
+                    submitted_type.name.as_str(),
+                    "/variant/",
+                    variant.name.as_str(),
+                ]
+                .concat(),
+                class: Class::CompatibleWithConditions,
+                condition: Some("unknown-variant tolerance"),
+            }
         }));
     }
 
