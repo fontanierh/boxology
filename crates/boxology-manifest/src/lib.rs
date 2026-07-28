@@ -21,8 +21,9 @@ const D2_SOURCE: &str = "specs/s5-manifest-and-validation.md D2";
 // inventory; BXW0020 duplicate list patterns; BXW0021 `fixtures` and BXW0034 a list whose presence
 // is a claim left empty; BXW0026 `[quality].commands`; BXW0027–BXW0030 `[[crates]]`; BXW0031–BXW0033 `[[derived]]`;
 // BXW0024 and BXW0025 `[[imports]]`; BXW0022 and BXW0023 the `[composition]` kind gate, with
-// BXW0035–BXW0041 its boxes and bindings. That completes the schema-1 key inventory, so BXW0042 is
-// the next free code and is unallocated: discovery and classification claim from there.
+// BXW0035–BXW0041 its boxes and bindings; BXW0042–BXW0060 belong to workspace discovery and
+// classification; CLI walk owns BXW0061–BXW0063, generation planning BXW0064–BXW0069, and
+// execution BXW0070–BXW0073; BXW0074 is the platform-only `protected` declaration.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
