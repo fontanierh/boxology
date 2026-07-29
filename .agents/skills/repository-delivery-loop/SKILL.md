@@ -23,6 +23,14 @@ Require `schema = 1` and configured `spec`, `implement`, and `review` roles. A r
 
 Each candidate names a `harness`, `model`, and `effort`. Treat all three as exact requirements. Do not execute commands, flags, or other arbitrary values from the configuration.
 
+### Select a candidate
+
+The first candidate is the default. Select a later candidate only when the user explicitly requests its harness or names that exact configured candidate. An explicit selection is not fallback: do not mutate, reorder, or persist changes to `models.toml`.
+
+Selection may be task-wide or limited to named roles. Repair inherits the implementation selection when `repair` uses `implement`. If an explicitly selected candidate is unavailable, unauthenticated, or cannot honor its exact model and effort, stop and report the failure; never silently fall back.
+
+Automatic fallback is allowed only when the role explicitly configures `fallback_on` and the observed condition matches it.
+
 ### Choose the execution surface
 
 Determine which harness hosts the primary agent before launching a worker.
@@ -35,13 +43,20 @@ Determine which harness hosts the primary agent before launching a worker.
 
 For example, a Codex primary launches a Codex candidate as a native Codex sub-agent and a Claude candidate through the Claude CLI. A Claude primary does the inverse.
 
-Use the configured model and effort. If the active harness's native mechanism cannot honor them, do not switch to that same harness's CLI. Treat the candidate as unavailable and apply the role's fallback policy. Launch an external worker through the CLI's supported model and effort selection; if its CLI is absent or cannot honor the requested values, treat that candidate as unavailable.
+Use the configured model and effort. If the active harness's native mechanism cannot honor them, do not switch to that same harness's CLI. Treat the candidate as unavailable and follow the selection and fallback rules above. Launch an external worker through the CLI's supported model and effort selection; if its CLI is absent or cannot honor the requested values, treat that candidate as unavailable.
 
 External CLI workers do not inherit the primary agent's conversation, repository instructions, worktree, or prior worker output. Give them the complete directive and exact worktree path explicitly. Use any process-management mechanism required by applicable repository instructions.
 
+Before launching a candidate with `harness = "kimi"`, read [`references/kimi-code.md`](references/kimi-code.md). A Codex primary must launch Kimi as a separate CLI process with the exact assigned worktree as its working directory and capture both stdout and stderr. Pass configuration as direct process environment and argv values, never by shell-constructing configuration values:
+
+- environment: `KIMI_CODE_NO_AUTO_UPDATE=1`, `KIMI_DISABLE_CRON=1`, and `KIMI_MODEL_THINKING_EFFORT=<configured effort>`;
+- argv: `/Users/jim/.kimi-code/bin/kimi`, `-m`, `kimi-code/k3`, `-p`, `<complete worker directive>`.
+
+Do not add `--auto` to `-p`: prompt mode is already unattended and the current CLI rejects that combination. In every Kimi directive, forbid subagents, schedules, background work, `--add-dir`, and leaving the assigned worktree. Advisory specification and review directives must also forbid edits and require a worktree-status audit for unexpected mutation. Launch review in a fresh Kimi process and session.
+
 ### Apply fallback policy
 
-Resolve every phase independently from the first candidate. A fallback used during one phase does not change candidate ordering for a later phase.
+Without an explicit selection, resolve every phase independently from the first candidate. A fallback used during one phase does not change candidate ordering for a later phase. Do not apply this fallback policy to an explicitly selected candidate.
 
 Fallback is allowed only when the observed condition appears in the role's `fallback_on` list:
 
