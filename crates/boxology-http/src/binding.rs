@@ -35,6 +35,12 @@ const MIN_MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
 /// The default time allowed to receive one complete HTTP/1 request head.
 const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(test)]
+std::thread_local! {
+    static TEST_HEAD_RECEIPT_SIGNAL: std::cell::RefCell<Option<tokio::sync::oneshot::Sender<()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Configuration for an HTTP server binding.
 #[derive(Clone)]
 pub struct HttpServerConfig {
@@ -382,9 +388,16 @@ async fn serve_connection(stream: TcpStream, context: ConnectionContext) {
         let exposures = Arc::clone(&exposures);
         let tasks = tasks.clone();
         async move {
+            let head_received = Instant::now();
+            #[cfg(test)]
+            TEST_HEAD_RECEIPT_SIGNAL.with(|slot| {
+                if let Some(signal) = slot.borrow_mut().take() {
+                    let _ = signal.send(());
+                }
+            });
             handle_request(
                 request,
-                Instant::now(),
+                head_received,
                 &exposures,
                 &tasks,
                 default_timeout,
@@ -453,6 +466,142 @@ mod tests {
                 format!("Hello, {name}!")
                     .encode()
                     .map_err(|_| ErasedCallError::InvalidResponse(Detail::new("output_encode")))
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingGreeter {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ErasedTarget for CountingGreeter {
+        fn call<'a>(
+            &'a self,
+            _capability: &'a CapabilityId,
+            _context: CallContext,
+            input: SlotValue,
+        ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let name = String::decode(&input)
+                    .map_err(|_| ErasedCallError::ContractViolation(Detail::new("input_decode")))?;
+                format!("Hello, {name}!")
+                    .encode()
+                    .map_err(|_| ErasedCallError::InvalidResponse(Detail::new("output_encode")))
+            })
+        }
+    }
+
+    struct BudgetObserver {
+        entered: Arc<AtomicUsize>,
+        completed: Arc<AtomicUsize>,
+        entry: Mutex<Option<oneshot::Sender<()>>>,
+        initial: Mutex<Option<oneshot::Sender<Duration>>>,
+        observe_again: Mutex<Option<oneshot::Receiver<()>>>,
+        second: Mutex<Option<oneshot::Sender<Duration>>>,
+        parked: Mutex<Option<oneshot::Sender<()>>>,
+        cancellation: Mutex<Option<oneshot::Sender<()>>>,
+        release: Mutex<Option<oneshot::Receiver<()>>>,
+    }
+
+    struct BudgetSignals {
+        entry: oneshot::Receiver<()>,
+        initial: oneshot::Receiver<Duration>,
+        observe_again: oneshot::Sender<()>,
+        second: oneshot::Receiver<Duration>,
+        parked: oneshot::Receiver<()>,
+        cancellation: oneshot::Receiver<()>,
+        release: oneshot::Sender<()>,
+    }
+
+    fn take_once<T>(slot: &Mutex<Option<T>>) -> T {
+        slot.lock()
+            .unwrap()
+            .take()
+            .expect("test signal consumed more than once")
+    }
+
+    impl BudgetObserver {
+        fn new() -> (Self, BudgetSignals) {
+            let (entry, entry_signal) = oneshot::channel();
+            let (initial, initial_signal) = oneshot::channel();
+            let (observe_again, observe_signal) = oneshot::channel();
+            let (second, second_signal) = oneshot::channel();
+            let (parked, parked_signal) = oneshot::channel();
+            let (cancellation, cancellation_signal) = oneshot::channel();
+            let (release, release_signal) = oneshot::channel();
+            (
+                Self {
+                    entered: Arc::new(AtomicUsize::new(0)),
+                    completed: Arc::new(AtomicUsize::new(0)),
+                    entry: Mutex::new(Some(entry)),
+                    initial: Mutex::new(Some(initial)),
+                    observe_again: Mutex::new(Some(observe_signal)),
+                    second: Mutex::new(Some(second)),
+                    parked: Mutex::new(Some(parked)),
+                    cancellation: Mutex::new(Some(cancellation)),
+                    release: Mutex::new(Some(release_signal)),
+                },
+                BudgetSignals {
+                    entry: entry_signal,
+                    initial: initial_signal,
+                    observe_again,
+                    second: second_signal,
+                    parked: parked_signal,
+                    cancellation: cancellation_signal,
+                    release,
+                },
+            )
+        }
+    }
+
+    impl ErasedTarget for BudgetObserver {
+        fn call<'a>(
+            &'a self,
+            _capability: &'a CapabilityId,
+            context: CallContext,
+            _input: SlotValue,
+        ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            let deadline = context
+                .deadline()
+                .expect("HTTP dispatch must set a deadline");
+            take_once(&self.initial)
+                .send(deadline.remaining())
+                .expect("initial budget receiver dropped");
+            take_once(&self.entry)
+                .send(())
+                .expect("entry receiver dropped");
+            let observe_again = take_once(&self.observe_again);
+            let second = take_once(&self.second);
+            let parked = take_once(&self.parked);
+            let cancellation = take_once(&self.cancellation);
+            let release = take_once(&self.release);
+            let completed = self.completed.clone();
+            Box::pin(async move {
+                observe_again
+                    .await
+                    .expect("test did not release the second budget observation");
+                second
+                    .send(
+                        context
+                            .deadline()
+                            .expect("deadline disappeared during dispatch")
+                            .remaining(),
+                    )
+                    .expect("second budget receiver dropped");
+                parked.send(()).expect("parked receiver dropped");
+                context.cancellation().cancelled().await;
+                cancellation
+                    .send(())
+                    .expect("cancellation receiver dropped");
+                release.await.expect("handler release gate dropped");
+                completed.fetch_add(1, Ordering::SeqCst);
+                "late"
+                    .to_owned()
+                    .encode()
+                    .map_err(|_| ErasedCallError::InvalidResponse(Detail::new("late_encode")))
             })
         }
     }
@@ -597,6 +746,62 @@ mod tests {
         hand_written_hello_builder(binding).start().unwrap()
     }
 
+    fn serve_counting_hello(
+        config: HttpServerConfig,
+    ) -> (Composition, Arc<HttpServerBinding>, Arc<AtomicUsize>) {
+        let binding = Arc::new(HttpServerBinding::new(config));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let target = CountingGreeter {
+            calls: calls.clone(),
+        };
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(hello_implementation(), move |_imports| target);
+        builder.expose(
+            BoxId::new("hello").unwrap(),
+            greet_capability(),
+            binding.clone(),
+            ExposureLevel::External,
+        );
+        (builder.start().unwrap(), binding, calls)
+    }
+
+    async fn run_budget_server(
+        observer: BudgetObserver,
+        ready: oneshot::Sender<(SocketAddr, TransportTaskTracker)>,
+        shutdown: oneshot::Receiver<()>,
+        done: oneshot::Sender<()>,
+    ) {
+        let stub = Arc::new(StubTransport::new());
+        let binding = Arc::new(HttpServerBinding::new(
+            HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
+                .with_default_timeout(Duration::from_secs(1)),
+        ));
+        let capability = greet_capability();
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(hello_implementation(), move |_imports| observer);
+        builder.expose(
+            BoxId::new("hello").unwrap(),
+            capability.clone(),
+            stub.clone(),
+            ExposureLevel::External,
+        );
+        builder.expose(
+            BoxId::new("hello").unwrap(),
+            capability,
+            binding.clone(),
+            ExposureLevel::External,
+        );
+        let composition = builder.start().unwrap();
+        let tracker = stub.runtime().unwrap().tracker().clone();
+        ready
+            .send((binding.local_addr().unwrap(), tracker))
+            .expect("test driver dropped server readiness");
+        shutdown.await.expect("test driver dropped server shutdown");
+        composition.shutdown(Duration::from_secs(1)).await.unwrap();
+        done.send(())
+            .expect("test driver dropped server completion");
+    }
+
     async fn start_serving(
         exposures: Arc<[TransportExposure]>,
     ) -> (SocketAddr, CancellationToken, JoinHandle<()>) {
@@ -634,13 +839,110 @@ mod tests {
     }
 
     async fn raw_request(address: SocketAddr, request: &[u8]) -> Vec<u8> {
-        let mut stream = TcpStream::connect(address).await.unwrap();
-        stream.write_all(request).await.unwrap();
-        let mut raw = Vec::new();
-        if let Err(error) = stream.read_to_end(&mut raw).await {
-            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+        bounded_raw_exchange(address, request).await
+    }
+
+    async fn bounded_raw_exchange(address: SocketAddr, request: &[u8]) -> Vec<u8> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut stream = TcpStream::connect(address).await.unwrap();
+            stream.write_all(request).await.unwrap();
+            bounded_read_to_end(&mut stream).await
+        })
+        .await
+        .expect("raw socket exchange exceeded five seconds")
+    }
+
+    async fn bounded_read_to_end(stream: &mut TcpStream) -> Vec<u8> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut raw = Vec::new();
+            if let Err(error) = stream.read_to_end(&mut raw).await {
+                assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+            }
+            raw
+        })
+        .await
+        .expect("raw socket read exceeded five seconds")
+    }
+
+    struct ExpectedResponse {
+        status: u16,
+        body: &'static [u8],
+        content_type: Option<&'static [u8]>,
+    }
+
+    fn response_header<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+        let mut found = None;
+        for line in headers.split(|byte| *byte == b'\n') {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let Some(separator) = line.iter().position(|byte| *byte == b':') else {
+                continue;
+            };
+            if line[..separator].eq_ignore_ascii_case(name) {
+                assert!(found.is_none(), "response contains duplicate {name:?}");
+                let value = &line[separator + 1..];
+                found = Some(value.strip_prefix(b" ").unwrap_or(value));
+            }
         }
-        raw
+        found
+    }
+
+    fn assert_exact_response(raw: &[u8], expected: ExpectedResponse) {
+        let (status, headers, body) = split_response_parts(raw);
+        assert_eq!(status, expected.status);
+        assert_eq!(body, expected.body);
+        assert_eq!(
+            response_header(headers, b"content-type"),
+            expected.content_type
+        );
+    }
+
+    fn hello_json_response() -> ExpectedResponse {
+        ExpectedResponse {
+            status: 200,
+            body: br#"{"result":{"value":"Hello, Ada!"}}"#,
+            content_type: Some(b"application/json"),
+        }
+    }
+
+    fn invalid_request_response() -> ExpectedResponse {
+        ExpectedResponse {
+            status: 400,
+            body:
+                br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#,
+            content_type: Some(b"application/json"),
+        }
+    }
+
+    fn deadline_exceeded_response() -> ExpectedResponse {
+        ExpectedResponse {
+            status: 504,
+            body: br#"{"error":{"kind":"call","code":"deadline_exceeded","message":"deadline exceeded"}}"#,
+            content_type: Some(b"application/json"),
+        }
+    }
+
+    fn unsupported_media_type_response() -> ExpectedResponse {
+        ExpectedResponse {
+            status: 415,
+            body: br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#,
+            content_type: Some(b"application/json"),
+        }
+    }
+
+    fn payload_too_large_response() -> ExpectedResponse {
+        ExpectedResponse {
+            status: 413,
+            body: br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#,
+            content_type: Some(b"application/json"),
+        }
+    }
+
+    fn bare_response(status: u16) -> ExpectedResponse {
+        ExpectedResponse {
+            status,
+            body: b"",
+            content_type: None,
+        }
     }
 
     fn split_response(raw: &[u8]) -> (u16, Vec<u8>) {
@@ -723,6 +1025,92 @@ X-Padding: ";
         drop(composition);
     }
 
+    #[tokio::test]
+    async fn fresh_compositions_pin_live_socket_admission_and_call_counts() {
+        let mut oversized_head = padded_request_head(8193);
+        oversized_head.extend_from_slice(br#""Ada""#);
+        let cases = vec![
+            (
+                "success",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap()),
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"".to_vec(),
+                hello_json_response(),
+                1,
+            ),
+            (
+                "garbage timeout",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap()),
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\nboxology-timeout-ms: garbage\r\n\r\n\"Ada\"".to_vec(),
+                invalid_request_response(),
+                0,
+            ),
+            (
+                "duplicate individually-valid timeout fields",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap()),
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\nboxology-timeout-ms: 1\r\nboxology-timeout-ms: 2\r\n\r\n\"Ada\"".to_vec(),
+                invalid_request_response(),
+                0,
+            ),
+            (
+                "zero timeout",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap()),
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\nboxology-timeout-ms: 0\r\n\r\n\"Ada\"".to_vec(),
+                deadline_exceeded_response(),
+                0,
+            ),
+            (
+                "text plain before zero timeout",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap()),
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 5\r\nboxology-timeout-ms: 0\r\n\r\n\"Ada\"".to_vec(),
+                unsupported_media_type_response(),
+                0,
+            ),
+            (
+                "oversized malformed chunked body",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
+                    .with_request_limits(5, DEFAULT_DEPTH_LIMIT),
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n{oo\r\n3\r\nps!\r\n0\r\n\r\n".to_vec(),
+                payload_too_large_response(),
+                0,
+            ),
+            (
+                "garbage timeout before oversized body",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
+                    .with_request_limits(5, DEFAULT_DEPTH_LIMIT),
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 6\r\nboxology-timeout-ms: garbage\r\n\r\n{oops!".to_vec(),
+                invalid_request_response(),
+                0,
+            ),
+            (
+                "malformed request line",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap()),
+                b"POST /rpc/hello/greet\r\nHost: boxology\r\nConnection: close\r\n\r\n".to_vec(),
+                bare_response(400),
+                0,
+            ),
+            (
+                "complete head over the configured 8192-byte floor",
+                HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
+                    .with_max_request_head_bytes(1),
+                oversized_head,
+                bare_response(431),
+                0,
+            ),
+        ];
+
+        for (name, config, request, expected, expected_calls) in cases {
+            let (composition, binding, calls) = serve_counting_hello(config);
+            let raw = bounded_raw_exchange(binding.local_addr().unwrap(), &request).await;
+            assert_exact_response(&raw, expected);
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                expected_calls,
+                "unexpected dispatch count for {name}"
+            );
+            composition.shutdown(Duration::from_secs(1)).await.unwrap();
+        }
+    }
+
     async fn converge_tracker_len(tracker: &TransportTaskTracker, expected: usize) {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -735,6 +1123,139 @@ X-Padding: ";
         .await
         .expect("tracker count did not converge");
         assert_eq!(tracker.len(), expected);
+    }
+
+    #[tokio::test]
+    async fn trickled_body_hits_the_head_deadline_without_dispatching() {
+        let (head_receipt, head_received) = oneshot::channel();
+        TEST_HEAD_RECEIPT_SIGNAL.with(|slot| {
+            assert!(slot.borrow_mut().replace(head_receipt).is_none());
+        });
+        let config = HttpServerConfig::new("127.0.0.1:0".parse().unwrap())
+            .with_default_timeout(Duration::from_millis(100));
+        let (composition, binding, calls) = serve_counting_hello(config);
+        let mut stream = TcpStream::connect(binding.local_addr().unwrap())
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 6\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), head_received)
+            .await
+            .expect("server did not record request-head receipt")
+            .expect("request-head receipt signal dropped");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let _ = stream.write_all(b"{oops!").await;
+
+        let raw = bounded_read_to_end(&mut stream).await;
+        assert_exact_response(&raw, deadline_exceeded_response());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        composition.shutdown(Duration::from_secs(1)).await.unwrap();
+    }
+
+    #[test]
+    fn live_socket_deadline_budget_and_tracker_ownership_are_causal() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+        let (observer, signals) = BudgetObserver::new();
+        let entered = observer.entered.clone();
+        let completed = observer.completed.clone();
+        let (ready, ready_signal) = oneshot::channel();
+        let (shutdown, shutdown_signal) = oneshot::channel();
+        let (done, done_signal) = oneshot::channel();
+        let server = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(run_budget_server(observer, ready, shutdown_signal, done));
+        });
+        let (address, tracker) = tokio::time::timeout(Duration::from_secs(5), ready_signal)
+            .await
+            .expect("server did not become ready")
+            .expect("server readiness signal dropped");
+        assert_eq!(tracker.len(), 1, "only the HTTP accept task is live");
+
+        let BudgetSignals {
+            entry,
+            initial,
+            observe_again,
+            second,
+            parked,
+            cancellation,
+            release,
+        } = signals;
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(
+                b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\nboxology-timeout-ms: 1000\r\n\r\n\"Ada\"",
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), entry)
+            .await
+            .expect("handler did not enter")
+            .expect("entry signal dropped");
+        let first = tokio::time::timeout(Duration::from_secs(5), initial)
+            .await
+            .expect("initial budget was not recorded")
+            .expect("initial budget signal dropped");
+        assert_eq!(
+            tracker.len(),
+            3,
+            "accept, connection, and dispatch are live"
+        );
+        assert_eq!(entered.load(Ordering::SeqCst), 1);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        observe_again
+            .send(())
+            .expect("handler observation gate dropped");
+        let second = tokio::time::timeout(Duration::from_secs(5), second)
+            .await
+            .expect("second budget was not recorded")
+            .expect("second budget signal dropped");
+        assert!(
+            Duration::ZERO < second && second < first && first <= Duration::from_secs(1),
+            "deadline budget did not decrease causally: first={first:?}, second={second:?}"
+        );
+        tokio::time::timeout(Duration::from_secs(5), parked)
+            .await
+            .expect("handler did not park after the second observation")
+            .expect("parked signal dropped");
+
+        let raw = bounded_read_to_end(&mut stream).await;
+        assert_exact_response(&raw, deadline_exceeded_response());
+        converge_tracker_len(&tracker, 2).await;
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+        tokio::time::timeout(Duration::from_secs(5), cancellation)
+            .await
+            .expect("handler did not observe request cancellation")
+            .expect("cancellation signal dropped");
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            0,
+            "504 must not prove completion"
+        );
+
+        release.send(()).expect("handler release gate dropped");
+        converge_tracker_len(&tracker, 1).await;
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+
+        shutdown.send(()).expect("server shutdown receiver dropped");
+        tokio::time::timeout(Duration::from_secs(5), done_signal)
+            .await
+            .expect("server shutdown exceeded five seconds")
+            .expect("server completion signal dropped");
+        assert_eq!(tracker.len(), 0);
+        server.join().expect("server worker panicked");
+        });
     }
 
     #[tokio::test]
