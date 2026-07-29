@@ -1536,6 +1536,7 @@ dependencies = [
  "boxology-workspace",
  "serde_json",
  "sha2",
+ "toml_edit",
 ]
 
 [[package]]

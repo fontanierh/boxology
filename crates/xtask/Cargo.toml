@@ -13,3 +13,4 @@ boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
 boxology-workspace = { version = "=0.0.0", path = "../boxology-workspace" }
 sha2 = "=0.10.9"
 serde_json = "=1.0.150"
+toml_edit = "=0.25.13+spec-1.1.0"
