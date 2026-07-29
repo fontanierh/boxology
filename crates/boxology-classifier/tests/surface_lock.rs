@@ -4,16 +4,14 @@ use boxology_schema::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument,
     SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use syn::visit::{self, Visit};
 use syn::{Item, Meta, Visibility};
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 const RUST_SOURCES: &[&str] = &["lib.rs", "tests.rs"];
-const PRODUCTION_RUST_SOURCES: &[&str] = &["lib.rs"];
 
 #[derive(Default)]
 struct MacroDetector {
@@ -27,6 +25,49 @@ impl<'ast> Visit<'ast> for MacroDetector {
     }
 }
 
+fn allowed_derive(path: &syn::Path) -> bool {
+    path.get_ident().is_some_and(|ident| {
+        matches!(
+            ident.to_string().as_str(),
+            "Clone" | "Copy" | "Debug" | "Eq" | "Ord" | "PartialEq" | "PartialOrd"
+        )
+    })
+}
+
+fn allowed_production_attribute(attribute: &syn::Attribute) -> bool {
+    if attribute.path().is_ident("doc") {
+        return true;
+    }
+    if !attribute.path().is_ident("derive") {
+        return false;
+    }
+    let Ok(derives) = attribute.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+    ) else {
+        return false;
+    };
+    !derives.is_empty() && derives.iter().all(allowed_derive)
+}
+
+#[derive(Default)]
+struct ProductionLock {
+    bad: bool,
+}
+
+impl<'ast> Visit<'ast> for ProductionLock {
+    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+        self.bad |= !allowed_production_attribute(attribute);
+    }
+
+    fn visit_item_mod(&mut self, _: &'ast syn::ItemMod) {
+        self.bad = true;
+    }
+
+    fn visit_macro(&mut self, _: &'ast syn::Macro) {
+        self.bad = true;
+    }
+}
+
 fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
     let file = syn::parse_file(source).map_err(|_| "invalid Rust source")?;
     let mut macros = MacroDetector::default();
@@ -34,18 +75,20 @@ fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
     if macros.found {
         return Err("production macros are forbidden");
     }
-    let modules: Vec<_> = file
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Mod(module) => Some(module),
-            _ => None,
-        })
-        .collect();
-    if modules.len() != 1 {
-        return Err("expected exactly one module");
+    if file.attrs.iter().any(|attribute| {
+        !attribute
+            .path()
+            .get_ident()
+            .is_some_and(|ident| matches!(ident.to_string().as_str(), "doc" | "deny" | "forbid"))
+    }) {
+        return Err("unexpected crate attribute");
     }
-    let module = modules[0];
+    let Some((item, production)) = file.items.split_last() else {
+        return Err("tests module must be terminal");
+    };
+    let Item::Mod(module) = item else {
+        return Err("tests module must be terminal");
+    };
     let cfg_test = matches!(
         &module.attrs[..],
         [attribute]
@@ -58,6 +101,13 @@ fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
         || !cfg_test
     {
         return Err("unexpected module declaration");
+    }
+    let mut lock = ProductionLock::default();
+    for item in production {
+        lock.visit_item(item);
+    }
+    if lock.bad {
+        return Err("unexpected production attribute");
     }
     Ok(())
 }
@@ -102,97 +152,6 @@ fn rust_source_inventory(root: &Path) -> Result<Vec<String>, &'static str> {
     Ok(sources)
 }
 
-fn production_source(root: &Path) -> Result<String, &'static str> {
-    let mut source = String::new();
-    for relative in PRODUCTION_RUST_SOURCES {
-        source.push_str(
-            &fs::read_to_string(root.join(relative))
-                .map_err(|_| "cannot read production source")?,
-        );
-        source.push('\n');
-    }
-    Ok(source)
-}
-
-fn cargo_metadata(manifest_dir: &Path) -> Result<Value, &'static str> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args([
-            "metadata",
-            "--locked",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--manifest-path",
-        ])
-        .arg(manifest_dir.join("Cargo.toml"))
-        .output()
-        .map_err(|_| "cannot run cargo metadata")?;
-    if !output.status.success() {
-        return Err("cargo metadata failed");
-    }
-    serde_json::from_slice(&output.stdout).map_err(|_| "cargo metadata was not JSON")
-}
-
-fn require_cargo_targets(metadata: &Value, manifest_dir: &Path) -> Result<(), &'static str> {
-    let manifest = manifest_dir.join("Cargo.toml");
-    let packages = metadata["packages"]
-        .as_array()
-        .ok_or("cargo metadata omitted packages")?;
-    let package = packages
-        .iter()
-        .find(|package| {
-            package["manifest_path"]
-                .as_str()
-                .is_some_and(|path| Path::new(path) == manifest)
-        })
-        .ok_or("cargo metadata omitted classifier package")?;
-    let targets = package["targets"]
-        .as_array()
-        .ok_or("cargo metadata omitted targets")?;
-    let has_kind = |target: &Value, expected: &str| target["kind"] == json!([expected]);
-    if targets
-        .iter()
-        .any(|target| has_kind(target, "custom-build"))
-    {
-        return Err("build hooks are forbidden");
-    }
-    let libraries: Vec<_> = targets
-        .iter()
-        .filter(|target| has_kind(target, "lib"))
-        .collect();
-    if libraries.len() != 1 {
-        return Err("expected exactly one library target");
-    }
-    let source = libraries[0]["src_path"]
-        .as_str()
-        .ok_or("library target omitted source path")?;
-    if Path::new(source) != manifest_dir.join("src/lib.rs") {
-        return Err("library target must be src/lib.rs");
-    }
-    if targets.len() != 2 {
-        return Err("unexpected cargo target inventory");
-    }
-    let test = targets
-        .iter()
-        .find(|target| has_kind(target, "test"))
-        .ok_or("surface lock test target is missing")?;
-    let source = test["src_path"]
-        .as_str()
-        .ok_or("test target omitted source path")?;
-    if Path::new(source) != manifest_dir.join("tests/surface_lock.rs") {
-        return Err("test target must be tests/surface_lock.rs");
-    }
-    if test["test"] != true
-        || test
-            .get("required-features")
-            .is_some_and(|features| features != &json!([]))
-    {
-        return Err("surface lock test target must execute");
-    }
-    Ok(())
-}
-
 fn document(box_id: &str) -> SchemaDocument {
     SchemaDocument {
         box_id: BoxId::new(box_id).unwrap(),
@@ -235,11 +194,7 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     assert_eq!(rust_source_inventory(&root).unwrap(), RUST_SOURCES);
     let root_source = fs::read_to_string(root.join("lib.rs")).unwrap();
     assert_eq!(require_allowed_modules(&root_source), Ok(()));
-    assert_eq!(
-        require_cargo_targets(&cargo_metadata(manifest_dir).unwrap(), manifest_dir),
-        Ok(())
-    );
-    let source = production_source(&root).unwrap();
+    let source = fs::read_to_string(root.join("lib.rs")).unwrap();
     let anchors = [
         ("BXC0024", "Diagnostic::classification_requires_document()"),
         ("BXC0025", "Diagnostic::box_id_mismatch()"),
@@ -248,6 +203,7 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0028", "\"BXC0028\""),
         ("BXC0029", "\"BXC0029\""),
         ("BXC0029 condition", "\"unknown-variant tolerance\""),
+        ("classify", "pub fn classify("),
     ];
     for (code, anchor) in anchors {
         assert_eq!(source.matches(anchor).count(), 1, "{code} anchor count");
@@ -267,77 +223,46 @@ fn symlinked_source_root_fails_inventory() {
 }
 
 #[test]
-fn attributed_public_module_fails_the_ast_inventory() {
+fn production_ast_escapes_fail_closed() {
     let source = include_str!("../src/lib.rs");
-    let attacks = [
-        "mod stray {}",
-        "mod probe;",
-        "pub mod stray {}",
-        "pub(crate) mod stray {}",
-        "#[allow(dead_code)] pub mod stray {}",
-    ];
-    for attack in attacks {
+    for mutant in [
+        source.replacen("pub fn classify(", "#[cfg(test)]\npub fn classify(", 1),
+        source.replacen("pub fn classify(", "#[classifier]\npub fn classify(", 1),
+        source.replacen(
+            "pub fn classify(",
+            "#[cfg_attr(test, classifier)]\npub fn classify(",
+            1,
+        ),
+    ] {
+        assert_eq!(mutant.matches("pub fn classify(").count(), 1);
         assert_eq!(
-            require_allowed_modules(&format!("{source}\n{attack}\n")),
-            Err("expected exactly one module")
+            require_allowed_modules(&mutant),
+            Err("unexpected production attribute")
         );
     }
+    let divergent = format!("{source}\npub fn classify() {{}}\n");
+    assert_eq!(divergent.matches("pub fn classify(").count(), 2);
+    assert_eq!(
+        require_allowed_modules(&divergent),
+        Err("tests module must be terminal")
+    );
 }
 
 #[test]
 fn descendant_include_fails_the_production_inventory() {
     let source = include_str!("../src/lib.rs");
+    let marker = "\n#[cfg(test)]\nmod tests;";
     for attack in [
         "include!(\"hidden/probe.rs\");",
         "std::include!(\"../review_external_include.rs\");",
         "macro_rules! hidden { () => { include!(\"../hidden.rs\"); } }\nhidden!();",
     ] {
+        let mutant = source.replacen(marker, &format!("\n{attack}{marker}"), 1);
         assert_eq!(
-            require_allowed_modules(&format!("{source}\n{attack}\n")),
+            require_allowed_modules(&mutant),
             Err("production macros are forbidden")
         );
     }
-}
-
-#[test]
-fn alternate_root_and_build_hook_fail_cargo_target_lock() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manifest = manifest_dir.join("Cargo.toml");
-    let alternate = manifest_dir.join("review_alt_root.rs");
-    let metadata = |targets: Value| {
-        json!({"packages": [{
-            "manifest_path": manifest,
-            "targets": targets,
-        }]})
-    };
-    assert_eq!(
-        require_cargo_targets(
-            &metadata(json!([{"kind": ["lib"], "src_path": alternate}])),
-            manifest_dir,
-        ),
-        Err("library target must be src/lib.rs")
-    );
-    assert_eq!(
-        require_cargo_targets(
-            &metadata(json!([
-                {"kind": ["lib"], "src_path": manifest_dir.join("src/lib.rs")},
-                {"kind": ["custom-build"], "src_path": manifest_dir.join("build.rs")},
-            ])),
-            manifest_dir,
-        ),
-        Err("build hooks are forbidden")
-    );
-    assert_eq!(
-        require_cargo_targets(
-            &metadata(json!([
-                {"kind": ["lib"], "src_path": manifest_dir.join("src/lib.rs")},
-                {"kind": ["test"], "src_path": manifest_dir.join("tests/surface_lock.rs")},
-                {"kind": ["bin"], "src_path": manifest_dir.join("hidden_bin.rs")},
-            ])),
-            manifest_dir,
-        ),
-        Err("unexpected cargo target inventory")
-    );
 }
 
 #[test]

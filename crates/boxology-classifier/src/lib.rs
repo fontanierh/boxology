@@ -10,9 +10,6 @@
 
 use boxology_schema::{Diagnostic, Diagnostics, SchemaDocument, SchemaVariant};
 
-#[cfg(test)]
-mod tests;
-
 /// The compatibility class of one schema change, ordered from least to most severe.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Class {
@@ -244,3 +241,6 @@ fn report(findings: Vec<Finding>) -> ClassificationReport {
         .unwrap_or(Class::Unchanged);
     ClassificationReport { findings, verdict }
 }
+
+#[cfg(test)]
+mod tests;

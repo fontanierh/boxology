@@ -4,14 +4,126 @@ use boxology_schema::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
     SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
-use serde_json::json;
+use serde_json::{Value, json};
+use std::path::Path;
+use std::process::Command;
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 
+fn metadata_target_is_live(metadata: &Value, manifest_dir: &Path) -> bool {
+    let manifest = manifest_dir.join("Cargo.toml");
+    let Some(package) = metadata["packages"].as_array().and_then(|packages| {
+        packages.iter().find(|package| {
+            package["manifest_path"]
+                .as_str()
+                .is_some_and(|path| Path::new(path) == manifest)
+        })
+    }) else {
+        return false;
+    };
+    let Some(targets) = package["targets"].as_array() else {
+        return false;
+    };
+    let kind = |target: &Value, expected| target["kind"] == json!([expected]);
+    let library = targets.iter().find(|target| kind(target, "lib"));
+    let surface = targets
+        .iter()
+        .find(|target| kind(target, "test") && target["name"].as_str() == Some("surface_lock"));
+    let Some((library, surface)) = library.zip(surface) else {
+        return false;
+    };
+    targets.len() == 2
+        && library["test"] == true
+        && library["src_path"]
+            .as_str()
+            .is_some_and(|path| Path::new(path) == manifest_dir.join("src/lib.rs"))
+        && surface["crate_types"] == json!(["bin"])
+        && surface["src_path"]
+            .as_str()
+            .is_some_and(|path| Path::new(path) == manifest_dir.join("tests/surface_lock.rs"))
+        && surface["test"] == true
+        && surface
+            .get("required-features")
+            .is_none_or(|features| features == &json!([]))
+}
+
+fn cargo_metadata(manifest_dir: &Path) -> Value {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args([
+            "metadata",
+            "--locked",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(manifest_dir.join("Cargo.toml"))
+        .output()
+        .expect("cargo metadata can run");
+    assert!(output.status.success(), "cargo metadata failed");
+    serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON")
+}
+
+fn surface_lock_lists_tests(manifest_dir: &Path) -> bool {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args(["test", "--locked", "--manifest-path"])
+        .arg(manifest_dir.join("Cargo.toml"))
+        .args(["--test", "surface_lock", "--", "--list"])
+        .output();
+    output.is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout)
+                .contains("production_inventory_and_code_anchors_are_fail_closed")
+    })
+}
+
 #[test]
-fn surface_lock_target_cannot_be_disabled_in_manifest() {
-    let manifest: String = include_str!("../Cargo.toml").split_whitespace().collect();
-    assert!(!manifest.contains("autotests=false") && !manifest.contains("[[test]]"));
+fn surface_lock_target_is_parsed_and_executable() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let metadata = cargo_metadata(manifest_dir);
+    assert!(metadata_target_is_live(&metadata, manifest_dir));
+    assert!(surface_lock_lists_tests(manifest_dir));
+}
+
+fn mutate_surface_target(metadata: &mut Value, mutate: fn(&mut Value)) {
+    let target = metadata["packages"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|package| package["targets"].as_array_mut().into_iter().flatten())
+        .find(|target| target["name"].as_str() == Some("surface_lock"))
+        .unwrap();
+    mutate(target);
+}
+
+#[test]
+fn surface_lock_target_mutants_are_active_negative_controls() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let metadata = cargo_metadata(manifest_dir);
+    let mut autotests_disabled = metadata.clone();
+    for package in autotests_disabled["packages"].as_array_mut().unwrap() {
+        if let Some(targets) = package["targets"].as_array_mut() {
+            targets.retain(|target| target["name"].as_str() != Some("surface_lock"));
+        }
+    }
+    assert!(!metadata_target_is_live(&autotests_disabled, manifest_dir));
+    type TargetMutant = (&'static str, fn(&mut Value));
+    let mutants: &[TargetMutant] = &[
+        ("required feature", |target| {
+            target["required-features"] = json!(["hidden"])
+        }),
+        ("alternate path", |target| {
+            target["src_path"] = json!("tests/other.rs")
+        }),
+        ("disabled test", |target| target["test"] = json!(false)),
+    ];
+    for (name, mutate) in mutants {
+        let mut mutant = metadata.clone();
+        mutate_surface_target(&mut mutant, *mutate);
+        assert!(!metadata_target_is_live(&mutant, manifest_dir), "{name}");
+    }
 }
 
 fn document(box_id: &str) -> SchemaDocument {
@@ -98,6 +210,27 @@ fn assert_exact_report(
         assert_eq!(finding.condition(), condition);
     }
     assert_eq!(report.verdict(), verdict);
+}
+
+fn assert_conditional(report: &ClassificationReport, paths: &[&str]) {
+    assert_eq!(report.verdict(), Class::CompatibleWithConditions);
+    assert_eq!(report.findings().len(), paths.len());
+    for (finding, path) in report.findings().iter().zip(paths) {
+        assert_eq!(
+            (
+                finding.code(),
+                finding.path(),
+                finding.class(),
+                finding.condition()
+            ),
+            (
+                "BXC0029",
+                *path,
+                Class::CompatibleWithConditions,
+                Some("unknown-variant tolerance")
+            )
+        );
+    }
 }
 
 fn assert_unclassified_pair(base: SchemaDocument, submitted: SchemaDocument) {
@@ -228,16 +361,7 @@ fn single_referenced_error_variant_addition_is_conditional() {
     submitted.revision.push('x');
 
     let report = classify(Some(&base), Some(&submitted)).unwrap();
-    assert_exact_report(
-        &report,
-        &[(
-            "BXC0029",
-            "hello/type/GreetError/variant/Other",
-            Class::CompatibleWithConditions,
-            Some("unknown-variant tolerance"),
-        )],
-        Class::CompatibleWithConditions,
-    );
+    assert_conditional(&report, &["hello/type/GreetError/variant/Other"]);
 }
 
 #[test]
@@ -249,138 +373,65 @@ fn multiple_referenced_error_variant_additions_are_sorted() {
     submitted.revision.push('x');
 
     let report = classify(Some(&base), Some(&submitted)).unwrap();
-    assert_exact_report(
+    assert_conditional(
         &report,
         &[
-            (
-                "BXC0029",
-                "hello/type/GreetError/variant/GreetOther",
-                Class::CompatibleWithConditions,
-                Some("unknown-variant tolerance"),
-            ),
-            (
-                "BXC0029",
-                "hello/type/WaveError/variant/WaveOther",
-                Class::CompatibleWithConditions,
-                Some("unknown-variant tolerance"),
-            ),
+            "hello/type/GreetError/variant/GreetOther",
+            "hello/type/WaveError/variant/WaveOther",
         ],
-        Class::CompatibleWithConditions,
     );
 }
 
-#[test]
-fn variant_removal_is_incompatible() {
-    let base = document("hello");
+fn assert_variant_incompatible(base: SchemaDocument, mutate: impl FnOnce(&mut SchemaDocument)) {
     let mut submitted = base.clone();
-    submitted.types[0].variants.pop();
+    mutate(&mut submitted);
     submitted.revision.push('x');
     assert_unclassified_pair(base, submitted);
 }
 
 #[test]
-fn variant_rename_is_incompatible() {
-    let base = document("hello");
-    let mut submitted = base.clone();
-    submitted.types[0].variants[0].name = "Other".to_owned();
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
-
-#[test]
-fn variant_reorder_is_incompatible() {
+fn variant_changes_outside_named_addition_fail_closed() {
     let mut base = document("hello");
     base.types[0].variants.push(variant("Other"));
-    let mut submitted = base.clone();
-    submitted.types[0].variants.swap(0, 1);
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
+    assert_variant_incompatible(base, |document| {
+        document.types[0].variants.swap(0, 1);
+    });
 
-#[test]
-fn variant_addition_with_another_change_is_incompatible() {
-    let base = document("hello");
-    let mut submitted = base.clone();
-    submitted.types[0].variants.push(variant("Other"));
-    submitted.capabilities[0].docs.push("More docs.".to_owned());
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
+    let mutations: &[fn(&mut SchemaDocument)] = &[
+        |document| {
+            document.types[0].variants.pop();
+        },
+        |document| document.types[0].variants[0].name = "Other".to_owned(),
+        |document| {
+            document.types[0].variants.push(variant("Other"));
+            document.capabilities[0].docs.push("More docs.".to_owned());
+        },
+        |document| {
+            document.types[0].variants.push(variant("Other"));
+            document.types[0]
+                .docs
+                .push("Different type docs.".to_owned());
+        },
+        |document| {
+            document.types[0].variants[0].name = "Renamed".to_owned();
+            document.types[0].variants.push(variant("Other"));
+        },
+    ];
+    for mutate in mutations {
+        assert_variant_incompatible(document("hello"), *mutate);
+    }
 
-#[test]
-fn variant_addition_with_type_docs_drift_is_incompatible() {
-    let base = document("hello");
-    let mut submitted = base.clone();
-    submitted.types[0].variants.push(variant("Other"));
-    submitted.types[0]
-        .docs
-        .push("Different type docs.".to_owned());
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
-
-#[test]
-fn variant_addition_with_type_deprecation_drift_is_incompatible() {
-    let base = document("hello");
-    let mut submitted = base.clone();
-    submitted.types[0].variants.push(variant("Other"));
-    submitted.types[0].deprecation = Some("use another error".to_owned());
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
-
-#[test]
-fn variant_addition_with_existing_variant_docs_drift_is_incompatible() {
-    let base = document("hello");
-    let mut submitted = base.clone();
-    submitted.types[0].variants[0]
-        .docs
-        .push("Different variant docs.".to_owned());
-    submitted.types[0].variants.push(variant("Other"));
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
-
-#[test]
-fn variant_addition_with_existing_variant_deprecation_drift_is_incompatible() {
-    let base = document("hello");
-    let mut submitted = base.clone();
-    submitted.types[0].variants[0].deprecation = Some("use another variant".to_owned());
-    submitted.types[0].variants.push(variant("Other"));
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
-
-#[test]
-fn variant_addition_with_existing_variant_name_drift_is_incompatible() {
-    let base = document("hello");
-    let mut submitted = base.clone();
-    submitted.types[0].variants[0].name = "Renamed".to_owned();
-    submitted.types[0].variants.push(variant("Other"));
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
-
-#[test]
-fn variant_addition_with_other_type_name_drift_is_incompatible() {
-    let base = two_error_document();
-    let mut submitted = base.clone();
-    submitted.types[1].variants.push(variant("Other"));
-    submitted.types[0].name = "RenamedError".to_owned();
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
-}
-
-#[test]
-fn unreferenced_type_variant_addition_is_incompatible() {
+    assert_variant_incompatible(two_error_document(), |document| {
+        document.types[1].variants.push(variant("Other"));
+        document.types[0].name = "RenamedError".to_owned();
+    });
     let mut base = document("hello");
     let mut unreferenced = base.types[0].clone();
     unreferenced.name = "UnusedError".to_owned();
     base.types.push(unreferenced);
-    let mut submitted = base.clone();
-    submitted.types[1].variants.push(variant("Other"));
-    submitted.revision.push('x');
-    assert_unclassified_pair(base, submitted);
+    assert_variant_incompatible(base, |document| {
+        document.types[1].variants.push(variant("Other"));
+    });
 }
 
 #[test]
@@ -434,8 +485,6 @@ fn every_effectively_mutable_comparable_field_fails_closed() {
         mutate(&mut submitted);
         assert_unclassified_pair(document("hello"), submitted);
     }
-    // Variant-list additions are the one named conditional carve-out; their negative controls
-    // remain explicit below rather than being hidden in this fail-closed mutation table.
     // Shape has only `Unary` in the current format-1 vocabulary, so it has no effective mutation.
 }
 
