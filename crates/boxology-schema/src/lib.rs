@@ -16,13 +16,13 @@
 #![forbid(unsafe_code)]
 
 // `BXC####` allocation, recorded so S4's slices cannot collide or strand gaps. The strict reader
-// claims BXC0001–BXC0023, the whole format-1 read inventory: BXC0001–BXC0006 the document gates,
+// claims BXC0001–BXC0023 and BXC0029–BXC0030, the whole format-1 read inventory: BXC0001–BXC0006 the document gates,
 // with unknown key, missing key, and wrong type generic across every level rather than repeated
-// per level (`boxology-manifest`'s shape, and the reason this block is 23 codes and not 30);
+// per level (`boxology-manifest`'s shape, keeping the initial read inventory compact);
 // BXC0007 and BXC0008 the reader's two narrowings; BXC0009 the revision spelling; BXC0010–BXC0014
 // the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. D2's BXC0024–BXC0025
 // are registered here, but emitted and reachability-proven by the classifier. The classifier owns
-// BXC0026–BXC0028; T2 opens at BXC0029.
+// BXC0026–BXC0028; BXC0029–BXC0030 are named-payload-field rules.
 //
 // The two narrowings are fail-closed and deliberate. `boxology-contract-syntax` hardcodes
 // `external` and `none` and rejects every other exposure and idempotency, so no document this
@@ -42,8 +42,8 @@
 // rule-text and attribution golden, and the compile-time exhaustiveness scan are all in this
 // slice. Its reachability half — `corpus_covers_every_code`, one minimal document provoking each
 // code — needs something that can parse a document, so it arrives with the reader, and **the
-// reader may not merge without it**. The field validators the reader composes were split out of
-// this slice for budget, not for scope: they add no code and change no entry above.
+// reader may not merge without it**. The payload field validators and their two identity/uniqueness
+// codes belong to this slice, while the classifier-reserved range remains outside this reader.
 mod read;
 
 pub use read::{Diagnostic, Diagnostics};
@@ -162,7 +162,38 @@ pub struct SchemaCapability {
     pub idempotency: Idempotency,
 }
 
-/// One variant of a declared error type; every format-1 payload is `unit`.
+/// The ordered metadata of one named field in a named variant payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaField {
+    /// The field's doc lines, in declaration order.
+    pub docs: Vec<String>,
+    /// The deprecation note, present exactly when the field is deprecated.
+    pub deprecation: Option<String>,
+    /// The field's declared identifier.
+    pub name: String,
+    /// The field's boundary leaf type.
+    pub ty: BoundaryLeaf,
+}
+
+/// A format-1 error-variant payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaPayload {
+    /// A variant with no payload; its wire spelling remains the string `"unit"`.
+    Unit,
+    /// A variant with one unnamed boundary leaf and its metadata.
+    Value {
+        /// The payload's doc lines, in declaration order.
+        docs: Vec<String>,
+        /// The deprecation note, present exactly when the payload is deprecated.
+        deprecation: Option<String>,
+        /// The payload's boundary leaf type.
+        ty: BoundaryLeaf,
+    },
+    /// A variant with ordered named fields; an empty vector remains distinct from [`Self::Unit`].
+    Named(Vec<SchemaField>),
+}
+
+/// One variant of a declared error type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaVariant {
     /// The variant's declared identifier.
@@ -171,6 +202,8 @@ pub struct SchemaVariant {
     pub docs: Vec<String>,
     /// The deprecation note, present exactly when the variant is deprecated.
     pub deprecation: Option<String>,
+    /// The variant's unit, value, or ordered named-field payload.
+    pub payload: SchemaPayload,
 }
 
 /// One declared type of a format-1 schema document; format 1 declares error types only.
@@ -273,7 +306,40 @@ impl SchemaVariant {
             "name": self.name,
             "docs": self.docs,
             "deprecation": deprecation(&self.deprecation),
-            "payload": "unit",
+            "payload": self.payload.value(),
+        })
+    }
+}
+
+impl SchemaPayload {
+    fn value(&self) -> Value {
+        match self {
+            Self::Unit => json!("unit"),
+            Self::Value {
+                docs,
+                deprecation: note,
+                ty,
+            } => json!({
+                "deprecation": deprecation(note),
+                "docs": docs,
+                "kind": "value",
+                "type": ty.canonical_name(),
+            }),
+            Self::Named(fields) => json!({
+                "fields": fields.iter().map(SchemaField::value).collect::<Vec<_>>(),
+                "kind": "named",
+            }),
+        }
+    }
+}
+
+impl SchemaField {
+    fn value(&self) -> Value {
+        json!({
+            "deprecation": deprecation(&self.deprecation),
+            "docs": self.docs,
+            "name": self.name,
+            "type": self.ty.canonical_name(),
         })
     }
 }
@@ -357,6 +423,7 @@ mod tests {
                     name: (*name).to_owned(),
                     docs: Vec::new(),
                     deprecation: None,
+                    payload: SchemaPayload::Unit,
                 })
                 .collect(),
         }
@@ -371,6 +438,58 @@ mod tests {
             revision: REVISION.to_owned(),
             types: vec![error_type("GreetError", &["EmptyName"])],
         }
+    }
+
+    fn mixed_payloads(provenance: Value) -> SchemaDocument {
+        let mut document = hello(provenance);
+        document.box_id = BoxId::new("payloads").unwrap();
+        document.capabilities[0].name = CapabilityName::new("inspect").unwrap();
+        document.capabilities[0].error = "PayloadError".to_owned();
+        document.types[0].name = "PayloadError".to_owned();
+        document.types[0].variants = vec![
+            SchemaVariant {
+                name: "Unit".to_owned(),
+                docs: Vec::new(),
+                deprecation: None,
+                payload: SchemaPayload::Unit,
+            },
+            SchemaVariant {
+                name: "Value".to_owned(),
+                docs: vec!["value variant".to_owned()],
+                deprecation: None,
+                payload: SchemaPayload::Value {
+                    docs: vec!["value payload".to_owned()],
+                    deprecation: Some("use detail".to_owned()),
+                    ty: BoundaryLeaf::U32,
+                },
+            },
+            SchemaVariant {
+                name: "Named".to_owned(),
+                docs: Vec::new(),
+                deprecation: Some("retired".to_owned()),
+                payload: SchemaPayload::Named(vec![
+                    SchemaField {
+                        docs: vec!["message field".to_owned()],
+                        deprecation: None,
+                        name: "message".to_owned(),
+                        ty: BoundaryLeaf::String,
+                    },
+                    SchemaField {
+                        docs: Vec::new(),
+                        deprecation: Some("use text".to_owned()),
+                        name: "code".to_owned(),
+                        ty: BoundaryLeaf::I64,
+                    },
+                ]),
+            },
+            SchemaVariant {
+                name: "EmptyNamed".to_owned(),
+                docs: Vec::new(),
+                deprecation: None,
+                payload: SchemaPayload::Named(Vec::new()),
+            },
+        ];
+        document
     }
 
     /// Two capabilities and two variants, each declared out of alphabetical order, so that any
@@ -464,6 +583,109 @@ mod tests {
 }
 "#;
 
+    const PINNED_MIXED: &[u8] = br#"{
+  "box_id": "payloads",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "PayloadError",
+      "id": "payloads.inspect",
+      "idempotency": "none",
+      "input": {
+        "name": "name",
+        "type": "String"
+      },
+      "max_exposure": "external",
+      "name": "inspect",
+      "output": {
+        "type": "String"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "a": "mixed",
+    "z": {
+      "a": 2,
+      "b": 1
+    }
+  },
+  "revision": "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "PayloadError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Unit",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [
+            "value variant"
+          ],
+          "name": "Value",
+          "payload": {
+            "deprecation": {
+              "note": "use detail"
+            },
+            "docs": [
+              "value payload"
+            ],
+            "kind": "value",
+            "type": "u32"
+          }
+        },
+        {
+          "deprecation": {
+            "note": "retired"
+          },
+          "docs": [],
+          "name": "Named",
+          "payload": {
+            "fields": [
+              {
+                "deprecation": null,
+                "docs": [
+                  "message field"
+                ],
+                "name": "message",
+                "type": "String"
+              },
+              {
+                "deprecation": {
+                  "note": "use text"
+                },
+                "docs": [],
+                "name": "code",
+                "type": "i64"
+              }
+            ],
+            "kind": "named"
+          }
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "EmptyNamed",
+          "payload": {
+            "fields": [],
+            "kind": "named"
+          }
+        }
+      ]
+    }
+  ]
+}
+"#;
+
     #[test]
     fn canonical_bytes_match_the_pinned_hello_document() {
         // Authored in reverse key order: under `preserve-order` that is what `serde_json` would
@@ -475,6 +697,15 @@ mod tests {
             "generator": "boxology-generator",
         });
         assert_eq!(hello(provenance).canonical_bytes(), PINNED_HELLO);
+    }
+
+    #[test]
+    fn mixed_payload_bytes_are_pinned_and_round_trip() {
+        let document = mixed_payloads(json!({"z": {"b": 1, "a": 2}, "a": "mixed"}));
+        let bytes = document.canonical_bytes();
+        assert_eq!(bytes, PINNED_MIXED);
+        assert_eq!(SchemaDocument::parse(&bytes).unwrap(), document);
+        assert_ne!(SchemaPayload::Unit, SchemaPayload::Named(Vec::new()));
     }
 
     /// Every spelling below is emitted verbatim into documents that other builds of this software
