@@ -27,10 +27,10 @@ pub struct ErrorDeclaration {
     pub deprecation: Option<String>,
     /// Ordinary Rust identifier.
     pub name: String,
-    /// Unit variants in declaration order.
+    /// Error variants in declaration order.
     pub variants: Vec<ErrorVariant>,
 }
-/// One controlled unit error variant with decoded metadata and an ordinary name.
+/// One controlled error variant with decoded metadata, an ordinary name, and a payload shape.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ErrorVariant {
     /// Decoded documentation lines in source order.
@@ -39,6 +39,46 @@ pub struct ErrorVariant {
     pub deprecation: Option<String>,
     /// Ordinary Rust identifier.
     pub name: String,
+    /// The variant's unit, one-value, or named-field payload.
+    pub payload: VariantPayload,
+}
+/// The supported payload shape of one controlled error variant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VariantPayload {
+    /// A variant with no payload, such as `Empty`.
+    Unit,
+    /// A variant with exactly one unnamed scalar field, such as `Code(u32)`.
+    Value(VariantValue),
+    /// A variant with zero or more named scalar fields, such as `Detail { message: String }`.
+    Named(Vec<VariantField>),
+}
+impl VariantPayload {
+    /// Returns whether this payload is the distinct unit shape.
+    pub fn is_unit(&self) -> bool {
+        matches!(self, Self::Unit)
+    }
+}
+/// The metadata and canonical scalar type of one unnamed variant field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VariantValue {
+    /// Decoded documentation lines in source order.
+    pub docs: Vec<String>,
+    /// Optional decoded deprecation note.
+    pub deprecation: Option<String>,
+    /// The canonical scalar leaf type.
+    pub ty: CanonicalType,
+}
+/// One named variant field with decoded metadata and a canonical scalar type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VariantField {
+    /// Decoded documentation lines in source order.
+    pub docs: Vec<String>,
+    /// Optional decoded deprecation note.
+    pub deprecation: Option<String>,
+    /// Ordinary Rust identifier in canonical NFC spelling.
+    pub name: String,
+    /// The canonical scalar leaf type.
+    pub ty: CanonicalType,
 }
 /// A controlled unary asynchronous capability and its complete semantic metadata.
 /// All names are ordinary identifiers; raw identifiers are rejected.
@@ -134,9 +174,28 @@ pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
     string(&mut out, &contract.error.name);
     count(&mut out, contract.error.variants.len());
     for variant in &contract.error.variants {
-        out.push(0);
+        out.push(match &variant.payload {
+            VariantPayload::Unit => 0,
+            VariantPayload::Value(_) => 1,
+            VariantPayload::Named(_) => 2,
+        });
         encode_metadata(&mut out, &variant.docs, &variant.deprecation);
         string(&mut out, &variant.name);
+        match &variant.payload {
+            VariantPayload::Unit => {}
+            VariantPayload::Value(value) => {
+                encode_metadata(&mut out, &value.docs, &value.deprecation);
+                string(&mut out, value.ty.canonical_name());
+            }
+            VariantPayload::Named(fields) => {
+                count(&mut out, fields.len());
+                for field in fields {
+                    encode_metadata(&mut out, &field.docs, &field.deprecation);
+                    string(&mut out, &field.name);
+                    string(&mut out, field.ty.canonical_name());
+                }
+            }
+        }
     }
     for capability in &contract.capabilities {
         out.push(2);
@@ -236,25 +295,103 @@ fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclara
         || !item.generics.params.is_empty()
         || item.generics.where_clause.is_some()
         || item.variants.is_empty()
-        || item
-            .variants
-            .iter()
-            .any(|v| !v.fields.is_empty() || v.discriminant.is_some())
     {
         return Err(error(
             item,
-            "#[error] requires a public non-generic enum of bare unit variants",
+            "#[error] requires a public non-generic enum of supported scalar variants",
         ));
+    }
+    if let Some(variant) = item
+        .variants
+        .iter()
+        .find(|variant| variant.discriminant.is_some())
+    {
+        return Err(error(variant, "error variants must not have discriminants"));
     }
     let variants = item
         .variants
         .iter()
         .map(|variant| {
             let (docs, deprecation, _) = metadata(&variant.attrs, "")?;
+            let payload = match &variant.fields {
+                syn::Fields::Unit => VariantPayload::Unit,
+                syn::Fields::Unnamed(fields) => {
+                    if fields.unnamed.len() != 1 {
+                        return Err(error(
+                            variant,
+                            "error variants must have exactly one unnamed field",
+                        ));
+                    }
+                    let field = fields
+                        .unnamed
+                        .first()
+                        .expect("one unnamed field was checked above");
+                    let (docs, deprecation, _) = metadata(&field.attrs, "")?;
+                    if !matches!(field.vis, syn::Visibility::Inherited) {
+                        return Err(error(
+                            &field.vis,
+                            "error variant fields must not have visibility",
+                        ));
+                    }
+                    let ty = leaf(&field.ty).ok_or_else(|| {
+                        error(
+                            &field.ty,
+                            "error variant field type must be a canonical scalar leaf",
+                        )
+                    })?;
+                    VariantPayload::Value(VariantValue {
+                        docs,
+                        deprecation,
+                        ty,
+                    })
+                }
+                syn::Fields::Named(fields) => {
+                    let mut names = BTreeSet::new();
+                    let mut fields_out = Vec::with_capacity(fields.named.len());
+                    for field in &fields.named {
+                        let (docs, deprecation, _) = metadata(&field.attrs, "")?;
+                        if !matches!(field.vis, syn::Visibility::Inherited) {
+                            return Err(error(
+                                &field.vis,
+                                "error variant fields must not have visibility",
+                            ));
+                        }
+                        let name = identifier(
+                            field
+                                .ident
+                                .as_ref()
+                                .expect("syn named fields always have identifiers"),
+                        )?;
+                        if !names.insert(name.clone()) {
+                            return Err(error(
+                                field
+                                    .ident
+                                    .as_ref()
+                                    .expect("syn named fields always have identifiers"),
+                                "error variant field names must be unique",
+                            ));
+                        }
+                        let ty = leaf(&field.ty).ok_or_else(|| {
+                            error(
+                                &field.ty,
+                                "error variant field type must be a canonical scalar leaf",
+                            )
+                        })?;
+                        fields_out.push(VariantField {
+                            docs,
+                            deprecation,
+                            name,
+                            ty,
+                        });
+                    }
+                    VariantPayload::Named(fields_out)
+                }
+            };
             Ok(ErrorVariant {
                 docs,
                 deprecation,
                 name: identifier(&variant.ident)?,
+                payload,
             })
         })
         .collect::<syn::Result<Vec<_>>>()?;
@@ -825,6 +962,184 @@ mod tests {
         let mut reversed = ordered.clone();
         reversed.error.variants.swap(0, 1);
         assert_ne!(semantic_digest(&ordered), semantic_digest(&reversed));
+    }
+
+    #[test]
+    fn payload_variants_preserve_full_ordered_model_and_literal_semantics() {
+        const MIXED: &str = r#"#[doc = "failure"] #[deprecated(note = "old")] #[error]
+            pub enum Fault {
+                #[doc = "unit"] Unit,
+                #[doc = "code"] #[deprecated(note = "obsolete")] Code(
+                    #[doc = "value"] #[deprecated] u32
+                ),
+                Detail {
+                    #[doc = "message field"] message: String,
+                    #[deprecated(note = "later")] retryable: bool,
+                },
+                Empty {},
+            }
+            #[capability(exposure = external)]
+            pub async fn greet(name: String) -> Result<String, Fault>;"#;
+        const MIXED_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000201000000000000000100000000000000076661696c7572650100000000000000036f6c6400000000000000054661756c7400000000000000040000000000000000010000000000000004756e6974000000000000000004556e69740100000000000000010000000000000004636f64650100000000000000086f62736f6c6574650000000000000004436f64650000000000000001000000000000000576616c7565010000000000000000000000000000000375333202000000000000000000000000000000000644657461696c00000000000000020000000000000001000000000000000d6d657373616765206669656c640000000000000000076d6573736167650000000000000006537472696e6700000000000000000100000000000000056c617465720000000000000009726574727961626c650000000000000004626f6f6c020000000000000000000000000000000005456d7074790000000000000000020000000000000000000000000000000005677265657400000000000000046e616d650000000000000006537472696e670000000000000006537472696e6700000000000000054661756c74000000000000000865787465726e616c00000000000000046e6f6e65";
+        const MIXED_DIGEST: &str =
+            "a662d7d8c096a3ce1690588651ff05b516e6f4fef68b29bf320cf6b413980b6a";
+        let contract = parse(MIXED.parse().unwrap()).unwrap();
+        assert!(contract.error.variants[0].payload.is_unit());
+        assert!(matches!(
+            &contract.error.variants[1].payload,
+            VariantPayload::Value(VariantValue { docs, deprecation, ty: CanonicalType::U32 })
+                if docs == &["value"] && deprecation.as_deref() == Some("")
+        ));
+        assert!(matches!(
+            &contract.error.variants[2].payload,
+            VariantPayload::Named(fields)
+                if fields.iter().map(|field| field.name.as_str()).collect::<Vec<_>>()
+                    == ["message", "retryable"]
+                    && fields[0].docs == ["message field"]
+                    && fields[0].ty == CanonicalType::String
+                    && fields[1].deprecation.as_deref() == Some("later")
+                    && fields[1].ty == CanonicalType::Bool
+        ));
+        assert!(matches!(
+            &contract.error.variants[3].payload,
+            VariantPayload::Named(fields) if fields.is_empty()
+        ));
+        assert!(!contract.error.variants[3].payload.is_unit());
+        assert_eq!(hex(&canonical_semantic_bytes(&contract)), MIXED_BYTES);
+        assert_eq!(hex(&semantic_digest(&contract)), MIXED_DIGEST);
+
+        for changed in [
+            MIXED.replace("Empty {},", "Empty,"),
+            MIXED.replace("retryable: bool", "retry_later: bool"),
+            MIXED.replace("retryable: bool", "retryable: u8"),
+            MIXED.replace("#[doc = \"message field\"] ", ""),
+            MIXED.replace("#[deprecated(note = \"later\")] retryable", "retryable"),
+            MIXED.replace("#[doc = \"value\"] ", ""),
+            MIXED.replace("#[doc = \"value\"] #[deprecated] u32", "#[doc = \"value\"] u32"),
+            MIXED.replace("message: String,\n                    #[deprecated(note = \"later\")] retryable: bool", "#[deprecated(note = \"later\")] retryable: bool,\n                    message: String"),
+        ] {
+            let changed = parse(changed.parse().unwrap()).unwrap();
+            assert_ne!(semantic_digest(&contract), semantic_digest(&changed));
+        }
+    }
+
+    #[test]
+    fn every_scalar_leaf_is_accepted_in_value_and_named_payloads() {
+        let leaves = [
+            "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "String",
+            "Blob",
+        ];
+        let variants = leaves
+            .iter()
+            .enumerate()
+            .map(|(index, leaf)| format!("Value{index}({leaf}), Named{index} {{ field: {leaf} }},"))
+            .collect::<String>();
+        let source = format!(
+            "#[error] pub enum Fault {{ {variants} }} {CAP}",
+            CAP = CAP.replace("GreetError", "Fault")
+        );
+        let contract = parse(source.parse().unwrap()).unwrap();
+        for (index, leaf) in leaves.iter().enumerate() {
+            let expected = match *leaf {
+                "bool" => CanonicalType::Bool,
+                "u8" => CanonicalType::U8,
+                "u16" => CanonicalType::U16,
+                "u32" => CanonicalType::U32,
+                "u64" => CanonicalType::U64,
+                "i8" => CanonicalType::I8,
+                "i16" => CanonicalType::I16,
+                "i32" => CanonicalType::I32,
+                "i64" => CanonicalType::I64,
+                "f32" => CanonicalType::F32,
+                "f64" => CanonicalType::F64,
+                "String" => CanonicalType::String,
+                "Blob" => CanonicalType::Blob,
+                _ => unreachable!(),
+            };
+            assert!(matches!(
+                contract.error.variants[index * 2].payload,
+                VariantPayload::Value(VariantValue { ty, .. }) if ty == expected
+            ));
+            assert!(matches!(
+                contract.error.variants[index * 2 + 1].payload,
+                VariantPayload::Named(ref fields) if fields[0].ty == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn payload_rejections_have_precise_spans_and_metadata_is_fail_closed() {
+        let rejected = [
+            (
+                "Code(u32, bool)",
+                "error variants must have exactly one unnamed field",
+                "Code(u32, bool)",
+            ),
+            (
+                "Unit = 1",
+                "error variants must not have discriminants",
+                "Unit = 1",
+            ),
+            (
+                "Code(pub u32)",
+                "error variant fields must not have visibility",
+                "pub",
+            ),
+            (
+                "Code(Vec<u8>)",
+                "error variant field type must be a canonical scalar leaf",
+                "Vec<u8>",
+            ),
+            (
+                "Code(crate::u32)",
+                "error variant field type must be a canonical scalar leaf",
+                "crate::u32",
+            ),
+            (
+                "Code(&u32)",
+                "error variant field type must be a canonical scalar leaf",
+                "&u32",
+            ),
+            (
+                "Code(Vec::<u32>)",
+                "error variant field type must be a canonical scalar leaf",
+                "Vec::<u32>",
+            ),
+            (
+                "Code((u32, bool))",
+                "error variant field type must be a canonical scalar leaf",
+                "(u32, bool)",
+            ),
+            (
+                "Detail { message: Vec<u8> }",
+                "error variant field type must be a canonical scalar leaf",
+                "Vec<u8>",
+            ),
+            (
+                "Detail { Café: u8, Cafe\u{301}: u16 }",
+                "error variant field names must be unique",
+                "Cafe\u{301}",
+            ),
+            (
+                "Detail { #[serde] message: String }",
+                "unknown contract metadata",
+                "#[serde]",
+            ),
+            (
+                "Detail { #[deprecated] #[deprecated] message: String }",
+                "duplicate deprecated attribute",
+                "#[deprecated]",
+            ),
+        ];
+        for (variant, message, slice) in rejected {
+            let source = format!(
+                "#[error] pub enum Fault {{ {variant} }} {CAP}",
+                CAP = CAP.replace("GreetError", "Fault")
+            );
+            let error = parse(source.parse().unwrap()).unwrap_err();
+            assert_eq!(error.to_string(), message, "{variant}");
+            assert_eq!(&source[error.span().byte_range()], slice, "{variant}");
+        }
     }
 
     fn hex(bytes: &[u8]) -> String {

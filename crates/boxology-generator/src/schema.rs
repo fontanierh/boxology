@@ -291,7 +291,7 @@ fn count(out: &mut Vec<u8>, value: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxology_contract_syntax::{ErrorDeclaration, ErrorVariant};
+    use boxology_contract_syntax::{ErrorDeclaration, ErrorVariant, VariantPayload};
 
     /// Pins all thirteen arms of the parsed-leaf to schema-leaf translation by naming the pairs.
     /// Only five leaves reach a document in any other test, so a transposed arm on the other eight
@@ -365,11 +365,13 @@ mod tests {
                         docs: vec!["No such key.".to_owned()],
                         deprecation: None,
                         name: "Missing".to_owned(),
+                        payload: VariantPayload::Unit,
                     },
                     ErrorVariant {
                         docs: Vec::new(),
                         deprecation: Some(String::new()),
                         name: "Denied".to_owned(),
+                        payload: VariantPayload::Unit,
                     },
                 ],
             },

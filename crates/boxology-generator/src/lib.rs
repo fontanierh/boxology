@@ -2291,6 +2291,33 @@ macro_rules! __boxology_check_implementation {
     }
 
     #[test]
+    fn payload_variants_fail_before_schema_revision_or_emission() {
+        let payload = CONTRACT.replace("EmptyName", "Code(u32)");
+        let diagnostics = generate(&request(&payload, false, OUTPUTS.to_vec())).unwrap_err();
+        assert_eq!(
+            diagnostics.to_string(),
+            "BXG0048 src/lib.rs:1:11-1:19 offending=\"payload-bearing error variants are not yet emittable\" rule=\"payload-bearing error variants require coordinated schema and contract-emitter support\" source=\"specs/s2-contract-generator.md D3\""
+        );
+
+        let mixed = payload.replace("name:String", "name:Blob");
+        let diagnostics = generate(&request(&mixed, false, OUTPUTS.to_vec())).unwrap_err();
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(|diagnostic| diagnostic.code())
+                .collect::<Vec<_>>(),
+            ["BXG0040", "BXG0048"]
+        );
+        assert!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .all(|diagnostic| diagnostic.span() == diagnostics.as_slice()[0].span())
+        );
+    }
+
+    #[test]
     fn semantic_change_updates_rust_name_and_digest_marker() {
         let changed = CONTRACT.replace("EmptyName", "MissingName");
         let before = tree(CONTRACT, false);
