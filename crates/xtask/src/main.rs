@@ -19,6 +19,7 @@ mod generated_project_subject;
 mod generator_model_subject;
 mod links;
 mod records;
+mod skill_audit;
 mod workspace_subject;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
@@ -62,10 +63,20 @@ const EDITOR_CHECK_ARGS: &[&str] = &[
 ];
 const SURFACE_LOCK_TEST_ARGS: &[&str] =
     &["test", "-p", "boxology-workspace", "--test", "surface_lock"];
+type SkillCommand = (&'static str, fn(&Path) -> u8);
+const SKILL_COMMANDS: &[SkillCommand] = &[("skill-audit", skill_audit::run)];
+const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
-    let code = match args.as_slice() {
+    ExitCode::from(dispatch(&args, &root()))
+}
+
+fn dispatch(args: &[String], audit_root: &Path) -> u8 {
+    if let Some(code) = registered_skill_command(args, audit_root) {
+        return code;
+    }
+    match args {
         [command, flag] if command == "ci" && flag == "--no-budget" => run_ci(None),
         [command, flag, base]
             if command == "ci"
@@ -151,13 +162,12 @@ fn main() -> ExitCode {
             usage();
             2
         }
-    };
-    ExitCode::from(code)
+    }
 }
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -175,6 +185,10 @@ fn run_ci(base: Option<&str>) -> u8 {
     println!("toolchain: PASS");
 
     let mut checks = vec![
+        (
+            "audit",
+            timed("audit", || registered_ci_skill_audits(&root())),
+        ),
         ("fmt", timed("fmt", run_fmt)),
         ("editor", timed("editor", run_editor)),
         (
@@ -236,6 +250,22 @@ fn run_ci(base: Option<&str>) -> u8 {
         eprintln!("summary: FAIL ({})", failed.join(", "));
         1
     }
+}
+
+// Production control-plane anchors; protected review must prevent their test-only displacement.
+fn registered_skill_command(args: &[String], root: &Path) -> Option<u8> {
+    let [command] = args else { return None };
+    SKILL_COMMANDS
+        .iter()
+        .find_map(|(name, run)| (*name == command).then(|| run(root)))
+}
+
+fn registered_ci_skill_audits(root: &Path) -> bool {
+    !CI_SKILL_AUDITS.is_empty() && CI_SKILL_AUDITS.iter().all(|audit| audit(root))
+}
+
+fn run_skill_audit_ci(audit_root: &Path) -> bool {
+    skill_audit::run(audit_root) == 0
 }
 
 fn timed<T>(name: &str, check: impl FnOnce() -> T) -> T {
