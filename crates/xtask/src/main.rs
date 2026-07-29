@@ -15,6 +15,7 @@ mod determinism_meta;
 mod determinism_publish;
 mod determinism_run;
 mod determinism_verify;
+mod external_test;
 mod generated_project_subject;
 mod generator_model_subject;
 mod links;
@@ -62,8 +63,14 @@ const EDITOR_CHECK_ARGS: &[&str] = &[
     "--no-test",
     EDITOR_FIXTURE,
 ];
-const SURFACE_LOCK_TEST_ARGS: &[&str] =
-    &["test", "-p", "boxology-workspace", "--test", "surface_lock"];
+const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
+    package: "boxology-workspace",
+    target: "surface_lock",
+    manifest: "crates/boxology-workspace/Cargo.toml",
+    source: "crates/boxology-workspace/tests/surface_lock.rs",
+    default_source: "tests/surface_lock.rs",
+    tests: &["surface_and_live_evasions_are_locked"],
+};
 type SkillCommand = (&'static str, fn(&Path) -> u8);
 const SKILL_COMMANDS: &[SkillCommand] = &[("skill-audit", skill_audit::run)];
 const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
@@ -214,7 +221,11 @@ fn run_ci(base: Option<&str>) -> u8 {
         ),
         (
             "surface-lock",
-            timed("surface-lock", || run_cargo(SURFACE_LOCK_TEST_ARGS)),
+            timed("surface-lock", || {
+                external_test::run_with_cargo(&root(), &SURFACE_LOCK_SPEC, |args| {
+                    external_test::cargo(&root(), args)
+                })
+            }),
         ),
         ("key-order", timed("key-order", run_key_order)),
         ("doc", timed("doc", run_doc)),
@@ -565,13 +576,36 @@ mod tests {
     fn surface_lock_registration_is_live_and_deletion_is_red() {
         let source = include_str!("main.rs");
         assert_eq!(
-            SURFACE_LOCK_TEST_ARGS,
-            &["test", "-p", "boxology-workspace", "--test", "surface_lock"]
+            SURFACE_LOCK_SPEC,
+            external_test::ExternalTestSpec {
+                package: "boxology-workspace",
+                target: "surface_lock",
+                manifest: "crates/boxology-workspace/Cargo.toml",
+                source: "crates/boxology-workspace/tests/surface_lock.rs",
+                default_source: "tests/surface_lock.rs",
+                tests: &["surface_and_live_evasions_are_locked"],
+            }
         );
-        let registration = "        (\n            \"surface-lock\",\n            timed(\"surface-lock\", || run_cargo(SURFACE_LOCK_TEST_ARGS)),\n        ),";
-        assert_eq!(run_ci_body(source).match_indices(registration).count(), 1);
+        let registration = "        (\n            \"surface-lock\",\n            timed(\"surface-lock\", || {\n                external_test::run_with_cargo(&root(), &SURFACE_LOCK_SPEC, |args| {\n                    external_test::cargo(&root(), args)\n                })\n            }),\n        ),";
+        let body = run_ci_body(source);
+        assert_eq!(body.match_indices(registration).count(), 1);
         let deleted = replace_once(source, registration);
         assert_eq!(run_ci_body(&deleted).match_indices(registration).count(), 0);
+        let duplicated =
+            source.replacen(registration, &format!("{registration}\n{registration}"), 1);
+        assert_eq!(
+            run_ci_body(&duplicated).match_indices(registration).count(),
+            2
+        );
+        let bypass = registration.replace(
+            "external_test::run_with_cargo(&root(), &SURFACE_LOCK_SPEC, |args| {\n                    external_test::cargo(&root(), args)\n                })",
+            "run_cargo(&[\"test\", \"-p\", \"boxology-workspace\", \"--test\", \"surface_lock\"])",
+        );
+        let bypassed = source.replacen(registration, &bypass, 1);
+        assert_eq!(
+            run_ci_body(&bypassed).match_indices(registration).count(),
+            0
+        );
     }
 
     #[test]
