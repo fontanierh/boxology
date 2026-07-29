@@ -208,32 +208,6 @@ fn http_response(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn composed_hello_box_answers_typed_client_over_real_http() {
-    let (composition, binding) = serve_generated_hello();
-    let address = binding.local_addr().unwrap();
-    let target = HttpClientTarget::new(
-        HttpClientConfig::new(format!("http://{address}")).unwrap(),
-        [hello_greet()],
-    )
-    .unwrap();
-    let context = CallContext::new(
-        Caller::Anonymous,
-        None,
-        CancelToken::new(),
-        TraceContext::empty(),
-        None,
-    );
-
-    let greeting = HelloHandle::from_erased(Arc::new(target))
-        .greet(context, "Ada".into())
-        .await;
-    assert_eq!(greeting.unwrap(), "Hello, Ada!");
-
-    composition.shutdown(Duration::from_secs(1)).await.unwrap();
-    assert!(TcpStream::connect(address).await.is_err());
-}
-
-#[tokio::test]
 async fn raw_hello_request_gets_canonical_bytes() {
     let (composition, binding) = serve_generated_hello();
     let address = binding.local_addr().unwrap();
