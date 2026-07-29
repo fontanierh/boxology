@@ -2,7 +2,7 @@
 
 use crate::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SCHEMA_FORMAT, SchemaCapability,
-    SchemaDocument, SchemaType, SchemaVariant, Shape,
+    SchemaDocument, SchemaField, SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
 use boxology_contract::{
     BoxId, CapabilityName, ExposureLevel, Idempotency, canonicalize_ordinary_rust_identifier,
@@ -185,6 +185,10 @@ const OUTPUT_KEYS: &[&str] = &["type"];
 const TYPE_KEYS: &[&str] = &["kind", "name", "docs", "deprecation", "variants"];
 const VARIANT_KEYS: &[&str] = &["name", "docs", "deprecation", "payload"];
 const DEPRECATION_KEYS: &[&str] = &["note"];
+const VALUE_PAYLOAD_KEYS: &[&str] = &["deprecation", "docs", "kind", "type"];
+const NAMED_PAYLOAD_KEYS: &[&str] = &["fields", "kind"];
+const PAYLOAD_KEYS: &[&str] = &["deprecation", "docs", "fields", "kind", "type"];
+const FIELD_KEYS: &[&str] = &["deprecation", "docs", "name", "type"];
 
 #[rustfmt::skip]
 impl SchemaDocument {
@@ -346,16 +350,96 @@ impl Reader {
             }
             let docs = self.docs(value, "docs", &item_at);
             let deprecation = self.deprecation(value, "deprecation", &item_at);
-            let payload = self.exact(value, "payload", "unit", "BXC0022", &item_at, ());
-            if let (Some(name), Some(docs), Some(deprecation), Some(())) = (name, docs, deprecation, payload) {
+            let payload = self.payload(value, &item_at);
+            if let (Some(name), Some(docs), Some(deprecation), Some(payload)) =
+                (name, docs, deprecation, payload)
+            {
                 variants.push(SchemaVariant {
                     name,
                     docs,
                     deprecation,
+                    payload,
                 });
             }
         }
         Some(variants)
+    }
+    fn payload(&mut self, object: &Map<String, Value>, at: &Location) -> Option<SchemaPayload> {
+        let value = self.field(object, "payload", at)?;
+        let payload_at = at.key("payload");
+        match value {
+            Value::String(value) if value == "unit" => Some(SchemaPayload::Unit),
+            Value::Object(value) => self.payload_object(value, &payload_at),
+            _ => {
+                self.push("BXC0022", payload_at);
+                None
+            }
+        }
+    }
+    fn payload_object(
+        &mut self,
+        object: &Map<String, Value>,
+        at: &Location,
+    ) -> Option<SchemaPayload> {
+        match self.string_field(object, "kind", at) {
+            Some("value") => {
+                self.unknown(object, VALUE_PAYLOAD_KEYS, at);
+                let docs = self.docs(object, "docs", at);
+                let deprecation = self.deprecation(object, "deprecation", at);
+                let ty = self.leaf(object, at);
+                match (docs, deprecation, ty) {
+                    (Some(docs), Some(deprecation), Some(ty)) => {
+                        Some(SchemaPayload::Value { docs, deprecation, ty })
+                    }
+                    _ => None,
+                }
+            }
+            Some("named") => {
+                self.unknown(object, NAMED_PAYLOAD_KEYS, at);
+                self.named_fields(object, at).map(SchemaPayload::Named)
+            }
+            Some(_) => {
+                self.unknown(object, PAYLOAD_KEYS, at);
+                self.push("BXC0022", at.key("kind"));
+                None
+            }
+            None => None,
+        }
+    }
+    fn named_fields(
+        &mut self,
+        object: &Map<String, Value>,
+        at: &Location,
+    ) -> Option<Vec<SchemaField>> {
+        let values = self.array_field(object, "fields", at)?;
+        let fields_at = at.key("fields");
+        let mut fields = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (index, value) in values.iter().enumerate() {
+            let item_at = fields_at.index(index);
+            let Some(value) = self.object_value(value, item_at.clone()) else {
+                continue;
+            };
+            self.unknown(value, FIELD_KEYS, &item_at);
+            let name = self.identifier(value, "name", "BXC0029", &item_at);
+            if let Some(name) = name.as_ref() && !seen.insert(name.clone()) {
+                self.push("BXC0030", item_at.key("name"));
+            }
+            let docs = self.docs(value, "docs", &item_at);
+            let deprecation = self.deprecation(value, "deprecation", &item_at);
+            let ty = self.leaf(value, &item_at);
+            if let (Some(name), Some(docs), Some(deprecation), Some(ty)) =
+                (name, docs, deprecation, ty)
+            {
+                fields.push(SchemaField {
+                    docs,
+                    deprecation,
+                    name,
+                    ty,
+                });
+            }
+        }
+        Some(fields)
     }
     fn capabilities(&mut self, root: &Map<String, Value>, at: &Location, box_id: Option<&BoxId>, type_names: Option<&[String]>) -> Option<Vec<SchemaCapability>> {
         let values = self.array_field(root, "capabilities", at)?;
@@ -485,8 +569,10 @@ fn rule_of(code: Code) -> Code {
         "BXC0019" => "a boundary type must be one of format 1's canonical leaves",
         "BXC0020" => "format 1's only capability shape is unary",
         "BXC0021" => "format 1 declares error types only",
-        "BXC0022" => "format 1's only variant payload is unit",
+        "BXC0022" => "format 1's variant payload must be unit, value, or named",
         "BXC0023" => "a capability error must name a declared type",
+        "BXC0029" => "a named payload field name must be an ordinary non-raw Rust identifier",
+        "BXC0030" => "named payload field names must be unique",
         "BXC0024" => "classification requires a base or a submitted document",
         "BXC0025" => "base and submitted must declare the same box id",
         _ => "a schema document must satisfy format 1",
@@ -499,10 +585,14 @@ fn rule_of(code: Code) -> Code {
 /// BXC0010-BXC0014 D4's identity namespaces, BXC0015-BXC0023 D3's grammar — where the uniqueness
 /// rules are actually written (D4 states none) and the only text reaching an input parameter name.
 /// BXC0024-BXC0025 are D2's classifier pairing errors; the classifier owns their reachability.
+/// BXC0029 is S2 D4's named-field identity rule and BXC0030 is S2 D3's named-field uniqueness
+/// rule. BXC0026-BXC0028 are reserved for classifier findings and have no rule-text arms here.
 fn source_of(code: Code) -> Code {
     match code {
         "BXC0024" | "BXC0025" => CLASSIFICATION,
         "BXC0009" => FINGERPRINT,
+        "BXC0029" => IDENTITY,
+        "BXC0030" => GRAMMAR,
         _ if ("BXC0010"..="BXC0014").contains(&code) => IDENTITY,
         _ if ("BXC0015"..="BXC0023").contains(&code) => GRAMMAR,
         _ => READER,
@@ -563,6 +653,21 @@ mod tests {
         assert_eq!(diagnostics.into_vec().len(), 1);
     }
 
+    fn value_payload(value: &mut Value) -> &mut Value {
+        let payload = &mut value["types"][0]["variants"][0]["payload"];
+        *payload = json!({"deprecation": null, "docs": [], "kind": "value", "type": "String"});
+        payload
+    }
+
+    fn named_field(value: &mut Value) -> &mut Value {
+        let payload = &mut value["types"][0]["variants"][0]["payload"];
+        *payload = json!({"fields": [{"deprecation": null, "docs": [], "name": "field", "type": "String"}], "kind": "named"});
+        &mut payload["fields"][0]
+    }
+
+    const PAYLOAD: &str = "/types/0/variants/0/payload";
+    const FIELD: &str = "/types/0/variants/0/payload/fields/0";
+
     fn assert_one_bytes(value: &[u8], code: Code, location: &str) {
         let diagnostics = SchemaDocument::parse(value).expect_err("invalid test bytes");
         assert_eq!(
@@ -581,8 +686,22 @@ mod tests {
         "BXC0001", "BXC0002", "BXC0003", "BXC0004", "BXC0005", "BXC0006", "BXC0007", "BXC0008",
         "BXC0009", "BXC0010", "BXC0011", "BXC0012", "BXC0013", "BXC0014", "BXC0015", "BXC0016",
         "BXC0017", "BXC0018", "BXC0019", "BXC0020", "BXC0021", "BXC0022", "BXC0023", "BXC0024",
-        "BXC0025",
+        "BXC0025", "BXC0029", "BXC0030",
     ];
+
+    /// Codes this reader can emit from document bytes. The pairing constructors BXC0024–BXC0025
+    /// are classifier inputs, so their reachability is proved by the classifier surface lock.
+    const READER_CODES: &[Code] = &[
+        "BXC0001", "BXC0002", "BXC0003", "BXC0004", "BXC0005", "BXC0006", "BXC0007", "BXC0008",
+        "BXC0009", "BXC0010", "BXC0011", "BXC0012", "BXC0013", "BXC0014", "BXC0015", "BXC0016",
+        "BXC0017", "BXC0018", "BXC0019", "BXC0020", "BXC0021", "BXC0022", "BXC0023", "BXC0029",
+        "BXC0030",
+    ];
+
+    /// Codes emitted by the classifier rather than this reader. They occupy the allocated range
+    /// without duplicating the classifier's finding text or pretending a reader corpus can reach
+    /// them.
+    const CLASSIFIER_RESERVED_CODES: &[Code] = &["BXC0026", "BXC0027", "BXC0028"];
 
     /// The unregistered code that probes the table's fallback, and the only quoted `BXC` literal in
     /// this crate that is not a registered code. The scan below subtracts exactly it.
@@ -612,10 +731,12 @@ BXC0018 variant names must be unique within their type specs/s2-contract-generat
 BXC0019 a boundary type must be one of format 1's canonical leaves specs/s2-contract-generator.md D3
 BXC0020 format 1's only capability shape is unary specs/s2-contract-generator.md D3
 BXC0021 format 1 declares error types only specs/s2-contract-generator.md D3
-BXC0022 format 1's only variant payload is unit specs/s2-contract-generator.md D3
+BXC0022 format 1's variant payload must be unit, value, or named specs/s2-contract-generator.md D3
 BXC0023 a capability error must name a declared type specs/s2-contract-generator.md D3
 BXC0024 classification requires a base or a submitted document specs/s4-contract-change-classification.md D2
 BXC0025 base and submitted must declare the same box id specs/s4-contract-change-classification.md D2
+BXC0029 a named payload field name must be an ordinary non-raw Rust identifier specs/s2-contract-generator.md D4
+BXC0030 named payload field names must be unique specs/s2-contract-generator.md D3
 ";
 
     #[test]
@@ -651,7 +772,13 @@ BXC0025 base and submitted must declare the same box id specs/s4-contract-change
             }
         }
         seen.sort_unstable();
-        assert_eq!(seen, ALL_CODES);
+        let mut allocated = ALL_CODES
+            .iter()
+            .chain(CLASSIFIER_RESERVED_CODES)
+            .copied()
+            .collect::<Vec<_>>();
+        allocated.sort_unstable();
+        assert_eq!(seen, allocated);
         let read = include_str!("read.rs");
         let source_of = read.split_once("fn source_of").unwrap().1;
         let source_of = source_of.split_once("#[cfg(test)]").unwrap().0;
@@ -662,11 +789,18 @@ BXC0025 base and submitted must declare the same box id specs/s4-contract-change
             anchors.clone().count(),
             anchors.collect::<BTreeSet<_>>().len(),
         );
-        assert_eq!((all, unique), (7, 7), "source_of anchors must be unique");
-        // Dense from BXC0001: ascending alone would let a gap open unnoticed.
+        assert_eq!((all, unique), (9, 9), "source_of anchors must be unique");
+        // Dense from BXC0001, with the classifier's reserved range represented explicitly rather
+        // than assigned reader rule text. An ascending reader-only list would miss this gap.
         let spell = |n| format!("BX{}{n:04}", 'C');
-        let dense: Vec<String> = (1..=ALL_CODES.len()).map(spell).collect();
-        assert_eq!(dense, ALL_CODES);
+        let dense: Vec<String> = (1..=30).map(spell).collect();
+        assert_eq!(
+            allocated
+                .iter()
+                .map(|code| (*code).to_owned())
+                .collect::<Vec<_>>(),
+            dense
+        );
     }
 
     #[test]
@@ -777,6 +911,8 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
         ("BXC0021", "/types/0/kind"),
         ("BXC0022", "/types/0/variants/0/payload"),
         ("BXC0023", "/capabilities/0/error"),
+        ("BXC0029", "/types/0/variants/0/payload/fields/0/name"),
+        ("BXC0030", "/types/0/variants/0/payload/fields/1/name"),
     ];
 
     fn corpus_bytes(code: Code) -> Vec<u8> {
@@ -829,6 +965,26 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
                     "BXC0021" => value["types"][0]["kind"] = json!("struct"),
                     "BXC0022" => value["types"][0]["variants"][0]["payload"] = json!("value"),
                     "BXC0023" => value["capabilities"][0]["error"] = json!("MissingError"),
+                    "BXC0029" => {
+                        value["types"][0]["variants"][0]["payload"] = json!({
+                            "fields": [{
+                                "deprecation": null,
+                                "docs": [],
+                                "name": "type",
+                                "type": "String"
+                            }],
+                            "kind": "named"
+                        });
+                    }
+                    "BXC0030" => {
+                        value["types"][0]["variants"][0]["payload"] = json!({
+                            "fields": [
+                                {"deprecation": null, "docs": [], "name": "field", "type": "String"},
+                                {"deprecation": null, "docs": [], "name": "field", "type": "String"}
+                            ],
+                            "kind": "named"
+                        });
+                    }
                     _ => unreachable!("the reader corpus has no unregistered code"),
                 }
                 bytes(&value)
@@ -839,7 +995,7 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
     #[test]
     fn corpus_covers_every_code() {
         let covered: Vec<&str> = CORPUS.iter().map(|(code, _)| *code).collect();
-        assert_eq!(covered.as_slice(), &ALL_CODES[..23]);
+        assert_eq!(covered.as_slice(), READER_CODES);
         let valid = SchemaDocument::parse(&bytes(&baseline())).expect("corpus baseline");
         assert_eq!((valid.capabilities.len(), valid.types.len()), (1, 1));
         assert_eq!(valid.box_id.as_str(), "hello");
@@ -852,6 +1008,118 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
         for &(code, location) in CORPUS {
             assert_one_bytes(&corpus_bytes(code), code, location);
         }
+    }
+
+    #[test]
+    fn payload_vocabulary_parses_to_the_exact_ordered_models() {
+        let mut value = baseline();
+        value["types"][0]["variants"][0]["payload"] = json!({
+            "deprecation": {"note": "use detail"},
+            "docs": ["payload docs"],
+            "kind": "value",
+            "type": "u32"
+        });
+        let parsed = SchemaDocument::parse(&bytes(&value)).expect("value payload");
+        assert_eq!(
+            parsed.types[0].variants[0].payload,
+            SchemaPayload::Value {
+                docs: vec!["payload docs".to_owned()],
+                deprecation: Some("use detail".to_owned()),
+                ty: BoundaryLeaf::U32,
+            }
+        );
+
+        value["types"][0]["variants"][0]["payload"] = json!({
+            "fields": [
+                {"deprecation": null, "docs": ["first"], "name": "first", "type": "String"},
+                {"deprecation": {"note": "retired"}, "docs": [], "name": "second", "type": "i64"}
+            ],
+            "kind": "named"
+        });
+        let parsed = SchemaDocument::parse(&bytes(&value)).expect("named payload");
+        assert_eq!(
+            parsed.types[0].variants[0].payload,
+            SchemaPayload::Named(vec![
+                SchemaField {
+                    docs: vec!["first".to_owned()],
+                    deprecation: None,
+                    name: "first".to_owned(),
+                    ty: BoundaryLeaf::String,
+                },
+                SchemaField {
+                    docs: Vec::new(),
+                    deprecation: Some("retired".to_owned()),
+                    name: "second".to_owned(),
+                    ty: BoundaryLeaf::I64,
+                },
+            ])
+        );
+
+        value["types"][0]["variants"][0]["payload"] = json!({
+            "fields": [],
+            "kind": "named"
+        });
+        let parsed = SchemaDocument::parse(&bytes(&value)).expect("empty named payload");
+        assert_eq!(
+            parsed.types[0].variants[0].payload,
+            SchemaPayload::Named(Vec::new())
+        );
+    }
+
+    #[test]
+    fn payload_fields_are_strict_one_at_a_time() {
+        // (named field, key, missing, invalid leaf, expected code)
+        let cases = [
+            (false, "type", true, false, "BXC0004"),
+            (false, "type", false, false, "BXC0005"),
+            (false, "type", false, true, "BXC0019"),
+            (false, "docs", false, false, "BXC0005"),
+            (false, "deprecation", false, false, "BXC0005"),
+            (false, "extra", false, false, "BXC0003"),
+            (true, "type", true, false, "BXC0004"),
+            (true, "type", false, false, "BXC0005"),
+            (true, "type", false, true, "BXC0019"),
+            (true, "docs", false, false, "BXC0005"),
+            (true, "deprecation", false, false, "BXC0005"),
+            (true, "extra", false, false, "BXC0003"),
+        ];
+        for &(named, key, missing, invalid, code) in &cases {
+            let mut value = baseline();
+            let target = if named {
+                named_field(&mut value)
+            } else {
+                value_payload(&mut value)
+            };
+            if missing {
+                target.as_object_mut().unwrap().remove(key);
+            } else {
+                target[key] = if invalid { json!("Never") } else { json!(true) };
+            }
+            let base = if named { FIELD } else { PAYLOAD };
+            let location = if missing {
+                base.to_owned()
+            } else {
+                format!("{base}/{key}")
+            };
+            assert_one(value, code, &location);
+        }
+    }
+
+    #[test]
+    fn named_field_names_are_nfc_unique() {
+        let mut value = baseline();
+        value["types"][0]["variants"][0]["payload"] = json!({
+            "fields": [
+                {"deprecation": null, "docs": [], "name": "e\u{301}", "type": "String"},
+                {"deprecation": null, "docs": [], "name": "é", "type": "String"}
+            ],
+            "kind": "named"
+        });
+        assert_one(
+            value,
+            "BXC0030",
+            "/types/0/variants/0/payload/fields/1/name",
+        );
     }
 
     #[test]

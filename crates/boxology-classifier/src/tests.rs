@@ -1,8 +1,8 @@
 use super::*;
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaType,
-    SchemaVariant, Shape,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
+    SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
 use serde_json::json;
 
@@ -37,9 +37,36 @@ fn document(box_id: &str) -> SchemaDocument {
                 name: "EmptyName".to_owned(),
                 docs: vec!["The name was empty.".to_owned()],
                 deprecation: None,
+                payload: SchemaPayload::Unit,
             }],
         }],
     }
+}
+
+fn named_document() -> SchemaDocument {
+    let mut document = document("hello");
+    document.types[0].variants[0].payload = SchemaPayload::Named(vec![
+        SchemaField {
+            docs: Vec::new(),
+            deprecation: None,
+            name: "first".to_owned(),
+            ty: BoundaryLeaf::String,
+        },
+        SchemaField {
+            docs: Vec::new(),
+            deprecation: None,
+            name: "second".to_owned(),
+            ty: BoundaryLeaf::I64,
+        },
+    ]);
+    document
+}
+
+fn named_fields(document: &mut SchemaDocument) -> &mut [SchemaField] {
+    let SchemaPayload::Named(fields) = &mut document.types[0].variants[0].payload else {
+        unreachable!("named payload")
+    };
+    fields
 }
 
 fn assert_unclassified_pair(base: SchemaDocument, submitted: SchemaDocument) {
@@ -165,10 +192,19 @@ fn every_effectively_mutable_comparable_field_fails_closed() {
         },
         |document| document.types[0].variants[0].deprecation = Some("retired".to_owned()),
         |document| {
+            document.types[0].variants[0].payload = SchemaPayload::Value {
+                docs: Vec::new(),
+                deprecation: None,
+                ty: BoundaryLeaf::String,
+            }
+        },
+        |document| document.types[0].variants[0].payload = SchemaPayload::Named(Vec::new()),
+        |document| {
             document.types[0].variants.push(SchemaVariant {
                 name: "Other".to_owned(),
                 docs: Vec::new(),
                 deprecation: None,
+                payload: SchemaPayload::Unit,
             })
         },
     ];
@@ -178,6 +214,23 @@ fn every_effectively_mutable_comparable_field_fails_closed() {
         assert_unclassified_pair(document("hello"), submitted);
     }
     // Shape has only `Unary` in the current format-1 vocabulary, so it has no effective mutation.
+}
+
+#[test]
+fn named_payload_fields_fail_closed() {
+    let mutations: &[fn(&mut SchemaDocument)] = &[
+        |document| named_fields(document)[0].docs.push("new docs".to_owned()),
+        |document| named_fields(document)[0].deprecation = Some("retired".to_owned()),
+        |document| named_fields(document)[0].name = "renamed".to_owned(),
+        |document| named_fields(document)[0].ty = BoundaryLeaf::Bool,
+        |document| named_fields(document).swap(0, 1),
+    ];
+    for mutate in mutations {
+        let base = named_document();
+        let mut submitted = base.clone();
+        mutate(&mut submitted);
+        assert_unclassified_pair(base, submitted);
+    }
 }
 
 #[test]

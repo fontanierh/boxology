@@ -1,8 +1,8 @@
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_contract_syntax::{CanonicalType, CapabilityDeclaration, Contract};
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaType,
-    SchemaVariant, Shape,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument,
+    SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -54,6 +54,7 @@ pub(super) fn document(
                     name: variant.name.clone(),
                     docs: variant.docs.clone(),
                     deprecation: variant.deprecation.clone(),
+                    payload: SchemaPayload::Unit,
                 })
                 .collect(),
         }],
@@ -420,11 +421,13 @@ mod tests {
                         name: "Missing".to_owned(),
                         docs: vec!["No such key.".to_owned()],
                         deprecation: None,
+                        payload: SchemaPayload::Unit,
                     },
                     SchemaVariant {
                         name: "Denied".to_owned(),
                         docs: Vec::new(),
                         deprecation: Some(String::new()),
+                        payload: SchemaPayload::Unit,
                     },
                 ],
             }],

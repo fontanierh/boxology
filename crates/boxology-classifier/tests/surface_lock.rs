@@ -1,8 +1,8 @@
 use boxology_classifier::classify;
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaType,
-    SchemaVariant, Shape,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument,
+    SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
 use serde_json::json;
 use std::fs;
@@ -68,6 +68,7 @@ fn document(box_id: &str) -> SchemaDocument {
                 name: "EmptyName".to_owned(),
                 docs: Vec::new(),
                 deprecation: None,
+                payload: SchemaPayload::Unit,
             }],
         }],
     }
