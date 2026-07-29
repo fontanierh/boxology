@@ -13,4 +13,4 @@ boxology-http = { version = "=0.0.0", path = "../boxology-http", default-feature
 boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime" }
 hello-contract = { version = "=0.0.0", path = "../fixtures/hello/generated/contract" }
 hello-implementation = { version = "=0.0.0", path = "../fixtures/hello/implementation" }
-tokio = { version = "=1.53.0", default-features = false, features = ["macros", "net", "rt", "time"] }
+tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }
