@@ -1,0 +1,16 @@
+[package]
+name = "boxology-http-conformance"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
+boxology-http = { version = "=0.0.0", path = "../boxology-http", default-features = false, features = ["client", "server"] }
+boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime" }
+hello-contract = { version = "=0.0.0", path = "../fixtures/hello/generated/contract" }
+hello-implementation = { version = "=0.0.0", path = "../fixtures/hello/implementation" }
+tokio = { version = "=1.53.0", default-features = false, features = ["macros", "net", "rt", "time"] }

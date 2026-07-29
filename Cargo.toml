@@ -15,6 +15,7 @@ members = [
     "crates/boxology-workspace",
     "crates/boxology-cli",
     "crates/boxology-http",
+    "crates/boxology-http-conformance",
     "crates/boxology-runtime",
     "crates/boxology-telegram",
     "crates/fixtures/fixture-tests",

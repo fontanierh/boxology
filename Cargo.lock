@@ -86,10 +86,10 @@ dependencies = [
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",
+ "boxology-http",
  "boxology-runtime",
  "greeter-contract",
  "greeter-implementation",
- "boxology-http",
  "hello-contract",
  "hello-implementation",
  "serde_json",
@@ -151,6 +151,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "boxology-http-conformance"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+ "boxology-http",
+ "boxology-runtime",
+ "hello-contract",
+ "hello-implementation",
+ "tokio",
 ]
 
 [[package]]
