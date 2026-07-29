@@ -49,6 +49,9 @@ const CONTROLLED_PARSE_RULE: &str = "contract tokens must satisfy the controlled
 const CONTROLLED_PARSE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
 const EMITTABLE_RULE: &str = "the `Blob` capability boundary leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.";
 const EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3,D5";
+const PAYLOAD_EMITTABLE_RULE: &str =
+    "payload-bearing error variants require coordinated schema and contract-emitter support";
+const PAYLOAD_EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
 pub struct ParsedRustInputs {
@@ -130,32 +133,55 @@ impl ControlledContract {
         semantic_digest: &[u8; 32] = &self.semantic_digest;
     }
 
-    /// Fails closed only when a `Blob` boundary leaf is parsed and modelled but not yet emittable in v0.
+    /// Fails closed when parsed semantics are not yet supported by the v0 emitter.
     ///
     /// Scalar leaves and `String` are emittable and pass; the plain parse path still returns the full
-    /// `Blob` model so later tasks can consume it, and this guard exists so that honest parsing does
-    /// not silently emit a wrong `Blob` artifact before its runtime encoding lands. Contracts holding
-    /// any number of capabilities are emittable; the guard checks every capability's boundary leaves.
+    /// `Blob` and payload-bearing models so later tasks can consume them, while this guard prevents
+    /// honest parsing from silently emitting unsupported artifacts. Contracts holding any number of
+    /// capabilities are emittable; the guard checks every capability's boundary leaves.
     ///
     /// # Errors
-    /// Returns `BXG0040` at the contract-invocation span when ANY capability's boundary leaf is `Blob`.
+    /// Returns at most one `BXG0040` for a `Blob` capability boundary and at most one `BXG0048`
+    /// for any payload-bearing error variant, both at the contract-invocation span.
     pub fn require_v0_emittable(&self) -> Result<(), Diagnostics> {
-        if self
+        let has_blob_boundary =
+            self.model.capabilities.iter().any(|capability| {
+                capability.input_type.is_blob() || capability.output_type.is_blob()
+            });
+        let has_payload = self
             .model
-            .capabilities
+            .error
+            .variants
             .iter()
-            .all(|capability| !capability.input_type.is_blob() && !capability.output_type.is_blob())
-        {
-            return Ok(());
+            .any(|variant| !variant.payload.is_unit());
+        let mut diagnostics = Vec::new();
+        if has_blob_boundary {
+            diagnostics.push(Diagnostic {
+                path: self.source.clone(),
+                span: self.span,
+                code: "BXG0040",
+                offending: "Blob capability boundary leaf not yet emittable in v0".into(),
+                rule: EMITTABLE_RULE,
+                rule_source: EMITTABLE_RULE_SOURCE,
+            });
         }
-        Err(Diagnostics(vec![Diagnostic {
-            path: self.source.clone(),
-            span: self.span,
-            code: "BXG0040",
-            offending: "Blob capability boundary leaf not yet emittable in v0".into(),
-            rule: EMITTABLE_RULE,
-            rule_source: EMITTABLE_RULE_SOURCE,
-        }]))
+        if has_payload {
+            diagnostics.push(Diagnostic {
+                path: self.source.clone(),
+                span: self.span,
+                code: "BXG0048",
+                offending: "payload-bearing error variants are not yet emittable".into(),
+                rule: PAYLOAD_EMITTABLE_RULE,
+                rule_source: PAYLOAD_EMITTABLE_RULE_SOURCE,
+            });
+        }
+        if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            diagnostics.sort();
+            diagnostics.dedup();
+            Err(Diagnostics(diagnostics))
+        }
     }
 }
 impl<'ast> CapabilityDeclaration<'ast> {
@@ -2283,6 +2309,56 @@ mod tests {
             .validate_capability_identities()
             .err()
             .expect("expected capability identity diagnostics")
+    }
+
+    #[test]
+    fn payloads_are_modelled_but_v0_emittability_is_deterministic_and_fail_closed() {
+        let source = "boxology::contract! { #[error] pub enum Fault { Code(u32), Detail { message: String } } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        let model = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)]))
+            .unwrap()
+            .controlled_contract()
+            .unwrap();
+        let diagnostics = model.require_v0_emittable().unwrap_err();
+        assert_eq!(
+            diagnostics.to_string(),
+            "BXG0048 root.rs:1:11-1:19 offending=\"payload-bearing error variants are not yet emittable\" rule=\"payload-bearing error variants require coordinated schema and contract-emitter support\" source=\"specs/s2-contract-generator.md D3\""
+        );
+
+        let blob = source.replace("name:String", "name:Blob");
+        let blob = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &blob)]))
+            .unwrap()
+            .controlled_contract()
+            .unwrap();
+        let diagnostics = blob.require_v0_emittable().unwrap_err();
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(|diagnostic| diagnostic.code())
+                .collect::<Vec<_>>(),
+            ["BXG0040", "BXG0048"]
+        );
+
+        let payload_blob = source.replace("message: String", "message: Blob");
+        let payload_blob =
+            ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &payload_blob)]))
+                .unwrap()
+                .controlled_contract()
+                .unwrap();
+        let diagnostics = payload_blob.require_v0_emittable().unwrap_err();
+        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0048");
+        let invalid = source.replace("message: String", "message: Vec<u8>");
+        let diagnostics = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &invalid)]))
+            .unwrap()
+            .controlled_contract()
+            .err()
+            .expect("payload syntax must fail through the controlled parser");
+        let diagnostic = &diagnostics.as_slice()[0];
+        assert_eq!(diagnostic.code(), "BXG0038");
+        assert_eq!(
+            &invalid[diagnostic.span().start().column() - 1..diagnostic.span().end().column() - 1],
+            "Vec<u8>"
+        );
     }
 
     fn assert_metadata_error(attributes: &str, code: &str, expected_span: &str) {
