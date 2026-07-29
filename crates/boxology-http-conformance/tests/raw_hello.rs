@@ -34,133 +34,19 @@ const METHOD_NOT_ALLOWED_BODY: &[u8] =
     br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Authority {
-    S3D4RoutingCanonicality,
-    S3D5StableWireCodes,
+enum SpecParagraph {
+    S3D3CanonicalResponseEncoding,
+    S3D4RoutingAndIdentifierCanonicality,
+    S3D5StableWireErrorCodes,
     S3D6MethodTable,
-    S3D7PipelineOrder,
+    S3D7RequestProcessingPipeline,
     RuntimeInvocationStatusTable,
-    RuntimeStableCodeParagraph,
+    RuntimeStableWireCodes,
 }
 
-impl Authority {
-    const ALL: [Self; 6] = [
-        Self::S3D4RoutingCanonicality,
-        Self::S3D5StableWireCodes,
-        Self::S3D6MethodTable,
-        Self::S3D7PipelineOrder,
-        Self::RuntimeInvocationStatusTable,
-        Self::RuntimeStableCodeParagraph,
-    ];
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Rule {
-    ExactSuccess,
-    UnknownBox,
-    UnknownCapability,
-    PercentEncodedBox,
-    PercentEncodedCapability,
-    UppercasePrefix,
-    UppercaseBox,
-    UppercaseCapability,
-    TrailingSlash,
-    Query,
-    GetMethod,
-    OptionsMethod,
-    UnknownRouteWrongMethod,
-    QueryWrongMethod,
-}
-
-impl Rule {
-    const ALL: [Self; 14] = [
-        Self::ExactSuccess,
-        Self::UnknownBox,
-        Self::UnknownCapability,
-        Self::PercentEncodedBox,
-        Self::PercentEncodedCapability,
-        Self::UppercasePrefix,
-        Self::UppercaseBox,
-        Self::UppercaseCapability,
-        Self::TrailingSlash,
-        Self::Query,
-        Self::GetMethod,
-        Self::OptionsMethod,
-        Self::UnknownRouteWrongMethod,
-        Self::QueryWrongMethod,
-    ];
-
-    fn authorities(self) -> &'static [Authority] {
-        use Authority::{
-            RuntimeInvocationStatusTable as RuntimeStatus,
-            RuntimeStableCodeParagraph as RuntimeCode, S3D4RoutingCanonicality as D4,
-            S3D5StableWireCodes as D5, S3D6MethodTable as D6, S3D7PipelineOrder as D7,
-        };
-        match self {
-            Self::ExactSuccess => &[D4],
-            Self::UnknownBox
-            | Self::UnknownCapability
-            | Self::PercentEncodedBox
-            | Self::PercentEncodedCapability
-            | Self::UppercasePrefix
-            | Self::UppercaseBox
-            | Self::UppercaseCapability
-            | Self::TrailingSlash
-            | Self::Query => &[D4, D5, RuntimeStatus, RuntimeCode],
-            Self::GetMethod | Self::OptionsMethod => &[D5, D6, RuntimeStatus, RuntimeCode],
-            Self::UnknownRouteWrongMethod => &[D4, D5, D7, RuntimeStatus, RuntimeCode],
-            Self::QueryWrongMethod => &[D4, D5, D6, D7, RuntimeStatus, RuntimeCode],
-        }
-    }
-
-    fn request(self) -> RequestShape {
-        match self {
-            Self::ExactSuccess => RequestShape::new("POST", "/rpc/hello/greet"),
-            Self::UnknownBox => RequestShape::new("POST", "/rpc/ghost/greet"),
-            Self::UnknownCapability => RequestShape::new("POST", "/rpc/hello/ghost"),
-            Self::PercentEncodedBox => RequestShape::new("POST", "/rpc/hell%6F/greet"),
-            Self::PercentEncodedCapability => RequestShape::new("POST", "/rpc/hello/gree%74"),
-            Self::UppercasePrefix => RequestShape::new("POST", "/RPC/hello/greet"),
-            Self::UppercaseBox => RequestShape::new("POST", "/rpc/Hello/greet"),
-            Self::UppercaseCapability => RequestShape::new("POST", "/rpc/hello/Greet"),
-            Self::TrailingSlash => RequestShape::new("POST", "/rpc/hello/greet/"),
-            Self::Query => RequestShape::new("POST", "/rpc/hello/greet?probe=1"),
-            Self::GetMethod => RequestShape::new("GET", "/rpc/hello/greet"),
-            Self::OptionsMethod => RequestShape::new("OPTIONS", "/rpc/hello/greet"),
-            Self::UnknownRouteWrongMethod => RequestShape::new("GET", "/rpc/ghost/greet"),
-            Self::QueryWrongMethod => RequestShape::new("GET", "/rpc/hello/greet?probe=1"),
-        }
-    }
-
-    fn expected(self) -> ExpectedResponse {
-        match self {
-            Self::ExactSuccess => SUCCESS,
-            Self::UnknownBox
-            | Self::PercentEncodedBox
-            | Self::UppercasePrefix
-            | Self::UppercaseBox
-            | Self::UnknownRouteWrongMethod => UNKNOWN_BOX,
-            Self::UnknownCapability
-            | Self::PercentEncodedCapability
-            | Self::UppercaseCapability
-            | Self::TrailingSlash => UNKNOWN_CAPABILITY,
-            Self::Query | Self::QueryWrongMethod => INVALID_REQUEST,
-            Self::GetMethod | Self::OptionsMethod => METHOD_NOT_ALLOWED,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct RequestShape {
-    method: &'static str,
-    target: &'static str,
-}
-
-impl RequestShape {
-    const fn new(method: &'static str, target: &'static str) -> Self {
-        Self { method, target }
-    }
-}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RequestShape(&'static str, &'static str);
+// ORACLE independently expands each shape into complete raw request bytes.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExpectedResponse {
@@ -172,98 +58,163 @@ struct ExpectedResponse {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RawCase {
-    rule: Rule,
+    id: &'static str,
     request: RequestShape,
+    authority: &'static [SpecParagraph],
+    expected: ExpectedResponse,
 }
 
-const SUCCESS: ExpectedResponse = ExpectedResponse {
-    status_line: b"HTTP/1.1 200 OK",
-    body: SUCCESS_BODY,
-    allow: None,
-    dispatches: 1,
+impl RawCase {
+    const fn new(
+        id: &'static str,
+        request: RequestShape,
+        authority: &'static [SpecParagraph],
+        expected: ExpectedResponse,
+    ) -> Self {
+        Self {
+            id,
+            request,
+            authority,
+            expected,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OracleRow {
+    rule: &'static str,
+    authority: &'static [SpecParagraph],
+    request: &'static [u8],
+    expected: ExpectedResponse,
+}
+
+const fn expected(
+    status_line: &'static [u8],
+    body: &'static [u8],
+    allow: Option<&'static [u8]>,
+    dispatches: usize,
+) -> ExpectedResponse {
+    ExpectedResponse {
+        status_line,
+        body,
+        allow,
+        dispatches,
+    }
+}
+
+const SUCCESS: ExpectedResponse = expected(b"HTTP/1.1 200 OK", SUCCESS_BODY, None, 1);
+const UNKNOWN_BOX: ExpectedResponse =
+    expected(b"HTTP/1.1 404 Not Found", UNKNOWN_BOX_BODY, None, 0);
+const UNKNOWN_CAPABILITY: ExpectedResponse =
+    expected(b"HTTP/1.1 404 Not Found", UNKNOWN_CAPABILITY_BODY, None, 0);
+const INVALID_REQUEST: ExpectedResponse =
+    expected(b"HTTP/1.1 400 Bad Request", INVALID_REQUEST_BODY, None, 0);
+const METHOD_NOT_ALLOWED: ExpectedResponse = expected(
+    b"HTTP/1.1 405 Method Not Allowed",
+    METHOD_NOT_ALLOWED_BODY,
+    Some(b"POST"),
+    0,
+);
+
+use SpecParagraph::{
+    RuntimeInvocationStatusTable as STATUS, RuntimeStableWireCodes as CODES,
+    S3D3CanonicalResponseEncoding as D3, S3D4RoutingAndIdentifierCanonicality as D4,
+    S3D5StableWireErrorCodes as D5, S3D6MethodTable as D6, S3D7RequestProcessingPipeline as D7,
 };
-const UNKNOWN_BOX: ExpectedResponse = ExpectedResponse {
-    status_line: b"HTTP/1.1 404 Not Found",
-    body: UNKNOWN_BOX_BODY,
-    allow: None,
-    dispatches: 0,
-};
-const UNKNOWN_CAPABILITY: ExpectedResponse = ExpectedResponse {
-    status_line: b"HTTP/1.1 404 Not Found",
-    body: UNKNOWN_CAPABILITY_BODY,
-    allow: None,
-    dispatches: 0,
-};
-const INVALID_REQUEST: ExpectedResponse = ExpectedResponse {
-    status_line: b"HTTP/1.1 400 Bad Request",
-    body: INVALID_REQUEST_BODY,
-    allow: None,
-    dispatches: 0,
-};
-const METHOD_NOT_ALLOWED: ExpectedResponse = ExpectedResponse {
-    status_line: b"HTTP/1.1 405 Method Not Allowed",
-    body: METHOD_NOT_ALLOWED_BODY,
-    allow: Some(b"POST"),
-    dispatches: 0,
-};
+const SUCCESS_AUTHORITY: &[SpecParagraph] = &[D3, D4];
+const ROUTING_AUTHORITY: &[SpecParagraph] = &[D3, D4, D5, STATUS, CODES];
+const METHOD_AUTHORITY: &[SpecParagraph] = &[D3, D5, D6, STATUS, CODES];
+const ROUTE_PIPELINE_AUTHORITY: &[SpecParagraph] = &[D3, D4, D5, D7, STATUS, CODES];
+const QUERY_PIPELINE_AUTHORITY: &[SpecParagraph] = &[D3, D4, D5, D6, D7, STATUS, CODES];
+const SA: &[SpecParagraph] = SUCCESS_AUTHORITY;
+const RA: &[SpecParagraph] = ROUTING_AUTHORITY;
+const MA: &[SpecParagraph] = METHOD_AUTHORITY;
+const PA: &[SpecParagraph] = ROUTE_PIPELINE_AUTHORITY;
+const QA: &[SpecParagraph] = QUERY_PIPELINE_AUTHORITY;
+const SU: ExpectedResponse = SUCCESS;
+const BX: ExpectedResponse = UNKNOWN_BOX;
+const CAP: ExpectedResponse = UNKNOWN_CAPABILITY;
+const BAD: ExpectedResponse = INVALID_REQUEST;
+const NA: ExpectedResponse = METHOD_NOT_ALLOWED;
+
+const EXACT_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/greet");
+const UNKNOWN_BOX_REQUEST: RequestShape = RequestShape("POST", "/rpc/ghost/greet");
+const UNKNOWN_CAPABILITY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/ghost");
+const ESCAPED_BOX_REQUEST: RequestShape = RequestShape("POST", "/rpc/hell%6F/greet");
+const ESCAPED_CAPABILITY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/gree%74");
+const UPPERCASE_PREFIX_REQUEST: RequestShape = RequestShape("POST", "/RPC/hello/greet");
+const UPPERCASE_BOX_REQUEST: RequestShape = RequestShape("POST", "/rpc/Hello/greet");
+const UPPERCASE_CAPABILITY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/Greet");
+const TRAILING_SLASH_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/greet/");
+const QUERY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/greet?probe=1");
+const GET_REQUEST: RequestShape = RequestShape("GET", "/rpc/hello/greet");
+const OPTIONS_REQUEST: RequestShape = RequestShape("OPTIONS", "/rpc/hello/greet");
+const UNKNOWN_ROUTE_GET_REQUEST: RequestShape = RequestShape("GET", "/rpc/ghost/greet");
+const QUERY_GET_REQUEST: RequestShape = RequestShape("GET", "/rpc/hello/greet?probe=1");
 
 const RAW_CASES: [RawCase; 14] = [
-    RawCase {
-        rule: Rule::ExactSuccess,
-        request: RequestShape::new("POST", "/rpc/hello/greet"),
-    },
-    RawCase {
-        rule: Rule::UnknownBox,
-        request: RequestShape::new("POST", "/rpc/ghost/greet"),
-    },
-    RawCase {
-        rule: Rule::UnknownCapability,
-        request: RequestShape::new("POST", "/rpc/hello/ghost"),
-    },
-    RawCase {
-        rule: Rule::PercentEncodedBox,
-        request: RequestShape::new("POST", "/rpc/hell%6F/greet"),
-    },
-    RawCase {
-        rule: Rule::PercentEncodedCapability,
-        request: RequestShape::new("POST", "/rpc/hello/gree%74"),
-    },
-    RawCase {
-        rule: Rule::UppercasePrefix,
-        request: RequestShape::new("POST", "/RPC/hello/greet"),
-    },
-    RawCase {
-        rule: Rule::UppercaseBox,
-        request: RequestShape::new("POST", "/rpc/Hello/greet"),
-    },
-    RawCase {
-        rule: Rule::UppercaseCapability,
-        request: RequestShape::new("POST", "/rpc/hello/Greet"),
-    },
-    RawCase {
-        rule: Rule::TrailingSlash,
-        request: RequestShape::new("POST", "/rpc/hello/greet/"),
-    },
-    RawCase {
-        rule: Rule::Query,
-        request: RequestShape::new("POST", "/rpc/hello/greet?probe=1"),
-    },
-    RawCase {
-        rule: Rule::GetMethod,
-        request: RequestShape::new("GET", "/rpc/hello/greet"),
-    },
-    RawCase {
-        rule: Rule::OptionsMethod,
-        request: RequestShape::new("OPTIONS", "/rpc/hello/greet"),
-    },
-    RawCase {
-        rule: Rule::UnknownRouteWrongMethod,
-        request: RequestShape::new("GET", "/rpc/ghost/greet"),
-    },
-    RawCase {
-        rule: Rule::QueryWrongMethod,
-        request: RequestShape::new("GET", "/rpc/hello/greet?probe=1"),
-    },
+    RawCase::new("exact-success", EXACT_REQUEST, SA, SU),
+    RawCase::new("unknown-box", UNKNOWN_BOX_REQUEST, RA, BX),
+    RawCase::new("unknown-capability", UNKNOWN_CAPABILITY_REQUEST, RA, CAP),
+    RawCase::new("percent-encoded-box", ESCAPED_BOX_REQUEST, RA, BX),
+    RawCase::new(
+        "percent-encoded-capability",
+        ESCAPED_CAPABILITY_REQUEST,
+        RA,
+        CAP,
+    ),
+    RawCase::new("uppercase-prefix", UPPERCASE_PREFIX_REQUEST, RA, BX),
+    RawCase::new("uppercase-box", UPPERCASE_BOX_REQUEST, RA, BX),
+    RawCase::new(
+        "uppercase-capability",
+        UPPERCASE_CAPABILITY_REQUEST,
+        RA,
+        CAP,
+    ),
+    RawCase::new("trailing-slash", TRAILING_SLASH_REQUEST, RA, CAP),
+    RawCase::new("query-string", QUERY_REQUEST, QA, BAD),
+    RawCase::new("get-method", GET_REQUEST, MA, NA),
+    RawCase::new("options-method", OPTIONS_REQUEST, MA, NA),
+    RawCase::new(
+        "unknown-route-wrong-method",
+        UNKNOWN_ROUTE_GET_REQUEST,
+        PA,
+        BX,
+    ),
+    RawCase::new("query-wrong-method", QUERY_GET_REQUEST, QA, BAD),
+];
+
+const fn oracle(
+    rule: &'static str,
+    authority: &'static [SpecParagraph],
+    request: &'static [u8],
+    expected: ExpectedResponse,
+) -> OracleRow {
+    OracleRow {
+        rule,
+        authority,
+        request,
+        expected,
+    }
+}
+
+// Independently pinned: do not derive this oracle from RAW_CASES, its request renderer, or its
+// response constants. Every row carries exact raw bytes, outcome, dispatch count, and authority.
+const ORACLE: [OracleRow; 14] = [
+    oracle("exact-success", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 200 OK", br#"{"result":{"value":"Hello, Ada!"}}"#, None, 1)),
+    oracle("unknown-box", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/ghost/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, None, 0)),
+    oracle("unknown-capability", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/ghost HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#, None, 0)),
+    oracle("percent-encoded-box", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hell%6F/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, None, 0)),
+    oracle("percent-encoded-capability", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/gree%74 HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#, None, 0)),
+    oracle("uppercase-prefix", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /RPC/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, None, 0)),
+    oracle("uppercase-box", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/Hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, None, 0)),
+    oracle("uppercase-capability", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/Greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#, None, 0)),
+    oracle("trailing-slash", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet/ HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#, None, 0)),
+    oracle("query-string", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet?probe=1 HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, None, 0)),
+    oracle("get-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"GET /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, Some(b"POST"), 0)),
+    oracle("options-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"OPTIONS /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, Some(b"POST"), 0)),
+    oracle("unknown-route-wrong-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"GET /rpc/ghost/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, None, 0)),
+    oracle("query-wrong-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"GET /rpc/hello/greet?probe=1 HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", expected(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, None, 0)),
 ];
 
 struct CountingHello {
@@ -283,7 +234,7 @@ impl HelloDispatch for CountingHello {
 
 #[tokio::test]
 async fn raw_hello_routing_method_query_cases_are_canonical() {
-    traceability_gate(&RAW_CASES);
+    traceability_gate(&RAW_CASES, &ORACLE);
     for case in RAW_CASES {
         let dispatches = Arc::new(AtomicUsize::new(0));
         let running = RunningHello::start(CountingHello {
@@ -291,17 +242,16 @@ async fn raw_hello_routing_method_query_cases_are_canonical() {
         });
         let address = running.local_addr();
         let request = render_request(case.request);
-        let expected = case.rule.expected();
 
         running
             .assert_then_shutdown(async move {
                 let response = raw_exchange(address, &request).await;
-                assert_response(&response, expected);
+                assert_response(&response, case.expected);
                 assert_eq!(
                     dispatches.load(Ordering::SeqCst),
-                    expected.dispatches,
-                    "{:?} dispatch count",
-                    case.rule
+                    case.expected.dispatches,
+                    "{} dispatch count",
+                    case.id
                 );
             })
             .await;
@@ -309,82 +259,144 @@ async fn raw_hello_routing_method_query_cases_are_canonical() {
 }
 
 #[test]
-fn raw_hello_traceability_is_family_scoped_and_mutations_are_active() {
-    traceability_gate(&RAW_CASES);
-}
-
-fn traceability_gate(cases: &[RawCase]) {
-    let expected_rules: BTreeSet<_> = Rule::ALL.into_iter().collect();
-    let expected_authorities: BTreeSet<_> = Authority::ALL.into_iter().collect();
-    let mut mapped_rules = BTreeSet::new();
-    let mut mapped_authorities = BTreeSet::new();
-
-    for case in cases {
-        assert!(
-            mapped_rules.insert(case.rule),
-            "duplicate raw Hello rule: {:?}",
-            case.rule
-        );
-        assert!(
-            !case.rule.authorities().is_empty(),
-            "{:?} has no S3/Runtime authority",
-            case.rule
-        );
-        mapped_authorities.extend(case.rule.authorities().iter().copied());
-        assert!(
-            request_matches(case.rule, case.request),
-            "{:?} request weakened to {:?}",
-            case.rule,
-            case.request
-        );
-    }
-
-    assert_eq!(
-        mapped_rules, expected_rules,
-        "raw Hello rules are incomplete"
-    );
-    assert_eq!(
-        mapped_authorities, expected_authorities,
-        "raw Hello authority coverage drifted"
-    );
+fn raw_hello_traceability_is_independent_and_complete() {
+    traceability_gate(&RAW_CASES, &ORACLE);
 }
 
 #[test]
-fn exact_request_predicates_reject_semantically_weaker_mutants() {
-    let mutants = [
-        (Rule::PercentEncodedBox, Rule::UnknownBox.request()),
-        (
-            Rule::PercentEncodedCapability,
-            Rule::UnknownCapability.request(),
-        ),
-        (Rule::UppercasePrefix, Rule::UnknownBox.request()),
-        (Rule::UppercaseBox, Rule::UnknownBox.request()),
-        (Rule::UppercaseCapability, Rule::UnknownCapability.request()),
-        (Rule::TrailingSlash, Rule::UnknownCapability.request()),
-        (Rule::Query, Rule::ExactSuccess.request()),
-        (Rule::GetMethod, Rule::ExactSuccess.request()),
-        (Rule::OptionsMethod, Rule::GetMethod.request()),
-        (Rule::UnknownRouteWrongMethod, Rule::UnknownBox.request()),
-        (Rule::QueryWrongMethod, Rule::Query.request()),
+fn traceability_semantic_drift_mutants_are_active() {
+    let mut deleted_case = RAW_CASES.to_vec();
+    deleted_case.pop();
+    assert_traceability_rejects(&deleted_case, &ORACLE, "rule deletion");
+
+    let mut duplicated_case = RAW_CASES.to_vec();
+    duplicated_case[1].id = duplicated_case[0].id;
+    assert_traceability_rejects(&duplicated_case, &ORACLE, "rule duplication");
+
+    let mut percent_escape_drift = RAW_CASES.to_vec();
+    percent_escape_drift[3].request = RequestShape("POST", "/rpc/ghost/greet");
+    assert_traceability_rejects(
+        &percent_escape_drift,
+        &ORACLE,
+        "percent escape became unknown route",
+    );
+
+    let mut status_drift = RAW_CASES.to_vec();
+    status_drift[0].expected.status_line = b"HTTP/1.1 201 Created";
+    assert_traceability_rejects(&status_drift, &ORACLE, "status drift");
+
+    let mut body_drift = RAW_CASES.to_vec();
+    body_drift[0].expected.body = br#"{"result":{"value":"Hello, Grace!"}}"#;
+    assert_traceability_rejects(&body_drift, &ORACLE, "body drift");
+
+    let mut allow_drift = RAW_CASES.to_vec();
+    allow_drift[0].expected.allow = Some(b"POST");
+    assert_traceability_rejects(&allow_drift, &ORACLE, "allow drift");
+
+    let mut dispatch_drift = RAW_CASES.to_vec();
+    dispatch_drift[0].expected.dispatches = 0;
+    assert_traceability_rejects(&dispatch_drift, &ORACLE, "dispatch-count drift");
+
+    let mut deleted_authority = RAW_CASES.to_vec();
+    deleted_authority[0].authority = &[SpecParagraph::S3D4RoutingAndIdentifierCanonicality];
+    assert_traceability_rejects(&deleted_authority, &ORACLE, "authority deletion");
+
+    let mut duplicated_authority = RAW_CASES.to_vec();
+    duplicated_authority[0].authority = &[
+        SpecParagraph::S3D3CanonicalResponseEncoding,
+        SpecParagraph::S3D3CanonicalResponseEncoding,
+        SpecParagraph::S3D4RoutingAndIdentifierCanonicality,
     ];
-    for (rule, mutant) in mutants {
-        assert!(
-            !request_matches(rule, mutant),
-            "{rule:?} accepted {mutant:?}"
-        );
+    assert_traceability_rejects(&duplicated_authority, &ORACLE, "authority duplication");
+}
+
+fn assert_traceability_rejects(cases: &[RawCase], oracle: &[OracleRow], mutant: &str) {
+    assert!(
+        traceability_check(cases, oracle).is_err(),
+        "{mutant} mutation stayed green"
+    );
+}
+
+fn traceability_gate(cases: &[RawCase], oracle: &[OracleRow]) {
+    if let Err(error) = traceability_check(cases, oracle) {
+        panic!("{error}");
     }
 }
 
-fn request_matches(rule: Rule, request: RequestShape) -> bool {
-    request == rule.request()
+fn traceability_check(cases: &[RawCase], oracle: &[OracleRow]) -> Result<(), String> {
+    if cases.len() != 14 {
+        return Err(format!(
+            "raw Hello table has {} rows, expected 14",
+            cases.len()
+        ));
+    }
+    if oracle.len() != 14 {
+        return Err(format!(
+            "independent oracle has {} rows, expected 14",
+            oracle.len()
+        ));
+    }
+
+    let mut case_rules = BTreeSet::new();
+    for case in cases {
+        if case.id.is_empty() || !case_rules.insert(case.id) {
+            return Err(format!("raw rule is empty or duplicated: {}", case.id));
+        }
+        validate_authority(case.id, case.authority)?;
+    }
+
+    let mut oracle_rules = BTreeSet::new();
+    for row in oracle {
+        if row.rule.is_empty() || !oracle_rules.insert(row.rule) {
+            return Err(format!("oracle rule is empty or duplicated: {}", row.rule));
+        }
+        validate_authority(row.rule, row.authority)?;
+    }
+
+    for (index, (case, golden)) in cases.iter().zip(oracle).enumerate() {
+        if case.id != golden.rule {
+            return Err(format!(
+                "row {index} rule drift: {} != {}",
+                case.id, golden.rule
+            ));
+        }
+        if case.authority != golden.authority {
+            return Err(format!("row {index} authority drift: {}", case.id));
+        }
+        let request = render_request(case.request);
+        if request.as_slice() != golden.request {
+            return Err(format!("row {index} raw request drift: {}", case.id));
+        }
+        if case.expected != golden.expected {
+            return Err(format!(
+                "row {index} response or outcome drift: {}",
+                case.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_authority(rule: &str, authority: &[SpecParagraph]) -> Result<(), String> {
+    if authority.is_empty() {
+        return Err(format!("{rule} has no authority"));
+    }
+    if !authority.contains(&SpecParagraph::S3D3CanonicalResponseEncoding) {
+        return Err(format!("{rule} omits S3 D3 response authority"));
+    }
+    let mut unique = BTreeSet::new();
+    if authority.iter().any(|paragraph| !unique.insert(*paragraph)) {
+        return Err(format!("{rule} repeats an authority"));
+    }
+    Ok(())
 }
 
 fn render_request(request: RequestShape) -> Vec<u8> {
     let mut request = format!(
         "{} {} HTTP/1.1\r\nHost: boxology\r\n\
          Content-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
-        request.method,
-        request.target,
+        request.0,
+        request.1,
         REQUEST_BODY.len()
     )
     .into_bytes();
@@ -454,20 +466,13 @@ fn assert_response(raw: &[u8], expected: ExpectedResponse) {
 }
 
 #[test]
-fn imf_fixdate_validator_rejects_structural_and_range_mutants() {
-    assert!(valid_imf_fixdate(b"Wed, 29 Jul 2026 11:54:22 GMT"));
-    for invalid in [
-        b"Xxx, 29 Jul 2026 11:54:22 GMT".as_slice(),
-        b"Wed; 29 Jul 2026 11:54:22 GMT",
-        b"Wed, 00 Jul 2026 11:54:22 GMT",
-        b"Wed, 32 Jul 2026 11:54:22 GMT",
-        b"Wed, 29 Foo 2026 11:54:22 GMT",
-        b"Wed, 29 Jul 20x6 11:54:22 GMT",
-        b"Wed, 29 Jul 2026 24:54:22 GMT",
-        b"Wed, 29 Jul 2026 11:60:22 GMT",
-        b"Wed, 29 Jul 2026 11:54:61 GMT",
-        b"Wed, 29 Jul 2026 11:54:22 UTC",
-    ] {
+fn imf_fixdate_edges_and_malformed_tokens_are_active() {
+    const VALID: &[u8] = b"Wed, 29 Jul 2026 11:54:22 GMT|Thu, 29 Feb 2024 23:59:60 GMT|Wed, 28 Feb 1900 23:59:59 GMT|Tue, 29 Feb 2000 23:59:59 GMT";
+    const INVALID: &[u8] = b"Mon, 31 Apr 2024 11:54:22 GMT|Sat, 29 Feb 2025 11:54:22 GMT|Wed, 29 Feb 1900 11:54:22 GMT|Tue, 28 Feb 2000 11:54:22 GMT|Thu, 29 Feb 2024 11:54:60 GMT|Thu, 29 Feb 2024 23:58:60 GMT|Thu, 29 Feb 2024 23:59:61 GMT|Xxx, 29 Jul 2026 11:54:22 GMT|Wed; 29 Jul 2026 11:54:22 GMT|Wed,29 Jul 2026 11:54:22 GMT|Wed, 00 Jul 2026 11:54:22 GMT|Wed, 32 Jul 2026 11:54:22 GMT|Wed, 29 Foo 2026 11:54:22 GMT|Wed, 29 Jul 20x6 11:54:22 GMT|Wed, 29 Jul 2026 24:54:22 GMT|Wed, 29 Jul 2026 11:60:22 GMT|Wed, 29 Jul 2026 11:54:22 UTC";
+    for valid in VALID.split(|byte| *byte == b'|') {
+        assert!(valid_imf_fixdate(valid), "rejected {valid:?}");
+    }
+    for invalid in INVALID.split(|byte| *byte == b'|') {
         assert!(!valid_imf_fixdate(invalid), "accepted {invalid:?}");
     }
 }
@@ -478,29 +483,82 @@ fn valid_imf_fixdate(value: &[u8]) -> bool {
         b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov",
         b"Dec",
     ];
-    value.len() == 29
-        && WEEKDAYS.contains(&&value[0..3])
-        && value[3..5] == *b", "
-        && decimal(&value[5..7]).is_some_and(|day| (1..=31).contains(&day))
-        && value[7] == b' '
-        && MONTHS.contains(&&value[8..11])
-        && value[11] == b' '
-        && value[12..16].iter().all(u8::is_ascii_digit)
-        && value[16] == b' '
-        && decimal(&value[17..19]).is_some_and(|hour| hour <= 23)
-        && value[19] == b':'
-        && decimal(&value[20..22]).is_some_and(|minute| minute <= 59)
-        && value[22] == b':'
-        && decimal(&value[23..25]).is_some_and(|second| second <= 60)
-        && value[25..29] == *b" GMT"
+    if value.len() != 29
+        || value[3..5] != *b", "
+        || value[7] != b' '
+        || value[11] != b' '
+        || value[16] != b' '
+        || value[19] != b':'
+        || value[22] != b':'
+        || value[25..29] != *b" GMT"
+    {
+        return false;
+    }
+
+    let weekday = match WEEKDAYS.iter().position(|name| *name == &value[..3]) {
+        Some(weekday) => weekday as u8,
+        None => return false,
+    };
+    let day = match decimal(&value[5..7]) {
+        Some(day @ 1..=31) => day as u8,
+        _ => return false,
+    };
+    let month = match MONTHS.iter().position(|name| *name == &value[8..11]) {
+        Some(month) => month as u8 + 1,
+        None => return false,
+    };
+    let year = match decimal(&value[12..16]) {
+        Some(year) => year,
+        None => return false,
+    };
+    if day > days_in_month(year, month) {
+        return false;
+    }
+    let Some(hour) = decimal(&value[17..19]) else {
+        return false;
+    };
+    let Some(minute) = decimal(&value[20..22]) else {
+        return false;
+    };
+    let Some(second) = decimal(&value[23..25]) else {
+        return false;
+    };
+    if hour > 23 || minute > 59 || second > 60 || second == 60 && (hour != 23 || minute != 59) {
+        return false;
+    }
+    weekday == weekday_index(year, month, day)
 }
 
-fn decimal(digits: &[u8]) -> Option<u8> {
+fn decimal(digits: &[u8]) -> Option<u16> {
     digits.iter().all(u8::is_ascii_digit).then(|| {
         digits
             .iter()
-            .fold(0, |value, digit| value * 10 + *digit - b'0')
+            .fold(0, |value, digit| value * 10 + u16::from(*digit - b'0'))
     })
+}
+
+fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        2 if leap_year(year) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn leap_year(year: u16) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+}
+
+fn weekday_index(year: u16, month: u8, day: u8) -> u8 {
+    let year = i64::from(year);
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let month = i64::from(month);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    ((era * 146_097 + day_of_era - 719_468 + 3).rem_euclid(7)) as u8
 }
 
 fn parse_headers(block: &[u8]) -> Vec<(&[u8], &[u8])> {
