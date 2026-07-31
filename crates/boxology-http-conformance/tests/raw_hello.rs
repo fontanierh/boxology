@@ -32,20 +32,40 @@ const INVALID_REQUEST_BODY: &[u8] =
     br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#;
 const METHOD_NOT_ALLOWED_BODY: &[u8] =
     br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#;
+const UNSUPPORTED_MEDIA_TYPE_BODY: &[u8] =
+    br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#;
+
+const ROW_COUNT: usize = 34;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SpecParagraph {
     S3D3CanonicalResponseEncoding,
     S3D4RoutingAndIdentifierCanonicality,
     S3D5StableWireErrorCodes,
-    S3D6MethodTable,
+    S3D6HeaderGrammars,
     S3D7RequestProcessingPipeline,
     RuntimeInvocationStatusTable,
     RuntimeStableWireCodes,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RequestShape(&'static str, &'static str);
+struct RequestShape {
+    method: &'static str,
+    path: &'static str,
+    content_type: Option<&'static str>,
+    extra: &'static [&'static str],
+}
+
+impl RequestShape {
+    const fn simple(method: &'static str, path: &'static str) -> Self {
+        Self {
+            method,
+            path,
+            content_type: Some("application/json"),
+            extra: &[],
+        }
+    }
+}
 // ORACLE independently expands each shape into complete raw request bytes.
 
 type Authority = &'static [SpecParagraph];
@@ -110,49 +130,177 @@ const OK_STATUS: &[u8] = b"HTTP/1.1 200 OK";
 const NOT_FOUND_STATUS: &[u8] = b"HTTP/1.1 404 Not Found";
 const BAD_REQUEST_STATUS: &[u8] = b"HTTP/1.1 400 Bad Request";
 const METHOD_NOT_ALLOWED_STATUS: &[u8] = b"HTTP/1.1 405 Method Not Allowed";
+const UNSUPPORTED_MEDIA_TYPE_STATUS: &[u8] = b"HTTP/1.1 415 Unsupported Media Type";
 
 const UB: &[u8] = UNKNOWN_BOX_BODY;
 const UCB: &[u8] = UNKNOWN_CAPABILITY_BODY;
 const IRB: &[u8] = INVALID_REQUEST_BODY;
 const MNB: &[u8] = METHOD_NOT_ALLOWED_BODY;
+const UMTB: &[u8] = UNSUPPORTED_MEDIA_TYPE_BODY;
 const SU: ExpectedResponse = e(OK_STATUS, SUCCESS_BODY, JSON, None, 1);
 const BX: ExpectedResponse = e(NOT_FOUND_STATUS, UB, JSON, None, 0);
 const CAP: ExpectedResponse = e(NOT_FOUND_STATUS, UCB, JSON, None, 0);
 const BAD: ExpectedResponse = e(BAD_REQUEST_STATUS, IRB, JSON, None, 0);
 const NA: ExpectedResponse = e(METHOD_NOT_ALLOWED_STATUS, MNB, JSON, Some(POST), 0);
+const UMT: ExpectedResponse = e(UNSUPPORTED_MEDIA_TYPE_STATUS, UMTB, JSON, None, 0);
 
 use SpecParagraph::{
     RuntimeInvocationStatusTable as STATUS, RuntimeStableWireCodes as CODES,
     S3D3CanonicalResponseEncoding as D3, S3D4RoutingAndIdentifierCanonicality as D4,
-    S3D5StableWireErrorCodes as D5, S3D6MethodTable as D6, S3D7RequestProcessingPipeline as D7,
+    S3D5StableWireErrorCodes as D5, S3D6HeaderGrammars as D6, S3D7RequestProcessingPipeline as D7,
 };
 const SUCCESS_AUTHORITY: &[SpecParagraph] = &[D3, D4];
 const ROUTING_AUTHORITY: &[SpecParagraph] = &[D3, D4, D5, STATUS, CODES];
 const METHOD_AUTHORITY: &[SpecParagraph] = &[D3, D5, D6, STATUS, CODES];
 const ROUTE_PIPELINE_AUTHORITY: &[SpecParagraph] = &[D3, D4, D5, D7, STATUS, CODES];
 const QUERY_PIPELINE_AUTHORITY: &[SpecParagraph] = &[D3, D4, D5, D6, D7, STATUS, CODES];
+const HEAD_ADMISSION_AUTHORITY: &[SpecParagraph] = &[D3, D5, D6, D7, STATUS, CODES];
 const SA: &[SpecParagraph] = SUCCESS_AUTHORITY;
 const RA: &[SpecParagraph] = ROUTING_AUTHORITY;
 const MA: &[SpecParagraph] = METHOD_AUTHORITY;
 const PA: &[SpecParagraph] = ROUTE_PIPELINE_AUTHORITY;
 const QA: &[SpecParagraph] = QUERY_PIPELINE_AUTHORITY;
+const HA: &[SpecParagraph] = HEAD_ADMISSION_AUTHORITY;
 
-const EXACT_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/greet");
-const UNKNOWN_BOX_REQUEST: RequestShape = RequestShape("POST", "/rpc/ghost/greet");
-const UNKNOWN_CAPABILITY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/ghost");
-const ESCAPED_BOX_REQUEST: RequestShape = RequestShape("POST", "/rpc/hell%6F/greet");
-const ESCAPED_CAPABILITY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/gree%74");
-const UPPERCASE_PREFIX_REQUEST: RequestShape = RequestShape("POST", "/RPC/hello/greet");
-const UPPERCASE_BOX_REQUEST: RequestShape = RequestShape("POST", "/rpc/Hello/greet");
-const UPPERCASE_CAPABILITY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/Greet");
-const TRAILING_SLASH_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/greet/");
-const QUERY_REQUEST: RequestShape = RequestShape("POST", "/rpc/hello/greet?probe=1");
-const GET_REQUEST: RequestShape = RequestShape("GET", "/rpc/hello/greet");
-const OPTIONS_REQUEST: RequestShape = RequestShape("OPTIONS", "/rpc/hello/greet");
-const UNKNOWN_ROUTE_GET_REQUEST: RequestShape = RequestShape("GET", "/rpc/ghost/greet");
-const PUT_REQUEST: RequestShape = RequestShape("PUT", "/rpc/hello/greet");
+const EXACT_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hello/greet");
+const UNKNOWN_BOX_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/ghost/greet");
+const UNKNOWN_CAPABILITY_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hello/ghost");
+const ESCAPED_BOX_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hell%6F/greet");
+const ESCAPED_CAPABILITY_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hello/gree%74");
+const UPPERCASE_PREFIX_REQUEST: RequestShape = RequestShape::simple("POST", "/RPC/hello/greet");
+const UPPERCASE_BOX_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/Hello/greet");
+const UPPERCASE_CAPABILITY_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hello/Greet");
+const TRAILING_SLASH_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hello/greet/");
+const QUERY_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hello/greet?probe=1");
+const GET_REQUEST: RequestShape = RequestShape::simple("GET", "/rpc/hello/greet");
+const OPTIONS_REQUEST: RequestShape = RequestShape::simple("OPTIONS", "/rpc/hello/greet");
+const UNKNOWN_ROUTE_GET_REQUEST: RequestShape = RequestShape::simple("GET", "/rpc/ghost/greet");
+const PUT_REQUEST: RequestShape = RequestShape::simple("PUT", "/rpc/hello/greet");
 
-const RAW_CASES: [RawCase; 14] = [
+const MISSING_CONTENT_TYPE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: None,
+    extra: &[],
+};
+const TEXT_PLAIN_MEDIA_TYPE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("text/plain"),
+    extra: &[],
+};
+const JSON_SUFFIX_MEDIA_TYPE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    // application/json + structured-suffix: subtype remains `json`, so only the
+    // suffix rejection arm can refuse it (unlike application/vnd.api+json).
+    content_type: Some("application/json+foo"),
+    extra: &[],
+};
+const WRONG_CHARSET_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json; charset=latin-1"),
+    extra: &[],
+};
+const CHARSET_UTF8_ACCEPTED_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json; charset=utf-8"),
+    extra: &[],
+};
+const CHARSET_UTF8_CASE_ACCEPTED_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json; charset=UTF-8"),
+    extra: &[],
+};
+const TRAILING_SEMICOLON_MEDIA_TYPE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json;"),
+    extra: &[],
+};
+const DUPLICATE_CONTENT_TYPE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Content-Type: application/json"],
+};
+const COMMA_JOINED_CONTENT_TYPE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json, application/json"),
+    extra: &[],
+};
+const CONTENT_ENCODING_IDENTITY_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Content-Encoding: identity"],
+};
+const CONTENT_ENCODING_GZIP_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Content-Encoding: gzip"],
+};
+const TIMEOUT_NON_DIGIT_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Boxology-Timeout-Ms: soon"],
+};
+const TIMEOUT_LEADING_ZERO_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Boxology-Timeout-Ms: 01"],
+};
+const TIMEOUT_ELEVEN_DIGITS_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Boxology-Timeout-Ms: 10000000000"],
+};
+const TIMEOUT_EMBEDDED_SPACE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Boxology-Timeout-Ms: 60 000"],
+};
+const TIMEOUT_DUPLICATE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Boxology-Timeout-Ms: 1000", "Boxology-Timeout-Ms: 2000"],
+};
+const TIMEOUT_MAX_VALID_ACCEPTED_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Boxology-Timeout-Ms: 9999999999"],
+};
+const IDEMPOTENCY_DUPLICATE_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Idempotency-Key: alpha", "Idempotency-Key: beta"],
+};
+const IDEMPOTENCY_EMPTY_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Idempotency-Key:"],
+};
+const IDEMPOTENCY_OBS_TEXT_REQUEST: RequestShape = RequestShape {
+    method: "POST",
+    path: "/rpc/hello/greet",
+    content_type: Some("application/json"),
+    extra: &["Idempotency-Key: café"],
+};
+
+const RAW_CASES: [RawCase; ROW_COUNT] = [
     RawCase::new("exact-success", EXACT_REQUEST, SA, SU),
     RawCase::new("unknown-box", UNKNOWN_BOX_REQUEST, RA, BX),
     RawCase::new("unknown-capability", UNKNOWN_CAPABILITY_REQUEST, RA, CAP),
@@ -182,6 +330,106 @@ const RAW_CASES: [RawCase; 14] = [
         BX,
     ),
     RawCase::new("put-method", PUT_REQUEST, MA, NA),
+    RawCase::new(
+        "missing-content-type",
+        MISSING_CONTENT_TYPE_REQUEST,
+        HA,
+        UMT,
+    ),
+    RawCase::new(
+        "text-plain-media-type",
+        TEXT_PLAIN_MEDIA_TYPE_REQUEST,
+        HA,
+        UMT,
+    ),
+    RawCase::new(
+        "json-suffix-media-type",
+        JSON_SUFFIX_MEDIA_TYPE_REQUEST,
+        HA,
+        UMT,
+    ),
+    RawCase::new("wrong-charset", WRONG_CHARSET_REQUEST, HA, UMT),
+    RawCase::new(
+        "charset-utf8-accepted",
+        CHARSET_UTF8_ACCEPTED_REQUEST,
+        HA,
+        SU,
+    ),
+    RawCase::new(
+        "charset-utf8-case-accepted",
+        CHARSET_UTF8_CASE_ACCEPTED_REQUEST,
+        HA,
+        SU,
+    ),
+    RawCase::new(
+        "trailing-semicolon-media-type",
+        TRAILING_SEMICOLON_MEDIA_TYPE_REQUEST,
+        HA,
+        UMT,
+    ),
+    RawCase::new(
+        "duplicate-content-type",
+        DUPLICATE_CONTENT_TYPE_REQUEST,
+        HA,
+        BAD,
+    ),
+    RawCase::new(
+        "comma-joined-content-type",
+        COMMA_JOINED_CONTENT_TYPE_REQUEST,
+        HA,
+        BAD,
+    ),
+    RawCase::new(
+        "content-encoding-identity",
+        CONTENT_ENCODING_IDENTITY_REQUEST,
+        HA,
+        UMT,
+    ),
+    RawCase::new(
+        "content-encoding-gzip",
+        CONTENT_ENCODING_GZIP_REQUEST,
+        HA,
+        UMT,
+    ),
+    RawCase::new("timeout-non-digit", TIMEOUT_NON_DIGIT_REQUEST, HA, BAD),
+    RawCase::new(
+        "timeout-leading-zero",
+        TIMEOUT_LEADING_ZERO_REQUEST,
+        HA,
+        BAD,
+    ),
+    RawCase::new(
+        "timeout-eleven-digits",
+        TIMEOUT_ELEVEN_DIGITS_REQUEST,
+        HA,
+        BAD,
+    ),
+    RawCase::new(
+        "timeout-embedded-space",
+        TIMEOUT_EMBEDDED_SPACE_REQUEST,
+        HA,
+        BAD,
+    ),
+    RawCase::new("timeout-duplicate", TIMEOUT_DUPLICATE_REQUEST, HA, BAD),
+    RawCase::new(
+        "timeout-max-valid-accepted",
+        TIMEOUT_MAX_VALID_ACCEPTED_REQUEST,
+        HA,
+        SU,
+    ),
+    RawCase::new(
+        "idempotency-duplicate",
+        IDEMPOTENCY_DUPLICATE_REQUEST,
+        HA,
+        BAD,
+    ),
+    RawCase::new("idempotency-empty", IDEMPOTENCY_EMPTY_REQUEST, HA, BAD),
+    RawCase::new(
+        "idempotency-obs-text",
+        IDEMPOTENCY_OBS_TEXT_REQUEST,
+        HA,
+        BAD,
+    ),
 ];
 
 const fn o(r: &'static str, a: Authority, q: RawBytes, e: ExpectedResponse) -> OracleRow {
@@ -191,7 +439,7 @@ const fn o(r: &'static str, a: Authority, q: RawBytes, e: ExpectedResponse) -> O
 // Independently pinned: do not derive this oracle from RAW_CASES, its request renderer, or its
 // response constants. Every row carries exact raw bytes, normative response expectations, dispatch
 // count, and fully qualified authority.
-const ORACLE: [OracleRow; 14] = [
+const ORACLE: [OracleRow; ROW_COUNT] = [
     o("exact-success", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 200 OK", br#"{"result":{"value":"Hello, Ada!"}}"#, b"application/json", None, 1)),
     o("unknown-box", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/ghost/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, b"application/json", None, 0)),
     o("unknown-capability", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/ghost HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#, b"application/json", None, 0)),
@@ -201,11 +449,31 @@ const ORACLE: [OracleRow; 14] = [
     o("uppercase-box", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/Hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, b"application/json", None, 0)),
     o("uppercase-capability", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/Greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#, b"application/json", None, 0)),
     o("trailing-slash", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet/ HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_capability","message":"unknown capability"}}"#, b"application/json", None, 0)),
-    o("query-string", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet?probe=1 HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
-    o("get-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"GET /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, b"application/json", Some(b"POST"), 0)),
-    o("options-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"OPTIONS /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, b"application/json", Some(b"POST"), 0)),
+    o("query-string", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet?probe=1 HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("get-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"GET /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, b"application/json", Some(b"POST"), 0)),
+    o("options-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"OPTIONS /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, b"application/json", Some(b"POST"), 0)),
     o("unknown-route-wrong-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D4RoutingAndIdentifierCanonicality, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"GET /rpc/ghost/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 404 Not Found", br#"{"error":{"kind":"call","code":"unknown_box","message":"unknown box"}}"#, b"application/json", None, 0)),
-    o("put-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6MethodTable, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"PUT /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, b"application/json", Some(b"POST"), 0)),
+    o("put-method", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"PUT /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 405 Method Not Allowed", br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#, b"application/json", Some(b"POST"), 0)),
+    o("missing-content-type", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("text-plain-media-type", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("json-suffix-media-type", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json+foo\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("wrong-charset", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json; charset=latin-1\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("charset-utf8-accepted", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json; charset=utf-8\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 200 OK", br#"{"result":{"value":"Hello, Ada!"}}"#, b"application/json", None, 1)),
+    o("charset-utf8-case-accepted", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json; charset=UTF-8\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 200 OK", br#"{"result":{"value":"Hello, Ada!"}}"#, b"application/json", None, 1)),
+    o("trailing-semicolon-media-type", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json;\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("duplicate-content-type", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("comma-joined-content-type", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json, application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("content-encoding-identity", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nContent-Encoding: identity\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("content-encoding-gzip", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("timeout-non-digit", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nBoxology-Timeout-Ms: soon\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("timeout-leading-zero", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nBoxology-Timeout-Ms: 01\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("timeout-eleven-digits", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nBoxology-Timeout-Ms: 10000000000\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("timeout-embedded-space", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nBoxology-Timeout-Ms: 60 000\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("timeout-duplicate", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nBoxology-Timeout-Ms: 1000\r\nBoxology-Timeout-Ms: 2000\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("timeout-max-valid-accepted", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nBoxology-Timeout-Ms: 9999999999\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 200 OK", br#"{"result":{"value":"Hello, Ada!"}}"#, b"application/json", None, 1)),
+    o("idempotency-duplicate", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nIdempotency-Key: alpha\r\nIdempotency-Key: beta\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("idempotency-empty", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nIdempotency-Key:\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("idempotency-obs-text", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nIdempotency-Key: caf\xc3\xa9\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
 ];
 
 struct CountingHello {
@@ -265,7 +533,7 @@ fn traceability_semantic_drift_mutants_are_active() {
     assert_traceability_rejects(&duplicated_case, &ORACLE, "rule duplication");
 
     let mut percent_escape_drift = RAW_CASES.to_vec();
-    percent_escape_drift[3].request = RequestShape("POST", "/rpc/ghost/greet");
+    percent_escape_drift[3].request = RequestShape::simple("POST", "/rpc/ghost/greet");
     assert_traceability_rejects(
         &percent_escape_drift,
         &ORACLE,
@@ -307,6 +575,40 @@ fn traceability_semantic_drift_mutants_are_active() {
         SpecParagraph::S3D4RoutingAndIdentifierCanonicality,
     ];
     assert_traceability_rejects(&duplicated_authority, &ORACLE, "authority duplication");
+
+    let mut extra_header_drift = RAW_CASES.to_vec();
+    extra_header_drift[23].request.extra = &["Content-Encoding: br"];
+    assert_traceability_rejects(&extra_header_drift, &ORACLE, "extra-header-line drift");
+
+    let mut umt_status_drift = RAW_CASES.to_vec();
+    umt_status_drift[14].expected.status_line = b"HTTP/1.1 415 Mismatched Reason";
+    assert_traceability_rejects(&umt_status_drift, &ORACLE, "415 status-line drift");
+
+    let mut umt_body_drift = RAW_CASES.to_vec();
+    umt_body_drift[14].expected.body = INVALID_REQUEST_BODY;
+    assert_traceability_rejects(&umt_body_drift, &ORACLE, "UMT body drift");
+
+    let mut accepted_dispatch_drift = RAW_CASES.to_vec();
+    accepted_dispatch_drift[30].expected.dispatches = 0;
+    assert_traceability_rejects(
+        &accepted_dispatch_drift,
+        &ORACLE,
+        "accepted-row dispatch drift",
+    );
+
+    let mut media_authority_deletion = RAW_CASES.to_vec();
+    media_authority_deletion[14].authority = &[
+        SpecParagraph::S3D3CanonicalResponseEncoding,
+        SpecParagraph::S3D5StableWireErrorCodes,
+        SpecParagraph::S3D6HeaderGrammars,
+        SpecParagraph::RuntimeInvocationStatusTable,
+        SpecParagraph::RuntimeStableWireCodes,
+    ];
+    assert_traceability_rejects(
+        &media_authority_deletion,
+        &ORACLE,
+        "media-row authority D7 deletion",
+    );
 }
 
 fn assert_traceability_rejects(cases: &[RawCase], oracle: &[OracleRow], mutant: &str) {
@@ -321,15 +623,15 @@ fn traceability_gate(cases: &[RawCase], oracle: &[OracleRow]) {
 }
 
 fn traceability_check(cases: &[RawCase], oracle: &[OracleRow]) -> Result<(), String> {
-    if cases.len() != 14 {
+    if cases.len() != ROW_COUNT {
         return Err(format!(
-            "raw Hello table has {} rows, expected 14",
+            "raw Hello table has {} rows, expected {ROW_COUNT}",
             cases.len()
         ));
     }
-    if oracle.len() != 14 {
+    if oracle.len() != ROW_COUNT {
         return Err(format!(
-            "independent oracle has {} rows, expected 14",
+            "independent oracle has {} rows, expected {ROW_COUNT}",
             oracle.len()
         ));
     }
@@ -391,7 +693,27 @@ fn validate_authority(rule: &str, authority: &[SpecParagraph]) -> Result<(), Str
 }
 
 fn render_request(request: RequestShape) -> Vec<u8> {
-    let mut rendered = format!("{} {} HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n", request.0, request.1, REQUEST_BODY.len()).into_bytes();
+    let mut rendered = format!(
+        "{} {} HTTP/1.1\r\nHost: boxology\r\n",
+        request.method, request.path
+    )
+    .into_bytes();
+    if let Some(content_type) = request.content_type {
+        rendered.extend_from_slice(b"Content-Type: ");
+        rendered.extend_from_slice(content_type.as_bytes());
+        rendered.extend_from_slice(b"\r\n");
+    }
+    for line in request.extra {
+        rendered.extend_from_slice(line.as_bytes());
+        rendered.extend_from_slice(b"\r\n");
+    }
+    rendered.extend_from_slice(
+        format!(
+            "Connection: close\r\nContent-Length: {}\r\n\r\n",
+            REQUEST_BODY.len()
+        )
+        .as_bytes(),
+    );
     rendered.extend_from_slice(REQUEST_BODY);
     rendered
 }
