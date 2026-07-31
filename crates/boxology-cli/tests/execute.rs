@@ -249,3 +249,84 @@ fn symlinked_input_parent_is_rejected_without_writing() {
     assert_eq!(error.location(), parent.as_path());
     assert!(!package_dir(&fixture).join("generated").exists());
 }
+
+#[test]
+fn first_run_has_no_base_and_tree_submitted() {
+    let fixture = fixture("[\"generated/**\"]");
+    let expected = generate(&request(&fixture)).unwrap();
+    let submitted = expected
+        .files()
+        .iter()
+        .find(|file| file.path() == "generated/schema.json")
+        .unwrap()
+        .bytes();
+    let outcome = execute(&fixture.root, &fixture.plan).unwrap();
+    assert!(outcome.base_schema().is_none());
+    assert_eq!(outcome.submitted_schema(), submitted);
+}
+
+#[test]
+fn base_schema_is_the_pre_write_bytes() {
+    let fixture = fixture("[\"generated/**\"]");
+    execute(&fixture.root, &fixture.plan).unwrap();
+    let schema = package_dir(&fixture).join("generated/schema.json");
+    fs::write(&schema, b"tampered base").unwrap();
+    let expected = generate(&request(&fixture)).unwrap();
+    let submitted = expected
+        .files()
+        .iter()
+        .find(|file| file.path() == "generated/schema.json")
+        .unwrap()
+        .bytes();
+    let outcome = execute(&fixture.root, &fixture.plan).unwrap();
+    assert_eq!(outcome.base_schema(), Some(b"tampered base".as_slice()));
+    assert_eq!(outcome.submitted_schema(), submitted);
+}
+
+#[test]
+fn unchanged_run_still_captures_base() {
+    let fixture = fixture("[\"generated/**\"]");
+    execute(&fixture.root, &fixture.plan).unwrap();
+    let outcome = execute(&fixture.root, &fixture.plan).unwrap();
+    assert!(outcome.is_unchanged());
+    assert_eq!(outcome.base_schema(), Some(outcome.submitted_schema()));
+}
+
+#[test]
+fn schema_path_is_a_generator_output_exactly_once() {
+    assert_eq!(
+        OUTPUTS
+            .iter()
+            .filter(|path| **path == "generated/schema.json")
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_checked_in_schema_is_refused() {
+    use std::os::unix::fs::symlink;
+    let fixture = fixture("[\"generated/**\"]");
+    execute(&fixture.root, &fixture.plan).unwrap();
+    let package = package_dir(&fixture);
+    let prior: Vec<_> = OUTPUTS
+        .iter()
+        .filter(|path| **path != "generated/schema.json")
+        .map(|path| ((*path).to_owned(), fs::read(package.join(path)).unwrap()))
+        .collect();
+    let schema = package.join("generated/schema.json");
+    let outside = fixture.root.join("outside-schema.json");
+    fs::rename(&schema, &outside).unwrap();
+    symlink(&outside, &schema).unwrap();
+    let error = execute(&fixture.root, &fixture.plan).unwrap_err();
+    assert_eq!(error.code(), "BXW0076");
+    assert_eq!(error.location(), schema.as_path());
+    assert_eq!(
+        error.detail(),
+        "the checked-in schema document must be a readable regular file"
+    );
+    for (path, bytes) in prior {
+        assert_eq!(fs::read(package.join(path)).unwrap(), bytes);
+    }
+}

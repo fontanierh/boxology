@@ -2,7 +2,8 @@
 //!
 //! The CLI's effectful boundary walks a workspace and executes one validated generation plan, while
 //! pure planning selects and describes contract-generation candidates. Generation remains pure;
-//! execution delegates its writes to the generator writer.
+//! execution delegates its writes to the generator writer. Classification of checked-in versus
+//! regenerated schema bytes is also pure.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -19,9 +20,11 @@ pub fn cargo_metadata_command(root: &Path) -> Command {
     command
 }
 
+mod classify;
 mod execute;
 mod generate;
 mod walk;
+pub use classify::{ClassifyError, classify, render};
 pub use execute::{ExecuteError, Outcome, execute};
 pub use generate::{GenerationPlan, PlanError, plan};
 pub use walk::{WalkError, WalkedWorkspace, walk};
