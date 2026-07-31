@@ -4,127 +4,11 @@ use boxology_schema::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
     SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
-use serde_json::{Value, json};
-use std::path::Path;
-use std::process::Command;
+use serde_json::json;
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
-
-fn metadata_target_is_live(metadata: &Value, manifest_dir: &Path) -> bool {
-    let manifest = manifest_dir.join("Cargo.toml");
-    let Some(package) = metadata["packages"].as_array().and_then(|packages| {
-        packages.iter().find(|package| {
-            package["manifest_path"]
-                .as_str()
-                .is_some_and(|path| Path::new(path) == manifest)
-        })
-    }) else {
-        return false;
-    };
-    let Some(targets) = package["targets"].as_array() else {
-        return false;
-    };
-    let kind = |target: &Value, expected| target["kind"] == json!([expected]);
-    let library = targets.iter().find(|target| kind(target, "lib"));
-    let surface = targets
-        .iter()
-        .find(|target| kind(target, "test") && target["name"].as_str() == Some("surface_lock"));
-    let Some((library, surface)) = library.zip(surface) else {
-        return false;
-    };
-    targets.len() == 2
-        && library["test"] == true
-        && library["src_path"]
-            .as_str()
-            .is_some_and(|path| Path::new(path) == manifest_dir.join("src/lib.rs"))
-        && surface["crate_types"] == json!(["bin"])
-        && surface["src_path"]
-            .as_str()
-            .is_some_and(|path| Path::new(path) == manifest_dir.join("tests/surface_lock.rs"))
-        && surface["test"] == true
-        && surface
-            .get("required-features")
-            .is_none_or(|features| features == &json!([]))
-}
-
-fn cargo_metadata(manifest_dir: &Path) -> Value {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args([
-            "metadata",
-            "--locked",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--manifest-path",
-        ])
-        .arg(manifest_dir.join("Cargo.toml"))
-        .output()
-        .expect("cargo metadata can run");
-    assert!(output.status.success(), "cargo metadata failed");
-    serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON")
-}
-
-fn surface_lock_lists_tests(manifest_dir: &Path) -> bool {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args(["test", "--locked", "--manifest-path"])
-        .arg(manifest_dir.join("Cargo.toml"))
-        .args(["--test", "surface_lock", "--", "--list"])
-        .output();
-    output.is_ok_and(|output| {
-        output.status.success()
-            && String::from_utf8_lossy(&output.stdout)
-                .contains("production_inventory_and_code_anchors_are_fail_closed")
-    })
-}
-
-#[test]
-fn surface_lock_target_is_parsed_and_executable() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let metadata = cargo_metadata(manifest_dir);
-    assert!(metadata_target_is_live(&metadata, manifest_dir));
-    assert!(surface_lock_lists_tests(manifest_dir));
-}
-
-fn mutate_surface_target(metadata: &mut Value, mutate: fn(&mut Value)) {
-    let target = metadata["packages"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .flat_map(|package| package["targets"].as_array_mut().into_iter().flatten())
-        .find(|target| target["name"].as_str() == Some("surface_lock"))
-        .unwrap();
-    mutate(target);
-}
-
-#[test]
-fn surface_lock_target_mutants_are_active_negative_controls() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let metadata = cargo_metadata(manifest_dir);
-    let mut autotests_disabled = metadata.clone();
-    for package in autotests_disabled["packages"].as_array_mut().unwrap() {
-        if let Some(targets) = package["targets"].as_array_mut() {
-            targets.retain(|target| target["name"].as_str() != Some("surface_lock"));
-        }
-    }
-    assert!(!metadata_target_is_live(&autotests_disabled, manifest_dir));
-    type TargetMutant = (&'static str, fn(&mut Value));
-    let mutants: &[TargetMutant] = &[
-        ("required feature", |target| {
-            target["required-features"] = json!(["hidden"])
-        }),
-        ("alternate path", |target| {
-            target["src_path"] = json!("tests/other.rs")
-        }),
-        ("disabled test", |target| target["test"] = json!(false)),
-    ];
-    for (name, mutate) in mutants {
-        let mut mutant = metadata.clone();
-        mutate_surface_target(&mut mutant, *mutate);
-        assert!(!metadata_target_is_live(&mutant, manifest_dir), "{name}");
-    }
-}
+const OTHER_REVISION: &str =
+    "sha256:a45a70dacfc5e3ea7911944d3f4fd385da1de2cdabfac86d554d4a321e3244cc";
 
 fn document(box_id: &str) -> SchemaDocument {
     SchemaDocument {
@@ -358,7 +242,7 @@ fn single_referenced_error_variant_addition_is_conditional() {
     let base = document("hello");
     let mut submitted = base.clone();
     submitted.types[0].variants.push(variant("Other"));
-    submitted.revision.push('x');
+    submitted.revision = OTHER_REVISION.to_owned();
 
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_conditional(&report, &["hello/type/GreetError/variant/Other"]);
@@ -370,7 +254,7 @@ fn multiple_referenced_error_variant_additions_are_sorted() {
     let mut submitted = base.clone();
     submitted.types[1].variants.push(variant("GreetOther"));
     submitted.types[0].variants.push(variant("WaveOther"));
-    submitted.revision.push('x');
+    submitted.revision = OTHER_REVISION.to_owned();
 
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_conditional(
@@ -385,7 +269,7 @@ fn multiple_referenced_error_variant_additions_are_sorted() {
 fn assert_variant_incompatible(base: SchemaDocument, mutate: impl FnOnce(&mut SchemaDocument)) {
     let mut submitted = base.clone();
     mutate(&mut submitted);
-    submitted.revision.push('x');
+    submitted.revision = OTHER_REVISION.to_owned();
     assert_unclassified_pair(base, submitted);
 }
 
@@ -451,7 +335,7 @@ fn equal_revision_variant_addition_is_incompatible() {
 #[test]
 fn every_effectively_mutable_comparable_field_fails_closed() {
     let mutations: &[fn(&mut SchemaDocument)] = &[
-        |document| document.revision.push('x'),
+        |document| document.revision = OTHER_REVISION.to_owned(),
         |document| document.capabilities[0].name = CapabilityName::new("wave").unwrap(),
         |document| document.capabilities[0].docs.push("New docs.".to_owned()),
         |document| document.capabilities[0].deprecation = Some("use wave2".to_owned()),

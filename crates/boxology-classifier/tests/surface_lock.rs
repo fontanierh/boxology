@@ -11,6 +11,8 @@ use syn::visit::{self, Visit};
 use syn::{Item, Meta, Visibility};
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
+const OTHER_REVISION: &str =
+    "sha256:a45a70dacfc5e3ea7911944d3f4fd385da1de2cdabfac86d554d4a321e3244cc";
 const RUST_SOURCES: &[&str] = &["lib.rs", "tests.rs"];
 
 #[derive(Default)]
@@ -188,6 +190,14 @@ fn document(box_id: &str) -> SchemaDocument {
 }
 
 #[test]
+fn surface_and_live_evasions_are_locked() {
+    production_inventory_and_code_anchors_are_fail_closed();
+    symlinked_source_root_fails_inventory();
+    production_ast_escapes_fail_closed();
+    descendant_include_fails_the_production_inventory();
+    every_classifier_code_is_reachable();
+}
+
 fn production_inventory_and_code_anchors_are_fail_closed() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = manifest_dir.join("src");
@@ -210,7 +220,6 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     }
 }
 
-#[test]
 fn symlinked_source_root_fails_inventory() {
     let link = std::env::temp_dir().join(format!("classifier-source-link-{}", std::process::id()));
     let target = link.with_extension("target");
@@ -222,7 +231,6 @@ fn symlinked_source_root_fails_inventory() {
     assert_eq!(result, Err("source root symlink is forbidden"));
 }
 
-#[test]
 fn production_ast_escapes_fail_closed() {
     let source = include_str!("../src/lib.rs");
     for mutant in [
@@ -248,7 +256,6 @@ fn production_ast_escapes_fail_closed() {
     );
 }
 
-#[test]
 fn descendant_include_fails_the_production_inventory() {
     let source = include_str!("../src/lib.rs");
     let marker = "\n#[cfg(test)]\nmod tests;";
@@ -265,7 +272,6 @@ fn descendant_include_fails_the_production_inventory() {
     }
 }
 
-#[test]
 fn every_classifier_code_is_reachable() {
     let missing = classify(None, None).unwrap_err().into_vec();
     let mismatch = classify(Some(&document("hello")), Some(&document("other")))
@@ -274,7 +280,7 @@ fn every_classifier_code_is_reachable() {
     let introduced = classify(None, Some(&document("hello"))).unwrap();
     let removed = classify(Some(&document("hello")), None).unwrap();
     let mut changed = document("hello");
-    changed.revision.push('x');
+    changed.revision = OTHER_REVISION.to_owned();
     let unclassified = classify(Some(&document("hello")), Some(&changed)).unwrap();
     let mut variant_addition = document("hello");
     variant_addition.types[0].variants.push(SchemaVariant {
@@ -283,7 +289,7 @@ fn every_classifier_code_is_reachable() {
         deprecation: None,
         payload: SchemaPayload::Unit,
     });
-    variant_addition.revision.push('x');
+    variant_addition.revision = OTHER_REVISION.to_owned();
     let conditional = classify(Some(&document("hello")), Some(&variant_addition)).unwrap();
     assert_eq!(
         [
