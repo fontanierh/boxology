@@ -71,6 +71,15 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
 };
+const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
+    external_test::ExternalTestSpec {
+        package: "boxology-classifier",
+        target: "surface_lock",
+        manifest: "crates/boxology-classifier/Cargo.toml",
+        source: "crates/boxology-classifier/tests/surface_lock.rs",
+        default_source: "tests/surface_lock.rs",
+        tests: &["surface_and_live_evasions_are_locked"],
+    };
 type SkillCommand = (&'static str, fn(&Path) -> u8);
 const SKILL_COMMANDS: &[SkillCommand] = &[("skill-audit", skill_audit::run)];
 const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
@@ -223,6 +232,14 @@ fn run_ci(base: Option<&str>) -> u8 {
             "surface-lock",
             timed("surface-lock", || {
                 external_test::run_with_cargo(&root(), &SURFACE_LOCK_SPEC, |args| {
+                    external_test::cargo(&root(), args)
+                })
+            }),
+        ),
+        (
+            "classifier-surface-lock",
+            timed("classifier-surface-lock", || {
+                external_test::run_with_cargo(&root(), &CLASSIFIER_SURFACE_LOCK_SPEC, |args| {
                     external_test::cargo(&root(), args)
                 })
             }),
