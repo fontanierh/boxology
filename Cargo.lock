@@ -169,6 +169,9 @@ dependencies = [
 name = "boxology-init"
 version = "0.0.0"
 dependencies = [
+ "boxology-contract",
+ "boxology-generator",
+ "boxology-generator-model",
  "boxology-manifest",
 ]
 
