@@ -1,7 +1,9 @@
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
-use boxology_contract_syntax::{CanonicalType, CapabilityDeclaration, Contract};
+use boxology_contract_syntax::{
+    CanonicalType, CapabilityDeclaration, Contract, VariantField, VariantPayload, VariantValue,
+};
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
     SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
 use serde_json::json;
@@ -54,12 +56,46 @@ pub(super) fn document(
                     name: variant.name.clone(),
                     docs: variant.docs.clone(),
                     deprecation: variant.deprecation.clone(),
-                    payload: SchemaPayload::Unit,
+                    payload: payload(&variant.payload),
                 })
                 .collect(),
         }],
     }
     .canonical_bytes()
+}
+
+/// Maps a parsed variant payload onto the schema vocabulary.
+fn payload(payload: &VariantPayload) -> SchemaPayload {
+    match payload {
+        VariantPayload::Unit => SchemaPayload::Unit,
+        VariantPayload::Value(VariantValue {
+            docs,
+            deprecation,
+            ty,
+        }) => SchemaPayload::Value {
+            docs: docs.clone(),
+            deprecation: deprecation.clone(),
+            ty: leaf(*ty),
+        },
+        VariantPayload::Named(fields) => SchemaPayload::Named(
+            fields
+                .iter()
+                .map(
+                    |VariantField {
+                         docs,
+                         deprecation,
+                         name,
+                         ty,
+                     }| SchemaField {
+                        docs: docs.clone(),
+                        deprecation: deprecation.clone(),
+                        name: name.clone(),
+                        ty: leaf(*ty),
+                    },
+                )
+                .collect(),
+        ),
+    }
 }
 
 fn capability(capability: &CapabilityDeclaration) -> SchemaCapability {
@@ -106,6 +142,10 @@ fn leaf(leaf: CanonicalType) -> BoundaryLeaf {
 
 pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u8; 32]) -> String {
     let error = &contract.error;
+    // Payload-blind on purpose: every variant emits as `Unit`. BXG0048 is what keeps
+    // that honest, rejecting payload-carrying contracts before generation reaches
+    // here. When #104 lifts that gate this must learn payloads in the same change,
+    // or descriptors will claim payload-bearing variants are `Unit`.
     let variants = error
         .variants
         .iter()
@@ -236,7 +276,27 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
     for variant in &error.variants {
         string(&mut out, &variant.name);
         metadata(&mut out, &variant.docs, &variant.deprecation);
-        out.push(0); // unit payload
+        match &variant.payload {
+            VariantPayload::Unit => out.push(0x00),
+            VariantPayload::Value(VariantValue {
+                docs,
+                deprecation,
+                ty,
+            }) => {
+                out.push(0x01);
+                metadata(&mut out, docs, deprecation);
+                string(&mut out, ty.canonical_name());
+            }
+            VariantPayload::Named(fields) => {
+                out.push(0x02);
+                count(&mut out, fields.len());
+                for field in fields {
+                    metadata(&mut out, &field.docs, &field.deprecation);
+                    string(&mut out, &field.name);
+                    string(&mut out, field.ty.canonical_name());
+                }
+            }
+        }
     }
     count(&mut out, contract.capabilities.len());
     for capability in &contract.capabilities {
@@ -292,7 +352,9 @@ fn count(out: &mut Vec<u8>, value: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxology_contract_syntax::{ErrorDeclaration, ErrorVariant, VariantPayload};
+    use boxology_contract_syntax::{
+        ErrorDeclaration, ErrorVariant, VariantField, VariantPayload, VariantValue,
+    };
 
     /// Pins all thirteen arms of the parsed-leaf to schema-leaf translation by naming the pairs.
     /// Only five leaves reach a document in any other test, so a transposed arm on the other eight
@@ -434,6 +496,151 @@ mod tests {
         };
         assert_eq!(
             document("store", &contract, &[4; 32], &[9; 32], "1.2.3"),
+            expected.canonical_bytes()
+        );
+    }
+
+    /// Pins the payload mapping for all three shapes, including the empty-named ≠ unit distinction
+    /// and declaration-order field preservation.
+    #[test]
+    fn document_maps_every_payload_shape() {
+        let contract = Contract {
+            error: ErrorDeclaration {
+                docs: Vec::new(),
+                deprecation: None,
+                name: "PayloadError".to_owned(),
+                variants: vec![
+                    ErrorVariant {
+                        docs: Vec::new(),
+                        deprecation: None,
+                        name: "Unit".to_owned(),
+                        payload: VariantPayload::Unit,
+                    },
+                    ErrorVariant {
+                        docs: vec!["value variant".to_owned()],
+                        deprecation: None,
+                        name: "Value".to_owned(),
+                        payload: VariantPayload::Value(VariantValue {
+                            docs: vec!["value payload".to_owned()],
+                            deprecation: Some("use detail".to_owned()),
+                            ty: CanonicalType::U32,
+                        }),
+                    },
+                    ErrorVariant {
+                        docs: Vec::new(),
+                        deprecation: Some("retired".to_owned()),
+                        name: "Named".to_owned(),
+                        payload: VariantPayload::Named(vec![
+                            VariantField {
+                                docs: vec!["message field".to_owned()],
+                                deprecation: None,
+                                name: "message".to_owned(),
+                                ty: CanonicalType::String,
+                            },
+                            VariantField {
+                                docs: Vec::new(),
+                                deprecation: Some("use text".to_owned()),
+                                name: "code".to_owned(),
+                                ty: CanonicalType::I64,
+                            },
+                        ]),
+                    },
+                    ErrorVariant {
+                        docs: Vec::new(),
+                        deprecation: None,
+                        name: "EmptyNamed".to_owned(),
+                        payload: VariantPayload::Named(Vec::new()),
+                    },
+                ],
+            },
+            capabilities: vec![CapabilityDeclaration {
+                docs: Vec::new(),
+                deprecation: None,
+                name: "inspect".to_owned(),
+                input_name: "name".to_owned(),
+                input_type: CanonicalType::String,
+                output_type: CanonicalType::String,
+                error: "PayloadError".to_owned(),
+                exposure: "external",
+                idempotency: "none",
+            }],
+        };
+        let expected = SchemaDocument {
+            box_id: BoxId::new("payloads").unwrap(),
+            capabilities: vec![SchemaCapability {
+                name: CapabilityName::new("inspect").unwrap(),
+                docs: Vec::new(),
+                deprecation: None,
+                error: "PayloadError".to_owned(),
+                input: InputSlot {
+                    name: "name".to_owned(),
+                    leaf: BoundaryLeaf::String,
+                },
+                output: OutputSlot {
+                    leaf: BoundaryLeaf::String,
+                },
+                shape: Shape::Unary,
+                max_exposure: ExposureLevel::External,
+                idempotency: Idempotency::None,
+            }],
+            provenance: Provenance::new(json!({
+                "generator": "boxology-generator",
+                "generator_version": "0.0.0",
+                "semantic_digest": hash_spelling(&[1; 32]),
+            })),
+            revision: hash_spelling(&[2; 32]),
+            types: vec![SchemaType {
+                name: "PayloadError".to_owned(),
+                docs: Vec::new(),
+                deprecation: None,
+                variants: vec![
+                    SchemaVariant {
+                        name: "Unit".to_owned(),
+                        docs: Vec::new(),
+                        deprecation: None,
+                        payload: SchemaPayload::Unit,
+                    },
+                    SchemaVariant {
+                        name: "Value".to_owned(),
+                        docs: vec!["value variant".to_owned()],
+                        deprecation: None,
+                        payload: SchemaPayload::Value {
+                            docs: vec!["value payload".to_owned()],
+                            deprecation: Some("use detail".to_owned()),
+                            ty: BoundaryLeaf::U32,
+                        },
+                    },
+                    SchemaVariant {
+                        name: "Named".to_owned(),
+                        docs: Vec::new(),
+                        deprecation: Some("retired".to_owned()),
+                        payload: SchemaPayload::Named(vec![
+                            SchemaField {
+                                docs: vec!["message field".to_owned()],
+                                deprecation: None,
+                                name: "message".to_owned(),
+                                ty: BoundaryLeaf::String,
+                            },
+                            SchemaField {
+                                docs: Vec::new(),
+                                deprecation: Some("use text".to_owned()),
+                                name: "code".to_owned(),
+                                ty: BoundaryLeaf::I64,
+                            },
+                        ]),
+                    },
+                    SchemaVariant {
+                        name: "EmptyNamed".to_owned(),
+                        docs: Vec::new(),
+                        deprecation: None,
+                        payload: SchemaPayload::Named(Vec::new()),
+                    },
+                ],
+            }],
+        };
+        assert_ne!(SchemaPayload::Unit, SchemaPayload::Named(Vec::new()));
+        assert_eq!(
+            document("payloads", &contract, &[2; 32], &[1; 32], "0.0.0"),
             expected.canonical_bytes()
         );
     }
