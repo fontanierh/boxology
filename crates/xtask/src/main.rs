@@ -71,6 +71,7 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     source: "crates/boxology-workspace/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
+    witnesses: 5,
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
@@ -80,6 +81,7 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
+        witnesses: 10,
     };
 // This slice pins the generator production source inventory only. Capability purity,
 // source closure, and dependency-graph pins are later #107 slices.
@@ -91,6 +93,7 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
         tests: &["production_source_inventory_is_exact"],
+        witnesses: 5,
     };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("surface-lock", &SURFACE_LOCK_SPEC),
@@ -618,12 +621,42 @@ mod tests {
 
     #[test]
     fn external_test_specs_are_registered_once_by_identity() {
-        let expected: &[(&str, &external_test::ExternalTestSpec)] = &[
-            ("surface-lock", &SURFACE_LOCK_SPEC),
-            ("classifier-surface-lock", &CLASSIFIER_SURFACE_LOCK_SPEC),
+        let expected: &[(&str, external_test::ExternalTestSpec)] = &[
+            (
+                "surface-lock",
+                external_test::ExternalTestSpec {
+                    package: "boxology-workspace",
+                    target: "surface_lock",
+                    manifest: "crates/boxology-workspace/Cargo.toml",
+                    source: "crates/boxology-workspace/tests/surface_lock.rs",
+                    default_source: "tests/surface_lock.rs",
+                    tests: &["surface_and_live_evasions_are_locked"],
+                    witnesses: 5,
+                },
+            ),
+            (
+                "classifier-surface-lock",
+                external_test::ExternalTestSpec {
+                    package: "boxology-classifier",
+                    target: "surface_lock",
+                    manifest: "crates/boxology-classifier/Cargo.toml",
+                    source: "crates/boxology-classifier/tests/surface_lock.rs",
+                    default_source: "tests/surface_lock.rs",
+                    tests: &["surface_and_live_evasions_are_locked"],
+                    witnesses: 10,
+                },
+            ),
             (
                 "generator-source-inventory",
-                &GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
+                external_test::ExternalTestSpec {
+                    package: "boxology-generator-model",
+                    target: "purity_lock",
+                    manifest: "crates/boxology-generator-model/Cargo.toml",
+                    source: "crates/boxology-generator-model/tests/purity_lock.rs",
+                    default_source: "tests/purity_lock.rs",
+                    tests: &["production_source_inventory_is_exact"],
+                    witnesses: 5,
+                },
             ),
         ];
         assert_eq!(
@@ -638,7 +671,7 @@ mod tests {
             );
             let count = EXTERNAL_TEST_SPECS
                 .iter()
-                .filter(|(n, s)| *n == *name && std::ptr::eq(*s, *spec))
+                .filter(|(n, s)| *n == *name && *s == spec)
                 .count();
             assert_eq!(count, 1, "mutation survived: {name}");
         }
@@ -755,11 +788,11 @@ mod tests {
         let source = include_str!("main.rs");
         let body = run_ci_body(source);
         let stripped: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        let pin = "checks.extend(external_test_checks(";
+        let pin = "checks.extend(external_test_checks(&root(),&mut|args|{external_test::cargo(&root(),args)}));";
         assert_eq!(
             stripped.match_indices(pin).count(),
             1,
-            "mutation survived: checks.extend(external_test_checks("
+            "mutation survived: checks.extend(external_test_checks(...cargo...))"
         );
         let deleted = replace_once(&stripped, pin);
         assert_eq!(
