@@ -1541,6 +1541,7 @@ dependencies = [
  "boxology-manifest",
  "boxology-schema",
  "boxology-workspace",
+ "quote",
  "serde_json",
  "sha2",
  "syn 3.0.0",
