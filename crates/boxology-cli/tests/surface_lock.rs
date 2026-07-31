@@ -8,36 +8,48 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use syn::visit::Visit;
-const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs main.rs";
-const FILES: &str = "Cargo.toml src/execute.rs src/generate.rs src/lib.rs src/main.rs src/walk.rs tests/bxw.golden tests/cli.rs tests/execute.rs tests/generation_plan.rs tests/surface_lock.rs";
+const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs classify.rs main.rs";
+const FILES: &str = "Cargo.toml src/classify.rs src/execute.rs src/generate.rs src/lib.rs src/main.rs src/walk.rs tests/bxw.golden tests/classify.rs tests/cli.rs tests/execute.rs tests/generation_plan.rs tests/surface_lock.rs";
 const PACKAGE: &str = include_str!("../Cargo.toml");
-const PACKAGE_HASH: u64 = 13_563_083_464_241_323_814;
+const PACKAGE_HASH: u64 = 4_400_377_577_107_281_090;
 const LIB: &str = include_str!("../src/lib.rs");
 const WALK: &str = include_str!("../src/walk.rs");
 const GENERATE: &str = include_str!("../src/generate.rs");
 const EXECUTE: &str = include_str!("../src/execute.rs");
+const CLASSIFY: &str = include_str!("../src/classify.rs");
 const MAIN: &str = include_str!("../src/main.rs");
 const SOURCES: &[(&str, &str)] = &[
     ("lib.rs", LIB),
     ("walk.rs", WALK),
     ("generate.rs", GENERATE),
     ("execute.rs", EXECUTE),
+    ("classify.rs", CLASSIFY),
     ("main.rs", MAIN),
 ];
 const GOLDEN: &str = include_str!("bxw.golden");
-const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0068 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075";
-const LIB_HASH: u64 = 1_874_236_580_949_743_012;
+const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0068 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079";
+const LIB_HASH: u64 = 7_206_800_631_454_075_744;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
 const GENERATE_HASH: u64 = 2_437_200_502_410_785_768;
-const EXECUTE_HASH: u64 = 10_204_720_481_213_213_050;
+const EXECUTE_HASH: u64 = 7_195_906_979_600_889_935;
+const CLASSIFY_HASH: u64 = 3_088_010_891_603_184_049;
 const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, selection.as_ref())\nexecute(root, generation)\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
 const MAIN_HASH: u64 = 2_327_141_899_214_887_966;
-const HASHES: [u64; 5] = [LIB_HASH, WALK_HASH, GENERATE_HASH, EXECUTE_HASH, MAIN_HASH];
+const HASHES: [u64; 6] = [
+    LIB_HASH,
+    WALK_HASH,
+    GENERATE_HASH,
+    EXECUTE_HASH,
+    CLASSIFY_HASH,
+    MAIN_HASH,
+];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
 const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.generator() == CONTRACT_GENERATOR\nclassification.package() == package.id()\nclassification.derived_output().is_none()\nentry.role() == CrateRole::BoxImplementation\npackage.relative(classification.path())?";
-const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())";
-const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged ExecuteError code location path detail diagnostics write_error execute";
+const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nconst SCHEMA: &str = \"generated/schema.json\";\nfile.path() == SCHEMA";
+const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged base_schema submitted_schema ExecuteError code location path detail diagnostics write_error execute";
+const CLASSIFY_ANCHORS: &str = "map_err(ClassifyError::base)\nmap_err(ClassifyError::submitted)\nmap_err(ClassifyError::pairing)\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
+const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify render";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Drop for Fixture {
@@ -208,43 +220,48 @@ fn source_surface_is_exact_and_mutation_resistant() {
             &source,
             GENERATE,
             EXECUTE,
+            CLASSIFY,
             MAIN,
             [
                 LIB_HASH,
                 hash(&source),
                 GENERATE_HASH,
                 EXECUTE_HASH,
+                CLASSIFY_HASH,
                 hash(MAIN),
             ],
         );
     }
     let mutant = format!("{LIB}// hash mutant\n");
-    rejects(&mutant, WALK, GENERATE, EXECUTE, MAIN, HASHES);
+    rejects(&mutant, WALK, GENERATE, EXECUTE, CLASSIFY, MAIN, HASHES);
     let mutant = format!("{WALK}// hash mutant\n");
-    rejects(LIB, &mutant, GENERATE, EXECUTE, MAIN, HASHES);
+    rejects(LIB, &mutant, GENERATE, EXECUTE, CLASSIFY, MAIN, HASHES);
     let mutant = format!("{GENERATE}// hash mutant\n");
-    rejects(LIB, WALK, &mutant, EXECUTE, MAIN, HASHES);
+    rejects(LIB, WALK, &mutant, EXECUTE, CLASSIFY, MAIN, HASHES);
     let mutant = format!("{EXECUTE}\n/// Mutant.\npub fn mutant() {{}}\n");
     let hashes = [
         LIB_HASH,
         WALK_HASH,
         GENERATE_HASH,
         hash(&mutant),
+        CLASSIFY_HASH,
         hash(MAIN),
     ];
-    rejects(LIB, WALK, GENERATE, &mutant, MAIN, hashes);
+    rejects(LIB, WALK, GENERATE, &mutant, CLASSIFY, MAIN, hashes);
     let mutant = EXECUTE.replace("BXW0070", "BXW9999");
     rejects(
         LIB,
         WALK,
         GENERATE,
         &mutant,
+        CLASSIFY,
         MAIN,
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             hash(&mutant),
+            CLASSIFY_HASH,
             hash(MAIN),
         ],
     );
@@ -262,6 +279,11 @@ fn source_surface_is_exact_and_mutation_resistant() {
             "boxology_generator_writer::write(&package_dir, &tree, plan.outputs())",
             "boxology_generator_writer::write(root, &tree, plan.outputs())",
         ),
+        (
+            "const SCHEMA: &str = \"generated/schema.json\";",
+            "const SCHEMA: &str = OUTPUTS[3];",
+        ),
+        ("file.path() == SCHEMA", "file.path() == OUTPUTS[3]"),
     ] {
         let changed = EXECUTE.replace(anchor, replacement);
         rejects(
@@ -269,11 +291,41 @@ fn source_surface_is_exact_and_mutation_resistant() {
             WALK,
             GENERATE,
             &changed,
+            CLASSIFY,
             MAIN,
             [
                 LIB_HASH,
                 WALK_HASH,
                 GENERATE_HASH,
+                hash(&changed),
+                CLASSIFY_HASH,
+                hash(MAIN),
+            ],
+        );
+    }
+    for (anchor, replacement) in [
+        (
+            "map_err(ClassifyError::base)",
+            "map_err(ClassifyError::submitted)",
+        ),
+        (
+            "boxology_classifier::classify(base.as_ref(), Some(&submitted))",
+            "boxology_classifier::classify(Some(&submitted), base.as_ref())",
+        ),
+    ] {
+        let changed = CLASSIFY.replace(anchor, replacement);
+        rejects(
+            LIB,
+            WALK,
+            GENERATE,
+            EXECUTE,
+            &changed,
+            MAIN,
+            [
+                LIB_HASH,
+                WALK_HASH,
+                GENERATE_HASH,
+                EXECUTE_HASH,
                 hash(&changed),
                 hash(MAIN),
             ],
@@ -294,7 +346,7 @@ fn source_surface_is_exact_and_mutation_resistant() {
         ),
     ] {
         let changed = GENERATE.replace(anchor, replacement);
-        rejects(LIB, WALK, &changed, EXECUTE, MAIN, HASHES);
+        rejects(LIB, WALK, &changed, EXECUTE, CLASSIFY, MAIN, HASHES);
     }
     for (needle, replacement) in [
         ("\"--locked\", ", ""),
@@ -306,12 +358,14 @@ fn source_surface_is_exact_and_mutation_resistant() {
             WALK,
             GENERATE,
             EXECUTE,
+            CLASSIFY,
             MAIN,
             [
                 hash(&changed),
                 WALK_HASH,
                 GENERATE_HASH,
                 EXECUTE_HASH,
+                CLASSIFY_HASH,
                 MAIN_HASH,
             ],
         );
@@ -322,12 +376,14 @@ fn source_surface_is_exact_and_mutation_resistant() {
         WALK,
         GENERATE,
         EXECUTE,
+        CLASSIFY,
         &duplicate,
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
+            CLASSIFY_HASH,
             hash(&duplicate),
         ],
     );
@@ -340,12 +396,14 @@ fn source_surface_is_exact_and_mutation_resistant() {
         WALK,
         GENERATE,
         EXECUTE,
+        CLASSIFY,
         &reworded,
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
+            CLASSIFY_HASH,
             hash(&reworded),
         ],
     );
@@ -358,12 +416,14 @@ fn source_surface_is_exact_and_mutation_resistant() {
         WALK,
         GENERATE,
         EXECUTE,
+        CLASSIFY,
         &second_exit,
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
+            CLASSIFY_HASH,
             hash(&second_exit),
         ],
     );
@@ -373,12 +433,14 @@ fn source_surface_is_exact_and_mutation_resistant() {
         WALK,
         GENERATE,
         EXECUTE,
+        CLASSIFY,
         &fallthrough,
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
+            CLASSIFY_HASH,
             hash(&fallthrough),
         ],
     );
@@ -387,6 +449,7 @@ fn source_surface_is_exact_and_mutation_resistant() {
         ("walk.rs", WALK),
         ("generate.rs", GENERATE),
         ("execute.rs", EXECUTE),
+        ("classify.rs", CLASSIFY),
         ("main.rs", MAIN),
         ("extra.rs", ""),
     ];
@@ -407,12 +470,21 @@ fn source_surface_is_exact_and_mutation_resistant() {
         assert!(!package_is(&mutant, &files));
     }
 }
-fn rejects(lib: &str, walk: &str, generate: &str, execute: &str, main: &str, hashes: [u64; 5]) {
+fn rejects(
+    lib: &str,
+    walk: &str,
+    generate: &str,
+    execute: &str,
+    classify: &str,
+    main: &str,
+    hashes: [u64; 6],
+) {
     let sources = [
         ("lib.rs", lib),
         ("walk.rs", walk),
         ("generate.rs", generate),
         ("execute.rs", execute),
+        ("classify.rs", classify),
         ("main.rs", main),
     ];
     assert!(!locked_sources(&sources, hashes, GOLDEN));
@@ -522,7 +594,7 @@ fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool
 fn package_is(manifest: &str, files: &[String]) -> bool {
     hash(manifest) == PACKAGE_HASH && files.join(" ") == FILES
 }
-fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 5], golden: &str) -> bool {
+fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 6], golden: &str) -> bool {
     if !sources
         .iter()
         .map(|(name, _)| *name)
@@ -540,6 +612,7 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 5], golden: &str) -> b
     }
     let mut lock = Lock::default();
     let mut execute_public = Vec::new();
+    let mut classify_public = Vec::new();
     for &(name, source) in sources.iter().skip(1) {
         lock.public.clear();
         let Ok(file) = syn::parse_file(source) else {
@@ -558,6 +631,9 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 5], golden: &str) -> b
         if name == "execute.rs" {
             execute_public = lock.public.clone();
         }
+        if name == "classify.rs" {
+            classify_public = lock.public.clone();
+        }
     }
     let codes = CODES
         .split_whitespace()
@@ -569,6 +645,7 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 5], golden: &str) -> b
         && lock.tests == 1
         && lock.codes == codes
         && execute_public.join(" ") == EXECUTE_PUBLIC
+        && classify_public.join(" ") == CLASSIFY_PUBLIC
         && render(&lock).is_some_and(|rendered| rendered == golden)
         && ANCHORS
             .lines()
@@ -579,14 +656,19 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 5], golden: &str) -> b
         && EXECUTE_ANCHORS
             .lines()
             .all(|anchor| sources[3].1.matches(anchor).count() == 1)
-        && MAIN_ANCHORS
+        && CLASSIFY_ANCHORS
             .lines()
             .all(|anchor| sources[4].1.matches(anchor).count() == 1)
+        && MAIN_ANCHORS
+            .lines()
+            .all(|anchor| sources[5].1.matches(anchor).count() == 1)
         && sources[0].1.matches(ARGV_SHAPE).count() == 1
         && sources[0].1.matches("#![deny(missing_docs)]").count() == 1
         && sources[0].1.matches("#![forbid(unsafe_code)]").count() == 1
         && sources[3].1.matches("#![deny(missing_docs)]").count() == 1
         && sources[3].1.matches("#![forbid(unsafe_code)]").count() == 1
+        && sources[4].1.matches("#![deny(missing_docs)]").count() == 1
+        && sources[4].1.matches("#![forbid(unsafe_code)]").count() == 1
 }
 fn render(lock: &Lock) -> Option<String> {
     let mut output = format!("sources={}\n", NAMES.replace(' ', ","));

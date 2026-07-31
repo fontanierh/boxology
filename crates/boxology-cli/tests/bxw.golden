@@ -1,4 +1,4 @@
-sources=lib.rs,walk.rs,generate.rs,execute.rs,main.rs
+sources=lib.rs,walk.rs,generate.rs,execute.rs,classify.rs,main.rs
 BXW0061|workspace root must be a real directory containing a regular Cargo.toml|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0062|filesystem refused a directory, symlink, or manifest read|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0063|walked name/path is not a valid RelativePath|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
@@ -13,3 +13,7 @@ BXW0071|the contract generator returned diagnostics|specs/s5-manifest-and-valida
 BXW0072|the generated tree could not be written|specs/s5-manifest-and-validation.md D5
 BXW0073|a generator output is not covered by a declared output pattern|specs/s5-manifest-and-validation.md D5 (inferred)
 BXW0075|cargo metadata could not be executed or did not return valid workspace metadata|specs/s5-manifest-and-validation.md D4
+BXW0076|the checked-in schema document must be a readable regular file|specs/s5-manifest-and-validation.md D5 (inferred)
+BXW0077|the checked-in schema document must satisfy the strict format-1 reader|specs/s4-contract-change-classification.md D1; specs/s5-manifest-and-validation.md D5
+BXW0078|the regenerated schema document must satisfy the strict format-1 reader|specs/s4-contract-change-classification.md D1; specs/s5-manifest-and-validation.md D5
+BXW0079|the checked-in and regenerated schema documents must pair for classification|specs/s4-contract-change-classification.md D2; specs/s5-manifest-and-validation.md D5

@@ -9,7 +9,7 @@ use boxology_generator_model::GenerationRequest;
 use boxology_generator_writer::WriteError;
 use boxology_manifest::RelativePath;
 use std::{
-    fmt, fs,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
@@ -20,18 +20,25 @@ const INPUT_TEXT: &str = "a generation input must be a readable regular file";
 const GENERATOR_TEXT: &str = "the contract generator returned diagnostics";
 const WRITER_TEXT: &str = "the generated tree could not be written";
 const COVERAGE_TEXT: &str = "a generator output is not covered by a declared output pattern";
+const SCHEMA_TEXT: &str = "the checked-in schema document must be a readable regular file";
 const INPUT: Rule = ("BXW0070", INPUT_TEXT, SOURCE);
 const GENERATOR: Rule = ("BXW0071", GENERATOR_TEXT, SOURCE);
 const WRITER: Rule = ("BXW0072", WRITER_TEXT, SOURCE);
 // This is an inference: D5 supplies the fixed generator output set and the plan supplies the
 // manifest output patterns, but does not state the implication that every fixed output is covered.
 const COVERAGE: Rule = ("BXW0073", COVERAGE_TEXT, INFERRED_SOURCE);
+// This is an inference: D5 requires reading the checked-in schema as classification base, and the
+// CLI's ingestion refuses symlinks and non-regular files with the same strength as BXW0070.
+const SCHEMA_FILE: Rule = ("BXW0076", SCHEMA_TEXT, INFERRED_SOURCE);
+const SCHEMA: &str = "generated/schema.json";
 
 /// The files changed by one accepted execution, in deterministic logical-path order.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Outcome {
     written: Vec<String>,
     removed: Vec<String>,
+    base_schema: Option<Vec<u8>>,
+    submitted_schema: Vec<u8>,
 }
 
 impl Outcome {
@@ -48,6 +55,16 @@ impl Outcome {
     /// Reports whether no generated file was written and no stale file was removed.
     pub fn is_unchanged(&self) -> bool {
         self.written.is_empty() && self.removed.is_empty()
+    }
+
+    /// Returns the pre-write checked-in `generated/schema.json` bytes, when present.
+    pub fn base_schema(&self) -> Option<&[u8]> {
+        self.base_schema.as_deref()
+    }
+
+    /// Returns the regenerated `generated/schema.json` bytes from the in-memory tree.
+    pub fn submitted_schema(&self) -> &[u8] {
+        &self.submitted_schema
     }
 }
 
@@ -66,6 +83,7 @@ enum Cause {
     Generator(Diagnostics),
     Writer(WriteError),
     Coverage,
+    Schema,
 }
 
 impl ExecuteError {
@@ -93,7 +111,7 @@ impl ExecuteError {
     pub fn diagnostics(&self) -> Option<&Diagnostics> {
         match &self.cause {
             Cause::Generator(diagnostics) => Some(diagnostics),
-            Cause::Input | Cause::Writer(_) | Cause::Coverage => None,
+            Cause::Input | Cause::Writer(_) | Cause::Coverage | Cause::Schema => None,
         }
     }
 
@@ -101,7 +119,7 @@ impl ExecuteError {
     pub fn write_error(&self) -> Option<&WriteError> {
         match &self.cause {
             Cause::Writer(error) => Some(error),
-            Cause::Input | Cause::Generator(_) | Cause::Coverage => None,
+            Cause::Input | Cause::Generator(_) | Cause::Coverage | Cause::Schema => None,
         }
     }
 
@@ -140,6 +158,15 @@ impl ExecuteError {
             cause: Cause::Coverage,
         }
     }
+
+    fn schema(path: PathBuf) -> Self {
+        Self {
+            code: SCHEMA_FILE.0,
+            location: path,
+            detail: SCHEMA_FILE.1,
+            cause: Cause::Schema,
+        }
+    }
 }
 
 impl fmt::Display for ExecuteError {
@@ -152,7 +179,7 @@ impl fmt::Display for ExecuteError {
         match &self.cause {
             Cause::Generator(diagnostics) => write!(formatter, ": {diagnostics}"),
             Cause::Writer(error) => write!(formatter, ": {error}"),
-            Cause::Input | Cause::Coverage => Ok(()),
+            Cause::Input | Cause::Coverage | Cause::Schema => Ok(()),
         }
     }
 }
@@ -161,7 +188,7 @@ impl std::error::Error for ExecuteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.cause {
             Cause::Writer(error) => Some(error),
-            Cause::Input | Cause::Generator(_) | Cause::Coverage => None,
+            Cause::Input | Cause::Generator(_) | Cause::Coverage | Cause::Schema => None,
         }
     }
 }
@@ -170,11 +197,13 @@ impl std::error::Error for ExecuteError {
 ///
 /// Inputs are read in sorted logical-path order after refusing symlinks in every input ancestor.
 /// The package directory is `root` joined with the plan's validated package root.
+/// Pre-write capture records the checked-in schema bytes beside the regenerated tree bytes.
 ///
 /// # Errors
 /// Returns `BXW0070` for a missing, unreadable, or non-regular input; `BXW0071` with generator
-/// diagnostics; `BXW0072` with the writer error; or `BXW0073` when a fixed generator output is not
-/// covered by the plan's declared patterns.
+/// diagnostics; `BXW0072` with the writer error; `BXW0073` when a fixed generator output is not
+/// covered by the plan's declared patterns; or `BXW0076` when the checked-in schema is present but
+/// not a readable regular file.
 pub fn execute(root: &Path, plan: &GenerationPlan) -> Result<Outcome, ExecuteError> {
     let package_root = plan.package_root().map_or("", RelativePath::as_str);
     let package_dir = guarded(root, package_root, false)?;
@@ -215,6 +244,14 @@ pub fn execute(root: &Path, plan: &GenerationPlan) -> Result<Outcome, ExecuteErr
             return Err(ExecuteError::coverage(package_dir.join(output.as_str())));
         }
     }
+    let submitted_schema = tree
+        .files()
+        .iter()
+        .find(|file| file.path() == SCHEMA)
+        .expect("generator outputs include schema.json")
+        .bytes()
+        .to_vec();
+    let base_schema = read_base_schema(&package_dir)?;
     guarded(root, package_root, false)?;
     let changes = boxology_generator_writer::write(&package_dir, &tree, plan.outputs())
         .map_err(|error| ExecuteError::writer(package_dir, error))?;
@@ -222,7 +259,25 @@ pub fn execute(root: &Path, plan: &GenerationPlan) -> Result<Outcome, ExecuteErr
     let mut removed = changes.removed;
     written.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     removed.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-    Ok(Outcome { written, removed })
+    Ok(Outcome {
+        written,
+        removed,
+        base_schema,
+        submitted_schema,
+    })
+}
+
+fn read_base_schema(package_dir: &Path) -> Result<Option<Vec<u8>>, ExecuteError> {
+    let location = package_dir.join(SCHEMA);
+    match fs::symlink_metadata(&location) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) | Ok(_) => {
+            let path = guarded(package_dir, SCHEMA, true)
+                .map_err(|error| ExecuteError::schema(error.location().to_path_buf()))?;
+            let bytes = fs::read(&path).map_err(|_| ExecuteError::schema(path))?;
+            Ok(Some(bytes))
+        }
+    }
 }
 
 fn guarded(root: &Path, relative: &str, file: bool) -> Result<PathBuf, ExecuteError> {

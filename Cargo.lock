@@ -51,11 +51,13 @@ dependencies = [
 name = "boxology-cli"
 version = "0.0.0"
 dependencies = [
+ "boxology-classifier",
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",
  "boxology-generator-writer",
  "boxology-manifest",
+ "boxology-schema",
  "boxology-workspace",
  "syn 3.0.0",
 ]
