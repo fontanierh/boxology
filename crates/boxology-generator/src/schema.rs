@@ -1,6 +1,7 @@
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_contract_syntax::{
-    CanonicalType, CapabilityDeclaration, Contract, VariantField, VariantPayload, VariantValue,
+    CanonicalType, CapabilityDeclaration, Contract, ErrorVariant, VariantField, VariantPayload,
+    VariantValue,
 };
 use boxology_schema::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
@@ -140,22 +141,35 @@ fn leaf(leaf: CanonicalType) -> BoundaryLeaf {
     }
 }
 
+/// Emits one `VariantDescriptor::new(...)` call for a generated error variant.
+///
+/// One-value payloads lower to `VariantPayload::Value(TypeDescriptor::{leaf}())`. Named payloads
+/// remain BXG0048-gated: the gate is the only thing keeping this honest for named shapes. When
+/// #104's named slice lifts that gate, this helper must learn named payloads in the same change.
+pub(super) fn variant_descriptor_source(variant: &ErrorVariant) -> String {
+    let payload = match &variant.payload {
+        VariantPayload::Unit => "::boxology_contract::VariantPayload::Unit".to_owned(),
+        VariantPayload::Value(value) => format!(
+            "::boxology_contract::VariantPayload::Value(::boxology_contract::TypeDescriptor::{}())",
+            descriptor_constructor(value.ty)
+        ),
+        VariantPayload::Named(_) => {
+            unreachable!("named payloads remain BXG0048-gated and must not reach emission")
+        }
+    };
+    format!(
+        "::boxology_contract::VariantDescriptor::new({name:?}, {payload}, {deprecation}),",
+        name = variant.name,
+        deprecation = rust_deprecation(&variant.deprecation),
+    )
+}
+
 pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u8; 32]) -> String {
     let error = &contract.error;
-    // Payload-blind on purpose: every variant emits as `Unit`. BXG0048 is what keeps
-    // that honest, rejecting payload-carrying contracts before generation reaches
-    // here. When #104 lifts that gate this must learn payloads in the same change,
-    // or descriptors will claim payload-bearing variants are `Unit`.
     let variants = error
         .variants
         .iter()
-        .map(|variant| {
-            format!(
-                "::boxology_contract::VariantDescriptor::new({name:?}, ::boxology_contract::VariantPayload::Unit, {deprecation}),",
-                name = variant.name,
-                deprecation = rust_deprecation(&variant.deprecation),
-            )
-        })
+        .map(variant_descriptor_source)
         .collect::<String>();
     // Every capability binds `box_id.clone()` and MUST run before `ContractDescriptor::new`
     // moves `box_id`. At a single capability the binding name, error move, and array are the

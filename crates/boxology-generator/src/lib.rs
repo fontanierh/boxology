@@ -2,7 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_contract_syntax::{CanonicalType, CapabilityDeclaration, Contract};
+use boxology_contract_syntax::{CanonicalType, CapabilityDeclaration, Contract, VariantPayload};
 use boxology_generator_model::{Diagnostics, GenerationRequest, ImportModel, ParsedRustInputs};
 
 mod schema;
@@ -75,41 +75,74 @@ pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostic
     let variants = error
         .variants
         .iter()
-        .map(|variant| {
-            format!(
+        .map(|variant| match &variant.payload {
+            VariantPayload::Unit => format!(
                 "{}{},",
                 attributes(&variant.docs, &variant.deprecation),
                 variant.name
-            )
+            ),
+            VariantPayload::Value(value) => format!(
+                "{}{}({}{}),",
+                attributes(&variant.docs, &variant.deprecation),
+                variant.name,
+                attributes(&value.docs, &value.deprecation),
+                rust_value_type(value.ty, true)
+            ),
+            VariantPayload::Named(_) => {
+                unreachable!("named payloads remain BXG0048-gated and must not reach emission")
+            }
         })
         .collect::<String>();
     let encode_arms = error
         .variants
         .iter()
-        .map(|variant| {
-            format!(
+        .map(|variant| match &variant.payload {
+            VariantPayload::Unit => format!(
                 "Self::{} => ({:?}.into(), ::boxology_contract::SlotValue::Null),",
                 variant.name, variant.name
-            )
+            ),
+            VariantPayload::Value(_) => format!(
+                "Self::{name}(value) => ({name:?}.into(), value.encode().map_err(|error| error.under(::boxology_contract::PathSegment::Variant({name:?}.into())))?),",
+                name = variant.name
+            ),
+            VariantPayload::Named(_) => {
+                unreachable!("named payloads remain BXG0048-gated and must not reach emission")
+            }
         })
         .collect::<String>();
     let decode_arms = error
         .variants
         .iter()
-        .map(|variant| {
-            format!(
+        .map(|variant| match &variant.payload {
+            VariantPayload::Unit => format!(
                 r#"
                 {name:?} if matches!(payload, ::boxology_contract::SlotValue::Null) => Ok(Self::{name}),
                 {name:?} => Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnexpectedPayload).under(::boxology_contract::PathSegment::Variant(tag.into()))),
                 "#,
                 name = variant.name
-            )
+            ),
+            VariantPayload::Value(value) => format!(
+                "{name:?} => {leaf}::decode(payload).map(Self::{name}).map_err(|error| error.under(::boxology_contract::PathSegment::Variant(tag.into()))),",
+                name = variant.name,
+                leaf = rust_value_type(value.ty, true)
+            ),
+            VariantPayload::Named(_) => {
+                unreachable!("named payloads remain BXG0048-gated and must not reach emission")
+            }
         })
         .collect::<String>();
     let tag_arms = error
         .variants
         .iter()
-        .map(|variant| format!("Self::{} => {:?},", variant.name, variant.name))
+        .map(|variant| match &variant.payload {
+            VariantPayload::Unit => format!("Self::{} => {:?},", variant.name, variant.name),
+            VariantPayload::Value(_) => {
+                format!("Self::{}(..) => {:?},", variant.name, variant.name)
+            }
+            VariantPayload::Named(_) => {
+                unreachable!("named payloads remain BXG0048-gated and must not reach emission")
+            }
+        })
         .collect::<String>();
     let error_abi = format!(
         r#"
@@ -904,13 +937,7 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
         .error
         .variants
         .iter()
-        .map(|variant| {
-            format!(
-                "::boxology_contract::VariantDescriptor::new({name:?}, ::boxology_contract::VariantPayload::Unit, {}),",
-                rust_deprecation(variant.deprecation.as_deref()),
-                name = variant.name,
-            )
-        })
+        .map(schema::variant_descriptor_source)
         .collect::<String>();
     let trait_methods = contract
         .capabilities
@@ -1092,7 +1119,8 @@ fn screaming_snake(ident: &str) -> String {
 ///
 /// Every scalar leaf spells identically bare and qualified (`u32` -> `u32`); only `String` differs
 /// (`String` bare, `::std::string::String` qualified). `Blob` never reaches emission because
-/// `require_v0_emittable` fails it closed, but a spelling is provided for completeness.
+/// `require_v0_emittable` fails closed on Blob capability boundaries and value-payload leaves, but a
+/// spelling is provided for completeness.
 fn rust_value_type(leaf: CanonicalType, qualified: bool) -> &'static str {
     match leaf {
         CanonicalType::String if qualified => "::std::string::String",
@@ -1100,17 +1128,6 @@ fn rust_value_type(leaf: CanonicalType, qualified: bool) -> &'static str {
         CanonicalType::Blob if qualified => "::boxology_contract::Blob",
         CanonicalType::Blob => "Blob",
         scalar => scalar.canonical_name(),
-    }
-}
-
-fn rust_deprecation(note: Option<&str>) -> String {
-    match note {
-        None => "None".into(),
-        Some("") => "Some(::boxology_contract::Deprecation::new(None))".into(),
-        Some(note) => format!(
-            "Some(::boxology_contract::Deprecation::new(Some({note:?}.into())))",
-            note = note,
-        ),
     }
 }
 
@@ -2292,16 +2309,34 @@ macro_rules! __boxology_check_implementation {
     }
 
     #[test]
-    fn payload_variants_fail_before_schema_revision_or_emission() {
-        let payload = CONTRACT.replace("EmptyName", "Code(u32)");
-        let diagnostics = generate(&request(&payload, false, OUTPUTS.to_vec())).unwrap_err();
+    fn value_payload_generates_and_named_payload_fails_before_emission() {
+        let value = CONTRACT.replace("EmptyName", "Code(u32)");
+        let generated = generate(&request(&value, false, OUTPUTS.to_vec())).expect("value payload");
+        let rust =
+            std::str::from_utf8(file(&generated, "generated/contract/src/lib.rs").bytes()).unwrap();
+        assert!(rust.contains("Code(u32)"));
+
+        let named = CONTRACT.replace("EmptyName", "Detail { message: String }");
+        let diagnostics = generate(&request(&named, false, OUTPUTS.to_vec())).unwrap_err();
         assert_eq!(
             diagnostics.to_string(),
-            "BXG0048 src/lib.rs:1:11-1:19 offending=\"payload-bearing error variants are not yet emittable\" rule=\"payload-bearing error variants require coordinated schema and contract-emitter support\" source=\"specs/s2-contract-generator.md D3\""
+            "BXG0048 src/lib.rs:1:11-1:19 offending=\"named-field error variants are not yet emittable\" rule=\"named-field payloads require contract-emitter support\" source=\"specs/s2-contract-generator.md D3\""
         );
 
-        let mixed = payload.replace("name:String", "name:Blob");
-        let diagnostics = generate(&request(&mixed, false, OUTPUTS.to_vec())).unwrap_err();
+        let value_blob = CONTRACT.replace("EmptyName", "Code(Blob)");
+        let diagnostics = generate(&request(&value_blob, false, OUTPUTS.to_vec())).unwrap_err();
+        assert_eq!(
+            diagnostics.to_string(),
+            "BXG0040 src/lib.rs:1:11-1:19 offending=\"Blob capability boundary or value-payload leaf not yet emittable in v0\" rule=\"the `Blob` capability boundary or value-payload leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.\" source=\"specs/s2-contract-generator.md D3,D5\""
+        );
+
+        let empty_named = CONTRACT.replace("EmptyName", "EmptyNamed {}");
+        let diagnostics = generate(&request(&empty_named, false, OUTPUTS.to_vec())).unwrap_err();
+        assert_eq!(diagnostics.as_slice().len(), 1);
+        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0048");
+
+        let named_and_blob = named.replace("name:String", "name:Blob");
+        let diagnostics = generate(&request(&named_and_blob, false, OUTPUTS.to_vec())).unwrap_err();
         assert_eq!(
             diagnostics
                 .as_slice()
@@ -2315,6 +2350,59 @@ macro_rules! __boxology_check_implementation {
                 .as_slice()
                 .iter()
                 .all(|diagnostic| diagnostic.span() == diagnostics.as_slice()[0].span())
+        );
+    }
+
+    const VALUE_PAYLOAD: &str = "boxology::contract! { #[error] pub enum Fault { #[doc = \"code variant\"] Code(#[doc = \"code payload\"] #[deprecated(note = \"use detail\")] u32), Empty } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+
+    #[test]
+    fn value_payload_emission_pins_enum_abi_and_both_descriptor_sites() {
+        let generated = tree(VALUE_PAYLOAD, false);
+        let rust =
+            std::str::from_utf8(file(&generated, "generated/contract/src/lib.rs").bytes()).unwrap();
+        for expected in [
+            "///code variant",
+            "Code(",
+            "///code payload",
+            "#[deprecated(note = \"use detail\")]",
+            "u32,",
+            "value\n                        .encode()\n                        .map_err(|error| {\n                            error\n                                .under(\n                                    ::boxology_contract::PathSegment::Variant(\"Code\".into()),\n                                )\n                        })?,",
+            "u32::decode(payload)\n                    .map(Self::Code)\n                    .map_err(|error| {\n                        error\n                            .under(::boxology_contract::PathSegment::Variant(tag.into()))\n                    })",
+            "Self::Code(..) => \"Code\",",
+            "Self::Empty => (\"Empty\".into(), ::boxology_contract::SlotValue::Null),",
+        ] {
+            assert!(rust.contains(expected), "missing {expected} in {rust}");
+        }
+        let value_payload_token = "::boxology_contract::VariantPayload::Value(\n                    ::boxology_contract::TypeDescriptor::u32(),\n                )";
+        assert_eq!(
+            rust.matches(value_payload_token).count(),
+            2,
+            "both descriptor sites must emit VariantPayload::Value(TypeDescriptor::u32())"
+        );
+        assert!(rust.contains("static FAULT_DESCRIPTOR"));
+        assert!(rust.contains("static __BOXOLOGY_CONTRACT_DESCRIPTOR"));
+
+        let model = scalar_model(VALUE_PAYLOAD).model().clone();
+        let descriptor = schema::descriptor_source("hello", &model, &[0u8; 32]);
+        let dispatch = dispatch_source("hello", &model);
+        let shared = "::boxology_contract::VariantDescriptor::new(\"Code\", ::boxology_contract::VariantPayload::Value(::boxology_contract::TypeDescriptor::u32()), None),";
+        assert!(
+            descriptor.contains(shared),
+            "contract descriptor must use shared helper tokens"
+        );
+        assert!(
+            dispatch.contains(shared),
+            "FAULT_DESCRIPTOR must use shared helper tokens"
+        );
+        assert_eq!(
+            descriptor.matches(shared).count(),
+            1,
+            "contract descriptor site"
+        );
+        assert_eq!(
+            dispatch.matches(shared).count(),
+            1,
+            "dispatch descriptor site"
         );
     }
 
@@ -2889,6 +2977,109 @@ macro_rules! __boxology_check_implementation {
                 .status
                 .success()
         );
+
+        let value_payload = "boxology::contract! { #[error] pub enum Fault { Code(u32), Empty } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        for file in tree(value_payload, false).files() {
+            fs::write(root.join(file.path()), file.bytes()).unwrap();
+        }
+        let value_body = r#"
+            use boxology_contract::{CallError, ErasedCallError};
+            let descriptor = boxology_generated_contract::contract_descriptor();
+            let fault_descriptor = descriptor.capabilities()[0].error();
+            assert!(matches!(
+                fault_descriptor.view(),
+                DescriptorRef::Enum(variants)
+                    if variants.len() == 2
+                        && variants[0].tag() == "Code"
+                        && matches!(variants[0].payload(), VariantPayload::Value(_))
+                        && variants[1].tag() == "Empty"
+                        && matches!(variants[1].payload(), VariantPayload::Unit)
+            ));
+            let known = Fault::Code(7);
+            let encoded = known.encode_value().unwrap();
+            assert_eq!(
+                encoded,
+                ContractValue::enum_value("Code", SlotValue::Value(ContractValue::u64(7)))
+            );
+            assert_eq!(Fault::decode_value(&encoded).unwrap(), known);
+            assert_eq!(known.error_tag(), "Code");
+            let unit_payload = ContractValue::enum_value(
+                "Empty",
+                SlotValue::Value(ContractValue::u64(1)),
+            );
+            let unexpected = Fault::decode_value(&unit_payload).unwrap_err();
+            assert_eq!(unexpected.kind(), &DecodeErrorKind::UnexpectedPayload);
+            assert_eq!(unexpected.path(), &[PathSegment::Variant("Empty".into())]);
+            let unknown = Fault::Unknown {
+                tag: "Future".into(),
+                payload: OpaquePayload::new(OpaqueTree::String("secret".into())),
+            };
+            assert_eq!(
+                Fault::decode_value(&unknown.encode_value().unwrap()).unwrap(),
+                unknown
+            );
+            let erased = ErasedCallError::from_domain(&known);
+            assert_eq!(
+                erased.into_typed::<Fault>(fault_descriptor),
+                CallError::Domain(Fault::Code(7))
+            );
+            let _: boxology_generated_contract::Fault = known;
+        "#;
+        fs::write(
+            consumer.join("src/main.rs"),
+            source("Fault", "Code(u32), Empty", value_body.to_string()),
+        )
+        .unwrap();
+        let value_run = cargo("run", &manifest, "consumer-value-target");
+        assert!(
+            value_run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&value_run.stderr)
+        );
+
+        let path_locality = "boxology::contract! { #[error] pub enum Fault { Bad(f32) } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        for file in tree(path_locality, false).files() {
+            fs::write(root.join(file.path()), file.bytes()).unwrap();
+        }
+        let path_body = r#"
+            use boxology_contract::{EncodeErrorKind, PathSegment};
+            let error = Fault::Bad(f32::NAN).encode_value().unwrap_err();
+            assert_eq!(error.kind(), &EncodeErrorKind::NonFiniteF32);
+            assert_eq!(error.path(), &[PathSegment::Variant("Bad".into())]);
+            let mismatched = ContractValue::enum_value(
+                "Bad",
+                SlotValue::Value(ContractValue::string("not-a-float")),
+            );
+            let decode_error = Fault::decode_value(&mismatched).unwrap_err();
+            assert_eq!(decode_error.path(), &[PathSegment::Variant("Bad".into())]);
+        "#;
+        fs::write(
+            consumer.join("src/main.rs"),
+            source("Fault", "Bad(f32)", path_body.to_string()),
+        )
+        .unwrap();
+        let path_run = cargo("run", &manifest, "consumer-path-target");
+        assert!(
+            path_run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&path_run.stderr)
+        );
+        fs::write(
+            consumer.join("src/main.rs"),
+            source(
+                "Fault",
+                "Code(String), Empty",
+                "let _ = Fault::Code(String::from(\"stale\"));".to_string(),
+            ),
+        )
+        .unwrap();
+        let stale_payload = cargo("check", &manifest, "consumer-value-target");
+        assert!(!stale_payload.status.success());
+        assert!(
+            String::from_utf8_lossy(&stale_payload.stderr)
+                .contains("Boxology generated contract is stale")
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -47,10 +47,9 @@ const CONTROLLED_SITE_RULE: &str =
     "exact boxology::contract! invocations must appear once at reachable module scope";
 const CONTROLLED_PARSE_RULE: &str = "contract tokens must satisfy the controlled v0 grammar";
 const CONTROLLED_PARSE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
-const EMITTABLE_RULE: &str = "the `Blob` capability boundary leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.";
+const EMITTABLE_RULE: &str = "the `Blob` capability boundary or value-payload leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.";
 const EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3,D5";
-const PAYLOAD_EMITTABLE_RULE: &str =
-    "payload-bearing error variants require coordinated schema and contract-emitter support";
+const PAYLOAD_EMITTABLE_RULE: &str = "named-field payloads require contract-emitter support";
 const PAYLOAD_EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
 
 /// Every successfully parsed Rust input, sorted by logical-path bytes.
@@ -135,42 +134,49 @@ impl ControlledContract {
 
     /// Fails closed when parsed semantics are not yet supported by the v0 emitter.
     ///
-    /// Scalar leaves and `String` are emittable and pass; the plain parse path still returns the full
-    /// `Blob` and payload-bearing models so later tasks can consume them, while this guard prevents
-    /// honest parsing from silently emitting unsupported artifacts. Contracts holding any number of
-    /// capabilities are emittable; the guard checks every capability's boundary leaves.
+    /// Scalar leaves and `String` are emittable, including as one-value error payloads; the plain
+    /// parse path still returns the full `Blob` and named-payload models so later tasks can consume
+    /// them, while this guard prevents honest parsing from silently emitting unsupported artifacts.
+    /// Contracts holding any number of capabilities are emittable; the guard checks every
+    /// capability's boundary leaves and every value-payload leaf.
     ///
     /// # Errors
-    /// Returns at most one `BXG0040` for a `Blob` capability boundary and at most one `BXG0048`
-    /// for any payload-bearing error variant, both at the contract-invocation span.
+    /// Returns at most one `BXG0040` for a `Blob` capability or value-payload leaf and at most one
+    /// `BXG0048` for any named-field error variant, both at the contract-invocation span.
     pub fn require_v0_emittable(&self) -> Result<(), Diagnostics> {
         let has_blob_boundary =
             self.model.capabilities.iter().any(|capability| {
                 capability.input_type.is_blob() || capability.output_type.is_blob()
+            }) || self.model.error.variants.iter().any(|variant| {
+                matches!(
+                    &variant.payload,
+                    boxology_contract_syntax::VariantPayload::Value(value) if value.ty.is_blob()
+                )
             });
-        let has_payload = self
-            .model
-            .error
-            .variants
-            .iter()
-            .any(|variant| !variant.payload.is_unit());
+        let has_named_payload = self.model.error.variants.iter().any(|variant| {
+            matches!(
+                &variant.payload,
+                boxology_contract_syntax::VariantPayload::Named(_)
+            )
+        });
         let mut diagnostics = Vec::new();
         if has_blob_boundary {
             diagnostics.push(Diagnostic {
                 path: self.source.clone(),
                 span: self.span,
                 code: "BXG0040",
-                offending: "Blob capability boundary leaf not yet emittable in v0".into(),
+                offending: "Blob capability boundary or value-payload leaf not yet emittable in v0"
+                    .into(),
                 rule: EMITTABLE_RULE,
                 rule_source: EMITTABLE_RULE_SOURCE,
             });
         }
-        if has_payload {
+        if has_named_payload {
             diagnostics.push(Diagnostic {
                 path: self.source.clone(),
                 span: self.span,
                 code: "BXG0048",
-                offending: "payload-bearing error variants are not yet emittable".into(),
+                offending: "named-field error variants are not yet emittable".into(),
                 rule: PAYLOAD_EMITTABLE_RULE,
                 rule_source: PAYLOAD_EMITTABLE_RULE_SOURCE,
             });
@@ -2312,24 +2318,54 @@ mod tests {
     }
 
     #[test]
-    fn payloads_are_modelled_but_v0_emittability_is_deterministic_and_fail_closed() {
-        let source = "boxology::contract! { #[error] pub enum Fault { Code(u32), Detail { message: String } } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
-        let model = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", source)]))
+    fn value_payloads_are_emittable_and_named_payloads_remain_fail_closed() {
+        let value = "boxology::contract! { #[error] pub enum Fault { Code(u32) } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        let model = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", value)]))
+            .unwrap()
+            .controlled_contract()
+            .unwrap();
+        model
+            .require_v0_emittable()
+            .expect("one-value payloads must gate clean");
+
+        let named = "boxology::contract! { #[error] pub enum Fault { Detail { message: String } } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        let model = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", named)]))
             .unwrap()
             .controlled_contract()
             .unwrap();
         let diagnostics = model.require_v0_emittable().unwrap_err();
         assert_eq!(
             diagnostics.to_string(),
-            "BXG0048 root.rs:1:11-1:19 offending=\"payload-bearing error variants are not yet emittable\" rule=\"payload-bearing error variants require coordinated schema and contract-emitter support\" source=\"specs/s2-contract-generator.md D3\""
+            "BXG0048 root.rs:1:11-1:19 offending=\"named-field error variants are not yet emittable\" rule=\"named-field payloads require contract-emitter support\" source=\"specs/s2-contract-generator.md D3\""
         );
 
-        let blob = source.replace("name:String", "name:Blob");
-        let blob = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &blob)]))
+        let value_blob = "boxology::contract! { #[error] pub enum Fault { Code(Blob) } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        let blob = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", value_blob)]))
             .unwrap()
             .controlled_contract()
             .unwrap();
         let diagnostics = blob.require_v0_emittable().unwrap_err();
+        assert_eq!(
+            diagnostics.to_string(),
+            "BXG0040 root.rs:1:11-1:19 offending=\"Blob capability boundary or value-payload leaf not yet emittable in v0\" rule=\"the `Blob` capability boundary or value-payload leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.\" source=\"specs/s2-contract-generator.md D3,D5\""
+        );
+
+        let empty_named = "boxology::contract! { #[error] pub enum Fault { EmptyNamed {} } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        let empty = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", empty_named)]))
+            .unwrap()
+            .controlled_contract()
+            .unwrap();
+        let diagnostics = empty.require_v0_emittable().unwrap_err();
+        assert_eq!(diagnostics.as_slice().len(), 1);
+        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0048");
+
+        let named_and_blob_boundary = "boxology::contract! { #[error] pub enum Fault { Detail { message: String } } #[capability(exposure=external)] pub async fn greet(name:Blob)->Result<String,Fault>; }";
+        let mixed =
+            ParsedRustInputs::parse(&request("root.rs", &[("root.rs", named_and_blob_boundary)]))
+                .unwrap()
+                .controlled_contract()
+                .unwrap();
+        let diagnostics = mixed.require_v0_emittable().unwrap_err();
         assert_eq!(
             diagnostics
                 .as_slice()
@@ -2339,15 +2375,16 @@ mod tests {
             ["BXG0040", "BXG0048"]
         );
 
-        let payload_blob = source.replace("message: String", "message: Blob");
-        let payload_blob =
-            ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &payload_blob)]))
-                .unwrap()
-                .controlled_contract()
-                .unwrap();
+        let named_blob = "boxology::contract! { #[error] pub enum Fault { Detail { message: Blob } } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,Fault>; }";
+        let payload_blob = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", named_blob)]))
+            .unwrap()
+            .controlled_contract()
+            .unwrap();
         let diagnostics = payload_blob.require_v0_emittable().unwrap_err();
+        assert_eq!(diagnostics.as_slice().len(), 1);
         assert_eq!(diagnostics.as_slice()[0].code(), "BXG0048");
-        let invalid = source.replace("message: String", "message: Vec<u8>");
+
+        let invalid = named.replace("message: String", "message: Vec<u8>");
         let diagnostics = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &invalid)]))
             .unwrap()
             .controlled_contract()
