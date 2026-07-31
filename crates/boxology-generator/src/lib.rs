@@ -1133,6 +1133,7 @@ fn attributes(docs: &[String], deprecation: &Option<String>) -> String {
 mod tests {
     use super::*;
     use boxology_contract::{BoxId, ContractRevision};
+    use boxology_schema::{SchemaDocument, SchemaPayload};
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
 
@@ -2315,6 +2316,387 @@ macro_rules! __boxology_check_implementation {
                 .iter()
                 .all(|diagnostic| diagnostic.span() == diagnostics.as_slice()[0].span())
         );
+    }
+
+    /// Mixed payload fixture mirroring PR1 `mixed_payloads` — the cross-crate semantic anchor.
+    const MIXED: &str = "boxology::contract! { #[error] pub enum PayloadError { Unit, #[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32), #[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }, EmptyNamed {} } #[capability(exposure=external)] pub async fn inspect(name:String)->Result<String,PayloadError>; }";
+
+    fn mixed_contract() -> boxology_generator_model::ControlledContract {
+        scalar_model(MIXED)
+    }
+
+    fn mixed_revision_of(source: &str) -> [u8; 32] {
+        schema::revision("payloads", scalar_model(source).model())
+    }
+
+    fn hash_hex(hash: &[u8; 32]) -> String {
+        format!(
+            "sha256:{}",
+            hash.iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )
+    }
+
+    fn assert_unique(anchor: &str) {
+        assert_eq!(
+            MIXED.matches(anchor).count(),
+            1,
+            "mutation anchor must occur exactly once: {anchor}"
+        );
+    }
+
+    const MIXED_SCHEMA: &[u8] = br#"{
+  "box_id": "payloads",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "PayloadError",
+      "id": "payloads.inspect",
+      "idempotency": "none",
+      "input": {
+        "name": "name",
+        "type": "String"
+      },
+      "max_exposure": "external",
+      "name": "inspect",
+      "output": {
+        "type": "String"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "generator": "boxology-generator",
+    "generator_version": "0.0.0",
+    "semantic_digest": "sha256:795b2224a1e4cc8360b5cf541499efad26adf3619bb4afa6748c159373d44806"
+  },
+  "revision": "sha256:ab76207e29cc030e0a072ccfad054352e67fd98871a84a1b820a162eb411597e",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "PayloadError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Unit",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [
+            "value variant"
+          ],
+          "name": "Value",
+          "payload": {
+            "deprecation": {
+              "note": "use detail"
+            },
+            "docs": [
+              "value payload"
+            ],
+            "kind": "value",
+            "type": "u32"
+          }
+        },
+        {
+          "deprecation": {
+            "note": "retired"
+          },
+          "docs": [],
+          "name": "Named",
+          "payload": {
+            "fields": [
+              {
+                "deprecation": null,
+                "docs": [
+                  "message field"
+                ],
+                "name": "message",
+                "type": "String"
+              },
+              {
+                "deprecation": {
+                  "note": "use text"
+                },
+                "docs": [],
+                "name": "code",
+                "type": "i64"
+              }
+            ],
+            "kind": "named"
+          }
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "EmptyNamed",
+          "payload": {
+            "fields": [],
+            "kind": "named"
+          }
+        }
+      ]
+    }
+  ]
+}
+"#;
+
+    #[test]
+    fn mixed_payload_schema_pins_projection_revision_digest_and_document() {
+        const PROJECTION: &[u8] = b"\x62\x6f\x78\x6f\x6c\x6f\x67\x79\x2e\x70\x75\x62\x6c\x69\x63\x2d\x63\x6f\x6e\x74\x72\x61\x63\x74\x2d\x72\x65\x76\x69\x73\x69\x6f\x6e\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x08\x70\x61\x79\x6c\x6f\x61\x64\x73\x00\x00\x00\x00\x00\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x0c\x50\x61\x79\x6c\x6f\x61\x64\x45\x72\x72\x6f\x72\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x04\x55\x6e\x69\x74\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x0d\x76\x61\x6c\x75\x65\x20\x76\x61\x72\x69\x61\x6e\x74\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x0d\x76\x61\x6c\x75\x65\x20\x70\x61\x79\x6c\x6f\x61\x64\x01\x00\x00\x00\x00\x00\x00\x00\x0a\x75\x73\x65\x20\x64\x65\x74\x61\x69\x6c\x00\x00\x00\x00\x00\x00\x00\x03\x75\x33\x32\x00\x00\x00\x00\x00\x00\x00\x05\x4e\x61\x6d\x65\x64\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x07\x72\x65\x74\x69\x72\x65\x64\x02\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x0d\x6d\x65\x73\x73\x61\x67\x65\x20\x66\x69\x65\x6c\x64\x00\x00\x00\x00\x00\x00\x00\x00\x07\x6d\x65\x73\x73\x61\x67\x65\x00\x00\x00\x00\x00\x00\x00\x06\x53\x74\x72\x69\x6e\x67\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x08\x75\x73\x65\x20\x74\x65\x78\x74\x00\x00\x00\x00\x00\x00\x00\x04\x63\x6f\x64\x65\x00\x00\x00\x00\x00\x00\x00\x03\x69\x36\x34\x00\x00\x00\x00\x00\x00\x00\x0a\x45\x6d\x70\x74\x79\x4e\x61\x6d\x65\x64\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x10\x70\x61\x79\x6c\x6f\x61\x64\x73\x2e\x69\x6e\x73\x70\x65\x63\x74\x00\x00\x00\x00\x00\x00\x00\x07\x69\x6e\x73\x70\x65\x63\x74\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x6e\x61\x6d\x65\x00\x00\x00\x00\x00\x00\x00\x06\x53\x74\x72\x69\x6e\x67\x00\x00\x00\x00\x00\x00\x00\x06\x53\x74\x72\x69\x6e\x67\x00\x00\x00\x00\x00\x00\x00\x0c\x50\x61\x79\x6c\x6f\x61\x64\x45\x72\x72\x6f\x72\x00\x00\x00\x00\x00\x00\x00\x05\x75\x6e\x61\x72\x79\x00\x00\x00\x00\x00\x00\x00\x08\x65\x78\x74\x65\x72\x6e\x61\x6c\x00\x00\x00\x00\x00\x00\x00\x04\x6e\x6f\x6e\x65";
+        let contract = mixed_contract();
+        let model = contract.model();
+        let projection = schema::projection("payloads", model);
+        assert_eq!(projection.len(), 571);
+        assert_eq!(projection, PROJECTION);
+        assert_eq!(
+            [
+                projection[121],
+                projection[165],
+                projection[262],
+                projection[405]
+            ],
+            [0x00, 0x01, 0x02, 0x02]
+        );
+        let revision = schema::revision("payloads", model);
+        let independently_hashed = format!("sha256:{:x}", Sha256::digest(PROJECTION));
+        assert_eq!(
+            independently_hashed,
+            "sha256:ab76207e29cc030e0a072ccfad054352e67fd98871a84a1b820a162eb411597e"
+        );
+        assert_eq!(revision, <[u8; 32]>::from(Sha256::digest(PROJECTION)));
+        assert_eq!(hash_hex(&revision), independently_hashed);
+        assert_eq!(
+            hash_hex(contract.semantic_digest()),
+            "sha256:795b2224a1e4cc8360b5cf541499efad26adf3619bb4afa6748c159373d44806"
+        );
+        let document = schema::document(
+            "payloads",
+            model,
+            &revision,
+            contract.semantic_digest(),
+            "0.0.0",
+        );
+        assert_eq!(document, MIXED_SCHEMA);
+    }
+
+    #[test]
+    fn mixed_payload_mutations_change_the_public_revision() {
+        let base = schema::revision("payloads", mixed_contract().model());
+        let mutations = [
+            ("unit_to_value", "Unit,", "Unit(u32),"),
+            (
+                "value_to_unit",
+                "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
+                "Value",
+            ),
+            (
+                "value_to_named",
+                "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
+                "Value { detail: u32 }",
+            ),
+            (
+                "named_to_value",
+                "#[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }",
+                "Named(String)",
+            ),
+            ("named_empty_to_unit", "EmptyNamed {}", "EmptyNamed"),
+            (
+                "named_empty_field_added",
+                "EmptyNamed {}",
+                "EmptyNamed { spare: bool }",
+            ),
+            (
+                "variant_order",
+                "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32), #[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }",
+                "#[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }, #[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
+            ),
+            (
+                "field_order",
+                "#[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64",
+                "#[deprecated(note=\"use text\")] code: i64, #[doc=\"message field\"] message: String",
+            ),
+            ("value_type_u32_to_u64", "u32)", "u64)"),
+            (
+                "field_type_string_to_bool",
+                "message: String",
+                "message: bool",
+            ),
+            ("field_type_i64_to_u8", "code: i64", "code: u8"),
+            (
+                "field_rename_message_to_text",
+                "message: String",
+                "text: String",
+            ),
+            ("variant_docs", "\"value variant\"", "\"variant\""),
+            ("payload_docs", "\"value payload\"", "\"payload\""),
+            (
+                "payload_deprecation_removed",
+                " #[deprecated(note=\"use detail\")]",
+                "",
+            ),
+            ("payload_note", "\"use detail\"", "\"use other\""),
+            (
+                "variant_deprecation_removed",
+                " #[deprecated(note=\"retired\")]",
+                "",
+            ),
+            ("field_note", "\"use text\"", "\"use code\""),
+            (
+                "field_docs_added",
+                "code: i64",
+                "#[doc=\"code field\"] code: i64",
+            ),
+            ("variant_removed", ", EmptyNamed {}", ""),
+            ("variant_added", "Unit,", "Unit, Other,"),
+        ];
+        assert_eq!(mutations.len(), 21);
+        for (name, anchor, replacement) in mutations {
+            assert_unique(anchor);
+            let mutated = MIXED.replace(anchor, replacement);
+            assert_ne!(
+                mixed_revision_of(&mutated),
+                base,
+                "mutation `{name}` must change the public revision"
+            );
+        }
+
+        // Renaming PayloadError spans the enum and capability sites — mutate the model directly.
+        let mut renamed = mixed_contract().model().clone();
+        renamed.error.name = "StorageFault".to_owned();
+        renamed.capabilities[0].error = "StorageFault".to_owned();
+        assert_ne!(
+            schema::revision("payloads", &renamed),
+            base,
+            "mutation `error_rename` must change the public revision"
+        );
+    }
+
+    #[test]
+    fn mixed_payload_non_mutations_preserve_projection_and_document() {
+        let contract = mixed_contract();
+        let model = contract.model();
+        let base_projection = schema::projection("payloads", model);
+        let base_revision = schema::revision("payloads", model);
+        let base_document = schema::document(
+            "payloads",
+            model,
+            &base_revision,
+            contract.semantic_digest(),
+            "0.0.0",
+        );
+
+        let decorated = "// ignored\nboxology::contract! { #[error] pub enum PayloadError { Unit, #[doc = \"value variant\"] Value(#[doc = \"value payload\"] #[deprecated(note = \"use detail\")] u32), #[deprecated(note = \"retired\")] Named { #[doc = \"message field\"] message: String, #[deprecated(note = \"use text\")] code: i64 }, EmptyNamed {} } /* ignored */ #[capability(exposure = external)] pub async fn inspect(name: String)->Result<String,PayloadError>; }";
+        assert_ne!(decorated, MIXED);
+        let decorated_contract = scalar_model(decorated);
+        assert_eq!(
+            schema::projection("payloads", decorated_contract.model()),
+            base_projection
+        );
+        assert_eq!(
+            schema::document(
+                "payloads",
+                decorated_contract.model(),
+                &base_revision,
+                contract.semantic_digest(),
+                "0.0.0",
+            ),
+            base_document
+        );
+
+        assert_unique("message: String");
+        let nfc = MIXED.replace("message: String", "\u{e9}: String");
+        let nfd = MIXED.replace("message: String", "e\u{301}: String");
+        let nfc_contract = scalar_model(&nfc);
+        let nfd_contract = scalar_model(&nfd);
+        assert_eq!(
+            schema::projection("payloads", nfc_contract.model()),
+            schema::projection("payloads", nfd_contract.model())
+        );
+        assert_eq!(
+            schema::document(
+                "payloads",
+                nfc_contract.model(),
+                &schema::revision("payloads", nfc_contract.model()),
+                &[0; 32],
+                "0.0.0",
+            ),
+            schema::document(
+                "payloads",
+                nfd_contract.model(),
+                &schema::revision("payloads", nfd_contract.model()),
+                &[0; 32],
+                "0.0.0",
+            )
+        );
+
+        let changed_provenance =
+            schema::document("payloads", model, &base_revision, &[7; 32], "9.9.9");
+        assert_ne!(changed_provenance, base_document);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&changed_provenance).unwrap()["revision"],
+            serde_json::from_slice::<Value>(&base_document).unwrap()["revision"]
+        );
+
+        let value: Value = serde_json::from_slice(&base_document).unwrap();
+        let compact = serde_json::to_vec(&value).unwrap();
+        assert_ne!(Sha256::digest(&base_document), Sha256::digest(&compact));
+        for document in [base_document.as_slice(), compact.as_slice()] {
+            let parsed: Value = serde_json::from_slice(document).unwrap();
+            let document_hash = format!("sha256:{:x}", Sha256::digest(document));
+            assert_eq!(
+                parsed["revision"],
+                "sha256:ab76207e29cc030e0a072ccfad054352e67fd98871a84a1b820a162eb411597e"
+            );
+            assert_ne!(document_hash, parsed["revision"].as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn mixed_payload_document_round_trips_through_the_strict_reader() {
+        let contract = mixed_contract();
+        let model = contract.model();
+        let document_bytes = schema::document(
+            "payloads",
+            model,
+            &schema::revision("payloads", model),
+            contract.semantic_digest(),
+            "0.0.0",
+        );
+        let expected = SchemaDocument::parse(MIXED_SCHEMA).unwrap();
+        assert_eq!(document_bytes, MIXED_SCHEMA);
+        assert_eq!(SchemaDocument::parse(&document_bytes).unwrap(), expected);
+        assert_eq!(expected.types[0].variants[0].payload, SchemaPayload::Unit);
+        assert_eq!(
+            expected.types[0].variants[3].payload,
+            SchemaPayload::Named(Vec::new())
+        );
+        assert_ne!(SchemaPayload::Unit, SchemaPayload::Named(Vec::new()));
+        let SchemaPayload::Named(fields) = &expected.types[0].variants[2].payload else {
+            panic!("Named variant must carry named fields");
+        };
+        assert_eq!(fields[0].name, "message");
+        assert_eq!(fields[1].name, "code");
+    }
+
+    #[test]
+    fn mixed_payload_variants_still_fail_generate_with_bxg0048() {
+        let diagnostics = generate(&request(MIXED, false, OUTPUTS.to_vec())).unwrap_err();
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(|diagnostic| diagnostic.code())
+                .collect::<Vec<_>>(),
+            ["BXG0048"]
+        );
+        assert_eq!(diagnostics.as_slice().len(), 1);
     }
 
     #[test]
