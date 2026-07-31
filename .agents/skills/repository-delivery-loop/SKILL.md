@@ -1,6 +1,6 @@
 ---
 name: repository-delivery-loop
-description: Orchestrate repository implementation through independently configured specification, implementation, review, and repair workers, followed by validation, tracker reconciliation, and merge. Use when Codex must ship one or more repository tasks with strong phase gates, isolated worktrees, explicit reviewer independence, controlled parallelism, and evidence-backed completion.
+description: Orchestrate repository implementation through independently configured specification, implementation, review, and repair workers, followed by validation, tracker reconciliation, and merge. Use when a coordinator must ship one or more repository tasks with strong phase gates, isolated worktrees, explicit reviewer independence, controlled parallelism, and evidence-backed completion.
 ---
 
 # Repository Delivery Loop
@@ -41,18 +41,41 @@ Determine which harness hosts the primary agent before launching a worker.
 - Never represent a worker from one harness as a worker from another.
 - Count native and CLI-launched workers equally against the concurrency cap.
 
-For example, a Codex primary launches a Codex candidate as a native Codex sub-agent and a Claude candidate through the Claude CLI. A Claude primary does the inverse.
+For example, a Claude primary launches a Claude candidate as a native Claude sub-agent and a Kimi or Cursor candidate through that harness's CLI. A primary hosted elsewhere does the inverse and launches the Claude candidate through the Claude CLI.
 
 Use the configured model and effort. If the active harness's native mechanism cannot honor them, do not switch to that same harness's CLI. Treat the candidate as unavailable and follow the selection and fallback rules above. Launch an external worker through the CLI's supported model and effort selection; if its CLI is absent or cannot honor the requested values, treat that candidate as unavailable.
 
 External CLI workers do not inherit the primary agent's conversation, repository instructions, worktree, or prior worker output. Give them the complete directive and exact worktree path explicitly. Use any process-management mechanism required by applicable repository instructions.
 
-Before launching a candidate with `harness = "kimi"`, read [`references/kimi-code.md`](references/kimi-code.md). A Codex primary must launch Kimi as a separate CLI process with the exact assigned worktree as its working directory and capture both stdout and stderr. Pass configuration as direct process environment and argv values, never by shell-constructing configuration values:
+A configured model may also be served by an unrelated harness. Never take that shortcut: route each candidate through the harness its configuration names, so the worker, its account, and its evidence stay attributable.
+
+Pass configuration to every external CLI as direct process environment and argv values, never by shell-constructing configuration values. Launch each with the exact assigned worktree as its working directory and capture both stdout and stderr. Worker API keys live in `/Users/jim/.config/boxology-delivery-loop/credentials.env` (mode `600`, outside the repository); load them into the process environment and keep them out of argv, prompts, and logs.
+
+#### `harness = "kimi"`
+
+Read [`references/kimi-code.md`](references/kimi-code.md) first.
 
 - environment: `KIMI_CODE_NO_AUTO_UPDATE=1`, `KIMI_DISABLE_CRON=1`, and `KIMI_MODEL_THINKING_EFFORT=<configured effort>`;
 - argv: `/Users/jim/.kimi-code/bin/kimi`, `-m`, `kimi-code/k3`, `-p`, `<complete worker directive>`.
 
-Do not add `--auto` to `-p`: prompt mode is already unattended and the current CLI rejects that combination. In every Kimi directive, forbid subagents, schedules, background work, `--add-dir`, and leaving the assigned worktree. Advisory specification and review directives must also forbid edits and require a worktree-status audit for unexpected mutation. Launch review in a fresh Kimi process and session.
+Do not add `--auto` or `--yolo` to `-p`: prompt mode is already unattended and the current CLI rejects that combination. In every Kimi directive, forbid subagents, schedules, background work, `--add-dir`, and leaving the assigned worktree.
+
+#### `harness = "cursor"`
+
+Read [`references/cursor-cli.md`](references/cursor-cli.md) first.
+
+- environment: `CURSOR_API_KEY=<key>`;
+- argv: `/Users/jim/.local/bin/cursor-agent`, `-p`, `--model`, `<configured model>`, `--force`, `--trust`, `--approve-mcps`, `--sandbox`, `disabled`, `--workspace`, `<exact worktree path>`, `<complete worker directive>`.
+
+Cursor encodes reasoning effort in the model identifier, so the configured `effort` is honored by selecting the matching suffix; `effort = "high"` requires `--model cursor-grok-4.5-high`. Never satisfy a configured effort with a different suffix. In every Cursor directive, forbid `-w`/`--worktree`, `--add-dir`, `--resume`, `--continue`, background work, and leaving the assigned worktree.
+
+#### `harness = "claude"`
+
+A Claude primary launches this candidate as a native Claude sub-agent, which inherits the session's model and effort. Confirm the session actually runs the configured model and effort before relying on it; if it does not, treat the candidate as unavailable rather than reaching for the CLI. A non-Claude primary launches it as a CLI process: `claude`, `-p`, `--model`, `<configured model>`, `--effort`, `<configured effort>`, with the worktree as the working directory.
+
+#### Every advisory role
+
+Advisory specification and review directives must forbid edits and require a worktree-status audit for unexpected mutation. Launch review in a fresh process and session.
 
 ### Apply fallback policy
 
