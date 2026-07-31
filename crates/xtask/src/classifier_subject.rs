@@ -50,6 +50,17 @@ fn capability_only() -> Result<(SchemaDocument, SchemaDocument), String> {
     Ok((base, submitted))
 }
 
+fn types_only() -> Result<(SchemaDocument, SchemaDocument), String> {
+    let base = hello()?;
+    let mut submitted = hello()?;
+    let schema_type = submitted
+        .types
+        .get_mut(0)
+        .ok_or("hello fixture has no type")?;
+    schema_type.docs.push(String::from("types-only subject"));
+    Ok((base, submitted))
+}
+
 fn render_report(report: &ClassificationReport) -> String {
     let mut body = format!("verdict {}\n", report.verdict().canonical_name());
     for finding in report.findings() {
@@ -97,6 +108,12 @@ fn report_capability_only() -> Result<String, String> {
     Ok(render_report(&report))
 }
 
+fn report_types_only() -> Result<String, String> {
+    let (base, submitted) = types_only()?;
+    let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
+    Ok(render_report(&report))
+}
+
 fn pairing_error() -> Result<String, String> {
     let base = hello()?;
     let submitted = ping()?;
@@ -113,6 +130,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         ("report-unchanged.txt", report_unchanged()?),
         ("report-changed.txt", report_changed()?),
         ("report-capability-only.txt", report_capability_only()?),
+        ("report-types-only.txt", report_types_only()?),
         ("pairing-error.txt", pairing_error()?),
     ];
     for (name, body) in written {
@@ -187,6 +205,21 @@ mod tests {
             rendered,
             report_capability_only().expect("it renders again")
         );
+        assert_eq!(
+            rendered,
+            "verdict incompatible\nfinding BXC0028 hello incompatible\n"
+        );
+    }
+
+    #[test]
+    fn subject_report_types_only_is_golden_and_repeatable() {
+        let (base, submitted) = types_only().expect("types-only pair builds");
+        assert_eq!(base.revision, submitted.revision);
+        assert_eq!(base.capabilities, submitted.capabilities);
+        assert_eq!(base.provenance, submitted.provenance);
+        assert_ne!(base.types, submitted.types);
+        let rendered = report_types_only().expect("types-only pair renders");
+        assert_eq!(rendered, report_types_only().expect("it renders again"));
         assert_eq!(
             rendered,
             "verdict incompatible\nfinding BXC0028 hello incompatible\n"

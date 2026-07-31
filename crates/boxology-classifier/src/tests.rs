@@ -238,6 +238,139 @@ fn provenance_only_difference_is_unchanged() {
 }
 
 #[test]
+fn types_only_difference_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+    assert_eq!(base.revision, submitted.revision);
+    assert_eq!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.provenance, submitted.provenance);
+    assert_ne!(base.types, submitted.types);
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn reachability_uses_union_of_both_capability_graphs() {
+    let base = document("hello");
+    let mut submitted = document("hello");
+    submitted.capabilities[0].error = "WaveError".to_owned();
+    let roles = reachability(&base, &submitted);
+    assert_eq!(
+        roles.get("GreetError"),
+        Some(&Roles {
+            input: false,
+            output: true
+        })
+    );
+    assert_eq!(
+        roles.get("WaveError"),
+        Some(&Roles {
+            input: false,
+            output: true
+        })
+    );
+    assert!(roles.values().all(|roles| !roles.input));
+}
+
+#[test]
+fn type_changes_detects_variant_removal() {
+    let mut base = document("hello");
+    base.types[0].variants.push(variant("Other"));
+    let submitted = document("hello");
+    let roles = reachability(&base, &submitted);
+    let changes = type_changes(&base, &submitted, &roles);
+    assert_eq!(
+        changes,
+        Vec::from([TypeChange::VariantRemoved {
+            type_name: "GreetError".to_owned(),
+            variant_name: "Other".to_owned(),
+            roles: Roles {
+                input: false,
+                output: true
+            },
+        }])
+    );
+}
+
+#[test]
+fn type_changes_detects_variant_reorder() {
+    let mut base = document("hello");
+    base.types[0].variants.push(variant("Other"));
+    let mut submitted = base.clone();
+    submitted.types[0].variants.swap(0, 1);
+    let roles = reachability(&base, &submitted);
+    let changes = type_changes(&base, &submitted, &roles);
+    assert_eq!(
+        changes,
+        Vec::from([TypeChange::VariantsReordered {
+            type_name: "GreetError".to_owned(),
+        }])
+    );
+}
+
+#[test]
+fn type_changes_detects_types_reorder() {
+    let base = two_error_document();
+    let mut submitted = base.clone();
+    submitted.types.swap(0, 1);
+    let roles = reachability(&base, &submitted);
+    let changes = type_changes(&base, &submitted, &roles);
+    assert_eq!(changes, Vec::from([TypeChange::TypesReordered]));
+}
+
+#[test]
+fn type_changes_detects_coarse_payload_change() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].payload = SchemaPayload::Value {
+        docs: Vec::new(),
+        deprecation: None,
+        ty: BoundaryLeaf::String,
+    };
+    let roles = reachability(&base, &submitted);
+    let changes = type_changes(&base, &submitted, &roles);
+    assert_eq!(
+        changes,
+        Vec::from([TypeChange::VariantPayloadChanged {
+            type_name: "GreetError".to_owned(),
+            variant_name: "EmptyName".to_owned(),
+            roles: Roles {
+                input: false,
+                output: true
+            },
+        }])
+    );
+}
+
+#[test]
+fn type_changes_treats_type_rename_as_remove_plus_add() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].name = "WaveError".to_owned();
+    let roles = reachability(&base, &submitted);
+    let changes = type_changes(&base, &submitted, &roles);
+    assert_eq!(
+        changes,
+        Vec::from([
+            TypeChange::TypeRemoved {
+                name: "GreetError".to_owned(),
+                roles: Roles {
+                    input: false,
+                    output: true
+                },
+            },
+            TypeChange::TypeAdded {
+                name: "WaveError".to_owned(),
+                roles: Roles {
+                    input: false,
+                    output: false
+                },
+            },
+        ])
+    );
+}
+
+#[test]
 fn single_referenced_error_variant_addition_is_conditional() {
     let base = document("hello");
     let mut submitted = base.clone();
@@ -295,6 +428,20 @@ fn variant_changes_outside_named_addition_fail_closed() {
             document.types[0]
                 .docs
                 .push("Different type docs.".to_owned());
+        },
+        |document| {
+            document.types[0].variants.push(variant("Other"));
+            document.types[0].deprecation = Some("use another error".to_owned());
+        },
+        |document| {
+            document.types[0].variants.push(variant("Other"));
+            document.types[0].variants[0]
+                .docs
+                .push("Different variant docs.".to_owned());
+        },
+        |document| {
+            document.types[0].variants.push(variant("Other"));
+            document.types[0].variants[0].deprecation = Some("use another variant".to_owned());
         },
         |document| {
             document.types[0].variants[0].name = "Renamed".to_owned();
