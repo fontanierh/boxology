@@ -67,7 +67,7 @@ Read [`references/cursor-cli.md`](references/cursor-cli.md) first.
 - environment: `CURSOR_API_KEY=<key>`;
 - argv: `/Users/jim/.local/bin/cursor-agent`, `-p`, `--model`, `<configured model>`, `--force`, `--trust`, `--approve-mcps`, `--sandbox`, `disabled`, `--workspace`, `<exact worktree path>`, `<complete worker directive>`.
 
-Cursor encodes reasoning effort in the model identifier, so the configured `effort` is honored by selecting the matching suffix; `effort = "high"` requires `--model cursor-grok-4.5-high`. Never satisfy a configured effort with a different suffix. In every Cursor directive, forbid `-w`/`--worktree`, `--add-dir`, `--resume`, `--continue`, background work, and leaving the assigned worktree.
+Cursor encodes reasoning effort in the model identifier, so the configured `effort` is honored by selecting the matching effort suffix; `effort = "high"` requires a `-high` identifier. A trailing `-fast` changes only scheduling priority, not the model or its effort. Never satisfy a configured effort with a different effort suffix. In every Cursor directive, forbid `-w`/`--worktree`, `--add-dir`, `--resume`, `--continue`, background work, and leaving the assigned worktree.
 
 #### `harness = "claude"`
 

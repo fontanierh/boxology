@@ -1,6 +1,6 @@
 # Cursor CLI / Grok 4.5 operator runbook
 
-This path uses the user's Cursor account and the CLI model alias `cursor-grok-4.5-high`.
+This path uses the user's Cursor account and the CLI model alias `cursor-grok-4.5-high-fast`.
 It is the `implement` and `repair` worker.
 
 ## Install, verify, and update
@@ -51,12 +51,14 @@ family is:
 | --- | --- |
 | `cursor-grok-4.5-low` | Grok 4.5, low effort |
 | `cursor-grok-4.5-medium` | Grok 4.5, medium effort |
-| `cursor-grok-4.5-high` | Grok 4.5, high effort — the configured `implement` candidate |
-| `cursor-grok-4.5-*-fast` | Same effort, priority capacity |
+| `cursor-grok-4.5-high` | Grok 4.5, high effort |
+| `cursor-grok-4.5-*-fast` | Same model and effort, priority capacity |
+| `cursor-grok-4.5-high-fast` | The configured `implement` candidate |
 
 Because effort is part of the identifier, the configured `effort` in `models.toml` is honored by
-selecting the matching suffix. `effort = "high"` requires `--model cursor-grok-4.5-high`. Never
-satisfy a configured effort with a different suffix.
+selecting the matching effort suffix. `effort = "high"` requires a `-high` identifier. A trailing
+`-fast` changes only scheduling priority, not the model or its effort, so `cursor-grok-4.5-high-fast`
+honors `effort = "high"`. Never satisfy a configured effort with a different effort suffix.
 
 Cursor also serves models from other vendors, including `kimi-k3-high` and `claude-opus-5-*`. Do not
 use them. Repository policy binds Kimi K3 to the Kimi Code CLI and Opus 5 to the Claude harness;
@@ -67,7 +69,7 @@ routing either through Cursor would misrepresent the worker and its account.
 ```sh
 CURSOR_API_KEY=... /Users/jim/.local/bin/cursor-agent \
   -p \
-  --model cursor-grok-4.5-high \
+  --model cursor-grok-4.5-high-fast \
   --force \
   --trust \
   --approve-mcps \
