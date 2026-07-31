@@ -19,7 +19,8 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) source: &'static str,
     pub(crate) default_source: &'static str,
     pub(crate) tests: &'static [&'static str],
-    /// SHA-256 of normalized listed-test blocks plus one-level bare-name helpers.
+    /// SHA-256 of listed `#[test]` bodies + one-level bare-name helpers (`syn::visit`;
+    /// not macros, not transitive, not `const`/`static`). Refresh from `observed`.
     pub(crate) body_digest: &'static str,
 }
 
@@ -58,9 +59,8 @@ pub(crate) fn require_external_tests(
     Ok(())
 }
 
-/// Digest listed `#[test]` blocks plus one-level bare-name helpers. Syn tokens
-/// drop comments and normalize whitespace; token text stays, so substitution
-/// and table truncation change the digest.
+/// Digest listed `#[test]` blocks plus one-level bare-name helpers via `syn::visit`
+/// (not macros/`const`/`static`/transitive). Refresh pins by copying `observed`.
 fn bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(), String> {
     let observed = body_digest(source, tests)?;
     if observed != expected {
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!(
             production.match_indices("Command::new(\"cargo\")").count(),
             1,
-            "anchor: production cargo() spawns Command::new(\"cargo\") once"
+            "anchor: production cargo() text contains Command::new(\"cargo\") once"
         );
     }
 
@@ -677,7 +677,7 @@ mod tests {
                 &expected
             )
             .is_err(),
-            "mutation survived: second-level helper must change the digest"
+            "mutation survived: changing a direct helper's body text must change the digest"
         );
         assert!(
             bodies_match_digest(
