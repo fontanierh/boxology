@@ -443,6 +443,16 @@ fn decode_request_body(
     limits: SyntaxLimits,
 ) -> Result<SlotValue, WireCallError> {
     let tree = parse(body, limits).map_err(|error| match error {
+        // Reachable only via direct `decode_request_body` callers that pass
+        // `body.len() > limits.0` (unit test
+        // `request_body_enforces_byte_limit_before_payload_inspection`).
+        // Unreachable on the live HTTP path: `collect_and_decode_request_body`
+        // enforces the same byte cap via size_hint and accumulation before
+        // calling here, so a successful collect always has
+        // `body.len() <= limits.0` and `parse` never yields `PayloadTooLarge`.
+        // Typed client response decoding calls `parse` directly, not this
+        // helper. A raw-socket conformance row therefore cannot exercise this
+        // arm; dropping it stays green for those rows (M4).
         SyntaxError::PayloadTooLarge { .. } => WireCallError::PayloadTooLarge,
         _ => WireCallError::InvalidRequest,
     })?;
