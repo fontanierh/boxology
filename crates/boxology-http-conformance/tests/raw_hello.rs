@@ -261,6 +261,11 @@ const TIMEOUT_ELEVEN_DIGITS_REQUEST: RequestShape = RequestShape {
     method: "POST",
     path: "/rpc/hello/greet",
     content_type: Some("application/json"),
+    // Eleven digits (`10000000000`) is rejected by two independent checks in
+    // `parse_timeout`: the digit-length cap (`bytes.len() > 10`) and the
+    // millisecond ceiling (`millis > 9_999_999_999`). A single-site mutant of
+    // either arm stays green; proving this row requires the compound mutant
+    // that relaxes both at once.
     extra: &["Boxology-Timeout-Ms: 10000000000"],
 };
 const TIMEOUT_EMBEDDED_SPACE_REQUEST: RequestShape = RequestShape {
@@ -291,6 +296,11 @@ const IDEMPOTENCY_EMPTY_REQUEST: RequestShape = RequestShape {
     method: "POST",
     path: "/rpc/hello/greet",
     content_type: Some("application/json"),
+    // Empty `Idempotency-Key` is rejected by two independent checks: the
+    // `bytes.is_empty()` arm in `parse_idempotency_key` (`server.rs` idempotency
+    // path, not the timeout `bytes.is_empty()`), and `IdempotencyKey::new("")`.
+    // A single-site mutant of either stays green; proving this row requires the
+    // compound mutant that disables both at once.
     extra: &["Idempotency-Key:"],
 };
 const IDEMPOTENCY_OBS_TEXT_REQUEST: RequestShape = RequestShape {
