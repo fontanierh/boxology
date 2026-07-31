@@ -1,17 +1,18 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     fs,
     path::{Component, Path},
     process::Command,
 };
 
 use syn::visit::Visit;
-use syn::{Expr, ExprCall, ExprMacro, ExprMethodCall, ItemFn, StmtMacro};
+use syn::{Expr, ExprCall, ExprMacro, ItemFn, StmtMacro};
 use toml_edit::{DocumentMut, Item, Table};
 
-/// Witness macros that can fail a test on their own: assertion macros fail on
-/// false conditions; the panic family fails unconditionally. `println!` and
-/// similar side-effect macros are excluded because they cannot turn the test red.
+/// Bare assert/panic-family macros that can fail a test on their own.
+/// `unwrap`/`expect` are ordinary setup vocabulary and do not count.
+/// Qualified paths (`core::assert!`), `debug_assert!`, `matches!`, and `?`
+/// are out of scope for this syntactic check.
 const WITNESS_MACROS: &[&str] = &[
     "assert",
     "assert_eq",
@@ -22,9 +23,6 @@ const WITNESS_MACROS: &[&str] = &[
     "unimplemented",
 ];
 
-/// Method calls that panic on `None`/`Err` and therefore count as live checks.
-const WITNESS_METHODS: &[&str] = &["unwrap", "expect"];
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ExternalTestSpec {
     pub(crate) package: &'static str,
@@ -33,6 +31,9 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) source: &'static str,
     pub(crate) default_source: &'static str,
     pub(crate) tests: &'static [&'static str],
+    /// Exact witness-macro count each listed test must contain in its own
+    /// block plus helpers it calls directly by bare name.
+    pub(crate) witnesses: usize,
 }
 
 pub(crate) fn require_external_tests(
@@ -54,35 +55,52 @@ pub(crate) fn require_external_tests(
         return false;
     };
     manifest_is_exact(&manifest, spec)
-        && bodies_are_live(&source, spec.tests)
+        && bodies_are_live(&source, spec.tests, spec.witnesses)
         && execute(&mut run, spec)
 }
 
-/// Fail-closed vacuity detector: each listed `#[test]` must transitively reach
-/// at least one witness expression (assert/panic family macro, or
-/// `unwrap`/`expect`). Comments, discards, and non-failing macros do not count.
-fn bodies_are_live(source: &str, tests: &[&str]) -> bool {
+/// Fail-closed vacuity detector: each listed `#[test]` must contain exactly
+/// `witnesses` bare witness-macro invocations in its own block or in a
+/// same-file helper it calls directly by bare name (one level only).
+/// Counting is syntactic containment, not reachability: witnesses under
+/// `if false`, `#[cfg(any())]`, or in never-called nested items still count
+/// when those items are themselves counted. Path calls, associated functions,
+/// and deeper helper chains are not descended.
+fn bodies_are_live(source: &str, tests: &[&str], witnesses: usize) -> bool {
     let Ok(file) = syn::parse_file(source) else {
         return false;
     };
     let mut indexer = FnIndexer::default();
     indexer.visit_file(&file);
-    if indexer.duplicate {
-        return false;
-    }
     for name in tests {
-        let Some(item) = indexer.by_name.get(*name) else {
+        let Some(defs) = indexer.by_name.get(*name) else {
             return false;
         };
-        if !is_bare_test(item) {
+        if defs.len() != 1 || !is_bare_test(defs[0]) {
             return false;
         }
-        let closure = call_closure(item, &indexer.by_name);
-        let mut witnesses = WitnessFinder::default();
-        for reachable in &closure {
-            witnesses.visit_block(&reachable.block);
+        let item = defs[0];
+        let mut calls = CallCollector::default();
+        calls.visit_block(&item.block);
+        let mut counted = HashSet::new();
+        let mut finder = WitnessFinder::default();
+        finder.visit_block(&item.block);
+        let mut found = finder.count;
+        for callee in &calls.callees {
+            let Some(defs) = indexer.by_name.get(callee) else {
+                continue;
+            };
+            if defs.len() != 1 {
+                return false;
+            }
+            if !counted.insert(callee.as_str()) {
+                continue;
+            }
+            let mut helper = WitnessFinder::default();
+            helper.visit_block(&defs[0].block);
+            found += helper.count;
         }
-        if witnesses.count < 1 {
+        if found != witnesses {
             return false;
         }
     }
@@ -106,47 +124,17 @@ fn bare_path_ident(call: &ExprCall) -> Option<String> {
     }
 }
 
-fn call_closure<'a>(start: &'a ItemFn, index: &HashMap<String, &'a ItemFn>) -> Vec<&'a ItemFn> {
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-    let start_name = start.sig.ident.to_string();
-    queue.push_back(start_name.clone());
-    visited.insert(start_name);
-    while let Some(name) = queue.pop_front() {
-        let Some(item) = index.get(&name) else {
-            continue;
-        };
-        let mut calls = CallCollector::default();
-        calls.visit_block(&item.block);
-        for callee in calls.callees {
-            if index.contains_key(&callee) && visited.insert(callee.clone()) {
-                queue.push_back(callee);
-            }
-        }
-    }
-    visited
-        .into_iter()
-        .filter_map(|name| index.get(&name).copied())
-        .collect()
-}
-
 #[derive(Default)]
 struct FnIndexer<'ast> {
-    by_name: HashMap<String, &'ast ItemFn>,
-    duplicate: bool,
+    by_name: HashMap<String, Vec<&'ast ItemFn>>,
 }
 
 impl<'ast> Visit<'ast> for FnIndexer<'ast> {
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        let name = item.sig.ident.to_string();
-        match self.by_name.entry(name) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(item);
-            }
-            std::collections::hash_map::Entry::Occupied(_) => {
-                self.duplicate = true;
-            }
-        }
+        self.by_name
+            .entry(item.sig.ident.to_string())
+            .or_default()
+            .push(item);
         syn::visit::visit_item_fn(self, item);
     }
 }
@@ -191,13 +179,6 @@ impl<'ast> Visit<'ast> for WitnessFinder {
     fn visit_stmt_macro(&mut self, node: &'ast StmtMacro) {
         self.note_macro(&node.mac);
         syn::visit::visit_stmt_macro(self, node);
-    }
-
-    fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
-        if WITNESS_METHODS.iter().any(|name| node.method == *name) {
-            self.count += 1;
-        }
-        syn::visit::visit_expr_method_call(self, node);
     }
 }
 
@@ -385,6 +366,7 @@ mod tests {
         source: "tests/client_lock.rs",
         default_source: "tests/client_lock.rs",
         tests: &["a", "b"],
+        witnesses: 1,
     };
     const ONE: &[&str] = &["a"];
     const EMPTY: &[&str] = &[];
@@ -651,21 +633,23 @@ mod tests {
     fn vacuous_bodies_are_rejected() {
         let cases = [
             ("{}", "empty body"),
-            ("{ // verify the inventory }", "comment-only body"),
+            ("{\n// verify the inventory\n}", "comment-only body"),
             ("{ let _ = helper(); }", "discard-only body"),
             ("{ println!(\"inventory checked\"); }", "println-only body"),
+            ("{ Some(()).unwrap(); }", "unwrap-only body"),
+            ("{ None::<()>.expect(\"x\"); }", "expect-only body"),
         ];
         for (body, label) in cases {
             let source = format!("#[test] fn subject() {body}\nfn helper() {{}}");
             assert!(
-                !bodies_are_live(&source, &["subject"]),
+                !bodies_are_live(&source, &["subject"], 1),
                 "mutation survived: {label}"
             );
         }
     }
 
     #[test]
-    fn each_witness_macro_and_method_keeps_a_body_live() {
+    fn each_witness_macro_keeps_a_body_live() {
         // Hardcoded independently of WITNESS_MACROS so removing one set entry
         // still exercises that macro's own fixture (M-a5 isolation).
         for name in [
@@ -679,35 +663,41 @@ mod tests {
         ] {
             let source = format!("#[test] fn subject() {{ {name}!() }}");
             assert!(
-                bodies_are_live(&source, &["subject"]),
+                bodies_are_live(&source, &["subject"], 1),
                 "anchor: witness macro {name}"
             );
         }
-        assert!(
-            bodies_are_live(
-                "#[test] fn subject() { None::<()>.unwrap(); }",
-                &["subject"]
-            ),
-            "anchor: witness method unwrap"
-        );
-        assert!(
-            bodies_are_live(
-                "#[test] fn subject() { None::<()>.expect(\"x\"); }",
-                &["subject"]
-            ),
-            "anchor: witness method expect"
-        );
     }
 
     #[test]
-    fn helper_descent_finds_witnesses_in_same_file_callees() {
-        let source = concat!(
-            "#[test] fn subject() { helper(); }\n",
-            "fn helper() { assert!(true); }\n",
+    fn direct_helper_witnesses_count_but_deeper_calls_do_not() {
+        assert!(
+            bodies_are_live(
+                "#[test] fn subject() { helper(); }\nfn helper() { assert!(true); }\n",
+                &["subject"],
+                1
+            ),
+            "anchor: direct helper witness"
         );
         assert!(
-            bodies_are_live(source, &["subject"]),
-            "anchor: helper-descent witness"
+            !bodies_are_live(
+                concat!(
+                    "#[test] fn subject() { helper(); }\n",
+                    "fn helper() { deeper(); }\n",
+                    "fn deeper() { assert!(true); }\n",
+                ),
+                &["subject"],
+                1
+            ),
+            "mutation survived: second-level helper must not satisfy the pin"
+        );
+        assert!(
+            !bodies_are_live(
+                "#[test] fn subject() { assert!(true); assert!(true); }\n",
+                &["subject"],
+                1
+            ),
+            "mutation survived: exact witness count"
         );
     }
 
@@ -716,26 +706,54 @@ mod tests {
         assert!(
             !bodies_are_live(
                 "#[test] fn subject() { assert!(true); }\n#[test] fn subject() { assert!(true); }\n",
-                &["subject"]
+                &["subject"],
+                1
             ),
             "mutation survived: duplicate #[test] names"
         );
         assert!(
-            !bodies_are_live("fn subject() { assert!(true); }\n", &["subject"]),
+            !bodies_are_live("fn subject() { assert!(true); }\n", &["subject"], 1),
             "mutation survived: same-named non-#[test] fn"
         );
         assert!(
-            !bodies_are_live("not rust", &["subject"]),
+            !bodies_are_live("not rust", &["subject"], 1),
             "mutation survived: parse failure must fail closed"
         );
         assert!(
-            !bodies_are_live("#[test] fn other() { assert!(true); }\n", &["subject"]),
+            !bodies_are_live("#[test] fn other() { assert!(true); }\n", &["subject"], 1),
             "mutation survived: missing listed test"
+        );
+        // Same-named nested fns that are not reachable from the listed test
+        // must not reject the spec (classifier already nests `fn visit`).
+        assert!(
+            bodies_are_live(
+                concat!(
+                    "#[test] fn subject() { helper(); }\n",
+                    "fn helper() { assert!(true); }\n",
+                    "fn other() { fn visit() {}\n}\n",
+                    "fn another() { fn visit() {}\n}\n",
+                ),
+                &["subject"],
+                1
+            ),
+            "anchor: unreachable duplicate nested names are allowed"
+        );
+        assert!(
+            !bodies_are_live(
+                concat!(
+                    "#[test] fn subject() { helper(); }\n",
+                    "fn helper() { assert!(true); }\n",
+                    "fn helper() { assert!(true); }\n",
+                ),
+                &["subject"],
+                1
+            ),
+            "mutation survived: duplicate reachable helper name"
         );
     }
 
     #[test]
-    fn live_consumer_sources_have_witnesses() {
+    fn live_consumer_sources_match_pinned_witness_counts() {
         let root = crate::root();
         for spec in [
             &crate::SURFACE_LOCK_SPEC,
@@ -744,8 +762,14 @@ mod tests {
         ] {
             let source = fs::read_to_string(root.join(spec.source)).unwrap();
             assert!(
-                bodies_are_live(&source, spec.tests),
-                "anchor: live consumer {}",
+                bodies_are_live(&source, spec.tests, spec.witnesses),
+                "anchor: live consumer {} witnesses={}",
+                spec.package,
+                spec.witnesses
+            );
+            assert!(
+                !bodies_are_live(&source, spec.tests, spec.witnesses.saturating_sub(1)),
+                "anchor: {} is discriminating at pinned count",
                 spec.package
             );
         }
