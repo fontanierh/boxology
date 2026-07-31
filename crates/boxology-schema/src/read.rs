@@ -20,6 +20,15 @@ const CLASSIFICATION: Code = "specs/s4-contract-change-classification.md D2";
 const FINGERPRINT: Code = "specs/s2-contract-generator.md D6";
 const IDENTITY: Code = "specs/s2-contract-generator.md D4";
 const GRAMMAR: Code = "specs/s2-contract-generator.md D3";
+const INTEGRITY: Code = "specs/s4-contract-change-classification.md D6";
+
+/// Codes reserved for classifier findings. They occupy the allocated range without reader rule-text
+/// arms; the classifier surface lock proves every reserved code is emitted as a quoted `BXC` literal
+/// and that the classifier emits no other quoted `BXC` literal.
+pub const CLASSIFIER_RESERVED_CODES: &[&str] = &[
+    "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033", "BXC0034", "BXC0035",
+    "BXC0036",
+];
 
 /// Where in a schema document a diagnostic points: a JSON-pointer-style path such as
 /// `/capabilities/0/shape`, and the empty pointer for the document itself. `serde_json` records no
@@ -101,6 +110,16 @@ impl Diagnostic {
     /// Constructs the D2 error for a classification call whose documents have different box ids.
     pub fn box_id_mismatch() -> Self {
         Self::at("BXC0025", Location::root().key("box_id"))
+    }
+
+    /// Constructs the D6 integrity error for findings under equal document revisions.
+    pub fn integrity_findings_under_equal_revisions() -> Self {
+        Self::at("BXC0037", Location::root())
+    }
+
+    /// Constructs the D6 integrity error for silence under differing document revisions.
+    pub fn integrity_silence_under_differing_revisions() -> Self {
+        Self::at("BXC0038", Location::root())
     }
 }
 
@@ -575,6 +594,12 @@ fn rule_of(code: Code) -> Code {
         "BXC0030" => "named payload field names must be unique",
         "BXC0024" => "classification requires a base or a submitted document",
         "BXC0025" => "base and submitted must declare the same box id",
+        "BXC0037" => {
+            "findings under equal revisions mean the projection and the classifier disagree"
+        }
+        "BXC0038" => {
+            "differing revisions with no finding mean the projection and the classifier disagree"
+        }
         _ => "a schema document must satisfy format 1",
     }
 }
@@ -586,11 +611,13 @@ fn rule_of(code: Code) -> Code {
 /// rules are actually written (D4 states none) and the only text reaching an input parameter name.
 /// BXC0024-BXC0025 are D2's classifier pairing errors; the classifier owns their reachability.
 /// BXC0029 is S2 D4's named-field identity rule and BXC0030 is S2 D3's named-field uniqueness
-/// rule. BXC0026-BXC0028 and BXC0031-BXC0035 are reserved for classifier findings and have no
+/// rule. BXC0037-BXC0038 are D6's integrity cross-checks; the classifier owns their reachability.
+/// BXC0026-BXC0028 and BXC0031-BXC0036 are reserved for classifier findings and have no
 /// rule-text arms here.
 fn source_of(code: Code) -> Code {
     match code {
         "BXC0024" | "BXC0025" => CLASSIFICATION,
+        "BXC0037" | "BXC0038" => INTEGRITY,
         "BXC0009" => FINGERPRINT,
         "BXC0029" => IDENTITY,
         "BXC0030" => GRAMMAR,
@@ -687,23 +714,17 @@ mod tests {
         "BXC0001", "BXC0002", "BXC0003", "BXC0004", "BXC0005", "BXC0006", "BXC0007", "BXC0008",
         "BXC0009", "BXC0010", "BXC0011", "BXC0012", "BXC0013", "BXC0014", "BXC0015", "BXC0016",
         "BXC0017", "BXC0018", "BXC0019", "BXC0020", "BXC0021", "BXC0022", "BXC0023", "BXC0024",
-        "BXC0025", "BXC0029", "BXC0030",
+        "BXC0025", "BXC0029", "BXC0030", "BXC0037", "BXC0038",
     ];
 
     /// Codes this reader can emit from document bytes. The pairing constructors BXC0024–BXC0025
-    /// are classifier inputs, so their reachability is proved by the classifier surface lock.
+    /// and the integrity constructors BXC0037–BXC0038 are classifier inputs, so their reachability
+    /// is proved by the classifier surface lock.
     const READER_CODES: &[Code] = &[
         "BXC0001", "BXC0002", "BXC0003", "BXC0004", "BXC0005", "BXC0006", "BXC0007", "BXC0008",
         "BXC0009", "BXC0010", "BXC0011", "BXC0012", "BXC0013", "BXC0014", "BXC0015", "BXC0016",
         "BXC0017", "BXC0018", "BXC0019", "BXC0020", "BXC0021", "BXC0022", "BXC0023", "BXC0029",
         "BXC0030",
-    ];
-
-    /// Codes emitted by the classifier rather than this reader. They occupy the allocated range
-    /// without duplicating the classifier's finding text or pretending a reader corpus can reach
-    /// them.
-    const CLASSIFIER_RESERVED_CODES: &[Code] = &[
-        "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033", "BXC0034", "BXC0035",
     ];
 
     /// The unregistered code that probes the table's fallback, and the only quoted `BXC` literal in
@@ -740,6 +761,8 @@ BXC0024 classification requires a base or a submitted document specs/s4-contract
 BXC0025 base and submitted must declare the same box id specs/s4-contract-change-classification.md D2
 BXC0029 a named payload field name must be an ordinary non-raw Rust identifier specs/s2-contract-generator.md D4
 BXC0030 named payload field names must be unique specs/s2-contract-generator.md D3
+BXC0037 findings under equal revisions mean the projection and the classifier disagree specs/s4-contract-change-classification.md D6
+BXC0038 differing revisions with no finding mean the projection and the classifier disagree specs/s4-contract-change-classification.md D6
 ";
 
     #[test]
@@ -792,11 +815,11 @@ BXC0030 named payload field names must be unique specs/s2-contract-generator.md 
             anchors.clone().count(),
             anchors.collect::<BTreeSet<_>>().len(),
         );
-        assert_eq!((all, unique), (9, 9), "source_of anchors must be unique");
+        assert_eq!((all, unique), (11, 11), "source_of anchors must be unique");
         // Dense from BXC0001, with the classifier's reserved range represented explicitly rather
         // than assigned reader rule text. An ascending reader-only list would miss this gap.
         let spell = |n| format!("BX{}{n:04}", 'C');
-        let dense: Vec<String> = (1..=35).map(spell).collect();
+        let dense: Vec<String> = (1..=38).map(spell).collect();
         assert_eq!(
             allocated
                 .iter()

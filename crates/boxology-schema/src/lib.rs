@@ -21,8 +21,10 @@
 // per level (`boxology-manifest`'s shape, keeping the initial read inventory compact);
 // BXC0007 and BXC0008 the reader's two narrowings; BXC0009 the revision spelling; BXC0010–BXC0014
 // the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. D2's BXC0024–BXC0025
-// are registered here, but emitted and reachability-proven by the classifier. The classifier owns
-// BXC0026–BXC0028 and BXC0031–BXC0035; BXC0029–BXC0030 are named-payload-field rules.
+// are registered here, but emitted and reachability-proven by the classifier. D6's BXC0037–BXC0038
+// are likewise registered here — with constructors and rule_of/source_of arms — but emitted and
+// reachability-proven by the classifier. The classifier owns BXC0026–BXC0028 and BXC0031–BXC0036 as
+// reserved findings with no rule-text arms here; BXC0029–BXC0030 remain named-payload-field rules.
 //
 // The two narrowings are fail-closed and deliberate. `boxology-contract-syntax` hardcodes
 // `external` and `none` and rejects every other exposure and idempotency, so no document this
@@ -46,7 +48,7 @@
 // codes belong to this slice, while the classifier-reserved range remains outside this reader.
 mod read;
 
-pub use read::{Diagnostic, Diagnostics};
+pub use read::{CLASSIFIER_RESERVED_CODES, Diagnostic, Diagnostics};
 
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use serde_json::{Value, json};
