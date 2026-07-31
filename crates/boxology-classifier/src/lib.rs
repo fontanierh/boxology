@@ -123,16 +123,33 @@ pub fn classify(
         (Some(base), Some(submitted)) if equal_modulo_provenance(base, submitted) => {
             Ok(report(Vec::new()))
         }
-        // Interim D6 integrity placeholder: equal revisions with any remaining difference are a
-        // single unclassified finding. #319/T4 replaces this with the coded integrity error.
+        // D6 check A: equal revisions with any remaining difference is an integrity error. Short-
+        // circuit rather than compute-then-check so an engine miss under equal revisions cannot
+        // go silent; fail-closedness under differing revisions guarantees detected differences
+        // would have yielded a finding.
         (Some(base), Some(submitted)) if base.revision == submitted.revision => {
-            Ok(report(Vec::from([fail_closed_finding(base)])))
+            Err(Diagnostics::new(Vec::from([
+                Diagnostic::integrity_findings_under_equal_revisions(),
+            ]))
+            .expect("one integrity diagnostic"))
         }
-        (Some(base), Some(submitted)) => Ok(report(classify_paired_documents(base, submitted))),
+        (Some(base), Some(submitted)) => {
+            let findings = classify_paired_documents(base, submitted);
+            // D6 check B: differing revisions with zero findings means the projection and the
+            // classifier disagree (for example a revision-only difference).
+            if findings.is_empty() {
+                Err(Diagnostics::new(Vec::from([
+                    Diagnostic::integrity_silence_under_differing_revisions(),
+                ]))
+                .expect("one integrity diagnostic"))
+            } else {
+                Ok(report(findings))
+            }
+        }
     }
 }
 
-/// Fail-closed unclassified-change code (D5 default / interim D6 integrity placeholder).
+/// Fail-closed unclassified-change code (D5 default).
 const CODE_FAIL_CLOSED: &str = "BXC0028";
 
 /// Output-reachable type added (D5 additive row).
@@ -151,7 +168,7 @@ const CODE_DEPRECATION_CHANGED: &str = "BXC0034";
 const CODE_VARIANT_REMOVED: &str = "BXC0035";
 
 /// Referenced error-enum variant added (D5 conditional row).
-const CODE_VARIANT_ADDED: &str = "BXC0029";
+const CODE_VARIANT_ADDED: &str = "BXC0036";
 
 /// Migration condition for referenced error-enum variant addition.
 const CONDITION_UNKNOWN_VARIANT: &str = "unknown-variant tolerance";
@@ -173,7 +190,8 @@ fn fail_closed_finding(base: &SchemaDocument) -> Finding {
 /// D5 table row regardless of reachability (D5's preamble tension with those rows is tracked under
 /// #319). `VariantPayloadChanged` is reserved until #104 and likewise fails closed with no named
 /// code. Any capability delta is reported as one `BXC0028` at `<box>` until capability-level rows
-/// land. A revision-only difference (no type or capability delta) also fails closed.
+/// land. A revision-only difference (no type or capability delta) yields an empty finding list;
+/// `classify` turns that empty result into the D6 check-B integrity error.
 fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) -> Vec<Finding> {
     let roles = reachability(base, submitted);
     let changes = type_changes(base, submitted, &roles);
@@ -270,9 +288,9 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
             }
         }
     }
-    // Fail-closed default: unmatched type-graph kinds, any capability delta, or a difference
-    // with no named finding (revision-only) each emit one BXC0028 at <box>.
-    if unclassified || base.capabilities != submitted.capabilities || findings.is_empty() {
+    // Fail-closed default: unmatched type-graph kinds or any capability delta emit one BXC0028
+    // at <box>. An empty finding list (revision-only) is left empty for classify's check B.
+    if unclassified || base.capabilities != submitted.capabilities {
         findings.push(fail_closed_finding(base));
     }
     findings

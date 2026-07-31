@@ -61,6 +61,34 @@ fn types_only() -> Result<(SchemaDocument, SchemaDocument), String> {
     Ok((base, submitted))
 }
 
+fn flip_revision(document: &mut SchemaDocument) -> Result<(), String> {
+    let revision = document.revision.clone();
+    let last = revision.chars().last().ok_or("revision is empty")?;
+    let flipped = match last {
+        '0' => '1',
+        _ => '0',
+    };
+    document.revision = format!("{}{flipped}", &revision[..revision.len() - 1]);
+    Ok(())
+}
+
+fn variant_added() -> Result<(SchemaDocument, SchemaDocument), String> {
+    let base = hello()?;
+    let mut submitted = hello()?;
+    let schema_type = submitted
+        .types
+        .get_mut(0)
+        .ok_or("hello fixture has no type")?;
+    schema_type.variants.push(boxology_schema::SchemaVariant {
+        name: String::from("Other"),
+        docs: Vec::new(),
+        deprecation: None,
+        payload: boxology_schema::SchemaPayload::Unit,
+    });
+    flip_revision(&mut submitted)?;
+    Ok((base, submitted))
+}
+
 fn render_report(report: &ClassificationReport) -> String {
     let mut body = format!("verdict {}\n", report.verdict().canonical_name());
     for finding in report.findings() {
@@ -104,12 +132,22 @@ fn report_changed() -> Result<String, String> {
 
 fn report_capability_only() -> Result<String, String> {
     let (base, submitted) = capability_only()?;
-    let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
-    Ok(render_report(&report))
+    let error = classify(Some(&base), Some(&submitted))
+        .err()
+        .ok_or("capability-only pair classified")?;
+    Ok(format!("{error}\n"))
 }
 
 fn report_types_only() -> Result<String, String> {
     let (base, submitted) = types_only()?;
+    let error = classify(Some(&base), Some(&submitted))
+        .err()
+        .ok_or("types-only pair classified")?;
+    Ok(format!("{error}\n"))
+}
+
+fn report_variant_added() -> Result<String, String> {
+    let (base, submitted) = variant_added()?;
     let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
     Ok(render_report(&report))
 }
@@ -131,6 +169,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         ("report-changed.txt", report_changed()?),
         ("report-capability-only.txt", report_capability_only()?),
         ("report-types-only.txt", report_types_only()?),
+        ("report-variant-added.txt", report_variant_added()?),
         ("pairing-error.txt", pairing_error()?),
     ];
     for (name, body) in written {
@@ -207,7 +246,8 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "verdict incompatible\nfinding BXC0028 hello incompatible\n"
+            "BXC0037 at=\"\" rule=\"findings under equal revisions mean the projection and the \
+classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"\n"
         );
     }
 
@@ -222,7 +262,22 @@ mod tests {
         assert_eq!(rendered, report_types_only().expect("it renders again"));
         assert_eq!(
             rendered,
-            "verdict incompatible\nfinding BXC0028 hello incompatible\n"
+            "BXC0037 at=\"\" rule=\"findings under equal revisions mean the projection and the \
+classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"\n"
+        );
+    }
+
+    #[test]
+    fn subject_report_variant_added_is_golden_and_repeatable() {
+        let (base, submitted) = variant_added().expect("variant-added pair builds");
+        assert_ne!(base.revision, submitted.revision);
+        assert_ne!(base.types, submitted.types);
+        let rendered = report_variant_added().expect("variant-added pair renders");
+        assert_eq!(rendered, report_variant_added().expect("it renders again"));
+        assert_eq!(
+            rendered,
+            "verdict compatible_with_conditions\n\
+finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions\n"
         );
     }
 

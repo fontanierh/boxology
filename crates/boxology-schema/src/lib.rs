@@ -22,7 +22,7 @@
 // BXC0007 and BXC0008 the reader's two narrowings; BXC0009 the revision spelling; BXC0010–BXC0014
 // the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. D2's BXC0024–BXC0025
 // are registered here, but emitted and reachability-proven by the classifier. The classifier owns
-// BXC0026–BXC0028 and BXC0031–BXC0035; BXC0029–BXC0030 are named-payload-field rules.
+// BXC0026–BXC0028 and BXC0031–BXC0038; BXC0029–BXC0030 remain named-payload-field rules.
 //
 // The two narrowings are fail-closed and deliberate. `boxology-contract-syntax` hardcodes
 // `external` and `none` and rejects every other exposure and idempotency, so no document this

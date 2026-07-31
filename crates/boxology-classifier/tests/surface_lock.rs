@@ -211,13 +211,21 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0026", "\"BXC0026\""),
         ("BXC0027", "\"BXC0027\""),
         ("BXC0028", "\"BXC0028\""),
-        ("BXC0029", "\"BXC0029\""),
-        ("BXC0029 condition", "\"unknown-variant tolerance\""),
         ("BXC0031", "\"BXC0031\""),
         ("BXC0032", "\"BXC0032\""),
         ("BXC0033", "\"BXC0033\""),
         ("BXC0034", "\"BXC0034\""),
         ("BXC0035", "\"BXC0035\""),
+        ("BXC0036", "\"BXC0036\""),
+        ("BXC0036 condition", "\"unknown-variant tolerance\""),
+        (
+            "BXC0037",
+            "Diagnostic::integrity_findings_under_equal_revisions()",
+        ),
+        (
+            "BXC0038",
+            "Diagnostic::integrity_silence_under_differing_revisions()",
+        ),
         ("classify", "pub fn classify("),
     ];
     for (code, anchor) in anchors {
@@ -285,17 +293,9 @@ fn every_classifier_code_is_reachable() {
     let introduced = classify(None, Some(&document("hello"))).unwrap();
     let removed = classify(Some(&document("hello")), None).unwrap();
     let mut changed = document("hello");
+    changed.capabilities[0].input.name = "label".to_owned();
     changed.revision = OTHER_REVISION.to_owned();
     let unclassified = classify(Some(&document("hello")), Some(&changed)).unwrap();
-    let mut variant_addition = document("hello");
-    variant_addition.types[0].variants.push(SchemaVariant {
-        name: "Other".to_owned(),
-        docs: Vec::new(),
-        deprecation: None,
-        payload: SchemaPayload::Unit,
-    });
-    variant_addition.revision = OTHER_REVISION.to_owned();
-    let conditional = classify(Some(&document("hello")), Some(&variant_addition)).unwrap();
 
     let mut type_added = document("hello");
     type_added.capabilities.push(SchemaCapability {
@@ -385,6 +385,33 @@ fn every_classifier_code_is_reachable() {
     )
     .unwrap();
 
+    let mut variant_addition = document("hello");
+    variant_addition.types[0].variants.push(SchemaVariant {
+        name: "Other".to_owned(),
+        docs: Vec::new(),
+        deprecation: None,
+        payload: SchemaPayload::Unit,
+    });
+    variant_addition.revision = OTHER_REVISION.to_owned();
+    let conditional = classify(Some(&document("hello")), Some(&variant_addition)).unwrap();
+
+    let mut equal_revision_diff = document("hello");
+    equal_revision_diff.types[0].variants.push(SchemaVariant {
+        name: "Other".to_owned(),
+        docs: Vec::new(),
+        deprecation: None,
+        payload: SchemaPayload::Unit,
+    });
+    let integrity_equal = classify(Some(&document("hello")), Some(&equal_revision_diff))
+        .unwrap_err()
+        .into_vec();
+
+    let mut revision_only = document("hello");
+    revision_only.revision = OTHER_REVISION.to_owned();
+    let integrity_silence = classify(Some(&document("hello")), Some(&revision_only))
+        .unwrap_err()
+        .into_vec();
+
     let type_added_code = additive
         .findings()
         .iter()
@@ -404,16 +431,18 @@ fn every_classifier_code_is_reachable() {
             introduced.findings()[0].code(),
             removed.findings()[0].code(),
             unclassified.findings()[0].code(),
-            conditional.findings()[0].code(),
             type_added_code,
             type_removed_code,
             docs.findings()[0].code(),
             deprecation.findings()[0].code(),
             variant_removed.findings()[0].code(),
+            conditional.findings()[0].code(),
+            integrity_equal[0].code(),
+            integrity_silence[0].code(),
         ],
         [
-            "BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028", "BXC0029", "BXC0031", "BXC0032",
-            "BXC0033", "BXC0034", "BXC0035",
+            "BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033",
+            "BXC0034", "BXC0035", "BXC0036", "BXC0037", "BXC0038",
         ]
     );
 }

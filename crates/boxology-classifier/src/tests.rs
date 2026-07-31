@@ -108,7 +108,7 @@ fn assert_conditional(report: &ClassificationReport, paths: &[&str]) {
                 finding.condition()
             ),
             (
-                "BXC0029",
+                "BXC0036",
                 *path,
                 Class::CompatibleWithConditions,
                 Some("unknown-variant tolerance")
@@ -125,6 +125,22 @@ fn assert_unclassified_pair(base: SchemaDocument, submitted: SchemaDocument) {
         &[("BXC0028", "hello", Class::Incompatible, None)],
         Class::Incompatible,
     );
+}
+
+const INTEGRITY_EQUAL_REVISIONS: &str = "BXC0037 at=\"\" rule=\"findings under equal revisions mean the projection and the \
+classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"";
+
+const INTEGRITY_SILENCE: &str = "BXC0038 at=\"\" rule=\"differing revisions with no finding mean the projection and the \
+classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"";
+
+fn assert_integrity_equal_revisions(base: SchemaDocument, submitted: SchemaDocument) {
+    assert_eq!(base.revision, submitted.revision);
+    assert_ne!(base, submitted);
+    let diagnostics = classify(Some(&base), Some(&submitted)).unwrap_err();
+    let diagnostic = diagnostics.into_vec().pop().unwrap();
+    assert_eq!(diagnostic.code(), "BXC0037");
+    assert_eq!(diagnostic.location(), "");
+    assert_eq!(diagnostic.to_string(), INTEGRITY_EQUAL_REVISIONS);
 }
 
 fn add_capability(document: &mut SchemaDocument) {
@@ -238,15 +254,14 @@ fn provenance_only_difference_is_unchanged() {
 }
 
 #[test]
-fn types_only_difference_is_incompatible() {
+fn types_only_difference_under_equal_revisions_is_integrity_error() {
     let base = document("hello");
     let mut submitted = base.clone();
     submitted.types[0].variants.push(variant("Other"));
-    assert_eq!(base.revision, submitted.revision);
     assert_eq!(base.capabilities, submitted.capabilities);
     assert_eq!(base.provenance, submitted.provenance);
     assert_ne!(base.types, submitted.types);
-    assert_unclassified_pair(base, submitted);
+    assert_integrity_equal_revisions(base, submitted);
 }
 
 #[test]
@@ -630,7 +645,7 @@ fn mixed_variant_addition_and_type_docs_keeps_conditional_verdict() {
                 None,
             ),
             (
-                "BXC0029",
+                "BXC0036",
                 "hello/type/GreetError/variant/Other",
                 Class::CompatibleWithConditions,
                 Some("unknown-variant tolerance"),
@@ -653,7 +668,7 @@ fn mixed_variant_addition_and_capability_docs_keeps_fail_closed() {
         &[
             ("BXC0028", "hello", Class::Incompatible, None),
             (
-                "BXC0029",
+                "BXC0036",
                 "hello/type/GreetError/variant/Other",
                 Class::CompatibleWithConditions,
                 Some("unknown-variant tolerance"),
@@ -664,23 +679,32 @@ fn mixed_variant_addition_and_capability_docs_keeps_fail_closed() {
 }
 
 #[test]
-fn equal_revision_variant_addition_is_incompatible() {
+fn equal_revision_variant_addition_is_integrity_error() {
     let base = document("hello");
     let mut submitted = base.clone();
     submitted.types[0].variants.push(variant("Other"));
+    assert_integrity_equal_revisions(base, submitted);
+}
 
-    let report = classify(Some(&base), Some(&submitted)).unwrap();
-    assert_exact_report(
-        &report,
-        &[("BXC0028", "hello", Class::Incompatible, None)],
-        Class::Incompatible,
-    );
+#[test]
+fn revision_only_difference_is_integrity_silence() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.revision, submitted.revision);
+    let diagnostics = classify(Some(&base), Some(&submitted)).unwrap_err();
+    let diagnostic = diagnostics.into_vec().pop().unwrap();
+    assert_eq!(diagnostic.code(), "BXC0038");
+    assert_eq!(diagnostic.location(), "");
+    assert_eq!(diagnostic.to_string(), INTEGRITY_SILENCE);
 }
 
 #[test]
 fn every_effectively_mutable_comparable_field_fails_closed() {
+    // Capability-level and reserved payload-shape mutations still fail closed. Named type-graph
+    // rows (docs, deprecation, referenced add/remove) are covered by dedicated tests; revision-
+    // only is the check-B integrity test above.
     let mutations: &[fn(&mut SchemaDocument)] = &[
-        |document| document.revision = OTHER_REVISION.to_owned(),
         |document| document.capabilities[0].name = CapabilityName::new("wave").unwrap(),
         |document| document.capabilities[0].docs.push("New docs.".to_owned()),
         |document| document.capabilities[0].deprecation = Some("use wave2".to_owned()),
@@ -690,16 +714,6 @@ fn every_effectively_mutable_comparable_field_fails_closed() {
         |document| document.capabilities[0].output.leaf = BoundaryLeaf::Bool,
         |document| document.capabilities[0].max_exposure = ExposureLevel::Internal,
         |document| document.capabilities[0].idempotency = Idempotency::Inherent,
-        |document| document.types[0].name = "WaveError".to_owned(),
-        |document| document.types[0].docs.push("New docs.".to_owned()),
-        |document| document.types[0].deprecation = Some("use another error".to_owned()),
-        |document| document.types[0].variants[0].name = "MissingName".to_owned(),
-        |document| {
-            document.types[0].variants[0]
-                .docs
-                .push("New docs.".to_owned())
-        },
-        |document| document.types[0].variants[0].deprecation = Some("retired".to_owned()),
         |document| {
             document.types[0].variants[0].payload = SchemaPayload::Value {
                 docs: Vec::new(),
@@ -712,6 +726,7 @@ fn every_effectively_mutable_comparable_field_fails_closed() {
     for mutate in mutations {
         let mut submitted = document("hello");
         mutate(&mut submitted);
+        submitted.revision = OTHER_REVISION.to_owned();
         assert_unclassified_pair(document("hello"), submitted);
     }
     // Shape has only `Unary` in the current format-1 vocabulary, so it has no effective mutation.
@@ -730,10 +745,10 @@ fn named_payload_fields_fail_closed() {
         let base = named_document();
         let mut submitted = base.clone();
         mutate(&mut submitted);
+        submitted.revision = OTHER_REVISION.to_owned();
         assert_unclassified_pair(base, submitted);
     }
 }
-
 #[test]
 fn named_payload_change_beside_named_finding_fails_closed() {
     // Isolates VariantPayloadChanged: equal-revision payload mutations never enter classify_paired_documents.
@@ -762,6 +777,8 @@ fn named_payload_change_beside_named_finding_fails_closed() {
 
 #[test]
 fn collection_shape_changes_fail_closed() {
+    // Capability shape changes and unreferenced type-graph reorder/add still fail closed.
+    // Removing a referenced type is the named BXC0032 path, covered elsewhere.
     type Case = (usize, usize, fn(&mut SchemaDocument));
     let cases: &[Case] = &[
         (1, 1, add_capability),
@@ -770,15 +787,13 @@ fn collection_shape_changes_fail_closed() {
         }),
         (2, 1, |document| document.capabilities.swap(0, 1)),
         (1, 1, add_type),
-        (1, 1, |document| {
-            document.types.pop();
-        }),
         (1, 2, |document| document.types.swap(0, 1)),
     ];
     for &(capabilities, types, mutate) in cases {
         let base = shaped_document(capabilities, types);
         let mut submitted = shaped_document(capabilities, types);
         mutate(&mut submitted);
+        submitted.revision = OTHER_REVISION.to_owned();
         assert_unclassified_pair(base, submitted);
     }
 }
