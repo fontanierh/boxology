@@ -213,6 +213,11 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0028", "\"BXC0028\""),
         ("BXC0029", "\"BXC0029\""),
         ("BXC0029 condition", "\"unknown-variant tolerance\""),
+        ("BXC0031", "\"BXC0031\""),
+        ("BXC0032", "\"BXC0032\""),
+        ("BXC0033", "\"BXC0033\""),
+        ("BXC0034", "\"BXC0034\""),
+        ("BXC0035", "\"BXC0035\""),
         ("classify", "pub fn classify("),
     ];
     for (code, anchor) in anchors {
@@ -291,6 +296,107 @@ fn every_classifier_code_is_reachable() {
     });
     variant_addition.revision = OTHER_REVISION.to_owned();
     let conditional = classify(Some(&document("hello")), Some(&variant_addition)).unwrap();
+
+    let mut type_added = document("hello");
+    type_added.capabilities.push(SchemaCapability {
+        name: CapabilityName::new("wave").unwrap(),
+        docs: Vec::new(),
+        deprecation: None,
+        error: "WaveError".to_owned(),
+        input: InputSlot {
+            name: "name".to_owned(),
+            leaf: BoundaryLeaf::String,
+        },
+        output: OutputSlot {
+            leaf: BoundaryLeaf::String,
+        },
+        shape: Shape::Unary,
+        max_exposure: ExposureLevel::External,
+        idempotency: Idempotency::None,
+    });
+    type_added.types.push(SchemaType {
+        name: "WaveError".to_owned(),
+        docs: Vec::new(),
+        deprecation: None,
+        variants: vec![SchemaVariant {
+            name: "EmptyName".to_owned(),
+            docs: Vec::new(),
+            deprecation: None,
+            payload: SchemaPayload::Unit,
+        }],
+    });
+    type_added.revision = OTHER_REVISION.to_owned();
+    let additive = classify(Some(&document("hello")), Some(&type_added)).unwrap();
+
+    let mut type_removed_base = document("hello");
+    type_removed_base.capabilities.push(SchemaCapability {
+        name: CapabilityName::new("wave").unwrap(),
+        docs: Vec::new(),
+        deprecation: None,
+        error: "WaveError".to_owned(),
+        input: InputSlot {
+            name: "name".to_owned(),
+            leaf: BoundaryLeaf::String,
+        },
+        output: OutputSlot {
+            leaf: BoundaryLeaf::String,
+        },
+        shape: Shape::Unary,
+        max_exposure: ExposureLevel::External,
+        idempotency: Idempotency::None,
+    });
+    type_removed_base.types.push(SchemaType {
+        name: "WaveError".to_owned(),
+        docs: Vec::new(),
+        deprecation: None,
+        variants: vec![SchemaVariant {
+            name: "EmptyName".to_owned(),
+            docs: Vec::new(),
+            deprecation: None,
+            payload: SchemaPayload::Unit,
+        }],
+    });
+    let mut type_removed_submitted = document("hello");
+    type_removed_submitted.revision = OTHER_REVISION.to_owned();
+    let type_removed = classify(Some(&type_removed_base), Some(&type_removed_submitted)).unwrap();
+
+    let mut type_docs = document("hello");
+    type_docs.types[0].docs.push("docs".to_owned());
+    type_docs.revision = OTHER_REVISION.to_owned();
+    let docs = classify(Some(&document("hello")), Some(&type_docs)).unwrap();
+
+    let mut type_deprecation = document("hello");
+    type_deprecation.types[0].deprecation = Some("retired".to_owned());
+    type_deprecation.revision = OTHER_REVISION.to_owned();
+    let deprecation = classify(Some(&document("hello")), Some(&type_deprecation)).unwrap();
+
+    let mut variant_removed_base = document("hello");
+    variant_removed_base.types[0].variants.push(SchemaVariant {
+        name: "Other".to_owned(),
+        docs: Vec::new(),
+        deprecation: None,
+        payload: SchemaPayload::Unit,
+    });
+    let mut variant_removed_submitted = document("hello");
+    variant_removed_submitted.revision = OTHER_REVISION.to_owned();
+    let variant_removed = classify(
+        Some(&variant_removed_base),
+        Some(&variant_removed_submitted),
+    )
+    .unwrap();
+
+    let type_added_code = additive
+        .findings()
+        .iter()
+        .find(|finding| finding.code() == "BXC0031")
+        .unwrap()
+        .code();
+    let type_removed_code = type_removed
+        .findings()
+        .iter()
+        .find(|finding| finding.code() == "BXC0032")
+        .unwrap()
+        .code();
     assert_eq!(
         [
             missing[0].code(),
@@ -299,9 +405,15 @@ fn every_classifier_code_is_reachable() {
             removed.findings()[0].code(),
             unclassified.findings()[0].code(),
             conditional.findings()[0].code(),
+            type_added_code,
+            type_removed_code,
+            docs.findings()[0].code(),
+            deprecation.findings()[0].code(),
+            variant_removed.findings()[0].code(),
         ],
         [
-            "BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028", "BXC0029",
+            "BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028", "BXC0029", "BXC0031", "BXC0032",
+            "BXC0033", "BXC0034", "BXC0035",
         ]
     );
 }

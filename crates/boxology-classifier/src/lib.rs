@@ -1,9 +1,9 @@
-//! A pure, fail-closed scaffold for classifying one schema revision against another.
+//! A pure, fail-closed classifier for one schema revision against another.
 //!
 //! The classifier reads only the supplied [`SchemaDocument`] values. It consults no filesystem,
 //! environment, network, clock, locale, process, or execution state, and has no policy controls
-//! that could hide or relabel a finding. The later S4 slices add the structural taxonomy and
-//! report format; this slice preserves the same public seam and fail-closed default.
+//! that could hide or relabel a finding. Named type-graph rows emit structured findings; every
+//! unmatched difference falls to the fail-closed default.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -123,21 +123,174 @@ pub fn classify(
         (Some(base), Some(submitted)) if equal_modulo_provenance(base, submitted) => {
             Ok(report(Vec::new()))
         }
-        (Some(base), Some(submitted)) => {
-            let roles = reachability(base, submitted);
-            let changes = type_changes(base, submitted, &roles);
-            if let Some(findings) = conditional_variant_additions(base, submitted, &changes) {
-                Ok(report(findings))
-            } else {
-                Ok(report(Vec::from([Finding {
-                    code: "BXC0028",
-                    path: base.box_id.as_str().to_owned(),
+        // Interim D6 integrity placeholder: equal revisions with any remaining difference are a
+        // single unclassified finding. #319/T4 replaces this with the coded integrity error.
+        (Some(base), Some(submitted)) if base.revision == submitted.revision => {
+            Ok(report(Vec::from([fail_closed_finding(base)])))
+        }
+        (Some(base), Some(submitted)) => Ok(report(classify_paired_documents(base, submitted))),
+    }
+}
+
+/// Fail-closed unclassified-change code (D5 default / interim D6 integrity placeholder).
+const CODE_FAIL_CLOSED: &str = "BXC0028";
+
+/// Output-reachable type added (D5 additive row).
+const CODE_TYPE_ADDED: &str = "BXC0031";
+
+/// Type removed (D5 incompatible row).
+const CODE_TYPE_REMOVED: &str = "BXC0032";
+
+/// Documentation changed on any type-graph element (D5 documentation row).
+const CODE_DOCS_CHANGED: &str = "BXC0033";
+
+/// Deprecation metadata changed on any type-graph element (D5 deprecation row).
+const CODE_DEPRECATION_CHANGED: &str = "BXC0034";
+
+/// Variant removed (D5 incompatible row).
+const CODE_VARIANT_REMOVED: &str = "BXC0035";
+
+/// Referenced error-enum variant added (D5 conditional row).
+const CODE_VARIANT_ADDED: &str = "BXC0029";
+
+/// Migration condition for referenced error-enum variant addition.
+const CONDITION_UNKNOWN_VARIANT: &str = "unknown-variant tolerance";
+
+fn fail_closed_finding(base: &SchemaDocument) -> Finding {
+    Finding {
+        code: CODE_FAIL_CLOSED,
+        path: base.box_id.as_str().to_owned(),
+        class: Class::Incompatible,
+        condition: None,
+    }
+}
+
+/// Applies the D5 type-graph taxonomy, then the fail-closed default.
+///
+/// Named findings are always emitted individually. Unreferenced *additions* (type or variant) fall
+/// to the fail-closed default per D5's preamble — a declared type reachable from no capability is
+/// not a named additive/conditional row. Documentation, deprecation, and removals classify by their
+/// D5 table row regardless of reachability (D5's preamble tension with those rows is tracked under
+/// #319). `VariantPayloadChanged` is reserved until #104 and likewise fails closed with no named
+/// code. Any capability delta is reported as one `BXC0028` at `<box>` until capability-level rows
+/// land. A revision-only difference (no type or capability delta) also fails closed.
+fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) -> Vec<Finding> {
+    let roles = reachability(base, submitted);
+    let changes = type_changes(base, submitted, &roles);
+    let mut findings = Vec::new();
+    let mut unclassified = false;
+    for change in &changes {
+        match change {
+            TypeChange::TypeAdded { name, roles } if roles.output => {
+                findings.push(Finding {
+                    code: CODE_TYPE_ADDED,
+                    path: type_path(base, name),
+                    class: Class::Additive,
+                    condition: None,
+                });
+            }
+            TypeChange::TypeRemoved { name, .. } => {
+                findings.push(Finding {
+                    code: CODE_TYPE_REMOVED,
+                    path: type_path(base, name),
                     class: Class::Incompatible,
                     condition: None,
-                }])))
+                });
+            }
+            TypeChange::TypeDocsChanged { name } => {
+                findings.push(Finding {
+                    code: CODE_DOCS_CHANGED,
+                    path: type_path(base, name),
+                    class: Class::Documentation,
+                    condition: None,
+                });
+            }
+            TypeChange::TypeDeprecationChanged { name } => {
+                findings.push(Finding {
+                    code: CODE_DEPRECATION_CHANGED,
+                    path: type_path(base, name),
+                    class: Class::Deprecation,
+                    condition: None,
+                });
+            }
+            TypeChange::VariantAdded {
+                type_name,
+                variant_name,
+                roles,
+            } if roles.output => {
+                findings.push(Finding {
+                    code: CODE_VARIANT_ADDED,
+                    path: variant_path(base, type_name, variant_name),
+                    class: Class::CompatibleWithConditions,
+                    condition: Some(CONDITION_UNKNOWN_VARIANT),
+                });
+            }
+            TypeChange::VariantRemoved {
+                type_name,
+                variant_name,
+                ..
+            } => {
+                findings.push(Finding {
+                    code: CODE_VARIANT_REMOVED,
+                    path: variant_path(base, type_name, variant_name),
+                    class: Class::Incompatible,
+                    condition: None,
+                });
+            }
+            TypeChange::VariantDocsChanged {
+                type_name,
+                variant_name,
+            } => {
+                findings.push(Finding {
+                    code: CODE_DOCS_CHANGED,
+                    path: variant_path(base, type_name, variant_name),
+                    class: Class::Documentation,
+                    condition: None,
+                });
+            }
+            TypeChange::VariantDeprecationChanged {
+                type_name,
+                variant_name,
+            } => {
+                findings.push(Finding {
+                    code: CODE_DEPRECATION_CHANGED,
+                    path: variant_path(base, type_name, variant_name),
+                    class: Class::Deprecation,
+                    condition: None,
+                });
+            }
+            // Unreferenced type/variant additions, reorderings, and reserved payload-shape
+            // changes have no named row in this slice.
+            TypeChange::TypeAdded { .. }
+            | TypeChange::VariantAdded { .. }
+            | TypeChange::TypesReordered
+            | TypeChange::VariantsReordered { .. }
+            | TypeChange::VariantPayloadChanged { .. } => {
+                unclassified = true;
             }
         }
     }
+    // Fail-closed default: unmatched type-graph kinds, any capability delta, or a difference
+    // with no named finding (revision-only) each emit one BXC0028 at <box>.
+    if unclassified || base.capabilities != submitted.capabilities || findings.is_empty() {
+        findings.push(fail_closed_finding(base));
+    }
+    findings
+}
+
+fn type_path(base: &SchemaDocument, name: &str) -> String {
+    [base.box_id.as_str(), "/type/", name].concat()
+}
+
+fn variant_path(base: &SchemaDocument, type_name: &str, variant_name: &str) -> String {
+    [
+        base.box_id.as_str(),
+        "/type/",
+        type_name,
+        "/variant/",
+        variant_name,
+    ]
+    .concat()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -409,48 +562,6 @@ fn append_matched_variant_changes(
             roles,
         });
     }
-}
-
-fn conditional_variant_additions(
-    base: &SchemaDocument,
-    submitted: &SchemaDocument,
-    changes: &[TypeChange],
-) -> Option<Vec<Finding>> {
-    if base.capabilities != submitted.capabilities
-        || base.revision == submitted.revision
-        || changes.is_empty()
-    {
-        return None;
-    }
-
-    let mut findings = Vec::new();
-    for change in changes {
-        let TypeChange::VariantAdded {
-            type_name,
-            variant_name,
-            roles,
-        } = change
-        else {
-            return None;
-        };
-        if !roles.output {
-            return None;
-        }
-        findings.push(Finding {
-            code: "BXC0029",
-            path: [
-                base.box_id.as_str(),
-                "/type/",
-                type_name.as_str(),
-                "/variant/",
-                variant_name.as_str(),
-            ]
-            .concat(),
-            class: Class::CompatibleWithConditions,
-            condition: Some("unknown-variant tolerance"),
-        });
-    }
-    Some(findings)
 }
 
 fn equal_modulo_provenance(base: &SchemaDocument, submitted: &SchemaDocument) -> bool {
