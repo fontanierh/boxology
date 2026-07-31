@@ -79,7 +79,7 @@ The block admits only:
 - doc comments/direct string `#[doc = "..."]`, `#[deprecated]` or `#[deprecated(note = "...")]`, `#[error]`, and `#[capability(...)]`; and
 - canonical leaves `bool`, `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `String`, `Blob`; containers `Option<T>`, `Vec<T>`, `BTreeMap<String, T>`, `Field<T>`, `Secret<T>`; and a supported in-block type.
 
-For the current generator, payload-bearing error variants require coordinated schema and contract-emitter support. They are parsed/modelled now, but generation must fail closed until that support lands (#103/#104).
+For the current generator, one-value error payloads over emittable leaves are emittable; a `Blob` value payload remains fail-closed under BXG0040. Named-field payloads (including empty-named) still require contract-emitter support and remain fail-closed under BXG0048 until that support lands (#104).
 
 A capability has one input; multiple logical inputs require a named struct. Context is implicit. Metadata arguments are unique, comma-separated, order-independent, and allow a trailing comma: `name = "[a-z][a-z0-9_]*"`, `exposure = code_only | internal | external`, and `idempotency = none | inherent`. Exposure defaults to `code_only`; idempotency defaults to `none`. Every declaration/member/capability identifier is an ordinary non-raw Rust identifier; the identity rules in D4 still apply.
 
