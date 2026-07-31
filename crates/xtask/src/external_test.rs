@@ -1,10 +1,29 @@
 use std::{
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     path::{Component, Path},
     process::Command,
 };
 
+use syn::visit::Visit;
+use syn::{Expr, ExprCall, ExprMacro, ExprMethodCall, ItemFn, StmtMacro};
 use toml_edit::{DocumentMut, Item, Table};
+
+/// Witness macros that can fail a test on their own: assertion macros fail on
+/// false conditions; the panic family fails unconditionally. `println!` and
+/// similar side-effect macros are excluded because they cannot turn the test red.
+const WITNESS_MACROS: &[&str] = &[
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "panic",
+    "unreachable",
+    "todo",
+    "unimplemented",
+];
+
+/// Method calls that panic on `None`/`Err` and therefore count as live checks.
+const WITNESS_METHODS: &[&str] = &["unwrap", "expect"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ExternalTestSpec {
@@ -31,7 +50,155 @@ pub(crate) fn require_external_tests(
     let Ok(manifest) = fs::read_to_string(root.join(spec.manifest)) else {
         return false;
     };
-    manifest_is_exact(&manifest, spec) && execute(&mut run, spec)
+    let Ok(source) = fs::read_to_string(root.join(spec.source)) else {
+        return false;
+    };
+    manifest_is_exact(&manifest, spec)
+        && bodies_are_live(&source, spec.tests)
+        && execute(&mut run, spec)
+}
+
+/// Fail-closed vacuity detector: each listed `#[test]` must transitively reach
+/// at least one witness expression (assert/panic family macro, or
+/// `unwrap`/`expect`). Comments, discards, and non-failing macros do not count.
+fn bodies_are_live(source: &str, tests: &[&str]) -> bool {
+    let Ok(file) = syn::parse_file(source) else {
+        return false;
+    };
+    let mut indexer = FnIndexer::default();
+    indexer.visit_file(&file);
+    if indexer.duplicate {
+        return false;
+    }
+    for name in tests {
+        let Some(item) = indexer.by_name.get(*name) else {
+            return false;
+        };
+        if !is_bare_test(item) {
+            return false;
+        }
+        let closure = call_closure(item, &indexer.by_name);
+        let mut witnesses = WitnessFinder::default();
+        for reachable in &closure {
+            witnesses.visit_block(&reachable.block);
+        }
+        if witnesses.count < 1 {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_bare_test(item: &ItemFn) -> bool {
+    item.attrs
+        .iter()
+        .any(|attribute| attribute.path().is_ident("test"))
+}
+
+fn bare_path_ident(call: &ExprCall) -> Option<String> {
+    let Expr::Path(path) = call.func.as_ref() else {
+        return None;
+    };
+    if path.qself.is_none() && path.path.segments.len() == 1 {
+        Some(path.path.segments[0].ident.to_string())
+    } else {
+        None
+    }
+}
+
+fn call_closure<'a>(start: &'a ItemFn, index: &HashMap<String, &'a ItemFn>) -> Vec<&'a ItemFn> {
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    let start_name = start.sig.ident.to_string();
+    queue.push_back(start_name.clone());
+    visited.insert(start_name);
+    while let Some(name) = queue.pop_front() {
+        let Some(item) = index.get(&name) else {
+            continue;
+        };
+        let mut calls = CallCollector::default();
+        calls.visit_block(&item.block);
+        for callee in calls.callees {
+            if index.contains_key(&callee) && visited.insert(callee.clone()) {
+                queue.push_back(callee);
+            }
+        }
+    }
+    visited
+        .into_iter()
+        .filter_map(|name| index.get(&name).copied())
+        .collect()
+}
+
+#[derive(Default)]
+struct FnIndexer<'ast> {
+    by_name: HashMap<String, &'ast ItemFn>,
+    duplicate: bool,
+}
+
+impl<'ast> Visit<'ast> for FnIndexer<'ast> {
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        let name = item.sig.ident.to_string();
+        match self.by_name.entry(name) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(item);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                self.duplicate = true;
+            }
+        }
+        syn::visit::visit_item_fn(self, item);
+    }
+}
+
+#[derive(Default)]
+struct CallCollector {
+    callees: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for CallCollector {
+    fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+        if let Some(ident) = bare_path_ident(node) {
+            self.callees.push(ident);
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+}
+
+#[derive(Default)]
+struct WitnessFinder {
+    count: usize,
+}
+
+impl WitnessFinder {
+    fn note_macro(&mut self, mac: &syn::Macro) {
+        if mac
+            .path
+            .get_ident()
+            .is_some_and(|ident| WITNESS_MACROS.contains(&ident.to_string().as_str()))
+        {
+            self.count += 1;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for WitnessFinder {
+    fn visit_expr_macro(&mut self, node: &'ast ExprMacro) {
+        self.note_macro(&node.mac);
+        syn::visit::visit_expr_macro(self, node);
+    }
+
+    fn visit_stmt_macro(&mut self, node: &'ast StmtMacro) {
+        self.note_macro(&node.mac);
+        syn::visit::visit_stmt_macro(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+        if WITNESS_METHODS.iter().any(|name| node.method == *name) {
+            self.count += 1;
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
 }
 
 pub(crate) fn run_with_cargo(
@@ -408,7 +575,11 @@ mod tests {
         fs::create_dir_all(root.join("real/tests")).unwrap();
         fs::create_dir_all(root.join("tests")).unwrap();
         fs::write(root.join("Cargo.toml"), BASE_MANIFEST).unwrap();
-        fs::write(root.join(SPEC.source), "").unwrap();
+        fs::write(
+            root.join(SPEC.source),
+            "#[test] fn a() { assert!(true); }\n#[test] fn b() { assert!(true); }\n",
+        )
+        .unwrap();
         fs::write(root.join("real/tests/test.rs"), "").unwrap();
         symlink(root.join("real"), root.join("link-dir")).unwrap();
         symlink(root.join("real/tests/test.rs"), root.join("link-file")).unwrap();
@@ -474,5 +645,145 @@ mod tests {
         let binder = "require_external_tests(root, run, spec)";
         let production = source.split_once("#[cfg(test)]").unwrap().0;
         assert_eq!(production.match_indices(binder).count(), 1);
+    }
+
+    #[test]
+    fn vacuous_bodies_are_rejected() {
+        let cases = [
+            ("{}", "empty body"),
+            ("{ // verify the inventory }", "comment-only body"),
+            ("{ let _ = helper(); }", "discard-only body"),
+            ("{ println!(\"inventory checked\"); }", "println-only body"),
+        ];
+        for (body, label) in cases {
+            let source = format!("#[test] fn subject() {body}\nfn helper() {{}}");
+            assert!(
+                !bodies_are_live(&source, &["subject"]),
+                "mutation survived: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_witness_macro_and_method_keeps_a_body_live() {
+        // Hardcoded independently of WITNESS_MACROS so removing one set entry
+        // still exercises that macro's own fixture (M-a5 isolation).
+        for name in [
+            "assert",
+            "assert_eq",
+            "assert_ne",
+            "panic",
+            "unreachable",
+            "todo",
+            "unimplemented",
+        ] {
+            let source = format!("#[test] fn subject() {{ {name}!() }}");
+            assert!(
+                bodies_are_live(&source, &["subject"]),
+                "anchor: witness macro {name}"
+            );
+        }
+        assert!(
+            bodies_are_live(
+                "#[test] fn subject() { None::<()>.unwrap(); }",
+                &["subject"]
+            ),
+            "anchor: witness method unwrap"
+        );
+        assert!(
+            bodies_are_live(
+                "#[test] fn subject() { None::<()>.expect(\"x\"); }",
+                &["subject"]
+            ),
+            "anchor: witness method expect"
+        );
+    }
+
+    #[test]
+    fn helper_descent_finds_witnesses_in_same_file_callees() {
+        let source = concat!(
+            "#[test] fn subject() { helper(); }\n",
+            "fn helper() { assert!(true); }\n",
+        );
+        assert!(
+            bodies_are_live(source, &["subject"]),
+            "anchor: helper-descent witness"
+        );
+    }
+
+    #[test]
+    fn duplicate_names_and_non_test_anchors_fail_closed() {
+        assert!(
+            !bodies_are_live(
+                "#[test] fn subject() { assert!(true); }\n#[test] fn subject() { assert!(true); }\n",
+                &["subject"]
+            ),
+            "mutation survived: duplicate #[test] names"
+        );
+        assert!(
+            !bodies_are_live("fn subject() { assert!(true); }\n", &["subject"]),
+            "mutation survived: same-named non-#[test] fn"
+        );
+        assert!(
+            !bodies_are_live("not rust", &["subject"]),
+            "mutation survived: parse failure must fail closed"
+        );
+        assert!(
+            !bodies_are_live("#[test] fn other() { assert!(true); }\n", &["subject"]),
+            "mutation survived: missing listed test"
+        );
+    }
+
+    #[test]
+    fn live_consumer_sources_have_witnesses() {
+        let root = crate::root();
+        for spec in [
+            &crate::SURFACE_LOCK_SPEC,
+            &crate::CLASSIFIER_SURFACE_LOCK_SPEC,
+            &crate::GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
+        ] {
+            let source = fs::read_to_string(root.join(spec.source)).unwrap();
+            assert!(
+                bodies_are_live(&source, spec.tests),
+                "anchor: live consumer {}",
+                spec.package
+            );
+        }
+    }
+
+    #[test]
+    fn vacuous_listed_bodies_fail_the_gate_conjunction() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("xtask-vacuity-wiring-{unique}"));
+        fs::create_dir_all(root.join("tests")).unwrap();
+        fs::write(root.join("Cargo.toml"), BASE_MANIFEST).unwrap();
+        fs::write(
+            root.join(SPEC.source),
+            "#[test] fn a() {}\n#[test] fn b() {}\n",
+        )
+        .unwrap();
+        let mut calls = 0;
+        let passed = require_external_tests(
+            &root,
+            |args| {
+                calls += 1;
+                let output: &[u8] = if args.last().copied() == Some("--list") {
+                    b"a: test\nb: test\n"
+                } else {
+                    b"test a ... ok\ntest b ... ok\n"
+                };
+                Some((true, output.to_vec()))
+            },
+            &SPEC,
+        );
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            !passed,
+            "mutation survived: vacuous body must fail require_external_tests"
+        );
+        assert_eq!(calls, 0, "anchor: bodies_are_live short-circuits execute");
     }
 }
