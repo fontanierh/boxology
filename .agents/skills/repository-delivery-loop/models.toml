@@ -1,21 +1,31 @@
 schema = 1
 
-# One candidate per role. No `fallback_on` is configured anywhere, so an
-# unavailable or exhausted candidate stops the phase and is reported rather
-# than silently substituting a different model.
+# Only `spec` configures fallback. `implement`, `repair`, and `review` declare a
+# single candidate with no `fallback_on`, so an unavailable or exhausted model
+# stops the phase and is reported rather than silently substituting one the
+# operator did not choose.
 
 [roles.spec]
+fallback_on = ["model_unavailable", "usage_exhausted"]
 
 [[roles.spec.candidates]]
 harness = "kimi"
 model = "kimi-code/k3"
 effort = "high"
 
+# Reached only when Kimi reports the model unavailable or its usage exhausted.
+# A rejected specification, a NO-GO verdict, or a timeout is not a fallback
+# condition and must stop the phase instead.
+[[roles.spec.candidates]]
+harness = "claude"
+model = "claude-fable-5"
+effort = "high"
+
 [roles.implement]
 
 [[roles.implement.candidates]]
 harness = "cursor"
-model = "cursor-grok-4.5-high"
+model = "cursor-grok-4.5-high-fast"
 effort = "high"
 
 [roles.review]
