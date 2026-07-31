@@ -239,7 +239,7 @@ fn external_test_checks(
         .collect()
 }
 
-/// Always runs; `base` is unused so budget mode cannot skip this fold.
+/// Runs for any `base` (unused: not gated on budget). Summary keeps verdicts via [`ci_failure_names`].
 fn fold_external_test_checks(
     base: Option<&str>,
     root: &Path,
@@ -247,6 +247,16 @@ fn fold_external_test_checks(
 ) -> Vec<(&'static str, bool)> {
     let _ = base;
     external_test_checks(root, run)
+}
+
+/// Missing registered external-test names, then false verdicts. Used as `run_ci` outcome.
+fn ci_failure_names(checks: &[(&'static str, bool)]) -> Vec<&'static str> {
+    let mut failed: Vec<&'static str> = EXTERNAL_TEST_SPECS
+        .iter()
+        .filter_map(|(name, _)| (!checks.iter().any(|(n, _)| n == name)).then_some(*name))
+        .collect();
+    failed.extend(checks.iter().filter_map(|(n, ok)| (!*ok).then_some(*n)));
+    failed
 }
 
 fn run_ci(base: Option<&str>) -> u8 {
@@ -314,10 +324,7 @@ fn run_ci(base: Option<&str>) -> u8 {
         }
         None => println!("budget: SKIPPED (--no-budget)"),
     }
-    let failed: Vec<_> = checks
-        .iter()
-        .filter_map(|(name, passed)| (!passed).then_some(*name))
-        .collect();
+    let failed = ci_failure_names(&checks);
     if failed.is_empty() {
         println!("summary: PASS");
         0
@@ -619,22 +626,6 @@ mod tests {
         assert!(root().join(EDITOR_FIXTURE).join("Cargo.toml").is_file());
     }
 
-    fn replace_once(source: &str, anchor: &str) -> String {
-        assert_eq!(
-            source.match_indices(anchor).count(),
-            1,
-            "anchor: {anchor:?}"
-        );
-        source.replacen(anchor, "", 1)
-    }
-
-    fn run_ci_body(source: &str) -> &str {
-        source
-            .split_once("fn run_ci(base: Option<&str>) -> u8 {")
-            .and_then(|(_, body)| body.split_once("\nfn timed<").map(|(body, _)| body))
-            .expect("run_ci body")
-    }
-
     #[test]
     fn external_test_specs_are_registered_once_by_identity() {
         let expected: &[(&str, external_test::ExternalTestSpec)] = &[
@@ -800,28 +791,35 @@ mod tests {
     }
 
     #[test]
-    fn run_ci_reaches_external_tests_under_base_and_no_base() {
+    fn run_ci_outcome_keeps_external_tests_and_propagates() {
+        let production = include_str!("main.rs")
+            .split_once("\nmod tests {")
+            .unwrap()
+            .0;
+        assert!(
+            production.contains("ci_failure_names(&checks)"),
+            "run_ci must summarize through ci_failure_names"
+        );
         for base in [None, Some("origin/main")] {
             let mut hit = 0;
-            let results = fold_external_test_checks(base, &root(), &mut |_| {
+            let checks = fold_external_test_checks(base, &root(), &mut |_| {
                 hit += 1;
                 Some((false, Vec::new()))
             });
-            assert_eq!(results.len(), 3, "fold length under base={base:?}");
-            assert!(hit > 0, "fold reaches runners under base={base:?}");
+            assert!(hit > 0 && checks.len() == 3, "fold under {base:?}");
+            assert_eq!(ci_failure_names(&checks).len(), 3, "false→fail {base:?}");
         }
-        // Neighbor tokens prove the fold is not wrapped: gating inserts `if`/`}` between them.
-        let stripped: String = run_ci_body(include_str!("main.rs"))
-            .chars()
-            .filter(|c| !c.is_whitespace())
+        let mut discarded: Vec<_> = EXTERNAL_TEST_SPECS
+            .iter()
+            .map(|(n, _)| (*n, true))
             .collect();
-        let pin = "}),),];checks.extend(fold_external_test_checks(base,&root(),&mut|args|{external_test::cargo(&root(),args)}));checks.extend([";
+        assert!(ci_failure_names(&discarded).is_empty());
+        discarded.clear();
         assert_eq!(
-            stripped.match_indices(pin).count(),
-            1,
-            "ungated fold adjacency"
+            ci_failure_names(&discarded).len(),
+            3,
+            "mutation survived: post-fold discard must fail CI outcome"
         );
-        assert_eq!(replace_once(&stripped, pin).match_indices(pin).count(), 0);
     }
 
     #[test]
