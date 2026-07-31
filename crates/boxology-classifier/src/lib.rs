@@ -137,6 +137,9 @@ pub fn classify(
             let findings = classify_paired_documents(base, submitted);
             // D6 check B: differing revisions with zero findings means the projection and the
             // classifier disagree (for example a revision-only difference).
+            // Deviates from AC4's letter deliberately: an empty finding set is now Err(BXC0038)
+            // rather than an incompatible report carrying the unclassified-change code. D6 requires
+            // failing loudly when revision and findings disagree.
             if findings.is_empty() {
                 Err(Diagnostics::new(Vec::from([
                     Diagnostic::integrity_silence_under_differing_revisions(),

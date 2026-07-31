@@ -22,6 +22,14 @@ const IDENTITY: Code = "specs/s2-contract-generator.md D4";
 const GRAMMAR: Code = "specs/s2-contract-generator.md D3";
 const INTEGRITY: Code = "specs/s4-contract-change-classification.md D6";
 
+/// Codes reserved for classifier findings. They occupy the allocated range without reader rule-text
+/// arms; the classifier surface lock proves every reserved code is emitted as a quoted `BXC` literal
+/// and that the classifier emits no other quoted `BXC` literal.
+pub const CLASSIFIER_RESERVED_CODES: &[&str] = &[
+    "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033", "BXC0034", "BXC0035",
+    "BXC0036",
+];
+
 /// Where in a schema document a diagnostic points: a JSON-pointer-style path such as
 /// `/capabilities/0/shape`, and the empty pointer for the document itself. `serde_json` records no
 /// byte spans, so `boxology_manifest`'s line-and-column model has nothing to read from, and a
@@ -717,14 +725,6 @@ mod tests {
         "BXC0009", "BXC0010", "BXC0011", "BXC0012", "BXC0013", "BXC0014", "BXC0015", "BXC0016",
         "BXC0017", "BXC0018", "BXC0019", "BXC0020", "BXC0021", "BXC0022", "BXC0023", "BXC0029",
         "BXC0030",
-    ];
-
-    /// Codes emitted by the classifier rather than this reader. They occupy the allocated range
-    /// without duplicating the classifier's finding text or pretending a reader corpus can reach
-    /// them.
-    const CLASSIFIER_RESERVED_CODES: &[Code] = &[
-        "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033", "BXC0034", "BXC0035",
-        "BXC0036",
     ];
 
     /// The unregistered code that probes the table's fallback, and the only quoted `BXC` literal in

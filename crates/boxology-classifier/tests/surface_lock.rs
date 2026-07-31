@@ -204,7 +204,7 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     assert_eq!(rust_source_inventory(&root).unwrap(), RUST_SOURCES);
     let root_source = fs::read_to_string(root.join("lib.rs")).unwrap();
     assert_eq!(require_allowed_modules(&root_source), Ok(()));
-    let source = fs::read_to_string(root.join("lib.rs")).unwrap();
+    let source = include_str!("../src/lib.rs");
     let anchors = [
         ("BXC0024", "Diagnostic::classification_requires_document()"),
         ("BXC0025", "Diagnostic::box_id_mismatch()"),
@@ -231,6 +231,23 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     for (code, anchor) in anchors {
         assert_eq!(source.matches(anchor).count(), 1, "{code} anchor count");
     }
+    // Both directions: every quoted BXC literal in lib.rs must be in CLASSIFIER_RESERVED_CODES,
+    // and every reserved code must appear as a quoted literal here. Equality closes
+    // emission-without-registration, cross-crate collision with a reader-owned code, and
+    // abandoned reservation. CLASSIFIER_RESERVED_CODES is promoted to a public schema constant
+    // so this lock can read it without duplicating the ledger.
+    let needle = format!("{}BXC", '"');
+    let mut emitted: Vec<&str> = Vec::new();
+    for (at, _) in source.match_indices(needle.as_str()) {
+        let code = source.get(at + 1..at + 8).unwrap_or_default();
+        if !emitted.contains(&code) {
+            emitted.push(code);
+        }
+    }
+    emitted.sort_unstable();
+    let mut reserved = boxology_schema::CLASSIFIER_RESERVED_CODES.to_vec();
+    reserved.sort_unstable();
+    assert_eq!(emitted, reserved);
 }
 
 fn symlinked_source_root_fails_inventory() {

@@ -477,7 +477,8 @@ fn unreferenced_type_addition_fails_closed() {
 #[test]
 fn unclassified_beside_named_finding_fails_closed() {
     // Named docs finding beside an unreferenced-type addition: only this shape distinguishes the
-    // unclassified disjunct from findings.is_empty() (every solo-unclassified fixture is dual-defended).
+    // unclassified disjunct from check B's empty-finding integrity path (every solo-unclassified
+    // fixture is dual-defended).
     let base = document("hello");
     let mut submitted = base.clone();
     submitted.types[0].docs.push("Extra type docs.".to_owned());
@@ -700,10 +701,60 @@ fn revision_only_difference_is_integrity_silence() {
 }
 
 #[test]
-fn every_effectively_mutable_comparable_field_fails_closed() {
+fn type_rename_is_remove_plus_unreferenced_add() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].name = "WaveError".to_owned();
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0028", "hello", Class::Incompatible, None),
+            (
+                "BXC0032",
+                "hello/type/GreetError",
+                Class::Incompatible,
+                None,
+            ),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn variant_rename_is_remove_plus_add() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].name = "Renamed".to_owned();
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            (
+                "BXC0035",
+                "hello/type/GreetError/variant/EmptyName",
+                Class::Incompatible,
+                None,
+            ),
+            (
+                "BXC0036",
+                "hello/type/GreetError/variant/Renamed",
+                Class::CompatibleWithConditions,
+                Some("unknown-variant tolerance"),
+            ),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn capability_and_reserved_payload_mutations_fail_closed() {
     // Capability-level and reserved payload-shape mutations still fail closed. Named type-graph
-    // rows (docs, deprecation, referenced add/remove) are covered by dedicated tests; revision-
-    // only is the check-B integrity test above.
+    // rows (docs, deprecation, referenced add/remove, variant add/remove) are covered by dedicated
+    // classify tests above; type/variant renames by the two tests immediately above; revision-only
+    // by the check-B integrity test above.
     let mutations: &[fn(&mut SchemaDocument)] = &[
         |document| document.capabilities[0].name = CapabilityName::new("wave").unwrap(),
         |document| document.capabilities[0].docs.push("New docs.".to_owned()),

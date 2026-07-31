@@ -29,13 +29,7 @@ fn renamed_input() -> Result<(SchemaDocument, SchemaDocument), String> {
         .get_mut(0)
         .ok_or("hello fixture has no capability")?;
     capability.input.name = String::from("label");
-    let revision = submitted.revision.clone();
-    let last = revision.chars().last().ok_or("hello revision is empty")?;
-    let flipped = match last {
-        '0' => '1',
-        _ => '0',
-    };
-    submitted.revision = format!("{}{flipped}", &revision[..revision.len() - 1]);
+    flip_revision(&mut submitted)?;
     Ok((base, submitted))
 }
 
