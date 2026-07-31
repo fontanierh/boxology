@@ -81,6 +81,17 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
     };
+// This slice pins the generator production source inventory only. Capability purity,
+// source closure, and dependency-graph pins are later #107 slices.
+const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
+    external_test::ExternalTestSpec {
+        package: "boxology-generator-model",
+        target: "purity_lock",
+        manifest: "crates/boxology-generator-model/Cargo.toml",
+        source: "crates/boxology-generator-model/tests/purity_lock.rs",
+        default_source: "tests/purity_lock.rs",
+        tests: &["production_source_inventory_is_exact"],
+    };
 type SkillCommand = (&'static str, fn(&Path) -> u8);
 const SKILL_COMMANDS: &[SkillCommand] = &[("skill-audit", skill_audit::run)];
 const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
@@ -243,6 +254,16 @@ fn run_ci(base: Option<&str>) -> u8 {
                 external_test::run_with_cargo(&root(), &CLASSIFIER_SURFACE_LOCK_SPEC, |args| {
                     external_test::cargo(&root(), args)
                 })
+            }),
+        ),
+        (
+            "generator-source-inventory",
+            timed("generator-source-inventory", || {
+                external_test::run_with_cargo(
+                    &root(),
+                    &GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
+                    |args| external_test::cargo(&root(), args),
+                )
             }),
         ),
         ("key-order", timed("key-order", run_key_order)),
