@@ -5,23 +5,11 @@ use std::{
     process::Command,
 };
 
+use quote::ToTokens;
+use sha2::{Digest, Sha256};
 use syn::visit::Visit;
-use syn::{Expr, ExprCall, ExprMacro, ItemFn, StmtMacro};
+use syn::{Expr, ExprCall, ItemFn};
 use toml_edit::{DocumentMut, Item, Table};
-
-/// Bare assert/panic-family macros that can fail a test on their own.
-/// `unwrap`/`expect` are ordinary setup vocabulary and do not count.
-/// Qualified paths (`core::assert!`), `debug_assert!`, `matches!`, and `?`
-/// are out of scope for this syntactic check.
-const WITNESS_MACROS: &[&str] = &[
-    "assert",
-    "assert_eq",
-    "assert_ne",
-    "panic",
-    "unreachable",
-    "todo",
-    "unimplemented",
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ExternalTestSpec {
@@ -31,80 +19,95 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) source: &'static str,
     pub(crate) default_source: &'static str,
     pub(crate) tests: &'static [&'static str],
-    /// Exact witness-macro count each listed test must contain in its own
-    /// block plus helpers it calls directly by bare name.
-    pub(crate) witnesses: usize,
+    /// SHA-256 of normalized listed-test blocks plus one-level bare-name helpers.
+    pub(crate) body_digest: &'static str,
 }
 
 pub(crate) fn require_external_tests(
     root: &Path,
     mut run: impl FnMut(&[&str]) -> Option<(bool, Vec<u8>)>,
     spec: &ExternalTestSpec,
-) -> bool {
-    if spec.tests.is_empty()
-        || !regular_file(root, spec.manifest)
-        || !regular_file(root, spec.source)
-        || build_script_exists(root, spec.manifest)
-    {
-        return false;
+) -> Result<(), String> {
+    let pkg = spec.package;
+    if spec.tests.is_empty() {
+        return Err(format!("{pkg}: empty tests list"));
+    }
+    if !regular_file(root, spec.manifest) {
+        return Err(format!("{pkg}: manifest missing or not a regular file"));
+    }
+    if !regular_file(root, spec.source) {
+        return Err(format!("{pkg}: source missing or not a regular file"));
+    }
+    if build_script_exists(root, spec.manifest) {
+        return Err(format!("{pkg}: build script is forbidden"));
     }
     let Ok(manifest) = fs::read_to_string(root.join(spec.manifest)) else {
-        return false;
+        return Err(format!("{pkg}: cannot read manifest"));
     };
     let Ok(source) = fs::read_to_string(root.join(spec.source)) else {
-        return false;
+        return Err(format!("{pkg}: cannot read source"));
     };
-    manifest_is_exact(&manifest, spec)
-        && bodies_are_live(&source, spec.tests, spec.witnesses)
-        && execute(&mut run, spec)
+    if !manifest_is_exact(&manifest, spec) {
+        return Err(format!("{pkg}: manifest does not match pinned controls"));
+    }
+    bodies_match_digest(&source, spec.tests, spec.body_digest)
+        .map_err(|error| format!("{pkg}: {error}"))?;
+    if !execute(&mut run, spec) {
+        return Err(format!("{pkg}: cargo list/run mismatch or cargo failed"));
+    }
+    Ok(())
 }
 
-/// Fail-closed vacuity detector: each listed `#[test]` must contain exactly
-/// `witnesses` bare witness-macro invocations in its own block or in a
-/// same-file helper it calls directly by bare name (one level only).
-/// Counting is syntactic containment, not reachability: witnesses under
-/// `if false`, `#[cfg(any())]`, or in never-called nested items still count
-/// when those items are themselves counted. Path calls, associated functions,
-/// and deeper helper chains are not descended.
-fn bodies_are_live(source: &str, tests: &[&str], witnesses: usize) -> bool {
-    let Ok(file) = syn::parse_file(source) else {
-        return false;
-    };
+/// Digest listed `#[test]` blocks plus one-level bare-name helpers. Syn tokens
+/// drop comments and normalize whitespace; token text stays, so substitution
+/// and table truncation change the digest.
+fn bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(), String> {
+    let observed = body_digest(source, tests)?;
+    if observed != expected {
+        return Err(format!(
+            "body digest mismatch: expected {expected}, observed {observed}"
+        ));
+    }
+    Ok(())
+}
+
+fn body_digest(source: &str, tests: &[&str]) -> Result<String, String> {
+    let file = syn::parse_file(source).map_err(|_| "source parse failed".to_string())?;
     let mut indexer = FnIndexer::default();
     indexer.visit_file(&file);
+    let mut hasher = Sha256::new();
     for name in tests {
         let Some(defs) = indexer.by_name.get(*name) else {
-            return false;
+            return Err(format!("missing listed test `{name}`"));
         };
         if defs.len() != 1 || !is_bare_test(defs[0]) {
-            return false;
+            return Err(format!("listed name `{name}` is not a unique #[test]"));
         }
         let item = defs[0];
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(item.block.to_token_stream().to_string().as_bytes());
+        hasher.update(b"\0");
         let mut calls = CallCollector::default();
         calls.visit_block(&item.block);
         let mut counted = HashSet::new();
-        let mut finder = WitnessFinder::default();
-        finder.visit_block(&item.block);
-        let mut found = finder.count;
         for callee in &calls.callees {
+            if !counted.insert(callee.as_str()) {
+                continue;
+            }
             let Some(defs) = indexer.by_name.get(callee) else {
                 continue;
             };
             if defs.len() != 1 {
-                return false;
+                return Err(format!("ambiguous helper `{callee}`"));
             }
-            if !counted.insert(callee.as_str()) {
-                continue;
-            }
-            let mut helper = WitnessFinder::default();
-            helper.visit_block(&defs[0].block);
-            found += helper.count;
-        }
-        if found != witnesses {
-            return false;
+            hasher.update(callee.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(defs[0].block.to_token_stream().to_string().as_bytes());
+            hasher.update(b"\0");
         }
     }
-    true
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn is_bare_test(item: &ItemFn) -> bool {
@@ -153,40 +156,11 @@ impl<'ast> Visit<'ast> for CallCollector {
     }
 }
 
-#[derive(Default)]
-struct WitnessFinder {
-    count: usize,
-}
-
-impl WitnessFinder {
-    fn note_macro(&mut self, mac: &syn::Macro) {
-        if mac
-            .path
-            .get_ident()
-            .is_some_and(|ident| WITNESS_MACROS.contains(&ident.to_string().as_str()))
-        {
-            self.count += 1;
-        }
-    }
-}
-
-impl<'ast> Visit<'ast> for WitnessFinder {
-    fn visit_expr_macro(&mut self, node: &'ast ExprMacro) {
-        self.note_macro(&node.mac);
-        syn::visit::visit_expr_macro(self, node);
-    }
-
-    fn visit_stmt_macro(&mut self, node: &'ast StmtMacro) {
-        self.note_macro(&node.mac);
-        syn::visit::visit_stmt_macro(self, node);
-    }
-}
-
 pub(crate) fn run_with_cargo(
     root: &Path,
     spec: &ExternalTestSpec,
     run: impl FnMut(&[&str]) -> Option<(bool, Vec<u8>)>,
-) -> bool {
+) -> Result<(), String> {
     require_external_tests(root, run, spec)
 }
 
@@ -359,6 +333,8 @@ mod tests {
 
     const BASE_MANIFEST: &str =
         "[package]\nname = \"client\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
+    /// Digest of `a`/`b` bodies that each contain `assert!(true)`.
+    const LIVE_AB_DIGEST: &str = "7b04fed7fcf43f6a77acc0c465186673bc29bc073013b481afce984ee4d06ef1";
     const SPEC: ExternalTestSpec = ExternalTestSpec {
         package: "client",
         target: "client_lock",
@@ -366,7 +342,7 @@ mod tests {
         source: "tests/client_lock.rs",
         default_source: "tests/client_lock.rs",
         tests: &["a", "b"],
-        witnesses: 1,
+        body_digest: LIVE_AB_DIGEST,
     };
     const ONE: &[&str] = &["a"];
     const EMPTY: &[&str] = &[];
@@ -505,7 +481,7 @@ mod tests {
             },
             &spec,
         );
-        assert!(passed);
+        assert!(passed.is_ok(), "{passed:?}");
         let calls: Vec<_> = calls.into_iter().map(|call| call.join("\0")).collect();
         assert_eq!(
             calls,
@@ -576,14 +552,17 @@ mod tests {
                 fs::write(root.join("build.rs"), "").unwrap();
             }
             let mut calls = 0;
-            assert!(!require_external_tests(
-                &root,
-                |_| {
-                    calls += 1;
-                    None
-                },
-                &SPEC
-            ));
+            assert!(
+                require_external_tests(
+                    &root,
+                    |_| {
+                        calls += 1;
+                        None
+                    },
+                    &SPEC
+                )
+                .is_err()
+            );
             assert_eq!(calls, 0);
             fs::remove_file(root.join("build.rs")).unwrap();
             if symlinked {
@@ -591,19 +570,22 @@ mod tests {
             }
         }
         let mut calls = 0;
-        assert!(require_external_tests(
-            &root,
-            |args| {
-                calls += 1;
-                let output: &[u8] = if args.last().copied() == Some("--list") {
-                    b"a: test\nb: test\n"
-                } else {
-                    b"test a ... ok\ntest b ... ok\n"
-                };
-                Some((true, output.to_vec()))
-            },
-            &SPEC
-        ));
+        assert!(
+            require_external_tests(
+                &root,
+                |args| {
+                    calls += 1;
+                    let output: &[u8] = if args.last().copied() == Some("--list") {
+                        b"a: test\nb: test\n"
+                    } else {
+                        b"test a ... ok\ntest b ... ok\n"
+                    };
+                    Some((true, output.to_vec()))
+                },
+                &SPEC
+            )
+            .is_ok()
+        );
         assert_eq!(calls, 2);
         fs::remove_dir_all(root).unwrap();
     }
@@ -611,122 +593,115 @@ mod tests {
     #[test]
     fn production_binder_propagates_false_delegate() {
         let mut calls = 0;
-        assert!(!run_with_cargo(
-            crate::root().as_path(),
-            &crate::SURFACE_LOCK_SPEC,
-            |_| {
+        assert!(
+            run_with_cargo(crate::root().as_path(), &crate::SURFACE_LOCK_SPEC, |_| {
                 calls += 1;
                 Some((false, Vec::new()))
-            }
-        ));
-    }
-
-    #[test]
-    fn production_binder_is_pinned_once() {
-        let source = include_str!("external_test.rs");
-        let binder = "require_external_tests(root, run, spec)";
-        let production = source.split_once("#[cfg(test)]").unwrap().0;
-        assert_eq!(production.match_indices(binder).count(), 1);
-    }
-
-    #[test]
-    fn vacuous_bodies_are_rejected() {
-        let cases = [
-            ("{}", "empty body"),
-            ("{\n// verify the inventory\n}", "comment-only body"),
-            ("{ let _ = helper(); }", "discard-only body"),
-            ("{ println!(\"inventory checked\"); }", "println-only body"),
-            ("{ Some(()).unwrap(); }", "unwrap-only body"),
-            ("{ None::<()>.expect(\"x\"); }", "expect-only body"),
-        ];
-        for (body, label) in cases {
-            let source = format!("#[test] fn subject() {body}\nfn helper() {{}}");
-            assert!(
-                !bodies_are_live(&source, &["subject"], 1),
-                "mutation survived: {label}"
-            );
-        }
-    }
-
-    #[test]
-    fn each_witness_macro_keeps_a_body_live() {
-        // Hardcoded independently of WITNESS_MACROS so removing one set entry
-        // still exercises that macro's own fixture (M-a5 isolation).
-        for name in [
-            "assert",
-            "assert_eq",
-            "assert_ne",
-            "panic",
-            "unreachable",
-            "todo",
-            "unimplemented",
-        ] {
-            let source = format!("#[test] fn subject() {{ {name}!() }}");
-            assert!(
-                bodies_are_live(&source, &["subject"], 1),
-                "anchor: witness macro {name}"
-            );
-        }
-    }
-
-    #[test]
-    fn direct_helper_witnesses_count_but_deeper_calls_do_not() {
-        assert!(
-            bodies_are_live(
-                "#[test] fn subject() { helper(); }\nfn helper() { assert!(true); }\n",
-                &["subject"],
-                1
-            ),
-            "anchor: direct helper witness"
+            })
+            .is_err()
         );
+    }
+
+    #[test]
+    fn production_binder_and_cargo_runner_are_pinned_once() {
+        let production = include_str!("external_test.rs")
+            .split_once("#[cfg(test)]")
+            .unwrap()
+            .0;
+        assert_eq!(
+            production
+                .match_indices("require_external_tests(root, run, spec)")
+                .count(),
+            1
+        );
+        assert_eq!(
+            production.match_indices("Command::new(\"cargo\")").count(),
+            1,
+            "anchor: production cargo() spawns Command::new(\"cargo\") once"
+        );
+    }
+
+    #[test]
+    fn body_digest_rejects_vacuous_and_substituted_bodies() {
+        let expected =
+            body_digest("#[test] fn subject() { assert!(true); }\n", &["subject"]).unwrap();
+        for (source, label) in [
+            ("#[test] fn subject() {}\n", "empty body"),
+            (
+                "#[test] fn subject() {\n// verify the inventory\n}\n",
+                "comment-only body",
+            ),
+            (
+                "#[test] fn subject() { let _ = helper(); }\nfn helper() {}\n",
+                "discard-only body",
+            ),
+            (
+                "#[test] fn subject() { println!(\"inventory checked\"); }\n",
+                "println-only body",
+            ),
+            (
+                "#[test] fn subject() { Some(()).unwrap(); }\n",
+                "unwrap-only body",
+            ),
+            (
+                "#[test] fn subject() { assert!(true); assert!(true); }\n",
+                "assert!(true) substitution",
+            ),
+        ] {
+            let err = bodies_match_digest(source, &["subject"], &expected).unwrap_err();
+            assert!(
+                err.contains("body digest mismatch")
+                    && err.contains(&format!("expected {expected}"))
+                    && err.contains("observed "),
+                "mutation survived: {label}; err={err}"
+            );
+        }
+    }
+
+    #[test]
+    fn body_digest_includes_direct_helpers_only() {
+        let with_helper = concat!(
+            "#[test] fn subject() { helper(); }\n",
+            "fn helper() { assert!(true); }\n",
+        );
+        let expected = body_digest(with_helper, &["subject"]).unwrap();
+        assert!(bodies_match_digest(with_helper, &["subject"], &expected).is_ok());
         assert!(
-            !bodies_are_live(
+            bodies_match_digest(
                 concat!(
                     "#[test] fn subject() { helper(); }\n",
                     "fn helper() { deeper(); }\n",
                     "fn deeper() { assert!(true); }\n",
                 ),
                 &["subject"],
-                1
-            ),
-            "mutation survived: second-level helper must not satisfy the pin"
+                &expected
+            )
+            .is_err(),
+            "mutation survived: second-level helper must change the digest"
         );
         assert!(
-            !bodies_are_live(
-                "#[test] fn subject() { assert!(true); assert!(true); }\n",
+            bodies_match_digest(
+                "#[test] fn subject() { helper(); }\nfn helper() {}\n",
                 &["subject"],
-                1
-            ),
-            "mutation survived: exact witness count"
+                &expected
+            )
+            .is_err(),
+            "mutation survived: helper body is pinned"
         );
     }
 
     #[test]
     fn duplicate_names_and_non_test_anchors_fail_closed() {
+        assert!(body_digest(
+            "#[test] fn subject() { assert!(true); }\n#[test] fn subject() { assert!(true); }\n",
+            &["subject"],
+        )
+        .is_err());
+        assert!(body_digest("fn subject() { assert!(true); }\n", &["subject"]).is_err());
+        assert!(body_digest("not rust", &["subject"]).is_err());
+        assert!(body_digest("#[test] fn other() { assert!(true); }\n", &["subject"]).is_err());
         assert!(
-            !bodies_are_live(
-                "#[test] fn subject() { assert!(true); }\n#[test] fn subject() { assert!(true); }\n",
-                &["subject"],
-                1
-            ),
-            "mutation survived: duplicate #[test] names"
-        );
-        assert!(
-            !bodies_are_live("fn subject() { assert!(true); }\n", &["subject"], 1),
-            "mutation survived: same-named non-#[test] fn"
-        );
-        assert!(
-            !bodies_are_live("not rust", &["subject"], 1),
-            "mutation survived: parse failure must fail closed"
-        );
-        assert!(
-            !bodies_are_live("#[test] fn other() { assert!(true); }\n", &["subject"], 1),
-            "mutation survived: missing listed test"
-        );
-        // Same-named nested fns that are not reachable from the listed test
-        // must not reject the spec (classifier already nests `fn visit`).
-        assert!(
-            bodies_are_live(
+            body_digest(
                 concat!(
                     "#[test] fn subject() { helper(); }\n",
                     "fn helper() { assert!(true); }\n",
@@ -734,26 +709,24 @@ mod tests {
                     "fn another() { fn visit() {}\n}\n",
                 ),
                 &["subject"],
-                1
-            ),
-            "anchor: unreachable duplicate nested names are allowed"
+            )
+            .is_ok()
         );
         assert!(
-            !bodies_are_live(
+            body_digest(
                 concat!(
                     "#[test] fn subject() { helper(); }\n",
                     "fn helper() { assert!(true); }\n",
                     "fn helper() { assert!(true); }\n",
                 ),
                 &["subject"],
-                1
-            ),
-            "mutation survived: duplicate reachable helper name"
+            )
+            .is_err()
         );
     }
 
     #[test]
-    fn live_consumer_sources_match_pinned_witness_counts() {
+    fn live_consumer_sources_match_pinned_body_digests() {
         let root = crate::root();
         for spec in [
             &crate::SURFACE_LOCK_SPEC,
@@ -761,15 +734,16 @@ mod tests {
             &crate::GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
         ] {
             let source = fs::read_to_string(root.join(spec.source)).unwrap();
+            if let Err(error) = bodies_match_digest(&source, spec.tests, spec.body_digest) {
+                panic!("anchor: live consumer {}: {error}", spec.package);
+            }
+            let wrong = "0".repeat(64);
+            let err = bodies_match_digest(&source, spec.tests, &wrong).unwrap_err();
             assert!(
-                bodies_are_live(&source, spec.tests, spec.witnesses),
-                "anchor: live consumer {} witnesses={}",
-                spec.package,
-                spec.witnesses
-            );
-            assert!(
-                !bodies_are_live(&source, spec.tests, spec.witnesses.saturating_sub(1)),
-                "anchor: {} is discriminating at pinned count",
+                err.contains("body digest mismatch")
+                    && err.contains(&format!("expected {wrong}"))
+                    && err.contains("observed "),
+                "anchor: {} pin names expected vs observed digests; err={err}",
                 spec.package
             );
         }
@@ -804,10 +778,11 @@ mod tests {
             &SPEC,
         );
         fs::remove_dir_all(root).unwrap();
+        let err = passed.unwrap_err();
         assert!(
-            !passed,
-            "mutation survived: vacuous body must fail require_external_tests"
+            err.contains("body digest mismatch"),
+            "mutation survived: vacuous body must fail require_external_tests; err={err}"
         );
-        assert_eq!(calls, 0, "anchor: bodies_are_live short-circuits execute");
+        assert_eq!(calls, 0, "anchor: body digest short-circuits execute");
     }
 }

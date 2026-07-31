@@ -71,7 +71,7 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     source: "crates/boxology-workspace/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
-    witnesses: 5,
+    body_digest: "51dd33ceec8bd3c0678c30a4c0ce705d4637289a73eea850b2456248d63cacf5",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
@@ -81,7 +81,7 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
-        witnesses: 10,
+        body_digest: "deb5684c570a37976dd77496580743f24fd6c6bbfb81688ef09d8622d06a1350",
     };
 // This slice pins the generator production source inventory only. Capability purity,
 // source closure, and dependency-graph pins are later #107 slices.
@@ -93,7 +93,7 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
         tests: &["production_source_inventory_is_exact"],
-        witnesses: 5,
+        body_digest: "bf4b0a931f675233c45103a5a1c772b79ffe8622c9d3aa7b9b8023563e82dd72",
     };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("surface-lock", &SURFACE_LOCK_SPEC),
@@ -226,11 +226,27 @@ fn external_test_checks(
             (
                 *name,
                 timed(name, || {
-                    external_test::run_with_cargo(root, spec, |args| run(args))
+                    match external_test::run_with_cargo(root, spec, |args| run(args)) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            eprintln!("{name}: {error}");
+                            false
+                        }
+                    }
                 }),
             )
         })
         .collect()
+}
+
+/// Always runs; `base` is unused so budget mode cannot skip this fold.
+fn fold_external_test_checks(
+    base: Option<&str>,
+    root: &Path,
+    run: &mut ExternalTestRunner<'_>,
+) -> Vec<(&'static str, bool)> {
+    let _ = base;
+    external_test_checks(root, run)
 }
 
 fn run_ci(base: Option<&str>) -> u8 {
@@ -270,7 +286,7 @@ fn run_ci(base: Option<&str>) -> u8 {
             }),
         ),
     ];
-    checks.extend(external_test_checks(&root(), &mut |args| {
+    checks.extend(fold_external_test_checks(base, &root(), &mut |args| {
         external_test::cargo(&root(), args)
     }));
     checks.extend([
@@ -631,7 +647,7 @@ mod tests {
                     source: "crates/boxology-workspace/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
-                    witnesses: 5,
+                    body_digest: "51dd33ceec8bd3c0678c30a4c0ce705d4637289a73eea850b2456248d63cacf5",
                 },
             ),
             (
@@ -643,7 +659,7 @@ mod tests {
                     source: "crates/boxology-classifier/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
-                    witnesses: 10,
+                    body_digest: "deb5684c570a37976dd77496580743f24fd6c6bbfb81688ef09d8622d06a1350",
                 },
             ),
             (
@@ -655,7 +671,7 @@ mod tests {
                     source: "crates/boxology-generator-model/tests/purity_lock.rs",
                     default_source: "tests/purity_lock.rs",
                     tests: &["production_source_inventory_is_exact"],
-                    witnesses: 5,
+                    body_digest: "bf4b0a931f675233c45103a5a1c772b79ffe8622c9d3aa7b9b8023563e82dd72",
                 },
             ),
         ];
@@ -784,22 +800,28 @@ mod tests {
     }
 
     #[test]
-    fn run_ci_folds_external_test_checks_once() {
-        let source = include_str!("main.rs");
-        let body = run_ci_body(source);
-        let stripped: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        let pin = "checks.extend(external_test_checks(&root(),&mut|args|{external_test::cargo(&root(),args)}));";
+    fn run_ci_reaches_external_tests_under_base_and_no_base() {
+        for base in [None, Some("origin/main")] {
+            let mut hit = 0;
+            let results = fold_external_test_checks(base, &root(), &mut |_| {
+                hit += 1;
+                Some((false, Vec::new()))
+            });
+            assert_eq!(results.len(), 3, "fold length under base={base:?}");
+            assert!(hit > 0, "fold reaches runners under base={base:?}");
+        }
+        // Neighbor tokens prove the fold is not wrapped: gating inserts `if`/`}` between them.
+        let stripped: String = run_ci_body(include_str!("main.rs"))
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let pin = "}),),];checks.extend(fold_external_test_checks(base,&root(),&mut|args|{external_test::cargo(&root(),args)}));checks.extend([";
         assert_eq!(
             stripped.match_indices(pin).count(),
             1,
-            "mutation survived: checks.extend(external_test_checks(...cargo...))"
+            "ungated fold adjacency"
         );
-        let deleted = replace_once(&stripped, pin);
-        assert_eq!(
-            deleted.match_indices(pin).count(),
-            0,
-            "anchor: replace_once clears the fold pin"
-        );
+        assert_eq!(replace_once(&stripped, pin).match_indices(pin).count(), 0);
     }
 
     #[test]
