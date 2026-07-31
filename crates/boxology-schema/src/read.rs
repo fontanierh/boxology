@@ -586,7 +586,8 @@ fn rule_of(code: Code) -> Code {
 /// rules are actually written (D4 states none) and the only text reaching an input parameter name.
 /// BXC0024-BXC0025 are D2's classifier pairing errors; the classifier owns their reachability.
 /// BXC0029 is S2 D4's named-field identity rule and BXC0030 is S2 D3's named-field uniqueness
-/// rule. BXC0026-BXC0028 are reserved for classifier findings and have no rule-text arms here.
+/// rule. BXC0026-BXC0028 and BXC0031-BXC0035 are reserved for classifier findings and have no
+/// rule-text arms here.
 fn source_of(code: Code) -> Code {
     match code {
         "BXC0024" | "BXC0025" => CLASSIFICATION,
@@ -701,7 +702,9 @@ mod tests {
     /// Codes emitted by the classifier rather than this reader. They occupy the allocated range
     /// without duplicating the classifier's finding text or pretending a reader corpus can reach
     /// them.
-    const CLASSIFIER_RESERVED_CODES: &[Code] = &["BXC0026", "BXC0027", "BXC0028"];
+    const CLASSIFIER_RESERVED_CODES: &[Code] = &[
+        "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033", "BXC0034", "BXC0035",
+    ];
 
     /// The unregistered code that probes the table's fallback, and the only quoted `BXC` literal in
     /// this crate that is not a registered code. The scan below subtracts exactly it.
@@ -793,7 +796,7 @@ BXC0030 named payload field names must be unique specs/s2-contract-generator.md 
         // Dense from BXC0001, with the classifier's reserved range represented explicitly rather
         // than assigned reader rule text. An ascending reader-only list would miss this gap.
         let spell = |n| format!("BX{}{n:04}", 'C');
-        let dense: Vec<String> = (1..=30).map(spell).collect();
+        let dense: Vec<String> = (1..=35).map(spell).collect();
         assert_eq!(
             allocated
                 .iter()

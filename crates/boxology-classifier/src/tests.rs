@@ -399,6 +399,11 @@ fn multiple_referenced_error_variant_additions_are_sorted() {
     );
 }
 
+fn with_flipped_revision(mut document: SchemaDocument) -> SchemaDocument {
+    document.revision = OTHER_REVISION.to_owned();
+    document
+}
+
 fn assert_variant_incompatible(base: SchemaDocument, mutate: impl FnOnce(&mut SchemaDocument)) {
     let mut submitted = base.clone();
     mutate(&mut submitted);
@@ -408,54 +413,14 @@ fn assert_variant_incompatible(base: SchemaDocument, mutate: impl FnOnce(&mut Sc
 
 #[test]
 fn variant_changes_outside_named_addition_fail_closed() {
+    // Reorder of common variants has no named row.
     let mut base = document("hello");
     base.types[0].variants.push(variant("Other"));
     assert_variant_incompatible(base, |document| {
         document.types[0].variants.swap(0, 1);
     });
 
-    let mutations: &[fn(&mut SchemaDocument)] = &[
-        |document| {
-            document.types[0].variants.pop();
-        },
-        |document| document.types[0].variants[0].name = "Other".to_owned(),
-        |document| {
-            document.types[0].variants.push(variant("Other"));
-            document.capabilities[0].docs.push("More docs.".to_owned());
-        },
-        |document| {
-            document.types[0].variants.push(variant("Other"));
-            document.types[0]
-                .docs
-                .push("Different type docs.".to_owned());
-        },
-        |document| {
-            document.types[0].variants.push(variant("Other"));
-            document.types[0].deprecation = Some("use another error".to_owned());
-        },
-        |document| {
-            document.types[0].variants.push(variant("Other"));
-            document.types[0].variants[0]
-                .docs
-                .push("Different variant docs.".to_owned());
-        },
-        |document| {
-            document.types[0].variants.push(variant("Other"));
-            document.types[0].variants[0].deprecation = Some("use another variant".to_owned());
-        },
-        |document| {
-            document.types[0].variants[0].name = "Renamed".to_owned();
-            document.types[0].variants.push(variant("Other"));
-        },
-    ];
-    for mutate in mutations {
-        assert_variant_incompatible(document("hello"), *mutate);
-    }
-
-    assert_variant_incompatible(two_error_document(), |document| {
-        document.types[1].variants.push(variant("Other"));
-        document.types[0].name = "RenamedError".to_owned();
-    });
+    // Variant added on an unreferenced type falls to the fail-closed default (D5 preamble).
     let mut base = document("hello");
     let mut unreferenced = base.types[0].clone();
     unreferenced.name = "UnusedError".to_owned();
@@ -463,6 +428,239 @@ fn variant_changes_outside_named_addition_fail_closed() {
     assert_variant_incompatible(base, |document| {
         document.types[1].variants.push(variant("Other"));
     });
+}
+
+#[test]
+fn variant_removed_is_incompatible() {
+    let mut base = document("hello");
+    base.types[0].variants.push(variant("Other"));
+    let submitted = with_flipped_revision(document("hello"));
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[(
+            "BXC0035",
+            "hello/type/GreetError/variant/Other",
+            Class::Incompatible,
+            None,
+        )],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn unreferenced_type_addition_fails_closed() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    let mut unused = base.types[0].clone();
+    unused.name = "UnusedError".to_owned();
+    submitted.types.push(unused);
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn unclassified_beside_named_finding_fails_closed() {
+    // Named docs finding beside an unreferenced-type addition: only this shape distinguishes the
+    // unclassified disjunct from findings.is_empty() (every solo-unclassified fixture is dual-defended).
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].docs.push("Extra type docs.".to_owned());
+    let mut unused = base.types[0].clone();
+    unused.name = "UnusedError".to_owned();
+    submitted.types.push(unused);
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0028", "hello", Class::Incompatible, None),
+            (
+                "BXC0033",
+                "hello/type/GreetError",
+                Class::Documentation,
+                None,
+            ),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn variant_payload_change_with_differing_revision_fails_closed() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].payload = SchemaPayload::Value {
+        docs: Vec::new(),
+        deprecation: None,
+        ty: BoundaryLeaf::String,
+    };
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_unclassified_pair(base, submitted);
+}
+
+#[test]
+fn type_docs_changed_is_documentation() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].docs.push("Extra type docs.".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[(
+            "BXC0033",
+            "hello/type/GreetError",
+            Class::Documentation,
+            None,
+        )],
+        Class::Documentation,
+    );
+}
+
+#[test]
+fn variant_docs_changed_is_documentation() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0]
+        .docs
+        .push("Extra variant docs.".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[(
+            "BXC0033",
+            "hello/type/GreetError/variant/EmptyName",
+            Class::Documentation,
+            None,
+        )],
+        Class::Documentation,
+    );
+}
+
+#[test]
+fn type_deprecation_changed_is_deprecation() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].deprecation = Some("use another error".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0034", "hello/type/GreetError", Class::Deprecation, None)],
+        Class::Deprecation,
+    );
+}
+
+#[test]
+fn variant_deprecation_changed_is_deprecation() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].deprecation = Some("use another variant".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[(
+            "BXC0034",
+            "hello/type/GreetError/variant/EmptyName",
+            Class::Deprecation,
+            None,
+        )],
+        Class::Deprecation,
+    );
+}
+
+#[test]
+fn type_added_with_referencing_capability_is_additive_and_fail_closed() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    add_capability(&mut submitted);
+    submitted.capabilities[1].error = "WaveError".to_owned();
+    let mut wave = base.types[0].clone();
+    wave.name = "WaveError".to_owned();
+    submitted.types.push(wave);
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0028", "hello", Class::Incompatible, None),
+            ("BXC0031", "hello/type/WaveError", Class::Additive, None),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn type_removed_with_referencing_capability_is_incompatible_and_fail_closed() {
+    let base = two_error_document();
+    let mut submitted = document("hello");
+    submitted.revision = OTHER_REVISION.to_owned();
+    // Keep GreetError; remove WaveError and its capability only.
+    assert_eq!(base.types[1].name, "GreetError");
+    assert_eq!(base.types[0].name, "WaveError");
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0028", "hello", Class::Incompatible, None),
+            ("BXC0032", "hello/type/WaveError", Class::Incompatible, None),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn mixed_variant_addition_and_type_docs_keeps_conditional_verdict() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.types[0].docs.push("Extra type docs.".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            (
+                "BXC0033",
+                "hello/type/GreetError",
+                Class::Documentation,
+                None,
+            ),
+            (
+                "BXC0029",
+                "hello/type/GreetError/variant/Other",
+                Class::CompatibleWithConditions,
+                Some("unknown-variant tolerance"),
+            ),
+        ],
+        Class::CompatibleWithConditions,
+    );
+}
+
+#[test]
+fn mixed_variant_addition_and_capability_docs_keeps_fail_closed() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.types[0].variants.push(variant("Other"));
+    submitted.capabilities[0].docs.push("More docs.".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0028", "hello", Class::Incompatible, None),
+            (
+                "BXC0029",
+                "hello/type/GreetError/variant/Other",
+                Class::CompatibleWithConditions,
+                Some("unknown-variant tolerance"),
+            ),
+        ],
+        Class::Incompatible,
+    );
 }
 
 #[test]
@@ -534,6 +732,32 @@ fn named_payload_fields_fail_closed() {
         mutate(&mut submitted);
         assert_unclassified_pair(base, submitted);
     }
+}
+
+#[test]
+fn named_payload_change_beside_named_finding_fails_closed() {
+    // Isolates VariantPayloadChanged: equal-revision payload mutations never enter classify_paired_documents.
+    let base = named_document();
+    let mut submitted = base.clone();
+    named_fields(&mut submitted)[0]
+        .docs
+        .push("new docs".to_owned());
+    submitted.types[0].docs.push("Extra type docs.".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0028", "hello", Class::Incompatible, None),
+            (
+                "BXC0033",
+                "hello/type/GreetError",
+                Class::Documentation,
+                None,
+            ),
+        ],
+        Class::Incompatible,
+    );
 }
 
 #[test]
