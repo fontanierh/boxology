@@ -1,12 +1,15 @@
 //! Pure assembly of the deterministic Boxology project tree.
 //!
-//! The initializer emits the root platform files, including the workspace and generator
-//! manifests, pinned toolchain, and ignore rules. It performs no filesystem, runtime environment,
-//! network, clock, or process access; the writer and later project packages are separate work.
+//! The initializer emits the root platform files and the embedded ping contract artifacts from
+//! S2's pure generator. It performs no filesystem, runtime environment, network, clock, or process
+//! access; the writer and later project packages are separate work.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use boxology_contract::BoxId;
+use boxology_generator::generate;
+use boxology_generator_model::GenerationRequest;
 use std::{
     fmt,
     path::{Component, Path, PathBuf},
@@ -15,7 +18,9 @@ use std::{
 const RULE_SOURCE: &str = "specs/s6-installer-and-generated-project.md D1";
 const REQUEST_PATH: &str = "<request>";
 const TOOLCHAIN: &[u8] = include_bytes!("../../../rust-toolchain.toml");
-const DIAGNOSTICS: [(&str, &str, &str); 2] = [
+const PING_MANIFEST: &[u8] = include_bytes!("../../fixtures/ping/boxology.toml");
+const PING_IMPLEMENTATION: &[u8] = include_bytes!("../../fixtures/ping/implementation/src/lib.rs");
+const DIAGNOSTICS: [(&str, &str, &str); 4] = [
     (
         "BXI0001",
         "project name",
@@ -25,6 +30,16 @@ const DIAGNOSTICS: [(&str, &str, &str); 2] = [
         "BXI0002",
         "dependency source",
         "dependency source must not be empty",
+    ),
+    (
+        "BXI0003",
+        "embedded generation",
+        "the pinned ping contract must generate without diagnostics",
+    ),
+    (
+        "BXI0004",
+        "generated path",
+        "embedded generated paths must be confined relative paths",
     ),
 ];
 const DEPENDENCIES: [(&str, &str); 4] = [
@@ -171,7 +186,8 @@ impl GeneratedFile {
 
 /// A generated project tree sorted by relative-path bytes.
 ///
-/// This slice uses literal-only output paths. A writer must pass every path through
+/// This slice uses literal-only output paths for the root platform files. Embedded generator
+/// paths are confined before the `ping/` prefix is applied. A writer must pass every path through
 /// [`confined_destination`] before joining it to its destination.
 #[derive(Debug, Eq, PartialEq)]
 pub struct GeneratedTree(Vec<GeneratedFile>);
@@ -183,7 +199,7 @@ impl GeneratedTree {
     }
 }
 
-/// Emits the deterministic root-platform subset for a validated request.
+/// Emits the deterministic project tree for a validated request.
 pub fn initialize(request: &InitRequest) -> Result<GeneratedTree, Diagnostics> {
     let mut files = vec![
         file(".gitignore", b"/target\n".to_vec()),
@@ -201,6 +217,7 @@ pub fn initialize(request: &InitRequest) -> Result<GeneratedTree, Diagnostics> {
         ),
         file("rust-toolchain.toml", TOOLCHAIN.to_vec()),
     ];
+    files.extend(embed_ping()?);
     files.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     Ok(GeneratedTree(files))
 }
@@ -208,17 +225,80 @@ pub fn initialize(request: &InitRequest) -> Result<GeneratedTree, Diagnostics> {
 /// Resolves a generated logical path beneath `root`.
 ///
 /// Empty, absolute, rooted, prefixed, dot-segment, backslash, and NUL paths are rejected.
-#[rustfmt::skip]
 pub fn confined_destination(root: &Path, logical: &str) -> Result<PathBuf, &'static str> {
+    confined_logical(logical).map(|logical| root.join(logical))
+}
+
+fn confined_logical(logical: &str) -> Result<&str, &'static str> {
     let bytes = logical.as_bytes();
     let portable_prefix = matches!(bytes, [letter, b':', ..] if letter.is_ascii_alphabetic());
-    let invalid_segment = logical.split('/').any(|part| part.is_empty() || matches!(part, "." | ".."));
-    let invalid_component = Path::new(logical).components().any(|part| !matches!(part, Component::Normal(_)));
-    if bytes.contains(&0) || bytes.contains(&b'\\') || portable_prefix || invalid_segment || invalid_component {
+    let invalid_segment = logical
+        .split('/')
+        .any(|part| part.is_empty() || matches!(part, "." | ".."));
+    let invalid_component = Path::new(logical)
+        .components()
+        .any(|part| !matches!(part, Component::Normal(_)));
+    if bytes.contains(&0)
+        || bytes.contains(&b'\\')
+        || portable_prefix
+        || invalid_segment
+        || invalid_component
+    {
         Err("generated path is not a confined relative path")
     } else {
-        Ok(root.join(logical))
+        Ok(logical)
     }
+}
+
+fn embed_ping() -> Result<Vec<GeneratedFile>, Diagnostics> {
+    embed(PING_MANIFEST, PING_IMPLEMENTATION)
+}
+
+fn embed(manifest: &[u8], implementation: &[u8]) -> Result<Vec<GeneratedFile>, Diagnostics> {
+    let box_id = BoxId::new("ping").map_err(|_| embedded_generation())?;
+    let request = GenerationRequest::new(
+        box_id,
+        "implementation/src/lib.rs".into(),
+        vec![
+            ("boxology.toml".into(), manifest.to_vec()),
+            ("implementation/src/lib.rs".into(), implementation.to_vec()),
+        ],
+        vec![],
+        boxology_generator::OUTPUTS
+            .iter()
+            .map(|path| (*path).to_owned())
+            .collect(),
+    )
+    .map_err(|_| embedded_generation())?;
+    let generated = generate(&request).map_err(|_| embedded_generation())?;
+    prefixed(
+        generated
+            .files()
+            .iter()
+            .map(|file| (file.path(), file.bytes())),
+    )
+}
+
+fn prefixed<'a>(
+    files: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+) -> Result<Vec<GeneratedFile>, Diagnostics> {
+    let mut out = Vec::new();
+    for (path, bytes) in files {
+        let logical = confined_logical(path).map_err(|_| path_not_confined())?;
+        out.push(GeneratedFile {
+            path: format!("ping/{logical}"),
+            bytes: bytes.to_vec(),
+        });
+    }
+    Ok(out)
+}
+
+fn embedded_generation() -> Diagnostics {
+    Diagnostics::new(vec![Diagnostic(2)]).expect("embedded-generation diagnostic is nonempty")
+}
+
+fn path_not_confined() -> Diagnostics {
+    Diagnostics::new(vec![Diagnostic(3)]).expect("path-confinement diagnostic is nonempty")
 }
 
 fn file(path: &str, bytes: Vec<u8>) -> GeneratedFile {
@@ -291,8 +371,12 @@ mod tests {
 
     const SOURCE: &str = include_str!("lib.rs");
     const CODE_GOLDEN: &str = include_str!("../test/bxi.golden");
+    const PROVENANCE_ANCHOR: &[u8] = b"  \"provenance\": ";
+    const PROVENANCE_TOKEN: &[u8] = b"\"@PROVENANCE@\"";
+    const GENERATOR_HEADER: &str = "// Generated by boxology-generator ";
+    const STD_IMPORT: &str = "use std::{\n    fmt,\n    path::{Component, Path, PathBuf},\n};";
     #[rustfmt::skip]
-    const GOLDEN: [(&str, &[u8]); 5] = [
+    const GOLDEN: [(&str, &[u8]); 9] = [
         (".gitignore", include_bytes!("../../../goldens/generated-project/.gitignore")),
         ("Cargo.toml", include_bytes!("../../../goldens/generated-project/Cargo.toml")),
         (
@@ -300,7 +384,41 @@ mod tests {
             include_bytes!("../../../goldens/generated-project/boxology-generator.toml"),
         ),
         ("boxology.toml", include_bytes!("../../../goldens/generated-project/boxology.toml")),
+        (
+            "ping/generated/adapter/adapter.rs",
+            include_bytes!("../../../goldens/generated-project/ping/generated/adapter/adapter.rs"),
+        ),
+        (
+            "ping/generated/contract/Cargo.toml",
+            include_bytes!("../../../goldens/generated-project/ping/generated/contract/Cargo.toml"),
+        ),
+        (
+            "ping/generated/contract/src/lib.rs",
+            include_bytes!("../../../goldens/generated-project/ping/generated/contract/src/lib.rs"),
+        ),
+        (
+            "ping/generated/schema.json",
+            include_bytes!("../../../goldens/generated-project/ping/generated/schema.json"),
+        ),
         ("rust-toolchain.toml", include_bytes!("../../../goldens/generated-project/rust-toolchain.toml")),
+    ];
+    const FIXTURE_GENERATED: [(&str, &[u8]); 4] = [
+        (
+            "generated/adapter/adapter.rs",
+            include_bytes!("../../fixtures/ping/generated/adapter/adapter.rs"),
+        ),
+        (
+            "generated/contract/Cargo.toml",
+            include_bytes!("../../fixtures/ping/generated/contract/Cargo.toml"),
+        ),
+        (
+            "generated/contract/src/lib.rs",
+            include_bytes!("../../fixtures/ping/generated/contract/src/lib.rs"),
+        ),
+        (
+            "generated/schema.json",
+            include_bytes!("../../fixtures/ping/generated/schema.json"),
+        ),
     ];
 
     fn source_codes(source: &str) -> Vec<&str> {
@@ -346,6 +464,127 @@ mod tests {
             .bytes()
     }
 
+    fn occurrence_count(bytes: &[u8], needle: &[u8]) -> usize {
+        bytes
+            .windows(needle.len())
+            .filter(|window| *window == needle)
+            .count()
+    }
+
+    fn normalize_rust(bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let text =
+            std::str::from_utf8(bytes).map_err(|_| String::from("Rust output must be UTF-8"))?;
+        if text.matches(GENERATOR_HEADER).count() != 1 {
+            return Err(String::from(
+                "Rust output must have exactly one generator header",
+            ));
+        }
+        let (header, body) = text
+            .split_once('\n')
+            .ok_or_else(|| String::from("generated Rust has a header line"))?;
+        if !header.starts_with(GENERATOR_HEADER) {
+            return Err(String::from(
+                "Rust header must start with the generator prefix",
+            ));
+        }
+        Ok(format!("{GENERATOR_HEADER}@PROVENANCE@\n{body}").into_bytes())
+    }
+
+    fn normalize_live_schema(bytes: &[u8]) -> Result<Vec<u8>, String> {
+        if occurrence_count(bytes, PROVENANCE_ANCHOR) != 1 {
+            return Err("live schema must have exactly one provenance anchor".into());
+        }
+        let anchor = bytes
+            .windows(PROVENANCE_ANCHOR.len())
+            .position(|window| window == PROVENANCE_ANCHOR)
+            .ok_or_else(|| "schema has one top-level provenance anchor".to_owned())?;
+        let value_start = anchor + PROVENANCE_ANCHOR.len();
+        if bytes.get(value_start) != Some(&b'{') {
+            return Err("live provenance is an object".into());
+        }
+
+        let mut depth = 0;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut value_end = None;
+        for (offset, byte) in bytes[value_start..].iter().copied().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match byte {
+                b'"' => in_string = true,
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        value_end = Some(value_start + offset + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let value_end = value_end.ok_or_else(|| "live provenance object is complete".to_owned())?;
+        let mut normalized =
+            Vec::with_capacity(bytes.len() - (value_end - value_start) + PROVENANCE_TOKEN.len());
+        normalized.extend_from_slice(&bytes[..value_start]);
+        normalized.extend_from_slice(PROVENANCE_TOKEN);
+        normalized.extend_from_slice(&bytes[value_end..]);
+        Ok(normalized)
+    }
+
+    fn assert_checked_in_schema_provenance(bytes: &[u8]) -> Result<(), String> {
+        if occurrence_count(bytes, PROVENANCE_ANCHOR) != 1 {
+            return Err("golden schema must have exactly one provenance anchor".into());
+        }
+        if occurrence_count(bytes, PROVENANCE_TOKEN) != 1 {
+            return Err("golden schema must carry exactly one provenance token".into());
+        }
+        let anchor = bytes
+            .windows(PROVENANCE_ANCHOR.len())
+            .position(|window| window == PROVENANCE_ANCHOR)
+            .ok_or_else(|| "golden schema has one provenance anchor".to_owned())?;
+        if !bytes[anchor + PROVENANCE_ANCHOR.len()..].starts_with(PROVENANCE_TOKEN) {
+            return Err("golden provenance token must sit at the anchor".into());
+        }
+        Ok(())
+    }
+
+    fn compare_kind(path: &str, actual: &[u8], expected: &[u8]) -> Result<(), String> {
+        match Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some("rs") => {
+                let actual = normalize_rust(actual)?;
+                let expected = normalize_rust(expected)?;
+                if actual != expected {
+                    return Err(format!("generated bytes differ for {path}"));
+                }
+            }
+            Some("json") => {
+                assert_checked_in_schema_provenance(expected)?;
+                let actual = normalize_live_schema(actual)?;
+                if actual != expected {
+                    return Err(format!("generated bytes differ for {path}"));
+                }
+            }
+            _ => {
+                if actual != expected {
+                    return Err(format!("generated bytes differ for {path}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn compare_golden(tree: &GeneratedTree) -> Result<(), String> {
         let actual: Vec<_> = tree.files().iter().map(GeneratedFile::path).collect();
         let expected: Vec<_> = GOLDEN.iter().map(|(path, _)| *path).collect();
@@ -364,12 +603,39 @@ mod tests {
             ));
         }
         for (path, expected_bytes) in GOLDEN {
-            let actual_bytes = generated(tree, path);
-            if actual_bytes != expected_bytes {
-                return Err(format!("generated bytes differ for {path}"));
-            }
+            compare_kind(path, generated(tree, path), expected_bytes)?;
         }
         Ok(())
+    }
+
+    fn collect_golden_files(root: &Path) -> Vec<String> {
+        fn visit(base: &Path, directory: &Path, found: &mut Vec<String>) {
+            for entry in fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                let file_type = entry.file_type().unwrap();
+                if file_type.is_dir() {
+                    visit(base, &path, found);
+                } else {
+                    assert!(
+                        file_type.is_file(),
+                        "golden inventory entry must be a regular file: {}",
+                        path.display()
+                    );
+                    found.push(
+                        path.strip_prefix(base)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        visit(root, root, &mut found);
+        found.sort();
+        found
     }
 
     #[test]
@@ -447,9 +713,10 @@ mod tests {
 
     #[test]
     fn request_validation_catalog_is_exact_and_payload_safe() {
+        let request_lines: Vec<_> = CODE_GOLDEN.lines().take(2).collect();
         for ((project, dependency), expected) in [("Bad.Project\n", "../boxology"), ("example", "")]
             .into_iter()
-            .zip(CODE_GOLDEN.lines())
+            .zip(request_lines)
         {
             let diagnostics = InitRequest::new(project, dependency).unwrap_err();
             assert_eq!(diagnostics.as_slice().len(), 1);
@@ -458,15 +725,18 @@ mod tests {
             let rendered = diagnostics.to_string();
             assert_eq!(rendered, expected);
         }
+        let catalog = [Diagnostic(0), Diagnostic(1), Diagnostic(2), Diagnostic(3)]
+            .map(|diagnostic| diagnostic.to_string())
+            .join("\n");
+        assert_eq!(catalog, CODE_GOLDEN.trim_end());
         let both = InitRequest::new("Bad", "").unwrap_err();
         assert_eq!(
             both.as_slice()
                 .iter()
                 .map(Diagnostic::code)
                 .collect::<Vec<_>>(),
-            golden_codes()
+            ["BXI0001", "BXI0002"]
         );
-        assert_eq!(both.to_string(), CODE_GOLDEN.trim_end());
         for valid in ["a", "example", "a0-b9", "box-"] {
             assert!(InitRequest::new(valid, "source").is_ok(), "{valid}");
         }
@@ -485,11 +755,22 @@ mod tests {
         assert_ne!(files, ["lib.rs"]);
         let production = production_source(SOURCE).expect("locked production/test boundary");
         let expected = golden_codes();
-        assert_eq!(expected, ["BXI0001", "BXI0002"]);
+        assert_eq!(expected, ["BXI0001", "BXI0002", "BXI0003", "BXI0004"]);
         assert_eq!(DIAGNOSTICS.map(|entry| entry.0).as_slice(), expected);
         assert_eq!(source_codes(production), expected);
         assert_eq!(modules(SOURCE), ["mod tests {"]);
         assert_eq!(production.matches("include!(").count(), 0);
+        assert_eq!(production.matches("fn prefixed").count(), 1);
+        assert_eq!(production.matches("std::").count(), 1);
+        assert!(production.contains(STD_IMPORT));
+        let mut impure = production.replacen(
+            STD_IMPORT,
+            "use std::{\n    fmt,\n    fs,\n    path::{Component, Path, PathBuf},\n};",
+            1,
+        );
+        assert!(!impure.contains(STD_IMPORT));
+        impure.push_str("\nstd::env::var(\"PATH\");\n");
+        assert_ne!(impure.matches("std::").count(), 1);
         let mut mutated = production.to_owned();
         mutated.push_str(&format!("\nconst STRAY: &str = \"{}{}\";\nmod stray;\n", "BX", "I9999"));
         assert_ne!(source_codes(&mutated), expected);
@@ -526,26 +807,185 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
+    fn embedded_generated_paths_are_confined() {
+        for path in boxology_generator::OUTPUTS {
+            assert_eq!(confined_logical(path), Ok(path));
+        }
+        let invalid = ["", "/escape", "C:/escape", "a/../b", "a//b", "a/b/", "a\\b", "a\0b"];
+        for path in invalid {
+            assert_eq!(confined_logical(path), Err("generated path is not a confined relative path"), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn path_prefixing_applies_confinement() {
+        let diagnostics = prefixed([("../escape", b"x".as_slice())]).unwrap_err();
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(Diagnostic::code)
+                .collect::<Vec<_>>(),
+            ["BXI0004"]
+        );
+    }
+
+    #[test]
+    fn empty_embedded_inputs_yield_bxi0003() {
+        let diagnostics = embed(&[], &[]).unwrap_err();
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(Diagnostic::code)
+                .collect::<Vec<_>>(),
+            ["BXI0003"]
+        );
+    }
+
+    #[test]
     fn golden_inventory_and_comparison_fail_closed() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../goldens/generated-project");
-        let mut found = fs::read_dir(root)
-            .unwrap()
-            .map(|entry| {
-                let entry = entry.unwrap();
-                assert!(entry.file_type().unwrap().is_file());
-                entry.file_name().into_string().unwrap()
-            })
-            .collect::<Vec<_>>();
-        found.sort();
+        let found = collect_golden_files(&root);
         let expected: Vec<String> = GOLDEN
             .iter()
             .map(|(path, _)| (*path).into())
             .collect::<Vec<_>>();
         assert_eq!(found, expected);
 
-        let mut altered = initialize(&request()).unwrap();
-        altered.0[0].bytes.push(b'x');
-        assert!(compare_golden(&altered).is_err());
+        for path in [
+            ".gitignore",
+            "ping/generated/adapter/adapter.rs",
+            "ping/generated/schema.json",
+        ] {
+            let mut altered = initialize(&request()).unwrap();
+            let file = altered
+                .0
+                .iter_mut()
+                .find(|file| file.path() == path)
+                .unwrap_or_else(|| panic!("missing generated file {path}"));
+            file.bytes.push(b'x');
+            assert!(
+                compare_golden(&altered).is_err(),
+                "compare_kind must reject a byte change under {path}"
+            );
+        }
     }
+
+    #[test]
+    fn provenance_normalization_fail_closed() {
+        let header = format!("{GENERATOR_HEADER}0.0.0\nfn main() {{}}\n");
+        assert!(normalize_rust(header.as_bytes()).is_ok());
+        // Isolates the Rust header exactly-once count (not starts_with).
+        assert_eq!(
+            normalize_rust(format!("{header}{GENERATOR_HEADER}0.0.0\n").as_bytes()).unwrap_err(),
+            "Rust output must have exactly one generator header"
+        );
+        assert_eq!(
+            normalize_rust(b"fn main() {}\n").unwrap_err(),
+            "Rust output must have exactly one generator header"
+        );
+        // Isolates the Rust header starts_with check (header contains the prefix, not at column 0).
+        assert_eq!(
+            normalize_rust(format!("kept {GENERATOR_HEADER}0.0.0\nfn main() {{}}\n").as_bytes())
+                .unwrap_err(),
+            "Rust header must start with the generator prefix"
+        );
+
+        let live = br#"{
+  "box_id": "ping",
+  "provenance": {"generator": "boxology-generator", "generator_version": "0.0.0", "semantic_digest": "sha256:dead"},
+  "revision": "sha256:cafe"
+}
+"#;
+        assert!(normalize_live_schema(live).is_ok());
+        // Isolates the live provenance-anchor exactly-once count.
+        let two_anchors = br#"{
+  "provenance": {"generator": "boxology-generator"},
+  "provenance": {"generator": "boxology-generator"}
+}
+"#;
+        assert_eq!(
+            normalize_live_schema(two_anchors).unwrap_err(),
+            "live schema must have exactly one provenance anchor"
+        );
+        let zero_anchors = br#"{
+  "box_id": "ping",
+  "revision": "sha256:cafe"
+}
+"#;
+        assert_eq!(
+            normalize_live_schema(zero_anchors).unwrap_err(),
+            "live schema must have exactly one provenance anchor"
+        );
+        // Isolates the live provenance-value object shape check.
+        let not_object = br#"{
+  "provenance": "@PROVENANCE@",
+  "revision": "sha256:cafe"
+}
+"#;
+        assert_eq!(
+            normalize_live_schema(not_object).unwrap_err(),
+            "live provenance is an object"
+        );
+
+        let golden = br#"{
+  "provenance": "@PROVENANCE@",
+  "revision": "sha256:cafe"
+}
+"#;
+        assert!(assert_checked_in_schema_provenance(golden).is_ok());
+        // Isolates the golden provenance-anchor exactly-once count.
+        let golden_two_anchors = br#"{
+  "provenance": "@PROVENANCE@",
+  "provenance": "@PROVENANCE@"
+}
+"#;
+        assert_eq!(
+            assert_checked_in_schema_provenance(golden_two_anchors).unwrap_err(),
+            "golden schema must have exactly one provenance anchor"
+        );
+        let golden_zero_anchors = br#"{
+  "revision": "sha256:cafe"
+}
+"#;
+        assert_eq!(
+            assert_checked_in_schema_provenance(golden_zero_anchors).unwrap_err(),
+            "golden schema must have exactly one provenance anchor"
+        );
+        // Isolates the golden provenance-token exactly-once count (not starts_with).
+        let token_less = br#"{
+  "provenance": {"generator": "boxology-generator"},
+  "revision": "sha256:cafe"
+}
+"#;
+        assert_eq!(
+            assert_checked_in_schema_provenance(token_less).unwrap_err(),
+            "golden schema must carry exactly one provenance token"
+        );
+        // Isolates the golden provenance-token-at-anchor starts_with check.
+        let token_elsewhere = br#"{
+  "other": "@PROVENANCE@",
+  "provenance": {"generator": "boxology-generator"},
+  "revision": "sha256:cafe"
+}
+"#;
+        assert_eq!(
+            assert_checked_in_schema_provenance(token_elsewhere).unwrap_err(),
+            "golden provenance token must sit at the anchor"
+        );
+    }
+
+    #[test]
+    fn embedded_artifacts_match_fixture_corpus() {
+        let tree = initialize(&request()).unwrap();
+        for (relative, expected) in FIXTURE_GENERATED {
+            let path = format!("ping/{relative}");
+            let actual = generated(&tree, &path);
+            compare_kind(&path, actual, expected).unwrap_or_else(|error| panic!("{path}: {error}"));
+        }
+    }
+
     // source inventory ends here
 }
