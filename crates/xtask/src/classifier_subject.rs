@@ -39,6 +39,17 @@ fn renamed_input() -> Result<(SchemaDocument, SchemaDocument), String> {
     Ok((base, submitted))
 }
 
+fn capability_only() -> Result<(SchemaDocument, SchemaDocument), String> {
+    let base = hello()?;
+    let mut submitted = hello()?;
+    let capability = submitted
+        .capabilities
+        .get_mut(0)
+        .ok_or("hello fixture has no capability")?;
+    capability.input.name = String::from("label");
+    Ok((base, submitted))
+}
+
 fn render_report(report: &ClassificationReport) -> String {
     let mut body = format!("verdict {}\n", report.verdict().canonical_name());
     for finding in report.findings() {
@@ -80,6 +91,12 @@ fn report_changed() -> Result<String, String> {
     Ok(render_report(&report))
 }
 
+fn report_capability_only() -> Result<String, String> {
+    let (base, submitted) = capability_only()?;
+    let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
+    Ok(render_report(&report))
+}
+
 fn pairing_error() -> Result<String, String> {
     let base = hello()?;
     let submitted = ping()?;
@@ -95,6 +112,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         ("report-removed.txt", report_removed()?),
         ("report-unchanged.txt", report_unchanged()?),
         ("report-changed.txt", report_changed()?),
+        ("report-capability-only.txt", report_capability_only()?),
         ("pairing-error.txt", pairing_error()?),
     ];
     for (name, body) in written {
@@ -150,6 +168,25 @@ mod tests {
         assert!(submitted.revision.starts_with("sha256:"));
         let rendered = report_changed().expect("changed pair renders");
         assert_eq!(rendered, report_changed().expect("it renders again"));
+        assert_eq!(
+            rendered,
+            "verdict incompatible\nfinding BXC0028 hello incompatible\n"
+        );
+    }
+
+    #[test]
+    fn subject_report_capability_only_is_golden_and_repeatable() {
+        let (base, submitted) = capability_only().expect("capability-only pair builds");
+        assert_eq!(base.revision, submitted.revision);
+        assert_ne!(
+            base.capabilities[0].input.name,
+            submitted.capabilities[0].input.name
+        );
+        let rendered = report_capability_only().expect("capability-only pair renders");
+        assert_eq!(
+            rendered,
+            report_capability_only().expect("it renders again")
+        );
         assert_eq!(
             rendered,
             "verdict incompatible\nfinding BXC0028 hello incompatible\n"
