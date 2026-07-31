@@ -19,10 +19,18 @@ pub struct RunningHello {
 
 impl RunningHello {
     pub fn start<T: hello_contract::HelloDispatch>(service: T) -> Self {
+        Self::start_with_config(
+            service,
+            HttpServerConfig::new("127.0.0.1:0".parse().expect("loopback address is valid")),
+        )
+    }
+
+    pub fn start_with_config<T: hello_contract::HelloDispatch>(
+        service: T,
+        config: HttpServerConfig,
+    ) -> Self {
         let greet = hello_greet();
-        let binding = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
-            "127.0.0.1:0".parse().expect("loopback address is valid"),
-        )));
+        let binding = Arc::new(HttpServerBinding::new(config));
         let mut builder = CompositionBuilder::new();
         builder.add_box(
             hello_implementation::generated::implementation_descriptor(),
