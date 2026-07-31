@@ -123,6 +123,7 @@ pub(crate) fn manifest_with(workspace: &Path, out: &Path, subjects: &[Subject]) 
 }
 pub fn child(name: &str, out: &Path) -> u8 {
     let run = match name {
+        "classifier-report" => crate::classifier_subject::run,
         "generated-project" => crate::generated_project_subject::run,
         "generator-model" => crate::generator_model_subject::run,
         "trivial-tree" => run_trivial,
@@ -158,6 +159,11 @@ pub(crate) fn child_from_args(args: &[String]) -> Option<u8> {
 }
 pub(crate) fn registry() -> std::result::Result<Vec<Subject>, String> {
     let subjects = vec![
+        Subject {
+            name: "classifier-report",
+            prepare: None,
+            argv: classifier_report_argv,
+        },
         Subject {
             name: "generated-project",
             prepare: None,
@@ -197,6 +203,11 @@ pub(crate) fn validate_registry(subjects: &[Subject]) -> std::result::Result<(),
         previous = Some(subject.name);
     }
     Ok(())
+}
+fn classifier_report_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
+    let mut command = trivial_argv(out);
+    command.1[1] = "classifier-report".into();
+    command
 }
 fn generator_model_argv(out: &Path) -> (PathBuf, Vec<OsString>) {
     let mut command = trivial_argv(out);

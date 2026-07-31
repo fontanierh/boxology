@@ -291,6 +291,7 @@ fn meta_fixtures_are_canonical_and_outside_the_live_registry() {
     assert_eq!(
         registered.iter().map(|item| item.name).collect::<Vec<_>>(),
         [
+            "classifier-report",
             "generated-project",
             "generator-model",
             "trivial-tree",

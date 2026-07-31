@@ -6,6 +6,7 @@ use std::time::Instant;
 
 mod advisories;
 mod budget;
+mod classifier_subject;
 mod deny;
 pub mod determinism;
 mod determinism_compare;
