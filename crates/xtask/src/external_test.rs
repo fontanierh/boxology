@@ -1,9 +1,14 @@
 use std::{
+    collections::{HashMap, HashSet},
     fs,
     path::{Component, Path},
     process::Command,
 };
 
+use quote::ToTokens;
+use sha2::{Digest, Sha256};
+use syn::visit::Visit;
+use syn::{Expr, ExprCall, ItemFn};
 use toml_edit::{DocumentMut, Item, Table};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,31 +19,148 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) source: &'static str,
     pub(crate) default_source: &'static str,
     pub(crate) tests: &'static [&'static str],
+    /// SHA-256 of listed `#[test]` bodies + one-level bare-name helpers (`syn::visit`;
+    /// not macros, not transitive, not `const`/`static`). Refresh from `observed`.
+    pub(crate) body_digest: &'static str,
 }
 
 pub(crate) fn require_external_tests(
     root: &Path,
     mut run: impl FnMut(&[&str]) -> Option<(bool, Vec<u8>)>,
     spec: &ExternalTestSpec,
-) -> bool {
-    if spec.tests.is_empty()
-        || !regular_file(root, spec.manifest)
-        || !regular_file(root, spec.source)
-        || build_script_exists(root, spec.manifest)
-    {
-        return false;
+) -> Result<(), String> {
+    let pkg = spec.package;
+    if spec.tests.is_empty() {
+        return Err(format!("{pkg}: empty tests list"));
+    }
+    if !regular_file(root, spec.manifest) {
+        return Err(format!("{pkg}: manifest missing or not a regular file"));
+    }
+    if !regular_file(root, spec.source) {
+        return Err(format!("{pkg}: source missing or not a regular file"));
+    }
+    if build_script_exists(root, spec.manifest) {
+        return Err(format!("{pkg}: build script is forbidden"));
     }
     let Ok(manifest) = fs::read_to_string(root.join(spec.manifest)) else {
-        return false;
+        return Err(format!("{pkg}: cannot read manifest"));
     };
-    manifest_is_exact(&manifest, spec) && execute(&mut run, spec)
+    let Ok(source) = fs::read_to_string(root.join(spec.source)) else {
+        return Err(format!("{pkg}: cannot read source"));
+    };
+    if !manifest_is_exact(&manifest, spec) {
+        return Err(format!("{pkg}: manifest does not match pinned controls"));
+    }
+    bodies_match_digest(&source, spec.tests, spec.body_digest)
+        .map_err(|error| format!("{pkg}: {error}"))?;
+    if !execute(&mut run, spec) {
+        return Err(format!("{pkg}: cargo list/run mismatch or cargo failed"));
+    }
+    Ok(())
+}
+
+/// Digest listed `#[test]` blocks plus one-level bare-name helpers via `syn::visit`
+/// (not macros/`const`/`static`/transitive). Refresh pins by copying `observed`.
+fn bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(), String> {
+    let observed = body_digest(source, tests)?;
+    if observed != expected {
+        return Err(format!(
+            "body digest mismatch: expected {expected}, observed {observed}"
+        ));
+    }
+    Ok(())
+}
+
+fn body_digest(source: &str, tests: &[&str]) -> Result<String, String> {
+    let file = syn::parse_file(source).map_err(|_| "source parse failed".to_string())?;
+    let mut indexer = FnIndexer::default();
+    indexer.visit_file(&file);
+    let mut hasher = Sha256::new();
+    for name in tests {
+        let Some(defs) = indexer.by_name.get(*name) else {
+            return Err(format!("missing listed test `{name}`"));
+        };
+        if defs.len() != 1 || !is_bare_test(defs[0]) {
+            return Err(format!("listed name `{name}` is not a unique #[test]"));
+        }
+        let item = defs[0];
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(item.block.to_token_stream().to_string().as_bytes());
+        hasher.update(b"\0");
+        let mut calls = CallCollector::default();
+        calls.visit_block(&item.block);
+        let mut counted = HashSet::new();
+        for callee in &calls.callees {
+            if !counted.insert(callee.as_str()) {
+                continue;
+            }
+            let Some(defs) = indexer.by_name.get(callee) else {
+                continue;
+            };
+            if defs.len() != 1 {
+                return Err(format!("ambiguous helper `{callee}`"));
+            }
+            hasher.update(callee.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(defs[0].block.to_token_stream().to_string().as_bytes());
+            hasher.update(b"\0");
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn is_bare_test(item: &ItemFn) -> bool {
+    item.attrs
+        .iter()
+        .any(|attribute| attribute.path().is_ident("test"))
+}
+
+fn bare_path_ident(call: &ExprCall) -> Option<String> {
+    let Expr::Path(path) = call.func.as_ref() else {
+        return None;
+    };
+    if path.qself.is_none() && path.path.segments.len() == 1 {
+        Some(path.path.segments[0].ident.to_string())
+    } else {
+        None
+    }
+}
+
+#[derive(Default)]
+struct FnIndexer<'ast> {
+    by_name: HashMap<String, Vec<&'ast ItemFn>>,
+}
+
+impl<'ast> Visit<'ast> for FnIndexer<'ast> {
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        self.by_name
+            .entry(item.sig.ident.to_string())
+            .or_default()
+            .push(item);
+        syn::visit::visit_item_fn(self, item);
+    }
+}
+
+#[derive(Default)]
+struct CallCollector {
+    callees: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for CallCollector {
+    fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+        if let Some(ident) = bare_path_ident(node) {
+            self.callees.push(ident);
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
 }
 
 pub(crate) fn run_with_cargo(
     root: &Path,
     spec: &ExternalTestSpec,
     run: impl FnMut(&[&str]) -> Option<(bool, Vec<u8>)>,
-) -> bool {
+) -> Result<(), String> {
     require_external_tests(root, run, spec)
 }
 
@@ -211,6 +333,8 @@ mod tests {
 
     const BASE_MANIFEST: &str =
         "[package]\nname = \"client\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
+    /// Digest of `a`/`b` bodies that each contain `assert!(true)`.
+    const LIVE_AB_DIGEST: &str = "7b04fed7fcf43f6a77acc0c465186673bc29bc073013b481afce984ee4d06ef1";
     const SPEC: ExternalTestSpec = ExternalTestSpec {
         package: "client",
         target: "client_lock",
@@ -218,6 +342,7 @@ mod tests {
         source: "tests/client_lock.rs",
         default_source: "tests/client_lock.rs",
         tests: &["a", "b"],
+        body_digest: LIVE_AB_DIGEST,
     };
     const ONE: &[&str] = &["a"];
     const EMPTY: &[&str] = &[];
@@ -356,7 +481,7 @@ mod tests {
             },
             &spec,
         );
-        assert!(passed);
+        assert!(passed.is_ok(), "{passed:?}");
         let calls: Vec<_> = calls.into_iter().map(|call| call.join("\0")).collect();
         assert_eq!(
             calls,
@@ -408,7 +533,11 @@ mod tests {
         fs::create_dir_all(root.join("real/tests")).unwrap();
         fs::create_dir_all(root.join("tests")).unwrap();
         fs::write(root.join("Cargo.toml"), BASE_MANIFEST).unwrap();
-        fs::write(root.join(SPEC.source), "").unwrap();
+        fs::write(
+            root.join(SPEC.source),
+            "#[test] fn a() { assert!(true); }\n#[test] fn b() { assert!(true); }\n",
+        )
+        .unwrap();
         fs::write(root.join("real/tests/test.rs"), "").unwrap();
         symlink(root.join("real"), root.join("link-dir")).unwrap();
         symlink(root.join("real/tests/test.rs"), root.join("link-file")).unwrap();
@@ -423,14 +552,17 @@ mod tests {
                 fs::write(root.join("build.rs"), "").unwrap();
             }
             let mut calls = 0;
-            assert!(!require_external_tests(
-                &root,
-                |_| {
-                    calls += 1;
-                    None
-                },
-                &SPEC
-            ));
+            assert!(
+                require_external_tests(
+                    &root,
+                    |_| {
+                        calls += 1;
+                        None
+                    },
+                    &SPEC
+                )
+                .is_err()
+            );
             assert_eq!(calls, 0);
             fs::remove_file(root.join("build.rs")).unwrap();
             if symlinked {
@@ -438,7 +570,201 @@ mod tests {
             }
         }
         let mut calls = 0;
-        assert!(require_external_tests(
+        assert!(
+            require_external_tests(
+                &root,
+                |args| {
+                    calls += 1;
+                    let output: &[u8] = if args.last().copied() == Some("--list") {
+                        b"a: test\nb: test\n"
+                    } else {
+                        b"test a ... ok\ntest b ... ok\n"
+                    };
+                    Some((true, output.to_vec()))
+                },
+                &SPEC
+            )
+            .is_ok()
+        );
+        assert_eq!(calls, 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn production_binder_propagates_false_delegate() {
+        let mut calls = 0;
+        assert!(
+            run_with_cargo(crate::root().as_path(), &crate::SURFACE_LOCK_SPEC, |_| {
+                calls += 1;
+                Some((false, Vec::new()))
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn production_binder_and_cargo_runner_are_pinned_once() {
+        let production = include_str!("external_test.rs")
+            .split_once("#[cfg(test)]")
+            .unwrap()
+            .0;
+        assert_eq!(
+            production
+                .match_indices("require_external_tests(root, run, spec)")
+                .count(),
+            1
+        );
+        assert_eq!(
+            production.match_indices("Command::new(\"cargo\")").count(),
+            1,
+            "anchor: production cargo() text contains Command::new(\"cargo\") once"
+        );
+    }
+
+    #[test]
+    fn body_digest_rejects_vacuous_and_substituted_bodies() {
+        let expected =
+            body_digest("#[test] fn subject() { assert!(true); }\n", &["subject"]).unwrap();
+        for (source, label) in [
+            ("#[test] fn subject() {}\n", "empty body"),
+            (
+                "#[test] fn subject() {\n// verify the inventory\n}\n",
+                "comment-only body",
+            ),
+            (
+                "#[test] fn subject() { let _ = helper(); }\nfn helper() {}\n",
+                "discard-only body",
+            ),
+            (
+                "#[test] fn subject() { println!(\"inventory checked\"); }\n",
+                "println-only body",
+            ),
+            (
+                "#[test] fn subject() { Some(()).unwrap(); }\n",
+                "unwrap-only body",
+            ),
+            (
+                "#[test] fn subject() { assert!(true); assert!(true); }\n",
+                "assert!(true) substitution",
+            ),
+        ] {
+            let err = bodies_match_digest(source, &["subject"], &expected).unwrap_err();
+            assert!(
+                err.contains("body digest mismatch")
+                    && err.contains(&format!("expected {expected}"))
+                    && err.contains("observed "),
+                "mutation survived: {label}; err={err}"
+            );
+        }
+    }
+
+    #[test]
+    fn body_digest_includes_direct_helpers_only() {
+        let with_helper = concat!(
+            "#[test] fn subject() { helper(); }\n",
+            "fn helper() { assert!(true); }\n",
+        );
+        let expected = body_digest(with_helper, &["subject"]).unwrap();
+        assert!(bodies_match_digest(with_helper, &["subject"], &expected).is_ok());
+        assert!(
+            bodies_match_digest(
+                concat!(
+                    "#[test] fn subject() { helper(); }\n",
+                    "fn helper() { deeper(); }\n",
+                    "fn deeper() { assert!(true); }\n",
+                ),
+                &["subject"],
+                &expected
+            )
+            .is_err(),
+            "mutation survived: changing a direct helper's body text must change the digest"
+        );
+        assert!(
+            bodies_match_digest(
+                "#[test] fn subject() { helper(); }\nfn helper() {}\n",
+                &["subject"],
+                &expected
+            )
+            .is_err(),
+            "mutation survived: helper body is pinned"
+        );
+    }
+
+    #[test]
+    fn duplicate_names_and_non_test_anchors_fail_closed() {
+        assert!(body_digest(
+            "#[test] fn subject() { assert!(true); }\n#[test] fn subject() { assert!(true); }\n",
+            &["subject"],
+        )
+        .is_err());
+        assert!(body_digest("fn subject() { assert!(true); }\n", &["subject"]).is_err());
+        assert!(body_digest("not rust", &["subject"]).is_err());
+        assert!(body_digest("#[test] fn other() { assert!(true); }\n", &["subject"]).is_err());
+        assert!(
+            body_digest(
+                concat!(
+                    "#[test] fn subject() { helper(); }\n",
+                    "fn helper() { assert!(true); }\n",
+                    "fn other() { fn visit() {}\n}\n",
+                    "fn another() { fn visit() {}\n}\n",
+                ),
+                &["subject"],
+            )
+            .is_ok()
+        );
+        assert!(
+            body_digest(
+                concat!(
+                    "#[test] fn subject() { helper(); }\n",
+                    "fn helper() { assert!(true); }\n",
+                    "fn helper() { assert!(true); }\n",
+                ),
+                &["subject"],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn live_consumer_sources_match_pinned_body_digests() {
+        let root = crate::root();
+        for spec in [
+            &crate::SURFACE_LOCK_SPEC,
+            &crate::CLASSIFIER_SURFACE_LOCK_SPEC,
+            &crate::GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
+        ] {
+            let source = fs::read_to_string(root.join(spec.source)).unwrap();
+            if let Err(error) = bodies_match_digest(&source, spec.tests, spec.body_digest) {
+                panic!("anchor: live consumer {}: {error}", spec.package);
+            }
+            let wrong = "0".repeat(64);
+            let err = bodies_match_digest(&source, spec.tests, &wrong).unwrap_err();
+            assert!(
+                err.contains("body digest mismatch")
+                    && err.contains(&format!("expected {wrong}"))
+                    && err.contains("observed "),
+                "anchor: {} pin names expected vs observed digests; err={err}",
+                spec.package
+            );
+        }
+    }
+
+    #[test]
+    fn vacuous_listed_bodies_fail_the_gate_conjunction() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("xtask-vacuity-wiring-{unique}"));
+        fs::create_dir_all(root.join("tests")).unwrap();
+        fs::write(root.join("Cargo.toml"), BASE_MANIFEST).unwrap();
+        fs::write(
+            root.join(SPEC.source),
+            "#[test] fn a() {}\n#[test] fn b() {}\n",
+        )
+        .unwrap();
+        let mut calls = 0;
+        let passed = require_external_tests(
             &root,
             |args| {
                 calls += 1;
@@ -449,30 +775,14 @@ mod tests {
                 };
                 Some((true, output.to_vec()))
             },
-            &SPEC
-        ));
-        assert_eq!(calls, 2);
+            &SPEC,
+        );
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn production_binder_propagates_false_delegate() {
-        let mut calls = 0;
-        assert!(!run_with_cargo(
-            crate::root().as_path(),
-            &crate::SURFACE_LOCK_SPEC,
-            |_| {
-                calls += 1;
-                Some((false, Vec::new()))
-            }
-        ));
-    }
-
-    #[test]
-    fn production_binder_is_pinned_once() {
-        let source = include_str!("external_test.rs");
-        let binder = "require_external_tests(root, run, spec)";
-        let production = source.split_once("#[cfg(test)]").unwrap().0;
-        assert_eq!(production.match_indices(binder).count(), 1);
+        let err = passed.unwrap_err();
+        assert!(
+            err.contains("body digest mismatch"),
+            "mutation survived: vacuous body must fail require_external_tests; err={err}"
+        );
+        assert_eq!(calls, 0, "anchor: body digest short-circuits execute");
     }
 }

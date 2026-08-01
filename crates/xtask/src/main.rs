@@ -71,6 +71,7 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     source: "crates/boxology-workspace/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
+    body_digest: "51dd33ceec8bd3c0678c30a4c0ce705d4637289a73eea850b2456248d63cacf5",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
@@ -80,6 +81,7 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
+        body_digest: "a23c9102bf4337048c6181118bce02b54ec836d6928a601e675069e07c3c43b1",
     };
 // This slice pins the generator production source inventory only. Capability purity,
 // source closure, and dependency-graph pins are later #107 slices.
@@ -91,7 +93,17 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
         tests: &["production_source_inventory_is_exact"],
+        body_digest: "bf4b0a931f675233c45103a5a1c772b79ffe8622c9d3aa7b9b8023563e82dd72",
     };
+const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
+    ("surface-lock", &SURFACE_LOCK_SPEC),
+    ("classifier-surface-lock", &CLASSIFIER_SURFACE_LOCK_SPEC),
+    (
+        "generator-source-inventory",
+        &GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
+    ),
+];
+type ExternalTestRunner<'a> = dyn FnMut(&[&str]) -> Option<(bool, Vec<u8>)> + 'a;
 type SkillCommand = (&'static str, fn(&Path) -> u8);
 const SKILL_COMMANDS: &[SkillCommand] = &[("skill-audit", skill_audit::run)];
 const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
@@ -204,6 +216,49 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+fn external_test_checks(
+    root: &Path,
+    run: &mut ExternalTestRunner<'_>,
+) -> Vec<(&'static str, bool)> {
+    EXTERNAL_TEST_SPECS
+        .iter()
+        .map(|(name, spec)| {
+            (
+                *name,
+                timed(name, || {
+                    match external_test::run_with_cargo(root, spec, |args| run(args)) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            eprintln!("{name}: {error}");
+                            false
+                        }
+                    }
+                }),
+            )
+        })
+        .collect()
+}
+
+/// Runs for any `base` (unused: not gated on budget). Summary keeps verdicts via [`ci_failure_names`].
+fn fold_external_test_checks(
+    base: Option<&str>,
+    root: &Path,
+    run: &mut ExternalTestRunner<'_>,
+) -> Vec<(&'static str, bool)> {
+    let _ = base;
+    external_test_checks(root, run)
+}
+
+/// Missing registered external-test names, then false verdicts. Used as `run_ci` outcome.
+fn ci_failure_names(checks: &[(&'static str, bool)]) -> Vec<&'static str> {
+    let mut failed: Vec<&'static str> = EXTERNAL_TEST_SPECS
+        .iter()
+        .filter_map(|(name, _)| (!checks.iter().any(|(n, _)| n == name)).then_some(*name))
+        .collect();
+    failed.extend(checks.iter().filter_map(|(n, ok)| (!*ok).then_some(*n)));
+    failed
+}
+
 fn run_ci(base: Option<&str>) -> u8 {
     let toolchain = timed("toolchain", check_toolchain);
     if let Err(error) = toolchain {
@@ -240,32 +295,11 @@ fn run_ci(base: Option<&str>) -> u8 {
                 run_cargo(&["test", "--workspace", "--all-features"])
             }),
         ),
-        (
-            "surface-lock",
-            timed("surface-lock", || {
-                external_test::run_with_cargo(&root(), &SURFACE_LOCK_SPEC, |args| {
-                    external_test::cargo(&root(), args)
-                })
-            }),
-        ),
-        (
-            "classifier-surface-lock",
-            timed("classifier-surface-lock", || {
-                external_test::run_with_cargo(&root(), &CLASSIFIER_SURFACE_LOCK_SPEC, |args| {
-                    external_test::cargo(&root(), args)
-                })
-            }),
-        ),
-        (
-            "generator-source-inventory",
-            timed("generator-source-inventory", || {
-                external_test::run_with_cargo(
-                    &root(),
-                    &GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
-                    |args| external_test::cargo(&root(), args),
-                )
-            }),
-        ),
+    ];
+    checks.extend(fold_external_test_checks(base, &root(), &mut |args| {
+        external_test::cargo(&root(), args)
+    }));
+    checks.extend([
         ("key-order", timed("key-order", run_key_order)),
         ("doc", timed("doc", run_doc)),
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
@@ -279,7 +313,7 @@ fn run_ci(base: Option<&str>) -> u8 {
             "determinism",
             timed("determinism", || determinism_run::local(&root()) == 0),
         ),
-    ];
+    ]);
     for &(name, passed) in &checks {
         println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
     }
@@ -290,10 +324,7 @@ fn run_ci(base: Option<&str>) -> u8 {
         }
         None => println!("budget: SKIPPED (--no-budget)"),
     }
-    let failed: Vec<_> = checks
-        .iter()
-        .filter_map(|(name, passed)| (!passed).then_some(*name))
-        .collect();
+    let failed = ci_failure_names(&checks);
     if failed.is_empty() {
         println!("summary: PASS");
         0
@@ -595,55 +626,199 @@ mod tests {
         assert!(root().join(EDITOR_FIXTURE).join("Cargo.toml").is_file());
     }
 
-    fn replace_once(source: &str, anchor: &str) -> String {
+    #[test]
+    fn external_test_specs_are_registered_once_by_identity() {
+        let expected: &[(&str, external_test::ExternalTestSpec)] = &[
+            (
+                "surface-lock",
+                external_test::ExternalTestSpec {
+                    package: "boxology-workspace",
+                    target: "surface_lock",
+                    manifest: "crates/boxology-workspace/Cargo.toml",
+                    source: "crates/boxology-workspace/tests/surface_lock.rs",
+                    default_source: "tests/surface_lock.rs",
+                    tests: &["surface_and_live_evasions_are_locked"],
+                    body_digest: "51dd33ceec8bd3c0678c30a4c0ce705d4637289a73eea850b2456248d63cacf5",
+                },
+            ),
+            (
+                "classifier-surface-lock",
+                external_test::ExternalTestSpec {
+                    package: "boxology-classifier",
+                    target: "surface_lock",
+                    manifest: "crates/boxology-classifier/Cargo.toml",
+                    source: "crates/boxology-classifier/tests/surface_lock.rs",
+                    default_source: "tests/surface_lock.rs",
+                    tests: &["surface_and_live_evasions_are_locked"],
+                    body_digest: "a23c9102bf4337048c6181118bce02b54ec836d6928a601e675069e07c3c43b1",
+                },
+            ),
+            (
+                "generator-source-inventory",
+                external_test::ExternalTestSpec {
+                    package: "boxology-generator-model",
+                    target: "purity_lock",
+                    manifest: "crates/boxology-generator-model/Cargo.toml",
+                    source: "crates/boxology-generator-model/tests/purity_lock.rs",
+                    default_source: "tests/purity_lock.rs",
+                    tests: &["production_source_inventory_is_exact"],
+                    body_digest: "bf4b0a931f675233c45103a5a1c772b79ffe8622c9d3aa7b9b8023563e82dd72",
+                },
+            ),
+        ];
         assert_eq!(
-            source.match_indices(anchor).count(),
-            1,
-            "anchor: {anchor:?}"
+            EXTERNAL_TEST_SPECS.len(),
+            3,
+            "mutation survived: registry length"
         );
-        source.replacen(anchor, "", 1)
-    }
-
-    fn run_ci_body(source: &str) -> &str {
-        source
-            .split_once("fn run_ci(base: Option<&str>) -> u8 {")
-            .and_then(|(_, body)| body.split_once("\nfn timed<").map(|(body, _)| body))
-            .expect("run_ci body")
+        for (index, (name, spec)) in expected.iter().enumerate() {
+            assert_eq!(
+                EXTERNAL_TEST_SPECS[index].0, *name,
+                "mutation survived: report order {name}"
+            );
+            let count = EXTERNAL_TEST_SPECS
+                .iter()
+                .filter(|(n, s)| *n == *name && *s == spec)
+                .count();
+            assert_eq!(count, 1, "mutation survived: {name}");
+        }
     }
 
     #[test]
-    fn surface_lock_registration_is_live_and_deletion_is_red() {
-        let source = include_str!("main.rs");
-        assert_eq!(
-            SURFACE_LOCK_SPEC,
-            external_test::ExternalTestSpec {
-                package: "boxology-workspace",
-                target: "surface_lock",
-                manifest: "crates/boxology-workspace/Cargo.toml",
-                source: "crates/boxology-workspace/tests/surface_lock.rs",
-                default_source: "tests/surface_lock.rs",
-                tests: &["surface_and_live_evasions_are_locked"],
+    fn external_test_checks_consult_and_propagate() {
+        let mut consultations: Vec<Vec<String>> = Vec::new();
+        let results = external_test_checks(&root(), &mut |args| {
+            consultations.push(args.iter().map(|arg| (*arg).to_owned()).collect());
+            let package = args
+                .iter()
+                .position(|arg| *arg == "-p")
+                .and_then(|index| args.get(index + 1))
+                .copied()
+                .unwrap_or("");
+            let tests: &[&str] = match package {
+                "boxology-workspace" | "boxology-classifier" => {
+                    &["surface_and_live_evasions_are_locked"]
+                }
+                "boxology-generator-model" => &["production_source_inventory_is_exact"],
+                other => panic!("unexpected package: {other}"),
+            };
+            if args.last().copied() == Some("--list") {
+                let listed = tests
+                    .iter()
+                    .map(|name| format!("{name}: test\n"))
+                    .collect::<String>();
+                Some((true, listed.into_bytes()))
+            } else {
+                let executed = tests
+                    .iter()
+                    .map(|name| format!("test {name} ... ok\n"))
+                    .collect::<String>();
+                Some((true, executed.into_bytes()))
             }
+        });
+        assert_eq!(results.len(), 3, "mutation survived: results.len()");
+        assert!(
+            results.iter().all(|(_, passed)| *passed),
+            "mutation survived: live consumer consultation"
         );
-        let registration = "        (\n            \"surface-lock\",\n            timed(\"surface-lock\", || {\n                external_test::run_with_cargo(&root(), &SURFACE_LOCK_SPEC, |args| {\n                    external_test::cargo(&root(), args)\n                })\n            }),\n        ),";
-        let body = run_ci_body(source);
-        assert_eq!(body.match_indices(registration).count(), 1);
-        let deleted = replace_once(source, registration);
-        assert_eq!(run_ci_body(&deleted).match_indices(registration).count(), 0);
-        let duplicated =
-            source.replacen(registration, &format!("{registration}\n{registration}"), 1);
+        let expected_argv: &[&[&str]] = &[
+            &[
+                "test",
+                "-p",
+                "boxology-workspace",
+                "--test",
+                "surface_lock",
+                "--",
+                "--list",
+            ],
+            &["test", "-p", "boxology-workspace", "--test", "surface_lock"],
+            &[
+                "test",
+                "-p",
+                "boxology-classifier",
+                "--test",
+                "surface_lock",
+                "--",
+                "--list",
+            ],
+            &[
+                "test",
+                "-p",
+                "boxology-classifier",
+                "--test",
+                "surface_lock",
+            ],
+            &[
+                "test",
+                "-p",
+                "boxology-generator-model",
+                "--test",
+                "purity_lock",
+                "--",
+                "--list",
+            ],
+            &[
+                "test",
+                "-p",
+                "boxology-generator-model",
+                "--test",
+                "purity_lock",
+            ],
+        ];
+        // Two argv vectors per spec: list then run.
         assert_eq!(
-            run_ci_body(&duplicated).match_indices(registration).count(),
-            2
+            consultations.len(),
+            expected_argv.len(),
+            "mutation survived: consultation count"
         );
-        let bypass = registration.replace(
-            "external_test::run_with_cargo(&root(), &SURFACE_LOCK_SPEC, |args| {\n                    external_test::cargo(&root(), args)\n                })",
-            "run_cargo(&[\"test\", \"-p\", \"boxology-workspace\", \"--test\", \"surface_lock\"])",
-        );
-        let bypassed = source.replacen(registration, &bypass, 1);
+        for (got, expected) in consultations.iter().zip(expected_argv.iter()) {
+            assert_eq!(
+                got.iter().map(String::as_str).collect::<Vec<_>>(),
+                expected.to_vec(),
+                "mutation survived: argv"
+            );
+        }
+        let false_results = external_test_checks(&root(), &mut |_| Some((false, Vec::new())));
         assert_eq!(
-            run_ci_body(&bypassed).match_indices(registration).count(),
-            0
+            false_results.len(),
+            3,
+            "mutation survived: false-propagation length"
+        );
+        assert!(
+            false_results.iter().all(|(_, passed)| !*passed),
+            "mutation survived: false-propagation"
+        );
+    }
+
+    #[test]
+    fn run_ci_outcome_keeps_external_tests_and_propagates() {
+        let production = include_str!("main.rs")
+            .split_once("\nmod tests {")
+            .unwrap()
+            .0;
+        assert!(
+            production.contains("ci_failure_names(&checks)"),
+            "run_ci must summarize through ci_failure_names"
+        );
+        for base in [None, Some("origin/main")] {
+            let mut hit = 0;
+            let checks = fold_external_test_checks(base, &root(), &mut |_| {
+                hit += 1;
+                Some((false, Vec::new()))
+            });
+            assert!(hit > 0 && checks.len() == 3, "fold under {base:?}");
+            assert_eq!(ci_failure_names(&checks).len(), 3, "false→fail {base:?}");
+        }
+        let mut discarded: Vec<_> = EXTERNAL_TEST_SPECS
+            .iter()
+            .map(|(n, _)| (*n, true))
+            .collect();
+        assert!(ci_failure_names(&discarded).is_empty());
+        discarded.clear();
+        assert_eq!(
+            ci_failure_names(&discarded).len(),
+            3,
+            "mutation survived: post-fold discard must fail CI outcome"
         );
     }
 
