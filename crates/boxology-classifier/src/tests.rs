@@ -914,6 +914,172 @@ fn classes_have_exact_order_and_names() {
     }
 }
 
+fn assert_renderings(report: &ClassificationReport, text: &str, json: &str) {
+    assert_eq!(render_text(report), text);
+    assert_eq!(render_json(report), json);
+}
+
+#[test]
+fn report_renderings_are_byte_exact() {
+    let introduced = classify(None, Some(&document("hello"))).unwrap();
+    assert_renderings(
+        &introduced,
+        r#"classification additive
+finding BXC0026 hello additive
+"#,
+        r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "additive",
+  "findings": [
+    {
+      "code": "BXC0026",
+      "path": "hello",
+      "class": "additive"
+    }
+  ]
+}
+"#,
+    );
+
+    let removed = classify(Some(&document("hello")), None).unwrap();
+    assert_renderings(
+        &removed,
+        r#"classification incompatible
+finding BXC0027 hello incompatible
+"#,
+        r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "incompatible",
+  "findings": [
+    {
+      "code": "BXC0027",
+      "path": "hello",
+      "class": "incompatible"
+    }
+  ]
+}
+"#,
+    );
+
+    let unchanged = classify(Some(&document("hello")), Some(&document("hello"))).unwrap();
+    assert_renderings(
+        &unchanged,
+        "classification unchanged\n",
+        r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "unchanged",
+  "findings": []
+}
+"#,
+    );
+
+    let base = document("hello");
+    let mut renamed = base.clone();
+    renamed.capabilities[0].input.name = "label".to_owned();
+    renamed.revision = OTHER_REVISION.to_owned();
+    let renamed = classify(Some(&base), Some(&renamed)).unwrap();
+    assert_renderings(
+        &renamed,
+        r#"classification incompatible
+finding BXC0028 hello incompatible
+"#,
+        r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "incompatible",
+  "findings": [
+    {
+      "code": "BXC0028",
+      "path": "hello",
+      "class": "incompatible"
+    }
+  ]
+}
+"#,
+    );
+
+    let base = document("hello");
+    let mut variant_added = base.clone();
+    variant_added.types[0].variants.push(variant("Other"));
+    variant_added.revision = OTHER_REVISION.to_owned();
+    let variant_added = classify(Some(&base), Some(&variant_added)).unwrap();
+    assert_renderings(
+        &variant_added,
+        r#"classification compatible_with_conditions
+finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions condition="unknown-variant tolerance"
+"#,
+        r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "compatible_with_conditions",
+  "findings": [
+    {
+      "code": "BXC0036",
+      "path": "hello/type/GreetError/variant/Other",
+      "class": "compatible_with_conditions",
+      "condition": "unknown-variant tolerance"
+    }
+  ]
+}
+"#,
+    );
+
+    let base = document("hello");
+    let mut two_findings = base.clone();
+    two_findings.types[0].docs.push("Extra docs".to_owned());
+    two_findings.types[0].deprecation = Some("retired".to_owned());
+    two_findings.revision = OTHER_REVISION.to_owned();
+    let two_findings = classify(Some(&base), Some(&two_findings)).unwrap();
+    assert_renderings(
+        &two_findings,
+        r#"classification deprecation
+finding BXC0033 hello/type/GreetError documentation
+finding BXC0034 hello/type/GreetError deprecation
+"#,
+        r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "deprecation",
+  "findings": [
+    {
+      "code": "BXC0033",
+      "path": "hello/type/GreetError",
+      "class": "documentation"
+    },
+    {
+      "code": "BXC0034",
+      "path": "hello/type/GreetError",
+      "class": "deprecation"
+    }
+  ]
+}
+"#,
+    );
+
+    let hostile = ClassificationReport {
+        findings: vec![Finding {
+            code: "BXC0028",
+            path: "hello/\"quoted\\path".to_owned(),
+            class: Class::Incompatible,
+            condition: None,
+        }],
+        verdict: Class::Incompatible,
+    };
+    assert_renderings(
+        &hostile,
+        "classification incompatible\nfinding BXC0028 hello/\"quoted\\path incompatible\n",
+        r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "incompatible",
+  "findings": [
+    {
+      "code": "BXC0028",
+      "path": "hello/\"quoted\\path",
+      "class": "incompatible"
+    }
+  ]
+}
+"#,
+    );
+}
+
 #[test]
 fn public_seam_is_send_sync_static() {
     fn bounds<T: Send + Sync + 'static>() {}

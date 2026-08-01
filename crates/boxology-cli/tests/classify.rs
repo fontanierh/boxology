@@ -1,4 +1,5 @@
-use boxology_cli::{classify, render};
+use boxology_classifier::render_text;
+use boxology_cli::classify;
 use boxology_contract::BoxId;
 use boxology_generator::{OUTPUTS, generate};
 use boxology_generator_model::GenerationRequest;
@@ -163,7 +164,7 @@ fn render_contains_every_finding_unmodified() {
     let submitted = with_other_revision(submitted);
     let report = classify(Some(&base.canonical_bytes()), &submitted.canonical_bytes()).unwrap();
     assert_eq!(
-        render(&report),
+        render_text(&report),
         "classification incompatible\n\
          finding BXC0033 hello/type/GreetError documentation\n\
          finding BXC0035 hello/type/GreetError/variant/Other incompatible\n"
@@ -176,7 +177,7 @@ fn render_contains_conditional_finding_unmodified() {
     let submitted = schema_bytes("hello", V2);
     let report = classify(Some(&base), &submitted).unwrap();
     assert_eq!(
-        render(&report),
+        render_text(&report),
         "classification compatible_with_conditions\n\
          finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\"\n"
     );

@@ -1,4 +1,4 @@
-use boxology_classifier::{ClassificationReport, Finding, classify};
+use boxology_classifier::{ClassificationReport, classify, render_json, render_text};
 use boxology_schema::SchemaDocument;
 use serde_json::json;
 use std::{fs, path::Path};
@@ -90,45 +90,28 @@ fn variant_added() -> Result<(SchemaDocument, SchemaDocument), String> {
     Ok((base, submitted))
 }
 
-fn render_report(report: &ClassificationReport) -> String {
-    let mut body = format!("verdict {}\n", report.verdict().canonical_name());
-    for finding in report.findings() {
-        body.push_str(&render_finding(finding));
-    }
-    body
-}
-
-fn render_finding(finding: &Finding) -> String {
-    format!(
-        "finding {} {} {}\n",
-        finding.code(),
-        finding.path(),
-        finding.class().canonical_name()
-    )
-}
-
-fn report_introduced() -> Result<String, String> {
+fn report_introduced() -> Result<ClassificationReport, String> {
     let submitted = hello()?;
     let report = classify(None, Some(&submitted)).map_err(|error| error.to_string())?;
-    Ok(render_report(&report))
+    Ok(report)
 }
 
-fn report_removed() -> Result<String, String> {
+fn report_removed() -> Result<ClassificationReport, String> {
     let base = hello()?;
     let report = classify(Some(&base), None).map_err(|error| error.to_string())?;
-    Ok(render_report(&report))
+    Ok(report)
 }
 
-fn report_unchanged() -> Result<String, String> {
+fn report_unchanged() -> Result<ClassificationReport, String> {
     let (base, submitted) = provenance_only()?;
     let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
-    Ok(render_report(&report))
+    Ok(report)
 }
 
-fn report_changed() -> Result<String, String> {
+fn report_changed() -> Result<ClassificationReport, String> {
     let (base, submitted) = renamed_input()?;
     let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
-    Ok(render_report(&report))
+    Ok(report)
 }
 
 fn report_capability_only() -> Result<String, String> {
@@ -155,10 +138,10 @@ fn report_revision_only() -> Result<String, String> {
     Ok(format!("{error}\n"))
 }
 
-fn report_variant_added() -> Result<String, String> {
+fn report_variant_added() -> Result<ClassificationReport, String> {
     let (base, submitted) = variant_added()?;
     let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
-    Ok(render_report(&report))
+    Ok(report)
 }
 
 fn pairing_error() -> Result<String, String> {
@@ -171,18 +154,26 @@ fn pairing_error() -> Result<String, String> {
 }
 
 pub(crate) fn run(out: &Path) -> Result<(), String> {
-    let written = [
-        ("report-introduced.txt", report_introduced()?),
-        ("report-removed.txt", report_removed()?),
-        ("report-unchanged.txt", report_unchanged()?),
-        ("report-changed.txt", report_changed()?),
+    let reports = [
+        ("report-introduced", report_introduced()?),
+        ("report-removed", report_removed()?),
+        ("report-unchanged", report_unchanged()?),
+        ("report-changed", report_changed()?),
+        ("report-variant-added", report_variant_added()?),
+    ];
+    for (name, report) in reports {
+        fs::write(out.join(format!("{name}.txt")), render_text(&report))
+            .map_err(|error| format!("write {name}.txt: {error}"))?;
+        fs::write(out.join(format!("{name}.json")), render_json(&report))
+            .map_err(|error| format!("write {name}.json: {error}"))?;
+    }
+    let errors = [
         ("report-capability-only.txt", report_capability_only()?),
         ("report-types-only.txt", report_types_only()?),
         ("report-revision-only.txt", report_revision_only()?),
-        ("report-variant-added.txt", report_variant_added()?),
         ("pairing-error.txt", pairing_error()?),
     ];
-    for (name, body) in written {
+    for (name, body) in errors {
         fs::write(out.join(name), body).map_err(|error| format!("write {name}: {error}"))?;
     }
     Ok(())
@@ -192,23 +183,57 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn assert_report_golden(
+        report: ClassificationReport,
+        again: ClassificationReport,
+        text: &str,
+        json: &str,
+    ) {
+        assert_eq!(render_text(&report), render_text(&again));
+        assert_eq!(render_json(&report), render_json(&again));
+        assert_eq!(render_text(&report), text);
+        assert_eq!(render_json(&report), json);
+    }
+
     #[test]
     fn subject_report_introduced_is_golden_and_repeatable() {
-        let rendered = report_introduced().expect("introduced pair renders");
-        assert_eq!(rendered, report_introduced().expect("it renders again"));
-        assert_eq!(
-            rendered,
-            "verdict additive\nfinding BXC0026 hello additive\n"
+        assert_report_golden(
+            report_introduced().expect("introduced pair renders"),
+            report_introduced().expect("it renders again"),
+            "classification additive\nfinding BXC0026 hello additive\n",
+            r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "additive",
+  "findings": [
+    {
+      "code": "BXC0026",
+      "path": "hello",
+      "class": "additive"
+    }
+  ]
+}
+"#,
         );
     }
 
     #[test]
     fn subject_report_removed_is_golden_and_repeatable() {
-        let rendered = report_removed().expect("removed pair renders");
-        assert_eq!(rendered, report_removed().expect("it renders again"));
-        assert_eq!(
-            rendered,
-            "verdict incompatible\nfinding BXC0027 hello incompatible\n"
+        assert_report_golden(
+            report_removed().expect("removed pair renders"),
+            report_removed().expect("it renders again"),
+            "classification incompatible\nfinding BXC0027 hello incompatible\n",
+            r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "incompatible",
+  "findings": [
+    {
+      "code": "BXC0027",
+      "path": "hello",
+      "class": "incompatible"
+    }
+  ]
+}
+"#,
         );
     }
 
@@ -216,9 +241,17 @@ mod tests {
     fn subject_report_unchanged_is_golden_and_repeatable() {
         let (base, submitted) = provenance_only().expect("provenance pair builds");
         assert_ne!(base, submitted);
-        let rendered = report_unchanged().expect("unchanged pair renders");
-        assert_eq!(rendered, report_unchanged().expect("it renders again"));
-        assert_eq!(rendered, "verdict unchanged\n");
+        assert_report_golden(
+            report_unchanged().expect("unchanged pair renders"),
+            report_unchanged().expect("it renders again"),
+            "classification unchanged\n",
+            r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "unchanged",
+  "findings": []
+}
+"#,
+        );
     }
 
     #[test]
@@ -233,11 +266,22 @@ mod tests {
         assert_ne!(base.revision, submitted.revision);
         assert_eq!(submitted.revision.len(), 71);
         assert!(submitted.revision.starts_with("sha256:"));
-        let rendered = report_changed().expect("changed pair renders");
-        assert_eq!(rendered, report_changed().expect("it renders again"));
-        assert_eq!(
-            rendered,
-            "verdict incompatible\nfinding BXC0028 hello incompatible\n"
+        assert_report_golden(
+            report_changed().expect("changed pair renders"),
+            report_changed().expect("it renders again"),
+            "classification incompatible\nfinding BXC0028 hello incompatible\n",
+            r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "incompatible",
+  "findings": [
+    {
+      "code": "BXC0028",
+      "path": "hello",
+      "class": "incompatible"
+    }
+  ]
+}
+"#,
         );
     }
 
@@ -302,12 +346,24 @@ classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"\n
         let (base, submitted) = variant_added().expect("variant-added pair builds");
         assert_ne!(base.revision, submitted.revision);
         assert_ne!(base.types, submitted.types);
-        let rendered = report_variant_added().expect("variant-added pair renders");
-        assert_eq!(rendered, report_variant_added().expect("it renders again"));
-        assert_eq!(
-            rendered,
-            "verdict compatible_with_conditions\n\
-finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions\n"
+        assert_report_golden(
+            report_variant_added().expect("variant-added pair renders"),
+            report_variant_added().expect("it renders again"),
+            "classification compatible_with_conditions\n\
+finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\"\n",
+            r#"{
+  "schema": "boxology.classification-report@1",
+  "verdict": "compatible_with_conditions",
+  "findings": [
+    {
+      "code": "BXC0036",
+      "path": "hello/type/GreetError/variant/Other",
+      "class": "compatible_with_conditions",
+      "condition": "unknown-variant tolerance"
+    }
+  ]
+}
+"#,
         );
     }
 

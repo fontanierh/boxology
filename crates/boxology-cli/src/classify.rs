@@ -4,7 +4,7 @@
 
 use boxology_classifier::ClassificationReport;
 use boxology_schema::{Diagnostics, SchemaDocument};
-use std::fmt::{self, Write};
+use std::fmt;
 
 type Rule = (&'static str, &'static str, &'static str);
 const D1_SOURCE: &str =
@@ -105,35 +105,4 @@ pub fn classify(
     };
     let submitted = SchemaDocument::parse(submitted).map_err(ClassifyError::submitted)?;
     boxology_classifier::classify(base.as_ref(), Some(&submitted)).map_err(ClassifyError::pairing)
-}
-
-/// Renders one provisional human-readable classification block for `boxology generate`.
-///
-/// Findings are emitted in classifier report order. This rendering is provisional under #319.
-pub fn render(report: &ClassificationReport) -> String {
-    let mut output = format!("classification {}\n", report.verdict().canonical_name());
-    for finding in report.findings() {
-        match finding.condition() {
-            Some(condition) => {
-                let _ = writeln!(
-                    output,
-                    "finding {} {} {} condition=\"{}\"",
-                    finding.code(),
-                    finding.path(),
-                    finding.class().canonical_name(),
-                    condition
-                );
-            }
-            None => {
-                let _ = writeln!(
-                    output,
-                    "finding {} {} {}",
-                    finding.code(),
-                    finding.path(),
-                    finding.class().canonical_name()
-                );
-            }
-        }
-    }
-    output
 }

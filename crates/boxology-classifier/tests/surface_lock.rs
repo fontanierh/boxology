@@ -13,7 +13,7 @@ use syn::{Item, Meta, Visibility};
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 const OTHER_REVISION: &str =
     "sha256:a45a70dacfc5e3ea7911944d3f4fd385da1de2cdabfac86d554d4a321e3244cc";
-const RUST_SOURCES: &[&str] = &["lib.rs", "tests.rs"];
+const RUST_SOURCES: &[&str] = &["lib.rs", "report.rs", "tests.rs"];
 
 #[derive(Default)]
 struct MacroDetector {
@@ -105,8 +105,24 @@ fn require_allowed_modules(source: &str) -> Result<(), &'static str> {
         return Err("unexpected module declaration");
     }
     let mut lock = ProductionLock::default();
+    let mut report_modules = 0;
     for item in production {
-        lock.visit_item(item);
+        if let Item::Mod(module) = item {
+            if module.ident == "report"
+                && module.attrs.is_empty()
+                && matches!(module.vis, Visibility::Inherited)
+                && module.content.is_none()
+            {
+                report_modules += 1;
+            } else {
+                return Err("unexpected module declaration");
+            }
+        } else {
+            lock.visit_item(item);
+        }
+    }
+    if report_modules != 1 {
+        return Err("exactly one report module is required");
     }
     if lock.bad {
         return Err("unexpected production attribute");
@@ -205,6 +221,20 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     let root_source = fs::read_to_string(root.join("lib.rs")).unwrap();
     assert_eq!(require_allowed_modules(&root_source), Ok(()));
     let source = include_str!("../src/lib.rs");
+    let report_source = include_str!("../src/report.rs");
+    let report_file = syn::parse_file(report_source).unwrap();
+    let mut report_macros = MacroDetector::default();
+    report_macros.visit_file(&report_file);
+    assert!(!report_macros.found);
+    let mut report_lock = ProductionLock::default();
+    for item in &report_file.items {
+        report_lock.visit_item(item);
+    }
+    assert!(!report_lock.bad);
+    assert!(!report_source.contains("\"BXC"));
+    for anchor in ["pub fn render_text(", "pub fn render_json("] {
+        assert_eq!(report_source.matches(anchor).count(), 1, "{anchor} count");
+    }
     let anchors = [
         ("BXC0024", "Diagnostic::classification_requires_document()"),
         ("BXC0025", "Diagnostic::box_id_mismatch()"),
