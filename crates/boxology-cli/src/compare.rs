@@ -28,6 +28,16 @@ pub enum DifferenceKind {
     /// A classified derived-output file has no regenerated counterpart.
     Stale,
 }
+impl DifferenceKind {
+    /// Returns the stable human and report-payload identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Differing => "differing",
+            Self::Stale => "stale",
+        }
+    }
+}
 
 /// One package-relative difference between checked-in and regenerated derived output.
 #[derive(Debug, Eq, PartialEq)]
@@ -66,6 +76,11 @@ impl CompareDifference {
     /// Returns the exact command that repairs this package's generated output.
     pub fn repair_command(&self) -> String {
         format!("boxology generate --package {}", self.package.as_str())
+    }
+
+    /// Returns the normative source of the byte-identity comparison rule.
+    pub fn rule_source(&self) -> &'static str {
+        COMPARE_SOURCE
     }
 }
 
@@ -124,6 +139,9 @@ pub fn compare_step(
     let plans = plan(workspace, None)?;
     let mut differences = Vec::new();
     for plan in plans {
+        let package_root = plan.package_root().map_or("", RelativePath::as_str);
+        let package_dir = guarded(root, package_root, false)?;
+        guarded(&package_dir, plan.crate_root().as_str(), true)?;
         let (package_dir, tree) = generate_tree(root, &plan)?;
         let package = workspace
             .packages()
