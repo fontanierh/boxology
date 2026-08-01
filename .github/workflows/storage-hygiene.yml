@@ -74,6 +74,28 @@ jobs:
           done < caches.txt
           echo "scheduled cache sweep complete"
 
+      - name: Prune superseded main caches
+        if: github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Every merge writes a new ~1.4 GB main cache and the old one is never
+          # reclaimed, so main alone reached three quarters of the 10 GB limit.
+          # Only the most recently used main cache is useful; the rest are
+          # superseded and their sole effect is to crowd out the next run.
+          newest=$(gh api "repos/$REPO/actions/caches?per_page=100" \
+            --jq '[.actions_caches[] | select(.ref == "refs/heads/main")] | sort_by(.last_accessed_at) | last | .id')
+          gh api "repos/$REPO/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | select(.ref == "refs/heads/main") | .id' > main_ids.txt || true
+          while read -r id; do
+            [ -n "$id" ] || continue
+            [ "$id" = "$newest" ] && continue
+            gh api -X DELETE "repos/$REPO/actions/caches/$id" && echo "deleted superseded main cache $id"
+          done < main_ids.txt
+          echo "superseded main cache sweep complete; kept $newest"
+
       - name: Report storage headroom
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
