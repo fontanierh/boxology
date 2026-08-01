@@ -81,7 +81,7 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
-        body_digest: "bcb00394e2e7d7d693f9b2ca43848a19ac9f53acfa5eef3b1519cf1de7c9b090",
+        body_digest: "a23c9102bf4337048c6181118bce02b54ec836d6928a601e675069e07c3c43b1",
     };
 // This slice pins the generator production source inventory only. Capability purity,
 // source closure, and dependency-graph pins are later #107 slices.
@@ -650,7 +650,7 @@ mod tests {
                     source: "crates/boxology-classifier/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
-                    body_digest: "bcb00394e2e7d7d693f9b2ca43848a19ac9f53acfa5eef3b1519cf1de7c9b090",
+                    body_digest: "a23c9102bf4337048c6181118bce02b54ec836d6928a601e675069e07c3c43b1",
                 },
             ),
             (
