@@ -728,7 +728,8 @@ mod tests {
         let catalog = [Diagnostic(0), Diagnostic(1), Diagnostic(2), Diagnostic(3)]
             .map(|diagnostic| diagnostic.to_string())
             .join("\n");
-        assert_eq!(catalog, CODE_GOLDEN.trim_end());
+        let lib_golden = CODE_GOLDEN.lines().take(4).collect::<Vec<_>>().join("\n");
+        assert_eq!(catalog, lib_golden);
         let both = InitRequest::new("Bad", "").unwrap_err();
         assert_eq!(
             both.as_slice()
@@ -750,14 +751,24 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         files.sort();
-        assert_eq!(files, ["lib.rs"]);
+        assert_eq!(files, ["lib.rs", "main.rs", "write.rs"]);
         files.push("stray.rs".into());
-        assert_ne!(files, ["lib.rs"]);
+        assert_ne!(files, ["lib.rs", "main.rs", "write.rs"]);
         let production = production_source(SOURCE).expect("locked production/test boundary");
         let expected = golden_codes();
-        assert_eq!(expected, ["BXI0001", "BXI0002", "BXI0003", "BXI0004"]);
-        assert_eq!(DIAGNOSTICS.map(|entry| entry.0).as_slice(), expected);
-        assert_eq!(source_codes(production), expected);
+        assert_eq!(
+            expected,
+            [
+                "BXI0001", "BXI0002", "BXI0003", "BXI0004", "BXI0005", "BXI0006", "BXI0007",
+                "BXI0008", "BXI0009",
+            ]
+        );
+        assert_eq!(DIAGNOSTICS.map(|entry| entry.0).as_slice(), &expected[..4]);
+        let mut scanned = source_codes(production);
+        scanned.extend(source_codes(include_str!("main.rs")));
+        scanned.extend(source_codes(include_str!("write.rs")));
+        assert_eq!(scanned, expected);
+        assert_eq!(expected, scanned);
         assert_eq!(modules(SOURCE), ["mod tests {"]);
         assert_eq!(production.matches("include!(").count(), 0);
         assert_eq!(production.matches("fn prefixed").count(), 1);
@@ -773,7 +784,7 @@ mod tests {
         assert_ne!(impure.matches("std::").count(), 1);
         let mut mutated = production.to_owned();
         mutated.push_str(&format!("\nconst STRAY: &str = \"{}{}\";\nmod stray;\n", "BX", "I9999"));
-        assert_ne!(source_codes(&mutated), expected);
+        assert_ne!(source_codes(&mutated), &expected[..4]);
         assert_ne!(modules(&mutated), ["mod tests {"]);
         let cut = ["#[cfg(test)]", "\nmod tests {"].concat();
         let anchor = ["\n    // source inventory ", "ends here"].concat();
