@@ -13,6 +13,7 @@ use std::{
 };
 
 use boxology_contract::CallContext;
+use boxology_http::HttpServerConfig;
 use hello_contract::{GreetError, HelloDispatch};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -34,11 +35,28 @@ const METHOD_NOT_ALLOWED_BODY: &[u8] =
     br#"{"error":{"kind":"call","code":"method_not_allowed","message":"method not allowed"}}"#;
 const UNSUPPORTED_MEDIA_TYPE_BODY: &[u8] =
     br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#;
+const PAYLOAD_TOO_LARGE_BODY: &[u8] =
+    br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#;
+const DEADLINE_EXCEEDED_BODY: &[u8] =
+    br#"{"error":{"kind":"call","code":"deadline_exceeded","message":"deadline exceeded"}}"#;
 
-const ROW_COUNT: usize = 36;
+const EMPTY_BODY: &[u8] = b"";
+const TRAILING_BYTES_BODY: &[u8] = b"\"Ada\" 0";
+const BOM_PREFIXED_BODY: &[u8] = b"\xEF\xBB\xBF\"Ada\"";
+const INVALID_UTF8_BODY: &[u8] = b"\"\xff\"";
+const DEPTH_BOMB_BODY: &[u8] = b"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"Ada\"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]";
+const OVERSIZED_STRING_BODY: &[u8] =
+    br#""AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA""#;
+const OVERSIZED_CHUNKED_BODY: &[u8] =
+    b"43\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\r\n0\r\n\r\n";
+const OVERSIZED_MALFORMED_BODY: &[u8] =
+    b"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
+
+const ROW_COUNT: usize = 47;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SpecParagraph {
+    S3D2Codec,
     S3D3CanonicalResponseEncoding,
     S3D4RoutingAndIdentifierCanonicality,
     S3D5StableWireErrorCodes,
@@ -81,11 +99,44 @@ struct ExpectedResponse {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ServerTuning {
+    max_body_bytes: Option<usize>,
+    default_timeout: Option<Duration>,
+}
+
+impl ServerTuning {
+    const DEFAULT: Self = Self {
+        max_body_bytes: None,
+        default_timeout: None,
+    };
+}
+
+const BODY_CAP_64: ServerTuning = ServerTuning {
+    max_body_bytes: Some(64),
+    default_timeout: None,
+};
+const TRICKLE_BUDGET: ServerTuning = ServerTuning {
+    max_body_bytes: None,
+    default_timeout: Some(Duration::from_millis(100)),
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Exchange {
+    Whole,
+    Trickle { stall: Duration },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RawCase {
     id: &'static str,
     request: RequestShape,
     authority: &'static [SpecParagraph],
     expected: ExpectedResponse,
+    body: Option<&'static [u8]>,
+    content_length: Option<usize>,
+    chunked: bool,
+    tuning: ServerTuning,
+    exchange: Exchange,
 }
 
 impl RawCase {
@@ -100,7 +151,37 @@ impl RawCase {
             request,
             authority,
             expected,
+            body: None,
+            content_length: None,
+            chunked: false,
+            tuning: ServerTuning::DEFAULT,
+            exchange: Exchange::Whole,
         }
+    }
+
+    const fn with_body(mut self, body: &'static [u8]) -> Self {
+        self.body = Some(body);
+        self
+    }
+
+    const fn with_chunked_framing(mut self) -> Self {
+        self.chunked = true;
+        self
+    }
+
+    const fn with_content_length(mut self, content_length: usize) -> Self {
+        self.content_length = Some(content_length);
+        self
+    }
+
+    const fn with_tuning(mut self, tuning: ServerTuning) -> Self {
+        self.tuning = tuning;
+        self
+    }
+
+    const fn with_trickle(mut self, stall: Duration) -> Self {
+        self.exchange = Exchange::Trickle { stall };
+        self
     }
 }
 
@@ -131,21 +212,27 @@ const NOT_FOUND_STATUS: &[u8] = b"HTTP/1.1 404 Not Found";
 const BAD_REQUEST_STATUS: &[u8] = b"HTTP/1.1 400 Bad Request";
 const METHOD_NOT_ALLOWED_STATUS: &[u8] = b"HTTP/1.1 405 Method Not Allowed";
 const UNSUPPORTED_MEDIA_TYPE_STATUS: &[u8] = b"HTTP/1.1 415 Unsupported Media Type";
+const PAYLOAD_TOO_LARGE_STATUS: &[u8] = b"HTTP/1.1 413 Payload Too Large";
+const GATEWAY_TIMEOUT_STATUS: &[u8] = b"HTTP/1.1 504 Gateway Timeout";
 
 const UB: &[u8] = UNKNOWN_BOX_BODY;
 const UCB: &[u8] = UNKNOWN_CAPABILITY_BODY;
 const IRB: &[u8] = INVALID_REQUEST_BODY;
 const MNB: &[u8] = METHOD_NOT_ALLOWED_BODY;
 const UMTB: &[u8] = UNSUPPORTED_MEDIA_TYPE_BODY;
+const PTLB: &[u8] = PAYLOAD_TOO_LARGE_BODY;
+const DEB: &[u8] = DEADLINE_EXCEEDED_BODY;
 const SU: ExpectedResponse = e(OK_STATUS, SUCCESS_BODY, JSON, None, 1);
 const BX: ExpectedResponse = e(NOT_FOUND_STATUS, UB, JSON, None, 0);
 const CAP: ExpectedResponse = e(NOT_FOUND_STATUS, UCB, JSON, None, 0);
 const BAD: ExpectedResponse = e(BAD_REQUEST_STATUS, IRB, JSON, None, 0);
 const NA: ExpectedResponse = e(METHOD_NOT_ALLOWED_STATUS, MNB, JSON, Some(POST), 0);
 const UMT: ExpectedResponse = e(UNSUPPORTED_MEDIA_TYPE_STATUS, UMTB, JSON, None, 0);
+const PTL: ExpectedResponse = e(PAYLOAD_TOO_LARGE_STATUS, PTLB, JSON, None, 0);
+const DE: ExpectedResponse = e(GATEWAY_TIMEOUT_STATUS, DEB, JSON, None, 0);
 
 use SpecParagraph::{
-    RuntimeInvocationStatusTable as STATUS, RuntimeStableWireCodes as CODES,
+    RuntimeInvocationStatusTable as STATUS, RuntimeStableWireCodes as CODES, S3D2Codec as D2,
     S3D3CanonicalResponseEncoding as D3, S3D4RoutingAndIdentifierCanonicality as D4,
     S3D5StableWireErrorCodes as D5, S3D6HeaderGrammars as D6, S3D7RequestProcessingPipeline as D7,
 };
@@ -155,12 +242,18 @@ const METHOD_AUTHORITY: &[SpecParagraph] = &[D3, D5, D6, STATUS, CODES];
 const ROUTE_PIPELINE_AUTHORITY: &[SpecParagraph] = &[D3, D4, D5, D7, STATUS, CODES];
 const HEAD_ADMISSION_AUTHORITY: &[SpecParagraph] = &[D3, D5, D6, D7, STATUS, CODES];
 const HEAD_ADMISSION_ACCEPTED_AUTHORITY: &[SpecParagraph] = &[D3, D6];
+const SYNTAX_AUTHORITY: &[SpecParagraph] = &[D3, D2, D5, D7, STATUS, CODES];
+const CAP_MEDIA_AUTHORITY: &[SpecParagraph] = &[D3, D2, D5, D6, D7, STATUS, CODES];
+const DEADLINE_AUTHORITY: &[SpecParagraph] = &[D3, D5, D7, STATUS, CODES];
 const SA: &[SpecParagraph] = SUCCESS_AUTHORITY;
 const RA: &[SpecParagraph] = ROUTING_AUTHORITY;
 const MA: &[SpecParagraph] = METHOD_AUTHORITY;
 const PA: &[SpecParagraph] = ROUTE_PIPELINE_AUTHORITY;
 const HA: &[SpecParagraph] = HEAD_ADMISSION_AUTHORITY;
 const HAA: &[SpecParagraph] = HEAD_ADMISSION_ACCEPTED_AUTHORITY;
+const SX: &[SpecParagraph] = SYNTAX_AUTHORITY;
+const CM: &[SpecParagraph] = CAP_MEDIA_AUTHORITY;
+const DA: &[SpecParagraph] = DEADLINE_AUTHORITY;
 
 const EXACT_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/hello/greet");
 const UNKNOWN_BOX_REQUEST: RequestShape = RequestShape::simple("POST", "/rpc/ghost/greet");
@@ -465,6 +558,73 @@ const RAW_CASES: [RawCase; ROW_COUNT] = [
         HA,
         BAD,
     ),
+    // Traceability-only classification row: `Parser::value` no-value →
+    // `MalformedJson` → 400. Semantic backstop would also reject a fabricated
+    // non-String tree; M6 (catch-all → Internal) goes red, but no unique
+    // deletion mutant is attributable to this row.
+    RawCase::new("empty-body", EXACT_REQUEST, HA, BAD).with_body(EMPTY_BODY),
+    // Isolates exhaustion `then_some` (syntax.rs). M1 → 200. No other check.
+    RawCase::new("trailing-bytes", EXACT_REQUEST, HA, BAD).with_body(TRAILING_BYTES_BODY),
+    // Isolates BOM rejection after `whitespace()`. M2 → 200. No other check;
+    // authority is D2's explicit rejection of a leading U+FEFF.
+    RawCase::new("bom-prefixed-body", EXACT_REQUEST, SX, BAD).with_body(BOM_PREFIXED_BODY),
+    // Isolates whole-input `from_utf8`. M3 → 200. No other check.
+    RawCase::new("invalid-utf8-body", EXACT_REQUEST, SX, BAD).with_body(INVALID_UTF8_BODY),
+    // Classification row: depth guard → `DepthLimitExceeded` → InvalidRequest.
+    // Guard-removal stays green (nested list vs String → 400), so deletion is
+    // invisible here and isolation is owed to a fixture whose capability input
+    // accepts lists. M5 (classify as PayloadTooLarge) → 413. Pins taxonomy +
+    // zero dispatch, not the guard.
+    RawCase::new("depth-bomb", EXACT_REQUEST, SX, BAD).with_body(DEPTH_BOMB_BODY),
+    // Byte cap defended by three layers (size_hint, accumulation, parse). M4
+    // (drop decode PayloadTooLarge arm) stays green — collection rejects first;
+    // that arm is only reachable via direct `decode_request_body` unit tests.
+    // M8 compound (all three layers off) → 200. Wiring: drop tuning → 200.
+    RawCase::new("oversized-content-length", EXACT_REQUEST, SX, PTL)
+        .with_body(OVERSIZED_STRING_BODY)
+        .with_tuning(BODY_CAP_64),
+    // Isolates accumulation (chunked size_hint.lower() is 0). Parse cap also
+    // rejects. M8-chunked (accumulation + parse off) → 200; CL-only caps fail here.
+    RawCase::new("oversized-chunked", EXACT_REQUEST, SX, PTL)
+        .with_body(OVERSIZED_CHUNKED_BODY)
+        .with_chunked_framing()
+        .with_tuning(BODY_CAP_64),
+    // Cap-before-grammar intent. M7 (reorder parse cap after grammar) stays
+    // green on the live path — collection size_hint/accumulation reject with
+    // 413 before `parse` runs. Proves wire 413 for oversized+malformed, not
+    // the parse-site ordering alone (that ordering stays with unit tests).
+    RawCase::new("oversized-plus-malformed", EXACT_REQUEST, SX, PTL)
+        .with_body(OVERSIZED_MALFORMED_BODY)
+        .with_tuning(BODY_CAP_64),
+    // Precedence: head admission (415) before body cap (413). M10 (collect
+    // before admit) → 413. Classification mutants stay green.
+    RawCase::new(
+        "oversized-plus-bad-media",
+        APPLICATION_XML_MEDIA_TYPE_REQUEST,
+        CM,
+        UMT,
+    )
+    .with_body(OVERSIZED_STRING_BODY)
+    .with_tuning(BODY_CAP_64),
+    // Pre-dispatch deadline. Four stages cover the stall: collect timeout,
+    // pre-dispatch check, `await_dispatch`'s timeout arm, and `invoke_if_live`'s
+    // pre-invoke check. No single-arm mutant is observable here. Wiring: drop
+    // trickle → 200. Compound needed to isolate the collect arm alone.
+    RawCase::new("trickled-body-vs-budget", EXACT_REQUEST, DA, DE)
+        .with_tuning(TRICKLE_BUDGET)
+        .with_trickle(Duration::from_millis(250)),
+    // Declared length is far above the cap, but the client sends only this
+    // head and never a body. The size-hint pre-check gives 413 immediately;
+    // without it, collection waits for the absent body and the short budget
+    // gives 504.
+    RawCase::new("oversized-content-length-head-only", EXACT_REQUEST, SX, PTL)
+        .with_body(EMPTY_BODY)
+        .with_content_length(1_000_000)
+        .with_tuning(ServerTuning {
+            max_body_bytes: Some(64),
+            default_timeout: Some(Duration::from_millis(100)),
+        })
+        .with_trickle(Duration::from_millis(250)),
 ];
 
 const fn o(r: &'static str, a: Authority, q: RawBytes, e: ExpectedResponse) -> OracleRow {
@@ -511,6 +671,17 @@ const ORACLE: [OracleRow; ROW_COUNT] = [
     o("idempotency-duplicate", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nIdempotency-Key: alpha\r\nIdempotency-Key: beta\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
     o("idempotency-empty", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nIdempotency-Key:\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
     o("idempotency-obs-text", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nIdempotency-Key: caf\xc3\xa9\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("empty-body", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("trailing-bytes", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 7\r\n\r\n\"Ada\" 0", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("bom-prefixed-body", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 8\r\n\r\n\xef\xbb\xbf\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("invalid-utf8-body", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 3\r\n\r\n\"\xff\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("depth-bomb", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 265\r\n\r\n[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"Ada\"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("oversized-content-length", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 67\r\n\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
+    o("oversized-chunked", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n43\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\r\n0\r\n\r\n", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
+    o("oversized-plus-malformed", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 67\r\n\r\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
+    o("oversized-plus-bad-media", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/xml\r\nConnection: close\r\nContent-Length: 67\r\n\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
+    o("trickled-body-vs-budget", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 504 Gateway Timeout", br#"{"error":{"kind":"call","code":"deadline_exceeded","message":"deadline exceeded"}}"#, b"application/json", None, 0)),
+    o("oversized-content-length-head-only", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 1000000\r\n\r\n", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
 ];
 
 struct CountingHello {
@@ -533,15 +704,28 @@ async fn raw_hello_cases_are_canonical() {
     traceability_gate(&RAW_CASES, &ORACLE);
     for case in RAW_CASES {
         let dispatches = Arc::new(AtomicUsize::new(0));
-        let running = RunningHello::start(CountingHello {
-            dispatches: Arc::clone(&dispatches),
-        });
+        let mut config =
+            HttpServerConfig::new("127.0.0.1:0".parse().expect("loopback address is valid"));
+        if let Some(cap) = case.tuning.max_body_bytes {
+            // Must match boxology-http's private DEFAULT_DEPTH_LIMIT; capped
+            // rows rely on this fixture coupling.
+            config = config.with_request_limits(cap, 128);
+        }
+        if let Some(deadline) = case.tuning.default_timeout {
+            config = config.with_default_timeout(deadline);
+        }
+        let running = RunningHello::start_with_config(
+            CountingHello {
+                dispatches: Arc::clone(&dispatches),
+            },
+            config,
+        );
         let address = running.local_addr();
-        let request = render_request(case.request);
+        let request = render_request(case);
 
         running
             .assert_then_shutdown(async move {
-                let response = raw_exchange(address, &request).await;
+                let response = raw_exchange(address, &request, case.exchange).await;
                 assert_response(&response, case.expected);
                 assert_eq!(
                     dispatches.load(Ordering::SeqCst),
@@ -646,6 +830,18 @@ fn traceability_semantic_drift_mutants_are_active() {
         &ORACLE,
         "media-row authority D7 deletion",
     );
+
+    let mut body_override_drift = RAW_CASES.to_vec();
+    body_override_drift[37].body = Some(b"\"Ada\"");
+    assert_traceability_rejects(&body_override_drift, &ORACLE, "body-override drift");
+
+    let mut framing_drift = RAW_CASES.to_vec();
+    framing_drift[42].chunked = false;
+    assert_traceability_rejects(&framing_drift, &ORACLE, "framing drift");
+
+    let mut payload_status_drift = RAW_CASES.to_vec();
+    payload_status_drift[41].expected.status_line = BAD_REQUEST_STATUS;
+    assert_traceability_rejects(&payload_status_drift, &ORACLE, "413 status-line drift");
 }
 
 fn assert_traceability_rejects(cases: &[RawCase], oracle: &[OracleRow], mutant: &str) {
@@ -693,7 +889,7 @@ fn traceability_check(cases: &[RawCase], oracle: &[OracleRow]) -> Result<(), Str
         if case.authority != golden.1 {
             return Err(format!("row {index} authority drift: {}", case.id));
         }
-        if render_request(case.request).as_slice() != golden.2 {
+        if render_request(*case).as_slice() != golden.2 {
             return Err(format!("row {index} raw request drift: {}", case.id));
         }
         if case.expected != golden.3 {
@@ -729,7 +925,9 @@ fn validate_authority(rule: &str, authority: &[SpecParagraph]) -> Result<(), Str
     Ok(())
 }
 
-fn render_request(request: RequestShape) -> Vec<u8> {
+fn render_request(case: RawCase) -> Vec<u8> {
+    let request = case.request;
+    let body = case.body.unwrap_or(REQUEST_BODY);
     let mut rendered = format!(
         "{} {} HTTP/1.1\r\nHost: boxology\r\n",
         request.method, request.path
@@ -744,21 +942,42 @@ fn render_request(request: RequestShape) -> Vec<u8> {
         rendered.extend_from_slice(line.as_bytes());
         rendered.extend_from_slice(b"\r\n");
     }
-    rendered.extend_from_slice(
-        format!(
-            "Connection: close\r\nContent-Length: {}\r\n\r\n",
-            REQUEST_BODY.len()
-        )
-        .as_bytes(),
-    );
-    rendered.extend_from_slice(REQUEST_BODY);
+    rendered.extend_from_slice(b"Connection: close\r\n");
+    if case.chunked {
+        rendered.extend_from_slice(b"Transfer-Encoding: chunked\r\n\r\n");
+    } else {
+        let content_length = case.content_length.unwrap_or(body.len());
+        rendered.extend_from_slice(format!("Content-Length: {content_length}\r\n\r\n").as_bytes());
+    }
+    rendered.extend_from_slice(body);
     rendered
 }
 
-async fn raw_exchange(address: std::net::SocketAddr, request: &[u8]) -> Vec<u8> {
+async fn raw_exchange(
+    address: std::net::SocketAddr,
+    request: &[u8],
+    exchange: Exchange,
+) -> Vec<u8> {
     timeout(Duration::from_secs(5), async {
         let mut stream = TcpStream::connect(address).await.expect("connect");
-        stream.write_all(request).await.expect("write");
+        match exchange {
+            Exchange::Whole => {
+                stream.write_all(request).await.expect("write");
+            }
+            Exchange::Trickle { stall } => {
+                let split = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .expect("request has a header/body boundary")
+                    + 4;
+                stream
+                    .write_all(&request[..split])
+                    .await
+                    .expect("write head");
+                tokio::time::sleep(stall).await;
+                let _ = stream.write_all(&request[split..]).await;
+            }
+        }
         let mut response = Vec::new();
         if let Err(error) = stream.read_to_end(&mut response).await {
             assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
