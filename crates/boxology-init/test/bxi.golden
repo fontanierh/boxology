@@ -2,3 +2,8 @@ BXI0001 <request>:1:1-1:1 offending="project name" rule="project name must match
 BXI0002 <request>:1:1-1:1 offending="dependency source" rule="dependency source must not be empty" source="specs/s6-installer-and-generated-project.md D1"
 BXI0003 <request>:1:1-1:1 offending="embedded generation" rule="the pinned ping contract must generate without diagnostics" source="specs/s6-installer-and-generated-project.md D1"
 BXI0004 <request>:1:1-1:1 offending="generated path" rule="embedded generated paths must be confined relative paths" source="specs/s6-installer-and-generated-project.md D1"
+BXI0005 <target>:1:1-1:1 offending="target directory" rule="target must be an existing readable directory" source="specs/s6-installer-and-generated-project.md D2"
+BXI0006 <target>:1:1-1:1 offending="target entries" rule="target must contain no entry other than `.git`" source="specs/s6-installer-and-generated-project.md D2" entries=[]
+BXI0007 <target>:1:1-1:1 offending="generated project" rule="a target bearing the `boxology.toml` completion sentinel has already been initialized; re-running is refused" source="specs/s6-installer-and-generated-project.md D2"
+BXI0008 <target>:1:1-1:1 offending="staged write" rule="an interrupted write leaves no tree bearing the completion sentinel; the partial tree is reported for manual cleanup" source="specs/s6-installer-and-generated-project.md D2"
+BXI0009 <argv>:1:1-1:1 offending="invocation" rule="all parameters must be given as explicit flags: `--name`, `--dependency-source`, `--target`" source="specs/s6-installer-and-generated-project.md D1"
