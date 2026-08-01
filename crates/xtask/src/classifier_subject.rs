@@ -55,6 +55,13 @@ fn types_only() -> Result<(SchemaDocument, SchemaDocument), String> {
     Ok((base, submitted))
 }
 
+fn revision_only() -> Result<(SchemaDocument, SchemaDocument), String> {
+    let base = hello()?;
+    let mut submitted = hello()?;
+    flip_revision(&mut submitted)?;
+    Ok((base, submitted))
+}
+
 fn flip_revision(document: &mut SchemaDocument) -> Result<(), String> {
     let revision = document.revision.clone();
     let last = revision.chars().last().ok_or("revision is empty")?;
@@ -140,6 +147,14 @@ fn report_types_only() -> Result<String, String> {
     Ok(format!("{error}\n"))
 }
 
+fn report_revision_only() -> Result<String, String> {
+    let (base, submitted) = revision_only()?;
+    let error = classify(Some(&base), Some(&submitted))
+        .err()
+        .ok_or("revision-only pair classified")?;
+    Ok(format!("{error}\n"))
+}
+
 fn report_variant_added() -> Result<String, String> {
     let (base, submitted) = variant_added()?;
     let report = classify(Some(&base), Some(&submitted)).map_err(|error| error.to_string())?;
@@ -163,6 +178,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
         ("report-changed.txt", report_changed()?),
         ("report-capability-only.txt", report_capability_only()?),
         ("report-types-only.txt", report_types_only()?),
+        ("report-revision-only.txt", report_revision_only()?),
         ("report-variant-added.txt", report_variant_added()?),
         ("pairing-error.txt", pairing_error()?),
     ];
@@ -257,6 +273,26 @@ classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"\n
         assert_eq!(
             rendered,
             "BXC0037 at=\"\" rule=\"findings under equal revisions mean the projection and the \
+classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"\n"
+        );
+    }
+
+    #[test]
+    fn subject_report_revision_only_is_golden_and_repeatable() {
+        let (base, submitted) = revision_only().expect("revision-only pair builds");
+        assert_ne!(base.revision, submitted.revision);
+        assert_eq!(base.box_id, submitted.box_id);
+        assert_eq!(base.capabilities, submitted.capabilities);
+        assert_eq!(base.types, submitted.types);
+        assert_eq!(base.provenance, submitted.provenance);
+        assert_eq!(submitted.revision.len(), 71);
+        assert!(submitted.revision.starts_with("sha256:"));
+        assert_eq!(&submitted.revision[..70], &base.revision[..70]);
+        let rendered = report_revision_only().expect("revision-only pair renders");
+        assert_eq!(rendered, report_revision_only().expect("it renders again"));
+        assert_eq!(
+            rendered,
+            "BXC0038 at=\"\" rule=\"differing revisions with no finding mean the projection and the \
 classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"\n"
         );
     }
