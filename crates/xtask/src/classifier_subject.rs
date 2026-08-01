@@ -269,14 +269,14 @@ mod tests {
         assert_report_golden(
             report_changed().expect("changed pair renders"),
             report_changed().expect("it renders again"),
-            "classification incompatible\nfinding BXC0028 hello incompatible\n",
+            "classification incompatible\nfinding BXC0041 hello.greet/input incompatible\n",
             r#"{
   "schema": "boxology.classification-report@1",
   "verdict": "incompatible",
   "findings": [
     {
-      "code": "BXC0028",
-      "path": "hello",
+      "code": "BXC0041",
+      "path": "hello.greet/input",
       "class": "incompatible"
     }
   ]

@@ -589,7 +589,7 @@ fn variant_deprecation_changed_is_deprecation() {
 }
 
 #[test]
-fn type_added_with_referencing_capability_is_additive_and_fail_closed() {
+fn type_added_with_referencing_capability_is_additive() {
     let base = document("hello");
     let mut submitted = base.clone();
     add_capability(&mut submitted);
@@ -602,15 +602,15 @@ fn type_added_with_referencing_capability_is_additive_and_fail_closed() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0028", "hello", Class::Incompatible, None),
+            ("BXC0039", "hello.wave", Class::Additive, None),
             ("BXC0031", "hello/type/WaveError", Class::Additive, None),
         ],
-        Class::Incompatible,
+        Class::Additive,
     );
 }
 
 #[test]
-fn type_removed_with_referencing_capability_is_incompatible_and_fail_closed() {
+fn type_removed_with_referencing_capability_is_incompatible() {
     let base = two_error_document();
     let mut submitted = document("hello");
     submitted.revision = OTHER_REVISION.to_owned();
@@ -621,8 +621,159 @@ fn type_removed_with_referencing_capability_is_incompatible_and_fail_closed() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0028", "hello", Class::Incompatible, None),
+            ("BXC0040", "hello.wave", Class::Incompatible, None),
             ("BXC0032", "hello/type/WaveError", Class::Incompatible, None),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn capability_added_is_additive() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    add_capability(&mut submitted);
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0039", "hello.wave", Class::Additive, None)],
+        Class::Additive,
+    );
+}
+
+#[test]
+fn capability_removed_is_incompatible() {
+    let mut base = document("hello");
+    add_capability(&mut base);
+    let submitted = with_flipped_revision(document("hello"));
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0040", "hello.wave", Class::Incompatible, None)],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn capability_rename_is_remove_plus_add() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.capabilities[0].name = CapabilityName::new("wave").unwrap();
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0040", "hello.greet", Class::Incompatible, None),
+            ("BXC0039", "hello.wave", Class::Additive, None),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn input_name_changed_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.capabilities[0].input.name = "label".to_owned();
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0041", "hello.greet/input", Class::Incompatible, None)],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn input_leaf_changed_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.capabilities[0].input.leaf = BoundaryLeaf::Bool;
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0042", "hello.greet/input", Class::Incompatible, None)],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn output_leaf_changed_is_incompatible() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.capabilities[0].output.leaf = BoundaryLeaf::Bool;
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0043", "hello.greet/output", Class::Incompatible, None)],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn input_name_and_leaf_changes_share_one_path_and_sort_by_code() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.capabilities[0].input.name = "label".to_owned();
+    submitted.capabilities[0].input.leaf = BoundaryLeaf::Bool;
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_eq!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0041", "hello.greet/input", Class::Incompatible, None),
+            ("BXC0042", "hello.greet/input", Class::Incompatible, None),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn capability_metadata_beside_named_finding_fails_closed() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    submitted.capabilities[0].error = "WaveError".to_owned();
+    submitted.types[0].docs.push("Extra type docs.".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_ne!(base.capabilities, submitted.capabilities);
+    assert_ne!(base.types, submitted.types);
+    assert_ne!(base.revision, submitted.revision);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[
+            ("BXC0028", "hello", Class::Incompatible, None),
+            (
+                "BXC0033",
+                "hello/type/GreetError",
+                Class::Documentation,
+                None,
+            ),
         ],
         Class::Incompatible,
     );
@@ -756,13 +907,9 @@ fn capability_and_reserved_payload_mutations_fail_closed() {
     // classify tests above; type/variant renames by the two tests immediately above; revision-only
     // by the check-B integrity test above.
     let mutations: &[fn(&mut SchemaDocument)] = &[
-        |document| document.capabilities[0].name = CapabilityName::new("wave").unwrap(),
         |document| document.capabilities[0].docs.push("New docs.".to_owned()),
         |document| document.capabilities[0].deprecation = Some("use wave2".to_owned()),
         |document| document.capabilities[0].error = "WaveError".to_owned(),
-        |document| document.capabilities[0].input.name.push('x'),
-        |document| document.capabilities[0].input.leaf = BoundaryLeaf::Bool,
-        |document| document.capabilities[0].output.leaf = BoundaryLeaf::Bool,
         |document| document.capabilities[0].max_exposure = ExposureLevel::Internal,
         |document| document.capabilities[0].idempotency = Idempotency::Inherent,
         |document| {
@@ -828,14 +975,10 @@ fn named_payload_change_beside_named_finding_fails_closed() {
 
 #[test]
 fn collection_shape_changes_fail_closed() {
-    // Capability shape changes and unreferenced type-graph reorder/add still fail closed.
+    // Capability reorder and unreferenced type-graph reorder/add still fail closed.
     // Removing a referenced type is the named BXC0032 path, covered elsewhere.
     type Case = (usize, usize, fn(&mut SchemaDocument));
     let cases: &[Case] = &[
-        (1, 1, add_capability),
-        (1, 1, |document| {
-            document.capabilities.pop();
-        }),
         (2, 1, |document| document.capabilities.swap(0, 1)),
         (1, 1, add_type),
         (1, 2, |document| document.types.swap(0, 1)),
@@ -981,15 +1124,15 @@ finding BXC0027 hello incompatible
     assert_renderings(
         &renamed,
         r#"classification incompatible
-finding BXC0028 hello incompatible
+finding BXC0041 hello.greet/input incompatible
 "#,
         r#"{
   "schema": "boxology.classification-report@1",
   "verdict": "incompatible",
   "findings": [
     {
-      "code": "BXC0028",
-      "path": "hello",
+      "code": "BXC0041",
+      "path": "hello.greet/input",
       "class": "incompatible"
     }
   ]

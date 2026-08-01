@@ -3,13 +3,16 @@
 //! The classifier reads only the supplied [`SchemaDocument`] values. It consults no filesystem,
 //! environment, network, clock, locale, process, or execution state, and has no policy controls
 //! that could hide or relabel a finding. Named type-graph rows emit structured findings; every
-//! unmatched difference falls to the fail-closed default.
+//! unmatched difference falls to the fail-closed default. Five structural capability rows are
+//! named; reserved capability metadata and reorder differences remain fail-closed.
 //! Canonical report renderings are available as [`render_text`] and [`render_json`].
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_schema::{Diagnostic, Diagnostics, SchemaDocument, SchemaType, SchemaVariant};
+use boxology_schema::{
+    Diagnostic, Diagnostics, SchemaCapability, SchemaDocument, SchemaType, SchemaVariant,
+};
 use std::collections::BTreeMap;
 
 /// The compatibility class of one schema change, ordered from least to most severe.
@@ -174,6 +177,21 @@ const CODE_VARIANT_REMOVED: &str = "BXC0035";
 /// Referenced error-enum variant added (D5 conditional row).
 const CODE_VARIANT_ADDED: &str = "BXC0036";
 
+/// Capability added (D5 additive row).
+const CODE_CAPABILITY_ADDED: &str = "BXC0039";
+
+/// Capability removed (D5 incompatible row).
+const CODE_CAPABILITY_REMOVED: &str = "BXC0040";
+
+/// Capability input parameter name changed (D5 incompatible row).
+const CODE_INPUT_NAME_CHANGED: &str = "BXC0041";
+
+/// Capability input leaf type changed (D5 incompatible row).
+const CODE_INPUT_LEAF_CHANGED: &str = "BXC0042";
+
+/// Capability output leaf type changed (D5 incompatible row).
+const CODE_OUTPUT_LEAF_CHANGED: &str = "BXC0043";
+
 /// Migration condition for referenced error-enum variant addition.
 const CONDITION_UNKNOWN_VARIANT: &str = "unknown-variant tolerance";
 
@@ -186,16 +204,17 @@ fn fail_closed_finding(base: &SchemaDocument) -> Finding {
     }
 }
 
-/// Applies the D5 type-graph taxonomy, then the fail-closed default.
+/// Applies the D5 type-graph and structural capability taxonomies, then the fail-closed default.
 ///
 /// Named findings are always emitted individually. Unreferenced *additions* (type or variant) fall
 /// to the fail-closed default per D5's preamble — a declared type reachable from no capability is
 /// not a named additive/conditional row. Documentation, deprecation, and removals classify by their
 /// D5 table row regardless of reachability (D5's preamble tension with those rows is tracked under
-/// #319). `VariantPayloadChanged` is reserved until #104 and likewise fails closed with no named
-/// code. Any capability delta is reported as one `BXC0028` at `<box>` until capability-level rows
-/// land. A revision-only difference (no type or capability delta) yields an empty finding list;
-/// `classify` turns that empty result into the D6 check-B integrity error.
+/// #319). Capability additions, removals, input-name changes, input-leaf changes, and output-leaf
+/// changes use their named rows. Capability documentation, deprecation, declared-error,
+/// exposure, idempotency, and reorder changes, like `VariantPayloadChanged`, remain reserved and
+/// fail closed at `<box>`. A revision-only difference (no type or capability delta) yields an empty
+/// finding list; `classify` turns that empty result into the D6 check-B integrity error.
 fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) -> Vec<Finding> {
     let roles = reachability(base, submitted);
     let changes = type_changes(base, submitted, &roles);
@@ -292,12 +311,66 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
             }
         }
     }
-    // Fail-closed default: unmatched type-graph kinds or any capability delta emit one BXC0028
-    // at <box>. An empty finding list (revision-only) is left empty for classify's check B.
-    if unclassified || base.capabilities != submitted.capabilities {
+
+    let changes = capability_changes(base, submitted);
+    for change in &changes {
+        match change {
+            CapabilityChange::CapabilityAdded { name } => findings.push(Finding {
+                code: CODE_CAPABILITY_ADDED,
+                path: capability_path(base, name),
+                class: Class::Additive,
+                condition: None,
+            }),
+            CapabilityChange::CapabilityRemoved { name } => findings.push(Finding {
+                code: CODE_CAPABILITY_REMOVED,
+                path: capability_path(base, name),
+                class: Class::Incompatible,
+                condition: None,
+            }),
+            CapabilityChange::InputNameChanged { name } => findings.push(Finding {
+                code: CODE_INPUT_NAME_CHANGED,
+                path: capability_input_path(base, name),
+                class: Class::Incompatible,
+                condition: None,
+            }),
+            CapabilityChange::InputLeafChanged { name } => findings.push(Finding {
+                code: CODE_INPUT_LEAF_CHANGED,
+                path: capability_input_path(base, name),
+                class: Class::Incompatible,
+                condition: None,
+            }),
+            CapabilityChange::OutputLeafChanged { name } => findings.push(Finding {
+                code: CODE_OUTPUT_LEAF_CHANGED,
+                path: capability_output_path(base, name),
+                class: Class::Incompatible,
+                condition: None,
+            }),
+            CapabilityChange::CapabilitiesReordered
+            | CapabilityChange::CapabilityMetadataChanged { .. } => {
+                unclassified = true;
+            }
+        }
+    }
+
+    // Fail-closed default: unmatched type-graph kinds or reserved capability kinds emit one
+    // BXC0028 at <box>. Every other capability difference has a named change above. An empty
+    // finding list (revision-only) is left empty for classify's check B.
+    if unclassified {
         findings.push(fail_closed_finding(base));
     }
     findings
+}
+
+fn capability_path(base: &SchemaDocument, name: &str) -> String {
+    [base.box_id.as_str(), ".", name].concat()
+}
+
+fn capability_input_path(base: &SchemaDocument, name: &str) -> String {
+    [capability_path(base, name).as_str(), "/input"].concat()
+}
+
+fn capability_output_path(base: &SchemaDocument, name: &str) -> String {
+    [capability_path(base, name).as_str(), "/output"].concat()
 }
 
 fn type_path(base: &SchemaDocument, name: &str) -> String {
@@ -366,6 +439,17 @@ enum TypeChange {
     },
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum CapabilityChange {
+    CapabilityAdded { name: String },
+    CapabilityRemoved { name: String },
+    CapabilitiesReordered,
+    CapabilityMetadataChanged { name: String },
+    InputNameChanged { name: String },
+    InputLeafChanged { name: String },
+    OutputLeafChanged { name: String },
+}
+
 /// Reachability over the union of both documents' capability graphs.
 ///
 /// Format 1 `InputSlot` / `OutputSlot` hold [`boxology_schema::BoundaryLeaf`] only, so no
@@ -411,6 +495,14 @@ fn index_variants(variants: &[SchemaVariant]) -> BTreeMap<&str, &SchemaVariant> 
     let mut index = BTreeMap::new();
     for variant in variants {
         index.insert(variant.name.as_str(), variant);
+    }
+    index
+}
+
+fn index_capabilities(capabilities: &[SchemaCapability]) -> BTreeMap<&str, &SchemaCapability> {
+    let mut index = BTreeMap::new();
+    for capability in capabilities {
+        index.insert(capability.name.as_str(), capability);
     }
     index
 }
@@ -489,6 +581,82 @@ fn type_changes(
     }
 
     changes
+}
+
+fn capability_changes(base: &SchemaDocument, submitted: &SchemaDocument) -> Vec<CapabilityChange> {
+    let mut changes = Vec::new();
+    let base_by_name = index_capabilities(&base.capabilities);
+    let submitted_by_name = index_capabilities(&submitted.capabilities);
+
+    for base_capability in &base.capabilities {
+        match submitted_by_name.get(base_capability.name.as_str()) {
+            None => changes.push(CapabilityChange::CapabilityRemoved {
+                name: base_capability.name.as_str().to_owned(),
+            }),
+            Some(submitted_capability) => append_matched_capability_changes(
+                &mut changes,
+                base_capability,
+                submitted_capability,
+            ),
+        }
+    }
+
+    for submitted_capability in &submitted.capabilities {
+        if base_by_name.contains_key(submitted_capability.name.as_str()) {
+            continue;
+        }
+        changes.push(CapabilityChange::CapabilityAdded {
+            name: submitted_capability.name.as_str().to_owned(),
+        });
+    }
+
+    if common_name_sequence_differs(
+        base.capabilities
+            .iter()
+            .map(|capability| capability.name.as_str()),
+        submitted
+            .capabilities
+            .iter()
+            .map(|capability| capability.name.as_str()),
+        &base_by_name,
+        &submitted_by_name,
+    ) {
+        changes.push(CapabilityChange::CapabilitiesReordered);
+    }
+
+    changes
+}
+
+fn append_matched_capability_changes(
+    changes: &mut Vec<CapabilityChange>,
+    base: &SchemaCapability,
+    submitted: &SchemaCapability,
+) {
+    if base.input.leaf != submitted.input.leaf {
+        changes.push(CapabilityChange::InputLeafChanged {
+            name: base.name.as_str().to_owned(),
+        });
+    }
+    if base.input.name != submitted.input.name {
+        changes.push(CapabilityChange::InputNameChanged {
+            name: base.name.as_str().to_owned(),
+        });
+    }
+    if base.output.leaf != submitted.output.leaf {
+        changes.push(CapabilityChange::OutputLeafChanged {
+            name: base.name.as_str().to_owned(),
+        });
+    }
+    if base.docs != submitted.docs
+        || base.deprecation != submitted.deprecation
+        || base.error != submitted.error
+        || base.max_exposure != submitted.max_exposure
+        || base.idempotency != submitted.idempotency
+    {
+        changes.push(CapabilityChange::CapabilityMetadataChanged {
+            name: base.name.as_str().to_owned(),
+        });
+    }
 }
 
 fn append_matched_type_changes(

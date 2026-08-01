@@ -247,6 +247,11 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0034", "\"BXC0034\""),
         ("BXC0035", "\"BXC0035\""),
         ("BXC0036", "\"BXC0036\""),
+        ("BXC0039", "\"BXC0039\""),
+        ("BXC0040", "\"BXC0040\""),
+        ("BXC0041", "\"BXC0041\""),
+        ("BXC0042", "\"BXC0042\""),
+        ("BXC0043", "\"BXC0043\""),
         ("BXC0036 condition", "\"unknown-variant tolerance\""),
         (
             "BXC0037",
@@ -339,10 +344,10 @@ fn every_classifier_code_is_reachable() {
         .into_vec();
     let introduced = classify(None, Some(&document("hello"))).unwrap();
     let removed = classify(Some(&document("hello")), None).unwrap();
-    let mut changed = document("hello");
-    changed.capabilities[0].input.name = "label".to_owned();
-    changed.revision = OTHER_REVISION.to_owned();
-    let unclassified = classify(Some(&document("hello")), Some(&changed)).unwrap();
+    let mut input_name_changed = document("hello");
+    input_name_changed.capabilities[0].input.name = "label".to_owned();
+    input_name_changed.revision = OTHER_REVISION.to_owned();
+    let input_name_changed = classify(Some(&document("hello")), Some(&input_name_changed)).unwrap();
 
     let mut type_added = document("hello");
     type_added.capabilities.push(SchemaCapability {
@@ -374,6 +379,28 @@ fn every_classifier_code_is_reachable() {
     });
     type_added.revision = OTHER_REVISION.to_owned();
     let additive = classify(Some(&document("hello")), Some(&type_added)).unwrap();
+
+    let mut capability_removed = document("hello");
+    capability_removed.capabilities.pop();
+    capability_removed.revision = OTHER_REVISION.to_owned();
+    let capability_removed = classify(Some(&document("hello")), Some(&capability_removed)).unwrap();
+
+    let mut input_leaf_changed = document("hello");
+    input_leaf_changed.capabilities[0].input.leaf = BoundaryLeaf::Bool;
+    input_leaf_changed.revision = OTHER_REVISION.to_owned();
+    let input_leaf_changed = classify(Some(&document("hello")), Some(&input_leaf_changed)).unwrap();
+
+    let mut output_leaf_changed = document("hello");
+    output_leaf_changed.capabilities[0].output.leaf = BoundaryLeaf::Bool;
+    output_leaf_changed.revision = OTHER_REVISION.to_owned();
+    let output_leaf_changed =
+        classify(Some(&document("hello")), Some(&output_leaf_changed)).unwrap();
+
+    let mut capability_metadata_changed = document("hello");
+    capability_metadata_changed.capabilities[0].deprecation = Some("retired".to_owned());
+    capability_metadata_changed.revision = OTHER_REVISION.to_owned();
+    let capability_metadata_changed =
+        classify(Some(&document("hello")), Some(&capability_metadata_changed)).unwrap();
 
     let mut type_removed_base = document("hello");
     type_removed_base.capabilities.push(SchemaCapability {
@@ -465,6 +492,17 @@ fn every_classifier_code_is_reachable() {
         .find(|finding| finding.code() == "BXC0031")
         .unwrap()
         .code();
+    let capability_added_code = additive
+        .findings()
+        .iter()
+        .find(|finding| finding.code() == "BXC0039")
+        .unwrap()
+        .code();
+    let capability_removed_code = capability_removed.findings()[0].code();
+    let input_name_changed_code = input_name_changed.findings()[0].code();
+    let input_leaf_changed_code = input_leaf_changed.findings()[0].code();
+    let output_leaf_changed_code = output_leaf_changed.findings()[0].code();
+    let capability_metadata_changed_code = capability_metadata_changed.findings()[0].code();
     let type_removed_code = type_removed
         .findings()
         .iter()
@@ -477,7 +515,7 @@ fn every_classifier_code_is_reachable() {
             mismatch[0].code(),
             introduced.findings()[0].code(),
             removed.findings()[0].code(),
-            unclassified.findings()[0].code(),
+            capability_metadata_changed_code,
             type_added_code,
             type_removed_code,
             docs.findings()[0].code(),
@@ -486,10 +524,16 @@ fn every_classifier_code_is_reachable() {
             conditional.findings()[0].code(),
             integrity_equal[0].code(),
             integrity_silence[0].code(),
+            capability_added_code,
+            capability_removed_code,
+            input_name_changed_code,
+            input_leaf_changed_code,
+            output_leaf_changed_code,
         ],
         [
             "BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033",
-            "BXC0034", "BXC0035", "BXC0036", "BXC0037", "BXC0038",
+            "BXC0034", "BXC0035", "BXC0036", "BXC0037", "BXC0038", "BXC0039", "BXC0040", "BXC0041",
+            "BXC0042", "BXC0043",
         ]
     );
 }
