@@ -1,5 +1,11 @@
 [workspace]
 resolver = "3"
+exclude = [
+    "crates/fixtures/greeter",
+    "crates/fixtures/hello",
+    "crates/fixtures/ping",
+    "crates/fixtures/ping-app",
+]
 members = [
     "crates/boxology-contract",
     "crates/boxology-contract-syntax",
@@ -20,13 +26,6 @@ members = [
     "crates/boxology-telegram",
     "crates/fixtures/fixture-tests",
     "crates/fixtures/generated-style-fmt",
-    "crates/fixtures/greeter/generated/contract",
-    "crates/fixtures/greeter/implementation",
-    "crates/fixtures/hello/generated/contract",
-    "crates/fixtures/hello/implementation",
-    "crates/fixtures/ping/generated/contract",
-    "crates/fixtures/ping/implementation",
-    "crates/fixtures/ping-app/composition",
     "crates/xtask",
 ]
 

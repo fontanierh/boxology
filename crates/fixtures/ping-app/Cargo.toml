@@ -1,0 +1,6 @@
+[workspace]
+resolver = "3"
+members = ["composition"]
+
+[workspace.package]
+edition = "2024"
