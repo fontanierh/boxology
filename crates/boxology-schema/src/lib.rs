@@ -702,6 +702,39 @@ mod tests {
     }
 
     #[test]
+    fn pinned_hello_digest_matches_the_checked_in_contract_marker() {
+        const ANCHOR: &str = "__BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [";
+        let contract = std::str::from_utf8(include_bytes!(
+            "../../fixtures/hello/generated/contract/src/lib.rs"
+        ))
+        .expect("checked-in hello contract is UTF-8");
+        assert_eq!(contract.matches("__BOXOLOGY_SEMANTIC_DIGEST").count(), 1);
+        let marker = contract
+            .split_once(ANCHOR)
+            .expect("checked-in contract has a semantic digest marker")
+            .1
+            .split_once("];")
+            .expect("checked-in digest marker is terminated");
+        let marker_bytes: Vec<u8> = marker
+            .0
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.parse().expect("marker byte is a u8"))
+            .collect();
+        assert_eq!(marker_bytes.len(), 32);
+        let marker_hex: String = marker_bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let pinned: Value = serde_json::from_slice(PINNED_HELLO).expect("pinned hello is JSON");
+        assert_eq!(
+            pinned["provenance"]["semantic_digest"],
+            format!("sha256:{marker_hex}")
+        );
+    }
+
+    #[test]
     fn mixed_payload_bytes_are_pinned_and_round_trip() {
         let document = mixed_payloads(json!({"z": {"b": 1, "a": 2}, "a": "mixed"}));
         let bytes = document.canonical_bytes();

@@ -1412,6 +1412,14 @@ macro_rules! __boxology_check_implementation {
     const IMPORT_REVISION: &str =
         "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 
+    #[test]
+    fn import_revision_matches_the_checked_in_hello_schema() {
+        let schema =
+            std::str::from_utf8(include_bytes!("../../fixtures/hello/generated/schema.json"))
+                .expect("checked-in hello schema is UTF-8");
+        assert_eq!(schema.matches(IMPORT_REVISION).count(), 1);
+    }
+
     /// A minimal valid `hello` import schema offering the `greet` capability over `String`.
     fn valid_hello_schema() -> String {
         import_schema("hello", &[("greet", "String", "String")])
@@ -1544,7 +1552,7 @@ macro_rules! __boxology_check_implementation {
     #[test]
     fn cold_schema_has_exact_projection_revision_and_document() {
         const PROJECTION: &[u8] = b"\x62\x6f\x78\x6f\x6c\x6f\x67\x79\x2e\x70\x75\x62\x6c\x69\x63\x2d\x63\x6f\x6e\x74\x72\x61\x63\x74\x2d\x72\x65\x76\x69\x73\x69\x6f\x6e\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x05\x68\x65\x6c\x6c\x6f\x00\x00\x00\x00\x00\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x0a\x47\x72\x65\x65\x74\x45\x72\x72\x6f\x72\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x09\x45\x6d\x70\x74\x79\x4e\x61\x6d\x65\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x0b\x68\x65\x6c\x6c\x6f\x2e\x67\x72\x65\x65\x74\x00\x00\x00\x00\x00\x00\x00\x05\x67\x72\x65\x65\x74\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x6e\x61\x6d\x65\x00\x00\x00\x00\x00\x00\x00\x06\x53\x74\x72\x69\x6e\x67\x00\x00\x00\x00\x00\x00\x00\x06\x53\x74\x72\x69\x6e\x67\x00\x00\x00\x00\x00\x00\x00\x0a\x47\x72\x65\x65\x74\x45\x72\x72\x6f\x72\x00\x00\x00\x00\x00\x00\x00\x05\x75\x6e\x61\x72\x79\x00\x00\x00\x00\x00\x00\x00\x08\x65\x78\x74\x65\x72\x6e\x61\x6c\x00\x00\x00\x00\x00\x00\x00\x04\x6e\x6f\x6e\x65";
-        const SCHEMA: &[u8] = br#"{
+        const SCHEMA_TEMPLATE: &str = r#"{
   "box_id": "hello",
   "capabilities": [
     {
@@ -1570,7 +1578,7 @@ macro_rules! __boxology_check_implementation {
     "generator_version": "0.0.0",
     "semantic_digest": "sha256:545f142b0ced7670e3f9efc7bcaaf3b7a2a0b2b790e5b48acaa85e4901c89b18"
   },
-  "revision": "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176",
+  "revision": "{REVISION}",
   "schema_format": 1,
   "types": [
     {
@@ -1596,9 +1604,13 @@ macro_rules! __boxology_check_implementation {
             .unwrap();
         assert_eq!(schema::projection("hello", contract.model()), PROJECTION);
         let independently_hashed = format!("sha256:{:x}", Sha256::digest(PROJECTION));
+        let schema = SCHEMA_TEMPLATE.replace("{REVISION}", &independently_hashed);
         let generated = generate(&cold).unwrap();
-        assert_eq!(file(&generated, "generated/schema.json").bytes(), SCHEMA);
-        let value: Value = serde_json::from_slice(SCHEMA).unwrap();
+        assert_eq!(
+            file(&generated, "generated/schema.json").bytes(),
+            schema.as_bytes()
+        );
+        let value: Value = serde_json::from_slice(schema.as_bytes()).unwrap();
         assert_eq!(value["box_id"], "hello");
         assert_eq!(value["types"][0]["kind"], "error");
         assert_eq!(value["types"][0]["variants"][0]["payload"], "unit");
@@ -1624,7 +1636,7 @@ macro_rules! __boxology_check_implementation {
             &[7; 32],
             "9.9.9",
         );
-        assert_ne!(changed_provenance, SCHEMA);
+        assert_ne!(changed_provenance, schema.as_bytes());
         assert_eq!(
             serde_json::from_slice::<Value>(&changed_provenance).unwrap()["revision"],
             value["revision"]
@@ -1632,8 +1644,8 @@ macro_rules! __boxology_check_implementation {
         let mut alternate = value.clone();
         alternate["schema_format"] = json!(1.0);
         let compact = serde_json::to_vec(&alternate).unwrap();
-        assert_ne!(Sha256::digest(SCHEMA), Sha256::digest(&compact));
-        for document in [SCHEMA, compact.as_slice()] {
+        assert_ne!(Sha256::digest(schema.as_bytes()), Sha256::digest(&compact));
+        for document in [schema.as_bytes(), compact.as_slice()] {
             let parsed: Value = serde_json::from_slice(document).unwrap();
             let document_hash = format!("sha256:{:x}", Sha256::digest(document));
             assert_eq!(parsed["revision"], independently_hashed);

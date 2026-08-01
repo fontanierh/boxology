@@ -635,6 +635,14 @@ mod tests {
     const BASE_REVISION: &str =
         "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 
+    #[test]
+    fn base_revision_matches_the_checked_in_hello_schema() {
+        let schema =
+            std::str::from_utf8(include_bytes!("../../fixtures/hello/generated/schema.json"))
+                .expect("checked-in hello schema is UTF-8");
+        assert_eq!(schema.matches(BASE_REVISION).count(), 1);
+    }
+
     fn baseline() -> Value {
         json!({
             "schema_format": 1,
