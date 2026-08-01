@@ -8,8 +8,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use syn::visit::Visit;
-const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs classify.rs main.rs";
-const FILES: &str = "Cargo.toml src/classify.rs src/execute.rs src/generate.rs src/lib.rs src/main.rs src/walk.rs tests/bxw.golden tests/classify.rs tests/cli.rs tests/execute.rs tests/generation_plan.rs tests/surface_lock.rs";
+const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs classify.rs check.rs main.rs";
+const FILES: &str = "Cargo.toml src/check.rs src/classify.rs src/execute.rs src/generate.rs src/lib.rs src/main.rs src/walk.rs tests/bxw.golden tests/check.rs tests/classify.rs tests/cli.rs tests/execute.rs tests/generation_plan.rs tests/surface_lock.rs";
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const PACKAGE_HASH: u64 = 4_400_377_577_107_281_090;
 const LIB: &str = include_str!("../src/lib.rs");
@@ -17,6 +17,7 @@ const WALK: &str = include_str!("../src/walk.rs");
 const GENERATE: &str = include_str!("../src/generate.rs");
 const EXECUTE: &str = include_str!("../src/execute.rs");
 const CLASSIFY: &str = include_str!("../src/classify.rs");
+const CHECK: &str = include_str!("../src/check.rs");
 const MAIN: &str = include_str!("../src/main.rs");
 const SOURCES: &[(&str, &str)] = &[
     ("lib.rs", LIB),
@@ -24,24 +25,27 @@ const SOURCES: &[(&str, &str)] = &[
     ("generate.rs", GENERATE),
     ("execute.rs", EXECUTE),
     ("classify.rs", CLASSIFY),
+    ("check.rs", CHECK),
     ("main.rs", MAIN),
 ];
 const GOLDEN: &str = include_str!("bxw.golden");
-const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0068 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079";
-const LIB_HASH: u64 = 7_206_800_631_454_075_744;
+const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0068 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082";
+const LIB_HASH: u64 = 3_183_086_740_705_326_423;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
 const GENERATE_HASH: u64 = 2_437_200_502_410_785_768;
 const EXECUTE_HASH: u64 = 7_195_906_979_600_889_935;
 const CLASSIFY_HASH: u64 = 11_819_106_377_568_339_839;
+const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
 const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, selection.as_ref())\nexecute(root, generation)\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
 const MAIN_HASH: u64 = 2_327_141_899_214_887_966;
-const HASHES: [u64; 6] = [
+const HASHES: [u64; 7] = [
     LIB_HASH,
     WALK_HASH,
     GENERATE_HASH,
     EXECUTE_HASH,
     CLASSIFY_HASH,
+    CHECK_HASH,
     MAIN_HASH,
 ];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
@@ -50,6 +54,8 @@ const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&out
 const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged base_schema submitted_schema ExecuteError code location path detail diagnostics write_error execute";
 const CLASSIFY_ANCHORS: &str = "map_err(ClassifyError::base)\nmap_err(ClassifyError::submitted)\nmap_err(ClassifyError::pairing)\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
 const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify render";
+const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED,\n            \"submitted\",\nCHECK_PAIRING,\n                \"pairing\",\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
+const CHECK_PUBLIC: &str = "DuplicatePackages PackageSchemas new CheckClassificationError package code side detail diagnostics ClassifyStepError classify_step";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Drop for Fixture {
@@ -216,28 +222,30 @@ fn source_surface_is_exact_and_mutation_resistant() {
     ];
     for source in cases {
         rejects(
-            LIB,
-            &source,
-            GENERATE,
-            EXECUTE,
-            CLASSIFY,
-            MAIN,
+            [LIB, &source, GENERATE, EXECUTE, CLASSIFY, CHECK, MAIN],
             [
                 LIB_HASH,
                 hash(&source),
                 GENERATE_HASH,
                 EXECUTE_HASH,
                 CLASSIFY_HASH,
+                CHECK_HASH,
                 hash(MAIN),
             ],
         );
     }
     let mutant = format!("{LIB}// hash mutant\n");
-    rejects(&mutant, WALK, GENERATE, EXECUTE, CLASSIFY, MAIN, HASHES);
+    rejects(
+        [&mutant, WALK, GENERATE, EXECUTE, CLASSIFY, CHECK, MAIN],
+        HASHES,
+    );
     let mutant = format!("{WALK}// hash mutant\n");
-    rejects(LIB, &mutant, GENERATE, EXECUTE, CLASSIFY, MAIN, HASHES);
+    rejects(
+        [LIB, &mutant, GENERATE, EXECUTE, CLASSIFY, CHECK, MAIN],
+        HASHES,
+    );
     let mutant = format!("{GENERATE}// hash mutant\n");
-    rejects(LIB, WALK, &mutant, EXECUTE, CLASSIFY, MAIN, HASHES);
+    rejects([LIB, WALK, &mutant, EXECUTE, CLASSIFY, CHECK, MAIN], HASHES);
     let mutant = format!("{EXECUTE}\n/// Mutant.\npub fn mutant() {{}}\n");
     let hashes = [
         LIB_HASH,
@@ -245,23 +253,23 @@ fn source_surface_is_exact_and_mutation_resistant() {
         GENERATE_HASH,
         hash(&mutant),
         CLASSIFY_HASH,
+        CHECK_HASH,
         hash(MAIN),
     ];
-    rejects(LIB, WALK, GENERATE, &mutant, CLASSIFY, MAIN, hashes);
+    rejects(
+        [LIB, WALK, GENERATE, &mutant, CLASSIFY, CHECK, MAIN],
+        hashes,
+    );
     let mutant = EXECUTE.replace("BXW0070", "BXW9999");
     rejects(
-        LIB,
-        WALK,
-        GENERATE,
-        &mutant,
-        CLASSIFY,
-        MAIN,
+        [LIB, WALK, GENERATE, &mutant, CLASSIFY, CHECK, MAIN],
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             hash(&mutant),
             CLASSIFY_HASH,
+            CHECK_HASH,
             hash(MAIN),
         ],
     );
@@ -287,18 +295,14 @@ fn source_surface_is_exact_and_mutation_resistant() {
     ] {
         let changed = EXECUTE.replace(anchor, replacement);
         rejects(
-            LIB,
-            WALK,
-            GENERATE,
-            &changed,
-            CLASSIFY,
-            MAIN,
+            [LIB, WALK, GENERATE, &changed, CLASSIFY, CHECK, MAIN],
             [
                 LIB_HASH,
                 WALK_HASH,
                 GENERATE_HASH,
                 hash(&changed),
                 CLASSIFY_HASH,
+                CHECK_HASH,
                 hash(MAIN),
             ],
         );
@@ -318,7 +322,10 @@ fn source_surface_is_exact_and_mutation_resistant() {
         ),
     ] {
         let changed = GENERATE.replace(anchor, replacement);
-        rejects(LIB, WALK, &changed, EXECUTE, CLASSIFY, MAIN, HASHES);
+        rejects(
+            [LIB, WALK, &changed, EXECUTE, CLASSIFY, CHECK, MAIN],
+            HASHES,
+        );
     }
     for (needle, replacement) in [
         ("\"--locked\", ", ""),
@@ -326,36 +333,28 @@ fn source_surface_is_exact_and_mutation_resistant() {
     ] {
         let changed = LIB.replace(needle, replacement);
         rejects(
-            &changed,
-            WALK,
-            GENERATE,
-            EXECUTE,
-            CLASSIFY,
-            MAIN,
+            [&changed, WALK, GENERATE, EXECUTE, CLASSIFY, CHECK, MAIN],
             [
                 hash(&changed),
                 WALK_HASH,
                 GENERATE_HASH,
                 EXECUTE_HASH,
                 CLASSIFY_HASH,
+                CHECK_HASH,
                 MAIN_HASH,
             ],
         );
     }
     let duplicate = format!("{MAIN}\nconst DUPLICATE: &str = \"BXW0075\";\n");
     rejects(
-        LIB,
-        WALK,
-        GENERATE,
-        EXECUTE,
-        CLASSIFY,
-        &duplicate,
+        [LIB, WALK, GENERATE, EXECUTE, CLASSIFY, CHECK, &duplicate],
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
             CLASSIFY_HASH,
+            CHECK_HASH,
             hash(&duplicate),
         ],
     );
@@ -364,18 +363,14 @@ fn source_surface_is_exact_and_mutation_resistant() {
         "metadata failed",
     );
     rejects(
-        LIB,
-        WALK,
-        GENERATE,
-        EXECUTE,
-        CLASSIFY,
-        &reworded,
+        [LIB, WALK, GENERATE, EXECUTE, CLASSIFY, CHECK, &reworded],
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
             CLASSIFY_HASH,
+            CHECK_HASH,
             hash(&reworded),
         ],
     );
@@ -384,35 +379,27 @@ fn source_surface_is_exact_and_mutation_resistant() {
         "if error.is_unknown_package() { 2 } else { 2 }",
     );
     rejects(
-        LIB,
-        WALK,
-        GENERATE,
-        EXECUTE,
-        CLASSIFY,
-        &second_exit,
+        [LIB, WALK, GENERATE, EXECUTE, CLASSIFY, CHECK, &second_exit],
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
             CLASSIFY_HASH,
+            CHECK_HASH,
             hash(&second_exit),
         ],
     );
     let fallthrough = MAIN.replace("_ => Err(())", "_ => Ok(None)");
     rejects(
-        LIB,
-        WALK,
-        GENERATE,
-        EXECUTE,
-        CLASSIFY,
-        &fallthrough,
+        [LIB, WALK, GENERATE, EXECUTE, CLASSIFY, CHECK, &fallthrough],
         [
             LIB_HASH,
             WALK_HASH,
             GENERATE_HASH,
             EXECUTE_HASH,
             CLASSIFY_HASH,
+            CHECK_HASH,
             hash(&fallthrough),
         ],
     );
@@ -422,6 +409,7 @@ fn source_surface_is_exact_and_mutation_resistant() {
         ("generate.rs", GENERATE),
         ("execute.rs", EXECUTE),
         ("classify.rs", CLASSIFY),
+        ("check.rs", CHECK),
         ("main.rs", MAIN),
         ("extra.rs", ""),
     ];
@@ -442,21 +430,15 @@ fn source_surface_is_exact_and_mutation_resistant() {
         assert!(!package_is(&mutant, &files));
     }
 }
-fn rejects(
-    lib: &str,
-    walk: &str,
-    generate: &str,
-    execute: &str,
-    classify: &str,
-    main: &str,
-    hashes: [u64; 6],
-) {
+fn rejects(bodies: [&str; 7], hashes: [u64; 7]) {
+    let [lib, walk, generate, execute, classify, check, main] = bodies;
     let sources = [
         ("lib.rs", lib),
         ("walk.rs", walk),
         ("generate.rs", generate),
         ("execute.rs", execute),
         ("classify.rs", classify),
+        ("check.rs", check),
         ("main.rs", main),
     ];
     assert!(!locked_sources(&sources, hashes, GOLDEN));
@@ -566,7 +548,7 @@ fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool
 fn package_is(manifest: &str, files: &[String]) -> bool {
     hash(manifest) == PACKAGE_HASH && files.join(" ") == FILES
 }
-fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 6], golden: &str) -> bool {
+fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 7], golden: &str) -> bool {
     if !sources
         .iter()
         .map(|(name, _)| *name)
@@ -585,6 +567,7 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 6], golden: &str) -> b
     let mut lock = Lock::default();
     let mut execute_public = Vec::new();
     let mut classify_public = Vec::new();
+    let mut check_public = Vec::new();
     for &(name, source) in sources.iter().skip(1) {
         lock.public.clear();
         let Ok(file) = syn::parse_file(source) else {
@@ -606,6 +589,9 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 6], golden: &str) -> b
         if name == "classify.rs" {
             classify_public = lock.public.clone();
         }
+        if name == "check.rs" {
+            check_public = lock.public.clone();
+        }
     }
     let codes = CODES
         .split_whitespace()
@@ -618,6 +604,7 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 6], golden: &str) -> b
         && lock.codes == codes
         && execute_public.join(" ") == EXECUTE_PUBLIC
         && classify_public.join(" ") == CLASSIFY_PUBLIC
+        && check_public.join(" ") == CHECK_PUBLIC
         && render(&lock).is_some_and(|rendered| rendered == golden)
         && ANCHORS
             .lines()
@@ -631,9 +618,12 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 6], golden: &str) -> b
         && CLASSIFY_ANCHORS
             .lines()
             .all(|anchor| sources[4].1.matches(anchor).count() == 1)
-        && MAIN_ANCHORS
+        && CHECK_ANCHORS
             .lines()
             .all(|anchor| sources[5].1.matches(anchor).count() == 1)
+        && MAIN_ANCHORS
+            .lines()
+            .all(|anchor| sources[6].1.matches(anchor).count() == 1)
         && sources[0].1.matches(ARGV_SHAPE).count() == 1
         && sources[0].1.matches("#![deny(missing_docs)]").count() == 1
         && sources[0].1.matches("#![forbid(unsafe_code)]").count() == 1
@@ -641,6 +631,8 @@ fn locked_sources(sources: &[(&str, &str)], hashes: [u64; 6], golden: &str) -> b
         && sources[3].1.matches("#![forbid(unsafe_code)]").count() == 1
         && sources[4].1.matches("#![deny(missing_docs)]").count() == 1
         && sources[4].1.matches("#![forbid(unsafe_code)]").count() == 1
+        && sources[5].1.matches("#![deny(missing_docs)]").count() == 1
+        && sources[5].1.matches("#![forbid(unsafe_code)]").count() == 1
 }
 fn render(lock: &Lock) -> Option<String> {
     let mut output = format!("sources={}\n", NAMES.replace(' ', ","));
