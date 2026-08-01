@@ -186,7 +186,11 @@ fn take_nul(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
     Ok((&bytes[..end], &bytes[end + 1..]))
 }
 fn is_excluded(path: &str, derived: &[&str]) -> bool {
+    // Every Cargo.lock is derived: cargo writes it, nobody hand-authors it. The
+    // rule was root-only while no nested workspace existed; fixture projects own
+    // their own workspaces now, so a nested lockfile is as derived as the root's.
     path == "Cargo.lock"
+        || path.ends_with("/Cargo.lock")
         || derived.iter().any(|entry| {
             entry.strip_suffix('/').map_or(path == *entry, |directory| {
                 path == directory || path.starts_with(&format!("{directory}/"))
@@ -291,7 +295,8 @@ mod tests {
         assert!(is_excluded("Cargo.lock", &derived));
         assert!(is_excluded("generated/exact.rs", &derived));
         assert!(is_excluded("generated/tree/nested.rs", &derived));
-        assert!(!is_excluded("nested/Cargo.lock", &derived));
+        assert!(is_excluded("nested/Cargo.lock", &derived));
+        assert!(!is_excluded("nested/Cargo.locked", &derived));
         assert!(!is_excluded("generated/treehouse/x", &derived));
         assert!(is_excluded(
             "goldens/generated-project/Cargo.toml",
