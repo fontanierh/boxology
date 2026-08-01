@@ -1,8 +1,15 @@
 #![forbid(unsafe_code)]
 
-use boxology_cli::{ExecuteError, PlanError, cargo_metadata_command, execute, plan, walk};
+use boxology_cli::{
+    CompareDifference, ExecuteError, PlanError, cargo_metadata_command, compare_step, execute,
+    plan, walk,
+};
 use boxology_contract::BoxId;
-use boxology_workspace::WorkspaceInputs;
+use boxology_manifest::RelativePath;
+use boxology_workspace::{
+    CheckReport, Completion, ContractClassificationCompletion, Entry, Finding, Findings,
+    SkipReason, StepSkip, Workspace, WorkspaceInputs,
+};
 use std::{
     env,
     io::{self, Write},
@@ -15,6 +22,11 @@ const METADATA_SOURCE: &str = "specs/s5-manifest-and-validation.md D4";
 const METADATA_TEXT: &str =
     "cargo metadata could not be executed or did not return valid workspace metadata";
 const METADATA: Rule = ("BXW0075", METADATA_TEXT, METADATA_SOURCE);
+
+enum Selection {
+    Generate(Option<BoxId>),
+    Check,
+}
 
 struct MetadataFailure {
     stderr: Vec<u8>,
@@ -69,7 +81,20 @@ fn run(args: &[String], root: &Path, stdout: &mut dyn Write, stderr: &mut dyn Wr
             return 1;
         }
     };
-    let plans = match plan(&workspace, selection.as_ref()) {
+    match selection {
+        Selection::Generate(package) => run_generate(root, workspace, &package, stdout, stderr),
+        Selection::Check => run_check(root, workspace, stdout, stderr),
+    }
+}
+
+fn run_generate(
+    root: &Path,
+    workspace: Workspace,
+    package: &Option<BoxId>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> u8 {
+    let plans = match plan(&workspace, package.as_ref()) {
         Ok(plans) => plans,
         Err(error) => return report_plan_failure(error, stderr),
     };
@@ -98,12 +123,84 @@ fn run(args: &[String], root: &Path, stdout: &mut dyn Write, stderr: &mut dyn Wr
     0
 }
 
-fn parse(args: &[String]) -> Result<Option<BoxId>, ()> {
-    match args {
-        [command] if command == "generate" => Ok(None),
-        [command, flag, package] if command == "generate" && flag == "--package" => {
-            BoxId::new(package.clone()).map(Some).map_err(|_| ())
+fn run_check(
+    root: &Path,
+    workspace: Workspace,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> u8 {
+    let differences = match compare_step(root, &workspace) {
+        Ok(differences) => differences,
+        Err(error) => {
+            let _ = writeln!(stderr, "{error}");
+            return 1;
         }
+    };
+    let regeneration = if differences.is_empty() {
+        Completion::Passed
+    } else {
+        let entries = differences
+            .iter()
+            .map(|difference| Entry::Workspace(difference_finding(&workspace, difference)))
+            .collect();
+        Completion::Failed(Findings::new(entries).expect("differences produce findings"))
+    };
+    let report = CheckReport {
+        discovery: Completion::Passed,
+        regeneration,
+        contract_classification: ContractClassificationCompletion::Skipped(
+            SkipReason::Unimplemented,
+        ),
+        cargo_graph: not_implemented(),
+        fmt: not_implemented(),
+        clippy: not_implemented(),
+        tests: not_implemented(),
+        quality: not_implemented(),
+    };
+    let _ = writeln!(stdout, "{}", report.render_human());
+    report.exit_code()
+}
+
+fn difference_finding(workspace: &Workspace, difference: &CompareDifference) -> Finding {
+    let package = workspace
+        .packages()
+        .iter()
+        .find(|package| package.id() == difference.package())
+        .expect("every compare difference belongs to a workspace package");
+    let path = match package.root() {
+        Some(root) => {
+            RelativePath::new(format!("{}/{}", root.as_str(), difference.path().as_str()))
+                .expect("package-root prefix is a valid relative path")
+        }
+        None => difference.path().clone(),
+    };
+    Finding::external(
+        difference.code(),
+        difference.detail(),
+        difference.rule_source(),
+        path,
+        Some(difference.package().clone()),
+        format!(
+            "kind={} repair=\"{}\"",
+            difference.kind().as_str(),
+            difference.repair_command()
+        ),
+    )
+}
+
+fn not_implemented() -> Completion {
+    Completion::Skipped(StepSkip::NotImplemented)
+}
+
+fn parse(args: &[String]) -> Result<Selection, ()> {
+    match args {
+        [command] if command == "generate" => Ok(Selection::Generate(None)),
+        [command, flag, package] if command == "generate" && flag == "--package" => {
+            BoxId::new(package.clone())
+                .map(|package| Selection::Generate(Some(package)))
+                .map_err(|_| ())
+        }
+        [command] if command == "check" => Ok(Selection::Check),
         _ => Err(()),
     }
 }
@@ -111,7 +208,7 @@ fn parse(args: &[String]) -> Result<Option<BoxId>, ()> {
 fn usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
-        "usage: boxology generate\n       boxology generate --package <id>"
+        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check"
     );
 }
 

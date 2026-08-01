@@ -141,6 +141,17 @@ fn assert_difference(difference: &CompareDifference, path: &str, kind: Differenc
         difference.detail(),
         "a checked-in derived artifact must be byte-identical to regeneration; regenerate the accountable package with boxology generate --package <id>"
     );
+    assert_eq!(
+        difference.rule_source(),
+        "specs/s5-manifest-and-validation.md D6; boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 2"
+    );
+}
+
+#[test]
+fn difference_kind_names_are_frozen() {
+    assert_eq!(DifferenceKind::Missing.as_str(), "missing");
+    assert_eq!(DifferenceKind::Differing.as_str(), "differing");
+    assert_eq!(DifferenceKind::Stale.as_str(), "stale");
 }
 
 #[test]
