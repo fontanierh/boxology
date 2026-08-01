@@ -4,6 +4,7 @@
 //! environment, network, clock, locale, process, or execution state, and has no policy controls
 //! that could hide or relabel a finding. Named type-graph rows emit structured findings; every
 //! unmatched difference falls to the fail-closed default.
+//! Canonical report renderings are available as [`render_text`] and [`render_json`].
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -620,6 +621,9 @@ fn report(findings: Vec<Finding>) -> ClassificationReport {
         .unwrap_or(Class::Unchanged);
     ClassificationReport { findings, verdict }
 }
+
+mod report;
+pub use report::{render_json, render_text};
 
 #[cfg(test)]
 mod tests;

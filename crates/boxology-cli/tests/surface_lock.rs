@@ -30,11 +30,11 @@ const SOURCES: &[(&str, &str)] = &[
 ];
 const GOLDEN: &str = include_str!("bxw.golden");
 const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0068 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082";
-const LIB_HASH: u64 = 3_183_086_740_705_326_423;
+const LIB_HASH: u64 = 18_407_660_669_776_501_583;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
 const GENERATE_HASH: u64 = 2_437_200_502_410_785_768;
 const EXECUTE_HASH: u64 = 7_195_906_979_600_889_935;
-const CLASSIFY_HASH: u64 = 11_819_106_377_568_339_839;
+const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
 const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, selection.as_ref())\nexecute(root, generation)\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
@@ -53,7 +53,7 @@ const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.ge
 const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nconst SCHEMA: &str = \"generated/schema.json\";\nfile.path() == SCHEMA";
 const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged base_schema submitted_schema ExecuteError code location path detail diagnostics write_error execute";
 const CLASSIFY_ANCHORS: &str = "map_err(ClassifyError::base)\nmap_err(ClassifyError::submitted)\nmap_err(ClassifyError::pairing)\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
-const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify render";
+const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify";
 const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED,\n            \"submitted\",\nCHECK_PAIRING,\n                \"pairing\",\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
 const CHECK_PUBLIC: &str = "DuplicatePackages PackageSchemas new CheckClassificationError package code side detail diagnostics ClassifyStepError classify_step";
 static NEXT: AtomicU64 = AtomicU64::new(0);

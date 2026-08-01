@@ -29,7 +29,7 @@ mod walk;
 pub use check::{
     CheckClassificationError, ClassifyStepError, DuplicatePackages, PackageSchemas, classify_step,
 };
-pub use classify::{ClassifyError, classify, render};
+pub use classify::{ClassifyError, classify};
 pub use execute::{ExecuteError, Outcome, execute};
 pub use generate::{GenerationPlan, PlanError, plan};
 pub use walk::{WalkError, WalkedWorkspace, walk};
