@@ -1,4 +1,4 @@
-sources=lib.rs,walk.rs,generate.rs,execute.rs,classify.rs,check.rs,main.rs
+sources=lib.rs,walk.rs,generate.rs,execute.rs,classify.rs,main.rs
 BXW0061|workspace root must be a real directory containing a regular Cargo.toml|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0062|filesystem refused a directory, symlink, or manifest read|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0063|walked name/path is not a valid RelativePath|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
@@ -17,6 +17,3 @@ BXW0076|the checked-in schema document must be a readable regular file|specs/s5-
 BXW0077|the checked-in schema document must satisfy the strict format-1 reader|specs/s4-contract-change-classification.md D1; specs/s5-manifest-and-validation.md D5
 BXW0078|the regenerated schema document must satisfy the strict format-1 reader|specs/s4-contract-change-classification.md D1; specs/s5-manifest-and-validation.md D5
 BXW0079|the checked-in and regenerated schema documents must pair and satisfy classifier integrity|specs/s4-contract-change-classification.md D2 D6; specs/s5-manifest-and-validation.md D5
-BXW0080|the base-revision schema document must satisfy the strict format-1 reader|specs/s4-contract-change-classification.md D1; specs/s5-manifest-and-validation.md D6
-BXW0081|the checked-in schema document must satisfy the strict format-1 reader|specs/s4-contract-change-classification.md D1; specs/s5-manifest-and-validation.md D6
-BXW0082|the base-revision and checked-in schema documents must pair and satisfy classifier integrity|specs/s4-contract-change-classification.md D2 D6; specs/s5-manifest-and-validation.md D6
