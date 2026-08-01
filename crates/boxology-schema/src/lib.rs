@@ -23,8 +23,9 @@
 // the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. D2's BXC0024–BXC0025
 // are registered here, but emitted and reachability-proven by the classifier. D6's BXC0037–BXC0038
 // are likewise registered here — with constructors and rule_of/source_of arms — but emitted and
-// reachability-proven by the classifier. The classifier owns BXC0026–BXC0028 and BXC0031–BXC0036 as
-// reserved findings with no rule-text arms here; BXC0029–BXC0030 remain named-payload-field rules.
+// reachability-proven by the classifier. The classifier owns BXC0026–BXC0028, BXC0031–BXC0036,
+// and BXC0039–BXC0043 as reserved findings with no rule-text arms here; BXC0029–BXC0030 remain
+// named-payload-field rules.
 //
 // The two narrowings are fail-closed and deliberate. `boxology-contract-syntax` hardcodes
 // `external` and `none` and rejects every other exposure and idempotency, so no document this

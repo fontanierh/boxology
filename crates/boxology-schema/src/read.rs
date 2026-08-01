@@ -27,7 +27,7 @@ const INTEGRITY: Code = "specs/s4-contract-change-classification.md D6";
 /// and that the classifier emits no other quoted `BXC` literal.
 pub const CLASSIFIER_RESERVED_CODES: &[&str] = &[
     "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033", "BXC0034", "BXC0035",
-    "BXC0036",
+    "BXC0036", "BXC0039", "BXC0040", "BXC0041", "BXC0042", "BXC0043",
 ];
 
 /// Where in a schema document a diagnostic points: a JSON-pointer-style path such as
@@ -612,8 +612,8 @@ fn rule_of(code: Code) -> Code {
 /// BXC0024-BXC0025 are D2's classifier pairing errors; the classifier owns their reachability.
 /// BXC0029 is S2 D4's named-field identity rule and BXC0030 is S2 D3's named-field uniqueness
 /// rule. BXC0037-BXC0038 are D6's integrity cross-checks; the classifier owns their reachability.
-/// BXC0026-BXC0028 and BXC0031-BXC0036 are reserved for classifier findings and have no
-/// rule-text arms here.
+/// BXC0026-BXC0028, BXC0031-BXC0036, and BXC0039-BXC0043 are reserved for classifier findings
+/// and have no rule-text arms here.
 fn source_of(code: Code) -> Code {
     match code {
         "BXC0024" | "BXC0025" => CLASSIFICATION,
@@ -827,7 +827,7 @@ BXC0038 differing revisions with no finding mean the projection and the classifi
         // Dense from BXC0001, with the classifier's reserved range represented explicitly rather
         // than assigned reader rule text. An ascending reader-only list would miss this gap.
         let spell = |n| format!("BX{}{n:04}", 'C');
-        let dense: Vec<String> = (1..=38).map(spell).collect();
+        let dense: Vec<String> = (1..=43).map(spell).collect();
         assert_eq!(
             allocated
                 .iter()
