@@ -86,6 +86,7 @@ jobs:
           path: target/debug/xtask
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before xtask-linux-arm64 upload attempt 2
         if: steps.ulx_bin_1.outcome == 'failure'
         run: sleep 15
@@ -99,6 +100,7 @@ jobs:
           path: target/debug/xtask
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before xtask-linux-arm64 upload attempt 3
         if: steps.ulx_bin_1.outcome == 'failure' && steps.ulx_bin_2.outcome == 'failure'
         run: sleep 30
@@ -110,6 +112,7 @@ jobs:
           path: target/debug/xtask
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Produce determinism artifacts
         run: |
           rm -rf target/determinism-linux target/determinism-linux-meta
@@ -127,6 +130,7 @@ jobs:
           path: target/determinism-linux.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-linux upload attempt 2
         if: steps.ulx_lin_1.outcome == 'failure'
         run: sleep 15
@@ -140,6 +144,7 @@ jobs:
           path: target/determinism-linux.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-linux upload attempt 3
         if: steps.ulx_lin_1.outcome == 'failure' && steps.ulx_lin_2.outcome == 'failure'
         run: sleep 30
@@ -151,6 +156,7 @@ jobs:
           path: target/determinism-linux.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Upload determinism-linux-meta (attempt 1)
         id: ulx_linmeta_1
         continue-on-error: true
@@ -160,6 +166,7 @@ jobs:
           path: target/determinism-linux-meta.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-linux-meta upload attempt 2
         if: steps.ulx_linmeta_1.outcome == 'failure'
         run: sleep 15
@@ -173,6 +180,7 @@ jobs:
           path: target/determinism-linux-meta.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-linux-meta upload attempt 3
         if: steps.ulx_linmeta_1.outcome == 'failure' && steps.ulx_linmeta_2.outcome == 'failure'
         run: sleep 30
@@ -184,6 +192,7 @@ jobs:
           path: target/determinism-linux-meta.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
 
   checks-macos:
     runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
@@ -237,6 +246,7 @@ jobs:
           path: target/determinism-macos.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-macos upload attempt 2
         if: steps.ulm_mac_1.outcome == 'failure'
         run: sleep 15
@@ -250,6 +260,7 @@ jobs:
           path: target/determinism-macos.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-macos upload attempt 3
         if: steps.ulm_mac_1.outcome == 'failure' && steps.ulm_mac_2.outcome == 'failure'
         run: sleep 30
@@ -261,6 +272,7 @@ jobs:
           path: target/determinism-macos.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Upload determinism-macos-meta (attempt 1)
         id: ulm_macmeta_1
         continue-on-error: true
@@ -270,6 +282,7 @@ jobs:
           path: target/determinism-macos-meta.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-macos-meta upload attempt 2
         if: steps.ulm_macmeta_1.outcome == 'failure'
         run: sleep 15
@@ -283,6 +296,7 @@ jobs:
           path: target/determinism-macos-meta.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
       - name: Backoff before determinism-macos-meta upload attempt 3
         if: steps.ulm_macmeta_1.outcome == 'failure' && steps.ulm_macmeta_2.outcome == 'failure'
         run: sleep 30
@@ -294,6 +308,7 @@ jobs:
           path: target/determinism-macos-meta.tar
           if-no-files-found: error
           overwrite: true
+          retention-days: 1
 
   deny:
     runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
