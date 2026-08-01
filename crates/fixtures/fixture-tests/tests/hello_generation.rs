@@ -86,6 +86,42 @@ fn checked_in(path: &str) -> &'static [u8] {
 }
 
 #[test]
+fn live_schema_digest_matches_the_generated_contract_marker() {
+    let generated = generate(&request()).expect("cold Hello generation succeeds");
+    let schema: Value =
+        serde_json::from_slice(generated_bytes(&generated, "generated/schema.json"))
+            .expect("generated schema is JSON");
+    let semantic_digest = schema["provenance"]["semantic_digest"]
+        .as_str()
+        .expect("live schema has a semantic digest");
+
+    let contract =
+        std::str::from_utf8(generated_bytes(&generated, "generated/contract/src/lib.rs"))
+            .expect("generated contract is UTF-8");
+    const ANCHOR: &str = "__BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [";
+    assert_eq!(contract.matches("__BOXOLOGY_SEMANTIC_DIGEST").count(), 1);
+    let marker = contract
+        .split_once(ANCHOR)
+        .expect("contract has a semantic digest marker")
+        .1
+        .split_once("];")
+        .expect("semantic digest marker is terminated");
+    let marker_bytes: Vec<u8> = marker
+        .0
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.parse().expect("marker byte is a u8"))
+        .collect();
+    assert_eq!(marker_bytes.len(), 32);
+    let marker_hex: String = marker_bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(semantic_digest, format!("sha256:{marker_hex}"));
+}
+
+#[test]
 fn hello_generation_is_cold_and_matches_checked_in_outputs() {
     let request = request();
     assert_eq!(request.crate_root().as_str(), "implementation/src/lib.rs");

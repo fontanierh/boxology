@@ -185,6 +185,25 @@ fn checked_in(path: &str) -> &'static [u8] {
     }
 }
 
+#[test]
+fn greeter_adapter_embeds_the_checked_in_hello_revision_exactly_once() {
+    const ANCHOR: &str = "  \"revision\": \"";
+    let schema = std::str::from_utf8(include_bytes!("../../hello/generated/schema.json"))
+        .expect("checked-in hello schema is UTF-8");
+    assert_eq!(schema.matches(ANCHOR).count(), 1);
+    let revision = schema
+        .split_once(ANCHOR)
+        .expect("hello schema has a revision anchor")
+        .1
+        .split_once('"')
+        .expect("hello revision is quoted")
+        .0;
+
+    let adapter = std::str::from_utf8(include_bytes!("../../greeter/generated/adapter/adapter.rs"))
+        .expect("checked-in greeter adapter is UTF-8");
+    assert_eq!(adapter.matches(revision).count(), 1);
+}
+
 fn checked_in_files() -> Vec<PathBuf> {
     fn visit(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(directory).expect("generated directory is readable") {
