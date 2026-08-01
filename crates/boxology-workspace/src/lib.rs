@@ -2248,24 +2248,44 @@ jobs:
         ]
     }
     const EXPECTED: &str = "\
+BXW0042 a/boxology.toml package=twin candidates=[]
+BXW0042 b/boxology.toml package=twin candidates=[]
 BXW0042 one package identity must be declared by exactly one manifest boxology-details/02-packages.md discovery walk
+BXW0043 boxology.toml package=root candidates=[root boxology.toml boxology.toml]
 BXW0043 a fixtures pattern must not claim its own declaring manifest boxology-details/02-packages.md discovery walk
+BXW0044 orphan.rs package= candidates=[]
 BXW0044 every tracked file must classify under some package boxology-details/02-packages.md discovery walk
+BXW0045 p/boxology.toml package= candidates=[root boxology.toml **,p p/boxology.toml boxology.toml]
 BXW0045 at most one package may claim a non-derived path boxology-details/02-packages.md discovery walk
+BXW0046 g.rs package= candidates=[root boxology.toml g.rs derived=one,root boxology.toml g.rs derived=two]
 BXW0046 at most one declared derived output may claim a path boxology-details/02-packages.md discovery walk
+BXW0047 g.rs package= candidates=[root boxology.toml g.rs,root boxology.toml g.rs derived=gen]
 BXW0047 a declared derived output must not also be claimed as a non-derived path boxology-details/02-packages.md discovery walk
+BXW0048 link package= candidates=[]
 BXW0048 symlink targets must stay inside the workspace root boxology-details/02-packages.md discovery walk
+BXW0049 Cargo.lock package=root candidates=[root boxology.toml Cargo.lock]
 BXW0049 Cargo.lock must be a platform package's declared global derived artifact boxology-details/02-packages.md discovery walk
+BXW0050 Cargo.toml package= candidates=[]
 BXW0050 cargo metadata must be a readable workspace document boxology-details/02-packages.md crate roles
+BXW0051 c/Cargo.toml package= candidates=[]
 BXW0051 every Cargo workspace member must match one declared crate entry boxology-details/02-packages.md crate roles
+BXW0052 boxology.toml package=root candidates=[c]
 BXW0052 every declared crate entry must match one Cargo workspace member specs/s5-manifest-and-validation.md D4
+BXW0053 sub/c/Cargo.toml package= candidates=[root boxology.toml sub/c,deep sub/boxology.toml c]
 BXW0053 at most one declared crate entry may match a Cargo workspace member boxology-details/02-packages.md crate roles
+BXW0054 boxology.toml package=root candidates=[c]
 BXW0054 a declared crate role must be one its package kind can host specs/s5-manifest-and-validation.md D4
+BXW0055 s/Cargo.toml package=solo candidates=[solo t normal]
 BXW0055 a box contract crate must depend on no box implementation boxology-details/08-rust-build-topology.md edge table
+BXW0056 a/s/Cargo.toml package=a candidates=[b b/t dev]
 BXW0056 a box implementation must depend on no foreign box implementation boxology-details/08-rust-build-topology.md edge table
+BXW0057 a/s/Cargo.toml package=a candidates=[b b/t dev]
 BXW0057 a box crate's edge to a foreign contract must be a declared import boxology-details/08-rust-build-topology.md edge table
+BXW0058 a/s/Cargo.toml package=a candidates=[b b/t dev]
 BXW0058 a composition edge must target a selected box specs/s5-manifest-and-validation.md D4
+BXW0059 s/Cargo.toml package=solo candidates=[solo t normal]
 BXW0059 no rule permits an edge between these crate roles at this package scope specs/s5-manifest-and-validation.md D4
+BXW0060 a/s/Cargo.toml package=a candidates=[missing normal]
 BXW0060 a path dependency onto a non-member is allowed only from a platform crate specs/s5-manifest-and-validation.md D4
 ";
     #[test]
@@ -2281,6 +2301,8 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             // corpus input that provokes its code plus unrelated ones, leaving "the least input
             // that provokes it" asserted nowhere. It is not "exactly one" either — BXW0042 reports
             // once per carrier of the duplicated identity, and both entries are that same code.
+            // The full finding line comes before the existing rule/source line, so path, package,
+            // and candidate payload are pinned in report order as well.
             let mut first = None;
             for entry in &report {
                 let Entry::Workspace(carried) = entry else {
@@ -2288,6 +2310,8 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 };
                 assert_eq!(carried.code(), code, "{code} reported {report}");
                 first = first.or(Some(carried));
+                let line = format!("{carried}\n");
+                rendered.push_str(&line);
             }
             let found = first.expect("a rejection carries at least one entry");
             let line = format!("{code} {} {}\n", found.rule(), found.rule_source());

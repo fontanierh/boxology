@@ -959,54 +959,53 @@ mod tests {
         };
         text.into_bytes()
     }
-    /// The rendered wording of every code, byte for byte, as `<code> <rule> <source>` per line in
-    /// `ALL_CODES` order. Nothing else in this crate pins a rule text or its attribution, so any
-    /// edit to either -- including the silent rewording one merged change slipped through -- was
-    /// invisible to the suite. A wording diff now shows up here as a diff.
-    const EXPECTED: &str = "\
-BXW0001 boxology.toml must be valid UTF-8 specs/s5-manifest-and-validation.md D2
-BXW0002 boxology.toml must be well-formed TOML specs/s5-manifest-and-validation.md D2
-BXW0003 the manifest must declare an integer schema version boxology-details/02-packages.md
-BXW0004 this reader supports manifest schema 1 and rejects unknown versions boxology-details/02-packages.md
-BXW0005 the manifest must declare a string package id boxology-details/02-packages.md
-BXW0006 the package id must match [a-z][a-z0-9-]* boxology-details/02-packages.md
-BXW0007 the manifest must declare a string package kind boxology-details/02-packages.md
-BXW0008 provider packages are not supported in v0 boxology-details/02-packages.md
-BXW0009 the package kind must be box, composition, or platform boxology-details/02-packages.md
-BXW0010 schema 1 rejects unknown manifest keys specs/s5-manifest-and-validation.md D2
-BXW0011 a known manifest key must hold its declared TOML type specs/s5-manifest-and-validation.md D2
-BXW0012 a required manifest key must be present specs/s5-manifest-and-validation.md D2
-BXW0013 glob patterns must be non-empty specs/s5-manifest-and-validation.md D2
-BXW0014 glob patterns must be relative specs/s5-manifest-and-validation.md D2
-BXW0015 glob patterns must not contain empty or . segments specs/s5-manifest-and-validation.md D2
-BXW0016 glob patterns must not contain .. segments specs/s5-manifest-and-validation.md D2
-BXW0017 glob patterns must not contain backslashes or control characters specs/s5-manifest-and-validation.md D2
-BXW0018 the v1 glob dialect supports only * and ** wildcards specs/s5-manifest-and-validation.md D2
-BXW0019 ** must stand alone as a complete segment specs/s5-manifest-and-validation.md D2
-BXW0020 patterns within one list must be unique specs/s5-manifest-and-validation.md D2
-BXW0021 only a platform package may declare fixtures specs/s5-manifest-and-validation.md D2
-BXW0022 only composition packages may declare a composition section specs/s5-manifest-and-validation.md D2
-BXW0023 a composition package must declare its composition section specs/s5-manifest-and-validation.md D2
-BXW0024 v1 imports the package's canonical contract, so contract must equal package boxology-details/02-packages.md
-BXW0025 declared import packages must be unique specs/s5-manifest-and-validation.md D2
-BXW0026 a quality command must be non-blank text specs/s5-manifest-and-validation.md D2
-BXW0027 a crate role must be box-implementation, box-contract, composition, or platform boxology-details/02-packages.md
-BXW0028 crate paths must be literal relative paths specs/s5-manifest-and-validation.md D2
-BXW0029 crate paths and cargo package names must be unique specs/s5-manifest-and-validation.md D2
-BXW0030 cargo package names must be non-empty identifiers specs/s5-manifest-and-validation.md D2
-BXW0031 derived output ids must match [a-z][a-z0-9-]* specs/s5-manifest-and-validation.md D2
-BXW0032 derived output ids must be unique specs/s5-manifest-and-validation.md D2
-BXW0033 generator identities must match [a-z][a-z0-9-]* specs/s5-manifest-and-validation.md D2
-BXW0034 this list must contain at least one entry specs/s5-manifest-and-validation.md D2
-BXW0035 box references must match [a-z][a-z0-9-]* specs/s5-manifest-and-validation.md D2
-BXW0036 selected boxes must be unique specs/s5-manifest-and-validation.md D2
-BXW0037 binding capabilities must be box-qualified names specs/s5-manifest-and-validation.md D2
-BXW0038 binding transport must be in-process or http specs/s5-manifest-and-validation.md D2
-BXW0039 binding exposure must be code_only, internal, or external specs/s5-manifest-and-validation.md D2
-BXW0040 every binding must reference a selected box specs/s5-manifest-and-validation.md D2
-BXW0041 a binding capability must be qualified by its own box specs/s5-manifest-and-validation.md D2
-BXW0074 only a platform package may declare protected control-plane paths specs/s5-manifest-and-validation.md D2
-";
+    /// The rendered diagnostic for every code, byte for byte, in `ALL_CODES` order. Nothing else
+    /// in this crate pins a corpus diagnostic's location, so any span drift -- including a silent
+    /// change to which TOML construct a rule points -- was invisible to the suite. The full line
+    /// keeps code, path, span, offending construct, rule, and source under one golden.
+    const EXPECTED: &str = r#"BXW0001 boxology.toml:1:1-1:1 offending="manifest bytes" rule="boxology.toml must be valid UTF-8" source="specs/s5-manifest-and-validation.md D2"
+BXW0002 boxology.toml:2:10-2:10 offending="manifest document" rule="boxology.toml must be well-formed TOML" source="specs/s5-manifest-and-validation.md D2"
+BXW0003 boxology.toml:1:1-1:1 offending="manifest key schema" rule="the manifest must declare an integer schema version" source="boxology-details/02-packages.md"
+BXW0004 boxology.toml:1:10-1:11 offending="manifest key schema" rule="this reader supports manifest schema 1 and rejects unknown versions" source="boxology-details/02-packages.md"
+BXW0005 boxology.toml:1:1-1:1 offending="manifest key id" rule="the manifest must declare a string package id" source="boxology-details/02-packages.md"
+BXW0006 boxology.toml:2:6-2:11 offending="manifest key id" rule="the package id must match [a-z][a-z0-9-]*" source="boxology-details/02-packages.md"
+BXW0007 boxology.toml:3:8-3:9 offending="manifest key kind" rule="the manifest must declare a string package kind" source="boxology-details/02-packages.md"
+BXW0008 boxology.toml:3:8-3:18 offending="manifest key kind" rule="provider packages are not supported in v0" source="boxology-details/02-packages.md"
+BXW0009 boxology.toml:3:8-3:14 offending="manifest key kind" rule="the package kind must be box, composition, or platform" source="boxology-details/02-packages.md"
+BXW0010 boxology.toml:5:1-5:5 offending="manifest key nope" rule="schema 1 rejects unknown manifest keys" source="specs/s5-manifest-and-validation.md D2"
+BXW0011 boxology.toml:5:16-5:17 offending="manifest key display_name" rule="a known manifest key must hold its declared TOML type" source="specs/s5-manifest-and-validation.md D2"
+BXW0012 boxology.toml:5:1-5:10 offending="manifest key commands" rule="a required manifest key must be present" source="specs/s5-manifest-and-validation.md D2"
+BXW0013 boxology.toml:4:10-4:12 offending="glob pattern" rule="glob patterns must be non-empty" source="specs/s5-manifest-and-validation.md D2"
+BXW0014 boxology.toml:4:10-4:14 offending="glob pattern" rule="glob patterns must be relative" source="specs/s5-manifest-and-validation.md D2"
+BXW0015 boxology.toml:4:10-4:16 offending="glob pattern" rule="glob patterns must not contain empty or . segments" source="specs/s5-manifest-and-validation.md D2"
+BXW0016 boxology.toml:4:10-4:16 offending="glob pattern" rule="glob patterns must not contain .. segments" source="specs/s5-manifest-and-validation.md D2"
+BXW0017 boxology.toml:4:10-4:16 offending="glob pattern" rule="glob patterns must not contain backslashes or control characters" source="specs/s5-manifest-and-validation.md D2"
+BXW0018 boxology.toml:4:10-4:14 offending="glob pattern" rule="the v1 glob dialect supports only * and ** wildcards" source="specs/s5-manifest-and-validation.md D2"
+BXW0019 boxology.toml:4:10-4:16 offending="glob pattern" rule="** must stand alone as a complete segment" source="specs/s5-manifest-and-validation.md D2"
+BXW0020 boxology.toml:4:15-4:18 offending="glob pattern" rule="patterns within one list must be unique" source="specs/s5-manifest-and-validation.md D2"
+BXW0021 boxology.toml:5:1-5:9 offending="manifest key fixtures" rule="only a platform package may declare fixtures" source="specs/s5-manifest-and-validation.md D2"
+BXW0022 boxology.toml:5:2-5:13 offending="manifest key composition" rule="only composition packages may declare a composition section" source="specs/s5-manifest-and-validation.md D2"
+BXW0023 boxology.toml:1:1-1:1 offending="manifest key composition" rule="a composition package must declare its composition section" source="specs/s5-manifest-and-validation.md D2"
+BXW0024 boxology.toml:7:1-7:9 offending="manifest key contract" rule="v1 imports the package's canonical contract, so contract must equal package" source="boxology-details/02-packages.md"
+BXW0025 boxology.toml:9:1-9:8 offending="manifest key package" rule="declared import packages must be unique" source="specs/s5-manifest-and-validation.md D2"
+BXW0026 boxology.toml:6:12-6:14 offending="manifest key commands" rule="a quality command must be non-blank text" source="specs/s5-manifest-and-validation.md D2"
+BXW0027 boxology.toml:8:1-8:5 offending="manifest key role" rule="a crate role must be box-implementation, box-contract, composition, or platform" source="boxology-details/02-packages.md"
+BXW0028 boxology.toml:7:1-7:5 offending="manifest key path" rule="crate paths must be literal relative paths" source="specs/s5-manifest-and-validation.md D2"
+BXW0029 boxology.toml:10:1-10:14 offending="manifest key cargo_package" rule="crate paths and cargo package names must be unique" source="specs/s5-manifest-and-validation.md D2"
+BXW0030 boxology.toml:6:1-6:14 offending="manifest key cargo_package" rule="cargo package names must be non-empty identifiers" source="specs/s5-manifest-and-validation.md D2"
+BXW0031 boxology.toml:6:1-6:3 offending="manifest key id" rule="derived output ids must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
+BXW0032 boxology.toml:11:1-11:3 offending="manifest key id" rule="derived output ids must be unique" source="specs/s5-manifest-and-validation.md D2"
+BXW0033 boxology.toml:7:1-7:10 offending="manifest key generator" rule="generator identities must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
+BXW0034 boxology.toml:6:1-6:6 offending="manifest key boxes" rule="this list must contain at least one entry" source="specs/s5-manifest-and-validation.md D2"
+BXW0035 boxology.toml:6:10-6:13 offending="manifest key boxes" rule="box references must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
+BXW0036 boxology.toml:6:15-6:18 offending="manifest key boxes" rule="selected boxes must be unique" source="specs/s5-manifest-and-validation.md D2"
+BXW0037 boxology.toml:9:1-9:11 offending="manifest key capability" rule="binding capabilities must be box-qualified names" source="specs/s5-manifest-and-validation.md D2"
+BXW0038 boxology.toml:10:1-10:10 offending="manifest key transport" rule="binding transport must be in-process or http" source="specs/s5-manifest-and-validation.md D2"
+BXW0039 boxology.toml:11:1-11:9 offending="manifest key exposure" rule="binding exposure must be code_only, internal, or external" source="specs/s5-manifest-and-validation.md D2"
+BXW0040 boxology.toml:8:1-8:4 offending="manifest key box" rule="every binding must reference a selected box" source="specs/s5-manifest-and-validation.md D2"
+BXW0041 boxology.toml:9:1-9:11 offending="manifest key capability" rule="a binding capability must be qualified by its own box" source="specs/s5-manifest-and-validation.md D2"
+BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a platform package may declare protected control-plane paths" source="specs/s5-manifest-and-validation.md D2"
+"#;
     #[test]
     fn rule_text_and_sources_are_locked() {
         // The glob dialect keeps its own rule table in `glob.rs`, so `rule_of` has no arm for
@@ -1021,11 +1020,13 @@ BXW0074 only a platform package may declare protected control-plane paths specs/
             let Err(defects) = Manifest::parse(path, &document(base, body)) else {
                 panic!("accepted: {spec}");
             };
-            let Some(found) = defects.into_iter().find(|d| d.code() == code) else {
+            let mut matching = defects.into_iter().filter(|d| d.code() == code);
+            let Some(found) = matching.next() else {
                 panic!("{spec} reported {defects}");
             };
+            assert!(matching.next().is_none(), "{spec} reported its code twice");
             assert_ne!(found.rule(), generic, "{code} renders the generic fallback");
-            let line = format!("{code} {} {}\n", found.rule(), found.rule_source());
+            let line = format!("{found}\n");
             rendered.push_str(&line);
         }
         assert_eq!(rendered, EXPECTED);
