@@ -145,7 +145,7 @@ fn finish(
     }
 }
 
-fn hello_greet() -> &'static CapabilityDescriptor {
+pub fn hello_greet() -> &'static CapabilityDescriptor {
     let id = CapabilityId::new(
         BoxId::new("hello").expect("fixture box id is valid"),
         CapabilityName::new("greet").expect("fixture capability name is valid"),
