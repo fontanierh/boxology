@@ -4,7 +4,7 @@
 //! pure planning selects and describes contract-generation candidates. Generation remains pure;
 //! execution delegates its writes to the generator writer. Classification of checked-in versus
 //! regenerated schema bytes is also pure, as is the check-step classification seam over supplied
-//! base-revision and checked-in schema bytes.
+//! base-revision and checked-in schema bytes and regeneration comparison over derived artifacts.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -23,6 +23,7 @@ pub fn cargo_metadata_command(root: &Path) -> Command {
 
 mod check;
 mod classify;
+mod compare;
 mod execute;
 mod generate;
 mod walk;
@@ -30,6 +31,7 @@ pub use check::{
     CheckClassificationError, ClassifyStepError, DuplicatePackages, PackageSchemas, classify_step,
 };
 pub use classify::{ClassifyError, classify};
+pub use compare::{CompareDifference, CompareStepError, DifferenceKind, compare_step};
 pub use execute::{ExecuteError, Outcome, execute};
 pub use generate::{GenerationPlan, PlanError, plan};
 pub use walk::{WalkError, WalkedWorkspace, walk};

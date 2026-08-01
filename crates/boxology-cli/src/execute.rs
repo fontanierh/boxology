@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 use crate::GenerationPlan;
-use boxology_generator::OUTPUTS;
+use boxology_generator::{GeneratedTree, OUTPUTS};
 use boxology_generator_model::Diagnostics;
 use boxology_generator_model::GenerationRequest;
 use boxology_generator_writer::WriteError;
@@ -206,6 +206,35 @@ impl std::error::Error for ExecuteError {
 /// not a readable regular file.
 pub fn execute(root: &Path, plan: &GenerationPlan) -> Result<Outcome, ExecuteError> {
     let package_root = plan.package_root().map_or("", RelativePath::as_str);
+    let (package_dir, tree) = generate_tree(root, plan)?;
+    let submitted_schema = tree
+        .files()
+        .iter()
+        .find(|file| file.path() == SCHEMA)
+        .expect("generator outputs include schema.json")
+        .bytes()
+        .to_vec();
+    let base_schema = read_base_schema(&package_dir)?;
+    guarded(root, package_root, false)?;
+    let changes = boxology_generator_writer::write(&package_dir, &tree, plan.outputs())
+        .map_err(|error| ExecuteError::writer(package_dir, error))?;
+    let mut written = changes.written;
+    let mut removed = changes.removed;
+    written.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    removed.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    Ok(Outcome {
+        written,
+        removed,
+        base_schema,
+        submitted_schema,
+    })
+}
+
+pub(crate) fn generate_tree(
+    root: &Path,
+    plan: &GenerationPlan,
+) -> Result<(PathBuf, GeneratedTree), ExecuteError> {
+    let package_root = plan.package_root().map_or("", RelativePath::as_str);
     let package_dir = guarded(root, package_root, false)?;
     let mut input_paths = plan.inputs().to_vec();
     input_paths.sort_unstable();
@@ -244,27 +273,7 @@ pub fn execute(root: &Path, plan: &GenerationPlan) -> Result<Outcome, ExecuteErr
             return Err(ExecuteError::coverage(package_dir.join(output.as_str())));
         }
     }
-    let submitted_schema = tree
-        .files()
-        .iter()
-        .find(|file| file.path() == SCHEMA)
-        .expect("generator outputs include schema.json")
-        .bytes()
-        .to_vec();
-    let base_schema = read_base_schema(&package_dir)?;
-    guarded(root, package_root, false)?;
-    let changes = boxology_generator_writer::write(&package_dir, &tree, plan.outputs())
-        .map_err(|error| ExecuteError::writer(package_dir, error))?;
-    let mut written = changes.written;
-    let mut removed = changes.removed;
-    written.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-    removed.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-    Ok(Outcome {
-        written,
-        removed,
-        base_schema,
-        submitted_schema,
-    })
+    Ok((package_dir, tree))
 }
 
 fn read_base_schema(package_dir: &Path) -> Result<Option<Vec<u8>>, ExecuteError> {
@@ -280,7 +289,7 @@ fn read_base_schema(package_dir: &Path) -> Result<Option<Vec<u8>>, ExecuteError>
     }
 }
 
-fn guarded(root: &Path, relative: &str, file: bool) -> Result<PathBuf, ExecuteError> {
+pub(crate) fn guarded(root: &Path, relative: &str, file: bool) -> Result<PathBuf, ExecuteError> {
     let mut path = root.to_owned();
     let mut parts = relative
         .split('/')
