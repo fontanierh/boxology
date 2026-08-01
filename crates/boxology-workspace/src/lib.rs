@@ -1277,14 +1277,98 @@ impl fmt::Display for SkipReason {
         formatter.write_str(self.sentence())
     }
 }
+/// One structured contract-classification finding carried by a check report.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ClassificationFinding {
+    package: BoxId,
+    path: String,
+    code: &'static str,
+    class: &'static str,
+    condition: Option<&'static str>,
+}
+impl ClassificationFinding {
+    /// Constructs one finding from already-classified fields.
+    pub fn new(
+        package: BoxId,
+        path: String,
+        code: &'static str,
+        class: &'static str,
+        condition: Option<&'static str>,
+    ) -> Self {
+        Self {
+            package,
+            path,
+            code,
+            class,
+            condition,
+        }
+    }
+    /// Returns the stable classifier code.
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+    /// Returns the compatibility class name.
+    pub fn class(&self) -> &'static str {
+        self.class
+    }
+    /// Returns the migration condition, when the finding is conditional.
+    pub fn condition(&self) -> Option<&'static str> {
+        self.condition
+    }
+    ref_getters! {
+        #[doc = "Returns the package under comparison."] package: &BoxId = package;
+        #[doc = "Returns the classifier identity path."] path: &str = path;
+    }
+}
+impl fmt::Display for ClassificationFinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} {} {} {}",
+            self.code, self.package, self.path, self.class
+        )?;
+        if let Some(condition) = self.condition {
+            write!(formatter, " condition={0}{1}{0}", '"', condition)?;
+        }
+        Ok(())
+    }
+}
+/// A nonempty classification-finding collection in `(package, path, code)` order.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ClassificationFindings(Vec<ClassificationFinding>);
+impl ClassificationFindings {
+    /// Sorts findings by package id, identity path, then code; returns `None` when empty.
+    pub fn new(mut findings: Vec<ClassificationFinding>) -> Option<Self> {
+        findings.sort_by(|left, right| {
+            left.package
+                .cmp(&right.package)
+                .then_with(|| left.path.cmp(&right.path))
+                .then_with(|| left.code.cmp(right.code))
+        });
+        (!findings.is_empty()).then_some(Self(findings))
+    }
+    ref_getters! {
+        #[doc = "Returns the sorted findings."] as_slice: &[ClassificationFinding] = 0;
+    }
+}
+impl fmt::Display for ClassificationFindings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let lines: Vec<String> = self
+            .0
+            .iter()
+            .map(|finding| format!("  {finding}"))
+            .collect();
+        formatter.write_str(&lines.join("\n"))
+    }
+}
 /// The contract-classification outcome, whose only additional state is a typed base-unavailable
 /// skip. Classification findings are report-only and do not make the repository validation fail.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ContractClassificationCompletion {
     /// The base-relative classification found no contract changes.
     Passed,
-    /// The classification report contains findings for the harness to interpret.
-    Failed(Findings),
+    /// The classification report contains structured findings for the harness to interpret.
+    Failed(ClassificationFindings),
     /// The base-relative classification could not run for the named deterministic reason.
     Skipped(SkipReason),
 }
@@ -1325,7 +1409,9 @@ impl fmt::Display for CheckStatus {
 ///
 /// The named field types make a skip constructible only in the contract-classification field. The
 /// eight fields mirror 08-rust-build-topology.md's baseline rather than a positional outcome array,
-/// so a report cannot omit a step or attach a base skip to an ordinary validation step.
+/// so a report cannot omit a step or attach a base skip to an ordinary validation step. Integrity
+/// errors never enter a report — they propagate as CLI errors before composition — and report-only
+/// classification findings are excluded from [`CheckReport::status`] deliberately under S5 D6.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckReport {
     /// The discovery/ownership/role validation outcome.
@@ -1347,7 +1433,8 @@ pub struct CheckReport {
 }
 impl CheckReport {
     /// Returns the final status, ignoring contract-classification findings because S5 D6 makes
-    /// those findings report-only. Every other validation field participates explicitly.
+    /// those findings report-only. Integrity errors never reach a report; every other validation
+    /// field participates explicitly.
     pub fn status(&self) -> CheckStatus {
         if self.discovery.is_failed()
             || self.regeneration.is_failed()
@@ -1388,7 +1475,7 @@ impl CheckReport {
                 match &self.contract_classification {
                     ContractClassificationCompletion::Passed => {}
                     ContractClassificationCompletion::Failed(findings) => {
-                        render_findings(lines, findings)
+                        lines.extend(findings.to_string().lines().map(str::to_owned));
                     }
                     ContractClassificationCompletion::Skipped(reason) => {
                         lines.push(format!("  {reason}"))
@@ -1579,6 +1666,17 @@ jobs:
         ])
         .expect("the report fixture has findings")
     }
+    fn classification_report_findings() -> ClassificationFindings {
+        // Codes avoid the `BX####` shape so the workspace surface lock inventory is untouched.
+        ClassificationFindings::new(vec![ClassificationFinding::new(
+            id("alpha"),
+            "alpha/type/T/variant/Other".to_owned(),
+            "FIND001",
+            "compatible_with_conditions",
+            Some("unknown-variant tolerance"),
+        )])
+        .expect("the classification fixture has findings")
+    }
     fn all_pass_report() -> CheckReport {
         CheckReport {
             discovery: Completion::Passed,
@@ -1727,7 +1825,7 @@ jobs:
                 "contract-classification",
                 CheckReport {
                     contract_classification: ContractClassificationCompletion::Failed(
-                        report_findings(),
+                        classification_report_findings(),
                     ),
                     ..all_pass_report()
                 },
@@ -1781,17 +1879,19 @@ jobs:
     #[test]
     fn contract_classification_findings_are_report_only() {
         let report = CheckReport {
-            contract_classification: ContractClassificationCompletion::Failed(report_findings()),
+            contract_classification: ContractClassificationCompletion::Failed(
+                classification_report_findings(),
+            ),
             ..all_pass_report()
         };
         assert_eq!(report.status(), CheckStatus::Passed);
         assert_eq!(report.exit_code(), 0);
-        assert!(
-            report
-                .render_human()
-                .contains("check contract-classification failed")
-        );
-        assert!(report.render_human().ends_with("check result passed"));
+        let rendered = report.render_human();
+        assert!(rendered.contains("check contract-classification failed"));
+        assert!(rendered.contains(
+            "  FIND001 alpha alpha/type/T/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\""
+        ));
+        assert!(rendered.ends_with("check result passed"));
     }
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("test literals are workspace-relative paths")
