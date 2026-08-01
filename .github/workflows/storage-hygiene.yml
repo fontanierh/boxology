@@ -1,0 +1,86 @@
+name: storage-hygiene
+
+# Keeps GitHub-hosted storage below its limits without human intervention.
+#
+# Two quotas have failed CI in this repository, each silently and each
+# presenting as an unrelated red job:
+#
+#   * artifact storage, exhausted at 2.74 GB because no upload declared
+#     `retention-days` and the ninety-day default meant nothing ever expired.
+#     Every run then failed at the upload step, which failed `checks-linux`
+#     and `checks-macos` and cascaded to `validation`.
+#   * cache storage, exhausted at the 10 GB repository limit because every
+#     pull request wrote a ~1.4 GB cache and closing the pull request did not
+#     remove it. Jobs then died at `actions/cache` before running any check.
+#
+# Retention on the upload steps handles the first. This workflow handles the
+# second, and sweeps both on a schedule so neither can accumulate again.
+
+on:
+  pull_request_target:
+    types: [closed]
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: storage-hygiene
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete caches for the closed pull request
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/caches?per_page=100" \
+            --jq ".actions_caches[] | select(.ref == \"$REF\") | .id" > ids.txt || true
+          while read -r id; do
+            [ -n "$id" ] || continue
+            gh api -X DELETE "repos/$REPO/actions/caches/$id" && echo "deleted cache $id"
+          done < ids.txt
+          echo "closed-pr cache sweep complete"
+
+      - name: Sweep caches on refs whose pull request is closed
+        if: github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | "\(.id) \(.ref)"' > caches.txt || true
+          while read -r id ref; do
+            [ -n "${ref:-}" ] || continue
+            case "$ref" in
+              refs/pull/*/merge)
+                number="${ref#refs/pull/}"; number="${number%/merge}"
+                state=$(gh api "repos/$REPO/pulls/$number" --jq .state 2>/dev/null || echo unknown)
+                if [ "$state" = "closed" ]; then
+                  gh api -X DELETE "repos/$REPO/actions/caches/$id" && echo "deleted cache $id ($ref, pr closed)"
+                fi
+                ;;
+            esac
+          done < caches.txt
+          echo "scheduled cache sweep complete"
+
+      - name: Report storage headroom
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/cache/usage" \
+            --jq '"cache: \(.active_caches_count) entries, \(.active_caches_size_in_bytes / 1048576 | floor) MB of 10240 MB"'
+          gh api "repos/$REPO/actions/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false) | .size_in_bytes] | add // 0 | "artifacts: \(. / 1048576 | floor) MB live"'
