@@ -17,6 +17,7 @@ mod determinism_publish;
 mod determinism_run;
 mod determinism_verify;
 mod external_test;
+mod fixture_projects;
 mod generated_project_subject;
 mod generator_model_subject;
 mod links;
@@ -25,6 +26,7 @@ mod skill_audit;
 mod workspace_subject;
 
 // Bootstrap registries. S7 replaces both with manifest-derived classification (S0 D10).
+// Fixture-project fmt runs in the fixture-projects gate until T5.
 const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-contract",
     "boxology-contract-syntax",
@@ -44,10 +46,6 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-http-conformance",
     "boxology-runtime",
     "boxology-telegram",
-    "greeter-implementation",
-    "hello-implementation",
-    "ping-implementation",
-    "ping-app",
     "xtask",
 ];
 const FMT_EXCLUDED_PACKAGES: &[&str] = &[
@@ -294,6 +292,10 @@ fn run_ci(base: Option<&str>) -> u8 {
             timed("test", || {
                 run_cargo(&["test", "--workspace", "--all-features"])
             }),
+        ),
+        (
+            "fixture-projects",
+            timed("fixture-projects", || fixture_projects::run(&root())),
         ),
     ];
     checks.extend(fold_external_test_checks(base, &root(), &mut |args| {
@@ -576,6 +578,17 @@ mod tests {
     }
 
     fn find_manifests(directory: &Path, found: &mut Vec<PathBuf>) {
+        if fs::read_to_string(directory.join("Cargo.toml"))
+            .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"))
+        {
+            // Generated fixture crates remain in the excluded registry; their hand-authored
+            // siblings are checked by the fixture-projects gate instead.
+            let generated = directory.join("generated");
+            if generated.is_dir() {
+                find_manifests(&generated, found);
+            }
+            return;
+        }
         for entry in fs::read_dir(directory).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
