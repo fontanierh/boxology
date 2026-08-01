@@ -52,7 +52,7 @@ const OVERSIZED_CHUNKED_BODY: &[u8] =
 const OVERSIZED_MALFORMED_BODY: &[u8] =
     b"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
 
-const ROW_COUNT: usize = 46;
+const ROW_COUNT: usize = 47;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SpecParagraph {
@@ -133,6 +133,7 @@ struct RawCase {
     authority: &'static [SpecParagraph],
     expected: ExpectedResponse,
     body: Option<&'static [u8]>,
+    content_length: Option<usize>,
     chunked: bool,
     tuning: ServerTuning,
     exchange: Exchange,
@@ -151,6 +152,7 @@ impl RawCase {
             authority,
             expected,
             body: None,
+            content_length: None,
             chunked: false,
             tuning: ServerTuning::DEFAULT,
             exchange: Exchange::Whole,
@@ -164,6 +166,11 @@ impl RawCase {
 
     const fn with_chunked_framing(mut self) -> Self {
         self.chunked = true;
+        self
+    }
+
+    const fn with_content_length(mut self, content_length: usize) -> Self {
+        self.content_length = Some(content_length);
         self
     }
 
@@ -551,19 +558,23 @@ const RAW_CASES: [RawCase; ROW_COUNT] = [
         HA,
         BAD,
     ),
-    // Classification row: `Parser::value` no-value → `MalformedJson` → 400.
-    // Semantic backstop would also reject a fabricated non-String tree. M6
-    // (catch-all → Internal) goes red; a "fabricate a value" mutant is excluded.
+    // Traceability-only classification row: `Parser::value` no-value →
+    // `MalformedJson` → 400. Semantic backstop would also reject a fabricated
+    // non-String tree; M6 (catch-all → Internal) goes red, but no unique
+    // deletion mutant is attributable to this row.
     RawCase::new("empty-body", EXACT_REQUEST, HA, BAD).with_body(EMPTY_BODY),
     // Isolates exhaustion `then_some` (syntax.rs). M1 → 200. No other check.
     RawCase::new("trailing-bytes", EXACT_REQUEST, HA, BAD).with_body(TRAILING_BYTES_BODY),
-    // Isolates BOM rejection after `whitespace()`. M2 → 200. No other check.
+    // Isolates BOM rejection after `whitespace()`. M2 → 200. No other check;
+    // authority is D2's explicit rejection of a leading U+FEFF.
     RawCase::new("bom-prefixed-body", EXACT_REQUEST, SX, BAD).with_body(BOM_PREFIXED_BODY),
     // Isolates whole-input `from_utf8`. M3 → 200. No other check.
     RawCase::new("invalid-utf8-body", EXACT_REQUEST, SX, BAD).with_body(INVALID_UTF8_BODY),
     // Classification row: depth guard → `DepthLimitExceeded` → InvalidRequest.
-    // Guard-removal stays green (nested list vs String → 400). M5 (classify as
-    // PayloadTooLarge) → 413. Pins taxonomy + zero dispatch, not the guard.
+    // Guard-removal stays green (nested list vs String → 400), so deletion is
+    // invisible here and isolation is owed to a fixture whose capability input
+    // accepts lists. M5 (classify as PayloadTooLarge) → 413. Pins taxonomy +
+    // zero dispatch, not the guard.
     RawCase::new("depth-bomb", EXACT_REQUEST, SX, BAD).with_body(DEPTH_BOMB_BODY),
     // Byte cap defended by three layers (size_hint, accumulation, parse). M4
     // (drop decode PayloadTooLarge arm) stays green — collection rejects first;
@@ -595,12 +606,24 @@ const RAW_CASES: [RawCase; ROW_COUNT] = [
     )
     .with_body(OVERSIZED_STRING_BODY)
     .with_tuning(BODY_CAP_64),
-    // Pre-dispatch deadline. Collect timeout arm AND dispatch-entry deadline
-    // check both yield 504 after the stall; M9 (delete collect timeout only)
-    // stays green. Wiring: drop trickle → 200. Compound needed to isolate the
-    // collect arm alone.
+    // Pre-dispatch deadline. Four stages cover the stall: collect timeout,
+    // pre-dispatch check, `await_dispatch`'s timeout arm, and `invoke_if_live`'s
+    // pre-invoke check. No single-arm mutant is observable here. Wiring: drop
+    // trickle → 200. Compound needed to isolate the collect arm alone.
     RawCase::new("trickled-body-vs-budget", EXACT_REQUEST, DA, DE)
         .with_tuning(TRICKLE_BUDGET)
+        .with_trickle(Duration::from_millis(250)),
+    // Declared length is far above the cap, but the client sends only this
+    // head and never a body. The size-hint pre-check gives 413 immediately;
+    // without it, collection waits for the absent body and the short budget
+    // gives 504.
+    RawCase::new("oversized-content-length-head-only", EXACT_REQUEST, SX, PTL)
+        .with_body(EMPTY_BODY)
+        .with_content_length(1_000_000)
+        .with_tuning(ServerTuning {
+            max_body_bytes: Some(64),
+            default_timeout: Some(Duration::from_millis(100)),
+        })
         .with_trickle(Duration::from_millis(250)),
 ];
 
@@ -658,6 +681,7 @@ const ORACLE: [OracleRow; ROW_COUNT] = [
     o("oversized-plus-malformed", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 67\r\n\r\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
     o("oversized-plus-bad-media", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D6HeaderGrammars, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/xml\r\nConnection: close\r\nContent-Length: 67\r\n\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"", e(b"HTTP/1.1 415 Unsupported Media Type", br#"{"error":{"kind":"call","code":"unsupported_media_type","message":"unsupported media type"}}"#, b"application/json", None, 0)),
     o("trickled-body-vs-budget", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"", e(b"HTTP/1.1 504 Gateway Timeout", br#"{"error":{"kind":"call","code":"deadline_exceeded","message":"deadline exceeded"}}"#, b"application/json", None, 0)),
+    o("oversized-content-length-head-only", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 1000000\r\n\r\n", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
 ];
 
 struct CountingHello {
@@ -683,6 +707,8 @@ async fn raw_hello_cases_are_canonical() {
         let mut config =
             HttpServerConfig::new("127.0.0.1:0".parse().expect("loopback address is valid"));
         if let Some(cap) = case.tuning.max_body_bytes {
+            // Must match boxology-http's private DEFAULT_DEPTH_LIMIT; capped
+            // rows rely on this fixture coupling.
             config = config.with_request_limits(cap, 128);
         }
         if let Some(deadline) = case.tuning.default_timeout {
@@ -920,7 +946,8 @@ fn render_request(case: RawCase) -> Vec<u8> {
     if case.chunked {
         rendered.extend_from_slice(b"Transfer-Encoding: chunked\r\n\r\n");
     } else {
-        rendered.extend_from_slice(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes());
+        let content_length = case.content_length.unwrap_or(body.len());
+        rendered.extend_from_slice(format!("Content-Length: {content_length}\r\n\r\n").as_bytes());
     }
     rendered.extend_from_slice(body);
     rendered

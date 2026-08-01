@@ -25,7 +25,7 @@ The HTTP binding proves "defined once, invoked through Rust and HTTP" is a platf
 
 Per issue #85 item 1, the codec does **not** parse JSON "directly into `ContractValue`". Layering:
 
-1. **Syntax layer:** bytes → a lossless JSON syntax tree that *preserves duplicate keys and key order* (parsed with a depth guard, default 128, and the byte cap enforced before/while reading — not via `serde_json::Value`, which collapses duplicates).
+1. **Syntax layer:** bytes → a lossless JSON syntax tree that *preserves duplicate keys and key order* (parsed with a depth guard, default 128, and the byte cap enforced before/while reading — not via `serde_json::Value`, which collapses duplicates). A leading U+FEFF is not JSON whitespace and is rejected as `invalid_request` (`400`); Boxology declines RFC 8259 §8.1's MAY to ignore it.
 2. **Semantic layer:** syntax tree + `TypeDescriptor` + `DecodeRole` → `ContractValue`, applying S1's role rules (strict `ProviderInput`, tolerant `ConsumerOutput`), resolving descriptor-directed representation (`"42"` as `u64` where the descriptor says integer-64, `{"base64":…}` as `Blob` where it says blob, enum envelopes where it says enum), and rejecting duplicate keys, non-canonical integer strings (`"007"`, signs on `u64`, whitespace), fractional/exponent integer syntax, and invalid UTF-8.
 
 Encode is the reverse: `ContractValue` → **canonical bytes** (D3). Non-finite floats are unrepresentable in `ContractValue` (S1) — recorded so the wire never re-litigates it.
