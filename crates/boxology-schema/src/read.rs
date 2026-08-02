@@ -547,10 +547,25 @@ impl Reader {
         self.exact(object, "shape", "unary", "BXC0020", at, Shape::Unary)
     }
     fn max_exposure(&mut self, object: &Map<String, Value>, at: &Location) -> Option<ExposureLevel> {
-        self.exact(object, "max_exposure", "external", "BXC0007", at, ExposureLevel::External)
+        self.string_field(object, "max_exposure", at).and_then(|value| {
+            let level = match value {
+                "code_only" => Some(ExposureLevel::CodeOnly),
+                "internal" => Some(ExposureLevel::Internal),
+                "external" => Some(ExposureLevel::External),
+                _ => None,
+            };
+            self.check(level, "BXC0007", at.key("max_exposure"))
+        })
     }
     fn idempotency(&mut self, object: &Map<String, Value>, at: &Location) -> Option<Idempotency> {
-        self.exact(object, "idempotency", "none", "BXC0008", at, Idempotency::None)
+        self.string_field(object, "idempotency", at).and_then(|value| {
+            let property = match value {
+                "none" => Some(Idempotency::None),
+                "inherent" => Some(Idempotency::Inherent),
+                _ => None,
+            };
+            self.check(property, "BXC0008", at.key("idempotency"))
+        })
     }
 }
 
@@ -573,8 +588,8 @@ fn rule_of(code: Code) -> Code {
         "BXC0004" => "a required schema key must be present",
         "BXC0005" => "a schema value must hold its declared JSON type",
         "BXC0006" => "this reader supports schema format 1 and rejects unknown formats",
-        "BXC0007" => "format 1's only exposure is external",
-        "BXC0008" => "format 1's only idempotency is none",
+        "BXC0007" => "format 1 exposure must be code_only, internal, or external",
+        "BXC0008" => "format 1 idempotency must be none or inherent",
         "BXC0009" => "a revision must be sha256: and 64 lowercase hexadecimal digits",
         "BXC0010" => "the box id must match [a-z][a-z0-9-]*",
         "BXC0011" => "a capability name must match [a-z][a-z0-9_]*",
@@ -604,9 +619,9 @@ fn rule_of(code: Code) -> Code {
     }
 }
 
-/// BXC0001-BXC0008 are the reader's own, including the two narrowings that reject values S2 D3's
-/// *contract* grammar lists as legal: the one emitter provably cannot write them, so citing D3
-/// there would point a reader at text saying the opposite. BXC0009 is D6's fingerprint spelling,
+/// BXC0001-BXC0008 are the reader's own document and enumerated-field gates. BXC0007 and BXC0008
+/// accept every exposure and idempotency spelling S2 D3 lists and reject every other spelling.
+/// BXC0009 is D6's fingerprint spelling,
 /// BXC0010-BXC0014 D4's identity namespaces, BXC0015-BXC0023 D3's grammar — where the uniqueness
 /// rules are actually written (D4 states none) and the only text reaching an input parameter name.
 /// BXC0024-BXC0025 are D2's classifier pairing errors; the classifier owns their reachability.
@@ -748,8 +763,8 @@ BXC0003 format 1 rejects unknown schema keys specs/s4-contract-change-classifica
 BXC0004 a required schema key must be present specs/s4-contract-change-classification.md D1
 BXC0005 a schema value must hold its declared JSON type specs/s4-contract-change-classification.md D1
 BXC0006 this reader supports schema format 1 and rejects unknown formats specs/s4-contract-change-classification.md D1
-BXC0007 format 1's only exposure is external specs/s4-contract-change-classification.md D1
-BXC0008 format 1's only idempotency is none specs/s4-contract-change-classification.md D1
+BXC0007 format 1 exposure must be code_only, internal, or external specs/s4-contract-change-classification.md D1
+BXC0008 format 1 idempotency must be none or inherent specs/s4-contract-change-classification.md D1
 BXC0009 a revision must be sha256: and 64 lowercase hexadecimal digits specs/s2-contract-generator.md D6
 BXC0010 the box id must match [a-z][a-z0-9-]* specs/s2-contract-generator.md D4
 BXC0011 a capability name must match [a-z][a-z0-9_]* specs/s2-contract-generator.md D4
@@ -967,8 +982,8 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
                     }
                     "BXC0005" => value["box_id"] = json!(1),
                     "BXC0006" => value["schema_format"] = json!(2),
-                    "BXC0007" => value["capabilities"][0]["max_exposure"] = json!("code_only"),
-                    "BXC0008" => value["capabilities"][0]["idempotency"] = json!("inherent"),
+                    "BXC0007" => value["capabilities"][0]["max_exposure"] = json!("private"),
+                    "BXC0008" => value["capabilities"][0]["idempotency"] = json!("keyed"),
                     "BXC0009" => value["revision"] = json!("bad"),
                     "BXC0010" => value["box_id"] = json!("Bad"),
                     "BXC0011" => value["capabilities"][0]["name"] = json!("Bad"),
@@ -1157,15 +1172,39 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
     }
 
     #[test]
-    fn every_unemitted_exposure_and_idempotency_spelling_is_rejected() {
-        for spelling in ["code_only", "internal"] {
+    fn exposure_and_idempotency_spellings_round_trip() {
+        let cases = [
+            ("max_exposure", "code_only"),
+            ("max_exposure", "internal"),
+            ("max_exposure", "external"),
+            ("idempotency", "none"),
+            ("idempotency", "inherent"),
+        ];
+        for (field, spelling) in cases {
             let mut value = baseline();
-            value["capabilities"][0]["max_exposure"] = json!(spelling);
-            assert_one(value, "BXC0007", "/capabilities/0/max_exposure");
+            value["capabilities"][0][field] = json!(spelling);
+            let parsed = SchemaDocument::parse(&bytes(&value)).expect(spelling);
+            let again = serde_json::from_slice::<Value>(&parsed.canonical_bytes()).unwrap();
+            assert_eq!(again["capabilities"][0][field], spelling);
+            match (field, spelling) {
+                ("max_exposure", "code_only") => {
+                    assert_eq!(parsed.capabilities[0].max_exposure, ExposureLevel::CodeOnly)
+                }
+                ("max_exposure", "internal") => {
+                    assert_eq!(parsed.capabilities[0].max_exposure, ExposureLevel::Internal)
+                }
+                ("max_exposure", "external") => {
+                    assert_eq!(parsed.capabilities[0].max_exposure, ExposureLevel::External)
+                }
+                ("idempotency", "none") => {
+                    assert_eq!(parsed.capabilities[0].idempotency, Idempotency::None)
+                }
+                ("idempotency", "inherent") => {
+                    assert_eq!(parsed.capabilities[0].idempotency, Idempotency::Inherent)
+                }
+                _ => unreachable!(),
+            }
         }
-        let mut value = baseline();
-        value["capabilities"][0]["idempotency"] = json!("inherent");
-        assert_one(value, "BXC0008", "/capabilities/0/idempotency");
     }
 
     #[test]

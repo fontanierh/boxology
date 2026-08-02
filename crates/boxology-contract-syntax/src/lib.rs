@@ -2,13 +2,13 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_contract::canonicalize_ordinary_rust_identifier;
+use boxology_contract::{ExposureLevel, Idempotency, canonicalize_ordinary_rust_identifier};
 use proc_macro2::TokenStream;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use syn::{
     Attribute, Expr, FnArg, ItemEnum, Lit, Meta, ReturnType, Token, Type, parse::Parse,
-    spanned::Spanned,
+    parse::ParseStream, spanned::Spanned,
 };
 /// A controlled contract block, independent of source spelling and location.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,9 +99,9 @@ pub struct CapabilityDeclaration {
     /// Directly named in-block error type.
     pub error: String,
     /// Declared maximum exposure.
-    pub exposure: &'static str,
+    pub exposure: ExposureLevel,
     /// Declared idempotency, defaulting to none.
-    pub idempotency: &'static str,
+    pub idempotency: Idempotency,
 }
 /// One canonical scalar leaf permitted as a capability input or output boundary type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,6 +164,23 @@ impl CanonicalType {
 /// Version of the generation-consistency semantic encoding.
 pub const SEMANTIC_ENCODING_VERSION: u32 = 1;
 
+/// Wire spelling of an exposure level in the semantic encoding and public-revision projection.
+pub fn exposure_spelling(level: ExposureLevel) -> &'static str {
+    match level {
+        ExposureLevel::CodeOnly => "code_only",
+        ExposureLevel::Internal => "internal",
+        ExposureLevel::External => "external",
+    }
+}
+
+/// Wire spelling of an idempotency property in the semantic encoding and public-revision projection.
+pub fn idempotency_spelling(value: Idempotency) -> &'static str {
+    match value {
+        Idempotency::None => "none",
+        Idempotency::Inherent => "inherent",
+    }
+}
+
 /// Encodes one controlled contract into the versioned canonical semantic format.
 pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
     let mut out = b"boxology.contract-semantics\0".to_vec();
@@ -206,8 +223,8 @@ pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
             capability.input_type.canonical_name(),
             capability.output_type.canonical_name(),
             capability.error.as_str(),
-            capability.exposure,
-            capability.idempotency,
+            exposure_spelling(capability.exposure),
+            idempotency_spelling(capability.idempotency),
         ] {
             string(&mut out, value);
         }
@@ -290,7 +307,7 @@ impl Parse for Contract {
 
 fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclaration> {
     let (docs, deprecation, marker) = metadata(attrs, "error")?;
-    if !marker
+    if marker.is_none()
         || !matches!(item.vis, syn::Visibility::Public(_))
         || !item.generics.params.is_empty()
         || item.generics.where_clause.is_some()
@@ -419,14 +436,13 @@ fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclara
 
 fn parse_capability(
     attrs: &[Attribute],
-    input: syn::parse::ParseStream<'_>,
+    input: ParseStream<'_>,
 ) -> syn::Result<CapabilityDeclaration> {
     let (docs, deprecation, marker) = metadata(attrs, "capability")?;
-    if !marker {
-        return Err(
-            input.error("capability declaration requires #[capability(exposure = external)]")
-        );
-    }
+    let Some(marker) = marker else {
+        return Err(input.error("capability declaration requires #[capability]"));
+    };
+    let (exposure, idempotency) = parse_capability_metadata(marker)?;
     input.parse::<Token![pub]>()?;
     input.parse::<Token![async]>()?;
     input.parse::<Token![fn]>()?;
@@ -473,18 +489,84 @@ fn parse_capability(
         input_type,
         output_type,
         error: error_name,
-        exposure: "external",
-        idempotency: "none",
+        exposure,
+        idempotency,
     })
 }
 
-fn metadata(
-    attrs: &[Attribute],
+fn parse_capability_metadata(attr: &Attribute) -> syn::Result<(ExposureLevel, Idempotency)> {
+    let mut exposure = None;
+    let mut idempotency = None;
+    match &attr.meta {
+        Meta::Path(_) => {}
+        Meta::List(list) => list.parse_args_with(|input: ParseStream<'_>| {
+            while !input.is_empty() {
+                let key: syn::Ident = input.parse()?;
+                let key_name = identifier(&key)?;
+                input.parse::<Token![=]>()?;
+                match key_name.as_str() {
+                    "exposure" => {
+                        if exposure.is_some() {
+                            return Err(error(&key, "duplicate capability metadata"));
+                        }
+                        let value: syn::Ident = input.parse()?;
+                        exposure = Some(match identifier(&value)?.as_str() {
+                            "code_only" => ExposureLevel::CodeOnly,
+                            "internal" => ExposureLevel::Internal,
+                            "external" => ExposureLevel::External,
+                            _ => {
+                                return Err(error(
+                                    &value,
+                                    "exposure must be code_only, internal, or external",
+                                ));
+                            }
+                        });
+                    }
+                    "idempotency" => {
+                        if idempotency.is_some() {
+                            return Err(error(&key, "duplicate capability metadata"));
+                        }
+                        let value: syn::Ident = input.parse()?;
+                        idempotency = Some(match identifier(&value)?.as_str() {
+                            "none" => Idempotency::None,
+                            "inherent" => Idempotency::Inherent,
+                            "keyed" => {
+                                return Err(error(
+                                    &value,
+                                    "idempotency keyed is not supported in v0",
+                                ));
+                            }
+                            _ => {
+                                return Err(error(&value, "idempotency must be none or inherent"));
+                            }
+                        });
+                    }
+                    _ => return Err(error(&key, "unknown capability metadata")),
+                }
+                if input.is_empty() {
+                    break;
+                }
+                input.parse::<Token![,]>()?;
+            }
+            Ok(())
+        })?,
+        Meta::NameValue(_) => {
+            return Err(error(attr, "capability metadata must be key = value pairs"));
+        }
+    }
+    Ok((
+        exposure.unwrap_or(ExposureLevel::CodeOnly),
+        idempotency.unwrap_or(Idempotency::None),
+    ))
+}
+
+fn metadata<'a>(
+    attrs: &'a [Attribute],
     marker_name: &str,
-) -> syn::Result<(Vec<String>, Option<String>, bool)> {
+) -> syn::Result<(Vec<String>, Option<String>, Option<&'a Attribute>)> {
     let mut docs = Vec::new();
     let mut deprecated = None;
-    let mut marker = false;
+    let mut marker = None;
     for attr in attrs {
         let name = attr
             .path()
@@ -520,20 +602,13 @@ fn metadata(
                 }
             });
         } else if name == marker_name {
-            if marker {
+            if marker.is_some() {
                 return Err(error(attr, "duplicate marker"));
             }
-            marker = true;
-            if marker_name == "error" {
-                if !matches!(attr.meta, Meta::Path(_)) {
-                    return Err(error(attr, "#[error] takes no arguments"));
-                }
-            } else {
-                let pair: Pair<syn::Ident> = attr.parse_args()?;
-                if identifier(&pair.key)? != "exposure" || identifier(&pair.value)? != "external" {
-                    return Err(error(&pair.value, "exposure must be external"));
-                }
+            if marker_name == "error" && !matches!(attr.meta, Meta::Path(_)) {
+                return Err(error(attr, "#[error] takes no arguments"));
             }
+            marker = Some(attr);
         } else {
             return Err(error(attr, "unknown contract metadata"));
         }
@@ -651,6 +726,8 @@ mod tests {
     const ERROR: &str = "#[error] pub enum GreetError { EmptyName }";
     const CAP: &str = "#[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>;";
     const HELLO_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000201000000000000000000000000000000000a47726565744572726f720000000000000001000000000000000000000000000000000009456d7074794e616d65020000000000000000000000000000000005677265657400000000000000046e616d650000000000000006537472696e670000000000000006537472696e67000000000000000a47726565744572726f72000000000000000865787465726e616c00000000000000046e6f6e65";
+    const META_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000201000000000000000000000000000000000145000000000000000100000000000000000000000000000000000156020000000000000000000000000000000007726573637565640000000000000001780000000000000006537472696e670000000000000006537472696e670000000000000001450000000000000008696e7465726e616c0000000000000008696e686572656e74";
+    const META_DIGEST: &str = "9b987115e4e54d5895cce41117ddfd589090ec993922b37dfcb5dad096e3849d";
     #[test]
     fn hello_parses_to_owned_semantics() {
         fn traits<T: Send + Sync + 'static>() {}
@@ -662,8 +739,8 @@ mod tests {
         assert_eq!(contract.capabilities[0].name, "greet");
         assert_eq!(contract.capabilities[0].input_name, "name");
         assert_eq!(contract.capabilities[0].error, "GreetError");
-        assert_eq!(contract.capabilities[0].exposure, "external");
-        assert_eq!(contract.capabilities[0].idempotency, "none");
+        assert_eq!(contract.capabilities[0].exposure, ExposureLevel::External);
+        assert_eq!(contract.capabilities[0].idempotency, Idempotency::None);
         let metadata = parse(
             format!("#[doc=\"greet\"] #[deprecated] {ERROR} {CAP}")
                 .parse()
@@ -672,6 +749,105 @@ mod tests {
         .unwrap();
         assert_eq!(metadata.error.docs, ["greet"]);
         assert_eq!(metadata.error.deprecation.as_deref(), Some(""));
+    }
+    #[test]
+    fn capability_metadata_accept_matrix() {
+        #[rustfmt::skip]
+        let cases = [
+            ("exposure=code_only", ExposureLevel::CodeOnly, Idempotency::None),
+            ("exposure=internal", ExposureLevel::Internal, Idempotency::None),
+            ("exposure=external", ExposureLevel::External, Idempotency::None),
+            ("idempotency=none", ExposureLevel::CodeOnly, Idempotency::None),
+            ("idempotency=inherent", ExposureLevel::CodeOnly, Idempotency::Inherent),
+            ("exposure=code_only,idempotency=none", ExposureLevel::CodeOnly, Idempotency::None),
+            ("exposure=code_only,idempotency=inherent", ExposureLevel::CodeOnly, Idempotency::Inherent),
+            ("exposure=internal,idempotency=none", ExposureLevel::Internal, Idempotency::None),
+            ("exposure=internal,idempotency=inherent", ExposureLevel::Internal, Idempotency::Inherent),
+            ("exposure=external,idempotency=none", ExposureLevel::External, Idempotency::None),
+            ("exposure=external,idempotency=inherent", ExposureLevel::External, Idempotency::Inherent),
+            ("idempotency=inherent,exposure=internal", ExposureLevel::Internal, Idempotency::Inherent),
+            ("exposure=external,", ExposureLevel::External, Idempotency::None),
+            ("", ExposureLevel::CodeOnly, Idempotency::None),
+            // Bare `#[capability]` is Meta::Path; empty args above is Meta::List([]).
+            ("#", ExposureLevel::CodeOnly, Idempotency::None),
+        ];
+        for (args, exposure, idempotency) in cases {
+            let marker = match args {
+                "#" => "#[capability]".to_owned(),
+                "" => "#[capability()]".to_owned(),
+                _ => format!("#[capability({args})]"),
+            };
+            let contract = parse(
+                format!(
+                    "{ERROR} {marker} pub async fn greet(name:String)->Result<String,GreetError>;"
+                )
+                .parse()
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(contract.capabilities[0].exposure, exposure, "{args}");
+            assert_eq!(contract.capabilities[0].idempotency, idempotency, "{args}");
+        }
+    }
+    #[test]
+    fn capability_metadata_rejections_have_precise_spans() {
+        let rejected = [
+            (
+                "#[capability(unknown=external)]",
+                "unknown capability metadata",
+                "unknown",
+            ),
+            (
+                "#[capability(name=\"greet\")]",
+                "unknown capability metadata",
+                "name",
+            ),
+            (
+                "#[capability(exposure=external,exposure=internal)]",
+                "duplicate capability metadata",
+                "exposure",
+            ),
+            (
+                "#[capability(exposure=private)]",
+                "exposure must be code_only, internal, or external",
+                "private",
+            ),
+            (
+                "#[capability(idempotency=later)]",
+                "idempotency must be none or inherent",
+                "later",
+            ),
+            (
+                "#[capability(idempotency=keyed)]",
+                "idempotency keyed is not supported in v0",
+                "keyed",
+            ),
+        ];
+        for (marker, message, slice) in rejected {
+            let source = format!(
+                "{ERROR} {marker} pub async fn greet(name:String)->Result<String,GreetError>;"
+            );
+            let error = parse(source.parse().unwrap()).unwrap_err();
+            assert_eq!(error.to_string(), message, "{marker}");
+            assert_eq!(&source[error.span().byte_range()], slice, "{marker}");
+        }
+    }
+    #[test]
+    fn non_default_metadata_semantic_encoding_is_pinned() {
+        let contract = parse(
+            "#[error] pub enum E { V } #[capability(exposure=internal,idempotency=inherent)] pub async fn rescued(x:String)->Result<String,E>;"
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(hex(&canonical_semantic_bytes(&contract)), META_BYTES);
+        assert_eq!(hex(&semantic_digest(&contract)), META_DIGEST);
+        assert_eq!(
+            hex(&canonical_semantic_bytes(
+                &parse(format!("{ERROR} {CAP}").parse().unwrap()).unwrap()
+            )),
+            HELLO_BYTES
+        );
     }
     #[test]
     fn unsupported_forms_and_duplicate_declarations_fail_closed() {
@@ -710,6 +886,17 @@ mod tests {
         ] {
             assert!(parse(source.parse().unwrap()).is_err(), "{source}");
         }
+        // `{CAP} {CAP} {ERROR}` above fails at parse_error (first item is not `#[error]`).
+        // `capability_error_mismatch_and_duplicate_names_fail_closed` already reaches the
+        // uniqueness pass and proves it errors; this row pins which message it errors with.
+        let duplicate_wire = format!("{ERROR} {CAP} {CAP}");
+        let error = parse(duplicate_wire.parse().unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("capability names must be unique"),
+            "{error}"
+        );
         for boundary in [
             "Vec<u8>",
             "Option<u8>",
@@ -947,6 +1134,8 @@ mod tests {
             |c| c.capabilities[0].name = "other".into(),
             |c| c.capabilities[0].input_name = "other".into(),
             |c| c.capabilities[0].error = "OtherError".into(),
+            |c| c.capabilities[0].exposure = ExposureLevel::Internal,
+            |c| c.capabilities[0].idempotency = Idempotency::Inherent,
         ];
         for mutate in mutations {
             let mut changed = hello.clone();
