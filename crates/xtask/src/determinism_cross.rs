@@ -186,7 +186,11 @@ mod tests {
         loop {
             let n = start + blocked.len() as u64;
             let path = parent.join(format!("residue-{pid}-{n}"));
-            let _ = fs::create_dir(&path);
+            match fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("plant residue: {error}"),
+            }
             fs::write(path.join("stale"), b"adopt-me").unwrap();
             blocked.push(Temp(path));
             if n > NEXT.load(Ordering::Relaxed) + budget {

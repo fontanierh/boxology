@@ -299,29 +299,17 @@ mod tests {
     use std::io;
     use std::path::PathBuf;
     use std::process::Command;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    // Un-namespaced {pid}-{n} paths are shared by every Temp::new caller; gate
-    // creation so the residue test can plant without racing sibling tests.
-    static TEMP_GATE: Mutex<()> = Mutex::new(());
-    fn sibling_budget() -> u64 {
-        std::thread::available_parallelism()
-            .map(|n| n.get() as u64)
-            .unwrap_or(4)
-    }
     struct Temp(PathBuf);
     impl Temp {
-        fn new() -> Self {
-            let _gate = TEMP_GATE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        fn new(name: &str) -> Self {
             let parent =
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-tests");
             fs::create_dir_all(&parent).unwrap();
             let path = loop {
                 let candidate = parent.join(format!(
-                    "{}-{}",
+                    "{name}-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));
@@ -344,31 +332,29 @@ mod tests {
         let pid = std::process::id();
         let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-tests");
         fs::create_dir_all(&parent).unwrap();
-        // Hold the gate only while planting; drop it before Temp::new so the
-        // test exercises the real call site without re-entrant deadlock.
-        let blocked = {
-            let _gate = TEMP_GATE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let start = NEXT.load(Ordering::Relaxed);
-            let mut blocked = Vec::new();
-            // Size from the live counter, plus a sibling budget for Temp::new
-            // calls that can sneak between dropping the gate and our allocate.
-            let budget = sibling_budget();
-            loop {
-                let n = start + blocked.len() as u64;
-                let path = parent.join(format!("{pid}-{n}"));
-                let _ = fs::create_dir(&path);
-                fs::write(path.join("stale"), b"adopt-me").unwrap();
-                blocked.push(Temp(path));
-                if n > NEXT.load(Ordering::Relaxed) + budget {
-                    break;
-                }
+        let start = NEXT.load(Ordering::Relaxed);
+        let mut blocked = Vec::new();
+        // Size from the live counter, plus a sibling budget for allocates that
+        // can advance NEXT between the end of planting and our Temp::new call.
+        let budget = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4);
+        loop {
+            let n = start + blocked.len() as u64;
+            let path = parent.join(format!("residue-{pid}-{n}"));
+            match fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("plant residue: {error}"),
             }
-            blocked
-        };
+            fs::write(path.join("stale"), b"adopt-me").unwrap();
+            blocked.push(Temp(path));
+            if n > NEXT.load(Ordering::Relaxed) + budget {
+                break;
+            }
+        }
         let before = NEXT.load(Ordering::Relaxed);
-        let got = Temp::new();
+        let got = Temp::new("residue");
         let after = NEXT.load(Ordering::Relaxed);
         assert!(
             after > before + 1,
@@ -395,7 +381,7 @@ mod tests {
     }
     #[test]
     fn tree_roundtrip_is_stable_byte_sorted_and_hashes_known_bytes() {
-        let temp = Temp::new();
+        let temp = Temp::new("roundtrip");
         // `a.txt` and the directory `a/` conflict on a byte prefix: the walk emits
         // `a/z` first (`a` < `a.txt` as a name) while bytewise `a.txt` (0x2e) sorts
         // before `a/z` (0x2f). Only the top-level sort repairs that order.
@@ -456,16 +442,16 @@ mod tests {
     }
     #[test]
     fn tree_rejects_empty_invalid_links_special_files_and_small_caps() {
-        let empty = Temp::new();
+        let empty = Temp::new("empty");
         assert!(
             scan_tree("s", &empty.0)
                 .unwrap_err()
                 .contains("empty directory")
         );
-        let names = Temp::new();
+        let names = Temp::new("names");
         fs::write(names.0.join("bad\tname"), b"x").unwrap();
         assert!(scan_tree("s", &names.0).is_err());
-        let caps = Temp::new();
+        let caps = Temp::new("caps");
         fs::create_dir(caps.0.join("a")).unwrap();
         fs::write(caps.0.join("a/file"), b"").unwrap();
         fs::write(caps.0.join("z"), b"abc").unwrap();
@@ -482,11 +468,11 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            let link = Temp::new();
+            let link = Temp::new("link");
             fs::write(link.0.join("file"), b"x").unwrap();
             symlink(link.0.join("file"), link.0.join("link")).unwrap();
             assert!(scan_tree("s", &link.0).unwrap_err().contains("unsupported"));
-            let fifo = Temp::new();
+            let fifo = Temp::new("fifo");
             assert!(
                 Command::new("mkfifo")
                     .arg(fifo.0.join("pipe"))
