@@ -805,93 +805,31 @@ mod tests {
         assert_eq!(metadata.error.deprecation.as_deref(), Some(""));
     }
     #[test]
-    fn omitted_metadata_takes_fail_safe_defaults() {
-        let contract = parse(
-            format!(
-                "{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;"
-            )
-            .parse()
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(contract.capabilities[0].exposure, ExposureLevel::CodeOnly);
-        assert_eq!(contract.capabilities[0].idempotency, Idempotency::None);
-    }
-    #[test]
     fn capability_metadata_accept_matrix() {
+        #[rustfmt::skip]
         let cases = [
-            (
-                "exposure=code_only",
-                ExposureLevel::CodeOnly,
-                Idempotency::None,
-            ),
-            (
-                "exposure=internal",
-                ExposureLevel::Internal,
-                Idempotency::None,
-            ),
-            (
-                "exposure=external",
-                ExposureLevel::External,
-                Idempotency::None,
-            ),
-            (
-                "idempotency=none",
-                ExposureLevel::CodeOnly,
-                Idempotency::None,
-            ),
-            (
-                "idempotency=inherent",
-                ExposureLevel::CodeOnly,
-                Idempotency::Inherent,
-            ),
-            (
-                "exposure=code_only,idempotency=none",
-                ExposureLevel::CodeOnly,
-                Idempotency::None,
-            ),
-            (
-                "exposure=code_only,idempotency=inherent",
-                ExposureLevel::CodeOnly,
-                Idempotency::Inherent,
-            ),
-            (
-                "exposure=internal,idempotency=none",
-                ExposureLevel::Internal,
-                Idempotency::None,
-            ),
-            (
-                "exposure=internal,idempotency=inherent",
-                ExposureLevel::Internal,
-                Idempotency::Inherent,
-            ),
-            (
-                "exposure=external,idempotency=none",
-                ExposureLevel::External,
-                Idempotency::None,
-            ),
-            (
-                "exposure=external,idempotency=inherent",
-                ExposureLevel::External,
-                Idempotency::Inherent,
-            ),
-            (
-                "idempotency=inherent,exposure=internal",
-                ExposureLevel::Internal,
-                Idempotency::Inherent,
-            ),
-            (
-                "exposure=external,",
-                ExposureLevel::External,
-                Idempotency::None,
-            ),
+            ("exposure=code_only", ExposureLevel::CodeOnly, Idempotency::None),
+            ("exposure=internal", ExposureLevel::Internal, Idempotency::None),
+            ("exposure=external", ExposureLevel::External, Idempotency::None),
+            ("idempotency=none", ExposureLevel::CodeOnly, Idempotency::None),
+            ("idempotency=inherent", ExposureLevel::CodeOnly, Idempotency::Inherent),
+            ("exposure=code_only,idempotency=none", ExposureLevel::CodeOnly, Idempotency::None),
+            ("exposure=code_only,idempotency=inherent", ExposureLevel::CodeOnly, Idempotency::Inherent),
+            ("exposure=internal,idempotency=none", ExposureLevel::Internal, Idempotency::None),
+            ("exposure=internal,idempotency=inherent", ExposureLevel::Internal, Idempotency::Inherent),
+            ("exposure=external,idempotency=none", ExposureLevel::External, Idempotency::None),
+            ("exposure=external,idempotency=inherent", ExposureLevel::External, Idempotency::Inherent),
+            ("idempotency=inherent,exposure=internal", ExposureLevel::Internal, Idempotency::Inherent),
+            ("exposure=external,", ExposureLevel::External, Idempotency::None),
             ("", ExposureLevel::CodeOnly, Idempotency::None),
+            // Bare `#[capability]` is Meta::Path; empty args above is Meta::List([]).
+            ("#", ExposureLevel::CodeOnly, Idempotency::None),
         ];
         for (args, exposure, idempotency) in cases {
-            let marker = if args.is_empty() {
-                "#[capability()]".to_owned()
-            } else {
-                format!("#[capability({args})]")
+            let marker = match args {
+                "#" => "#[capability]".to_owned(),
+                "" => "#[capability()]".to_owned(),
+                _ => format!("#[capability({args})]"),
             };
             let contract = parse(
                 format!(
