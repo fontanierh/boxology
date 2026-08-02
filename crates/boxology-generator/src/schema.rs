@@ -408,11 +408,7 @@ mod tests {
         }
     }
 
-    fn unary(
-        name: &str,
-        exposure: ExposureLevel,
-        idempotency: Idempotency,
-    ) -> Contract {
+    fn unary(name: &str, exposure: ExposureLevel, idempotency: Idempotency) -> Contract {
         Contract {
             error: ErrorDeclaration {
                 docs: Vec::new(),
@@ -466,7 +462,10 @@ mod tests {
         assert!(source.contains("Idempotency::Inherent"), "{source}");
         let hello = unary("greet", ExposureLevel::External, Idempotency::None);
         let hello_source = descriptor_source("hello", &hello, &[0; 32]);
-        assert!(hello_source.contains("ExposureLevel::External"), "{hello_source}");
+        assert!(
+            hello_source.contains("ExposureLevel::External"),
+            "{hello_source}"
+        );
         assert!(hello_source.contains("Idempotency::None"), "{hello_source}");
     }
 

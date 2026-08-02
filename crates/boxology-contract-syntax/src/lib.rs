@@ -2,9 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_contract::{
-    ExposureLevel, Idempotency, canonicalize_ordinary_rust_identifier,
-};
+use boxology_contract::{ExposureLevel, Idempotency, canonicalize_ordinary_rust_identifier};
 use proc_macro2::TokenStream;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -568,10 +566,7 @@ fn parse_capability_metadata(
                                 ));
                             }
                             _ => {
-                                return Err(error(
-                                    &value,
-                                    "idempotency must be none or inherent",
-                                ));
+                                return Err(error(&value, "idempotency must be none or inherent"));
                             }
                         });
                     }
@@ -762,8 +757,7 @@ mod tests {
     const CAP: &str = "#[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>;";
     const HELLO_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000201000000000000000000000000000000000a47726565744572726f720000000000000001000000000000000000000000000000000009456d7074794e616d65020000000000000000000000000000000005677265657400000000000000046e616d650000000000000006537472696e670000000000000006537472696e67000000000000000a47726565744572726f72000000000000000865787465726e616c00000000000000046e6f6e65";
     const META_BYTES: &str = "626f786f6c6f67792e636f6e74726163742d73656d616e746963730000000001000000000000000201000000000000000000000000000000000145000000000000000100000000000000000000000000000000000156020000000000000000000000000000000007726573637565640000000000000001780000000000000006537472696e670000000000000006537472696e670000000000000001450000000000000008696e7465726e616c0000000000000008696e686572656e74";
-    const META_DIGEST: &str =
-        "9b987115e4e54d5895cce41117ddfd589090ec993922b37dfcb5dad096e3849d";
+    const META_DIGEST: &str = "9b987115e4e54d5895cce41117ddfd589090ec993922b37dfcb5dad096e3849d";
     #[test]
     fn hello_parses_to_owned_semantics() {
         fn traits<T: Send + Sync + 'static>() {}
@@ -789,9 +783,11 @@ mod tests {
     #[test]
     fn omitted_metadata_takes_fail_safe_defaults() {
         let contract = parse(
-            format!("{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;")
-                .parse()
-                .unwrap(),
+            format!(
+                "{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;"
+            )
+            .parse()
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(contract.capabilities[0].exposure, ExposureLevel::CodeOnly);
@@ -800,11 +796,31 @@ mod tests {
     #[test]
     fn capability_metadata_accept_matrix() {
         let cases = [
-            ("exposure=code_only", ExposureLevel::CodeOnly, Idempotency::None),
-            ("exposure=internal", ExposureLevel::Internal, Idempotency::None),
-            ("exposure=external", ExposureLevel::External, Idempotency::None),
-            ("idempotency=none", ExposureLevel::CodeOnly, Idempotency::None),
-            ("idempotency=inherent", ExposureLevel::CodeOnly, Idempotency::Inherent),
+            (
+                "exposure=code_only",
+                ExposureLevel::CodeOnly,
+                Idempotency::None,
+            ),
+            (
+                "exposure=internal",
+                ExposureLevel::Internal,
+                Idempotency::None,
+            ),
+            (
+                "exposure=external",
+                ExposureLevel::External,
+                Idempotency::None,
+            ),
+            (
+                "idempotency=none",
+                ExposureLevel::CodeOnly,
+                Idempotency::None,
+            ),
+            (
+                "idempotency=inherent",
+                ExposureLevel::CodeOnly,
+                Idempotency::Inherent,
+            ),
             (
                 "exposure=code_only,idempotency=none",
                 ExposureLevel::CodeOnly,
@@ -854,9 +870,11 @@ mod tests {
                 format!("#[capability({args})]")
             };
             let contract = parse(
-                format!("{ERROR} {marker} pub async fn greet(name:String)->Result<String,GreetError>;")
-                    .parse()
-                    .unwrap(),
+                format!(
+                    "{ERROR} {marker} pub async fn greet(name:String)->Result<String,GreetError>;"
+                )
+                .parse()
+                .unwrap(),
             )
             .unwrap();
             assert_eq!(contract.capabilities[0].exposure, exposure, "{args}");
@@ -875,9 +893,11 @@ mod tests {
         .unwrap();
         assert_eq!(overridden.capabilities[0].name, "rescued");
         let without = parse(
-            format!("{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;")
-                .parse()
-                .unwrap(),
+            format!(
+                "{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;"
+            )
+            .parse()
+            .unwrap(),
         )
         .unwrap();
         assert_ne!(semantic_digest(&overridden), semantic_digest(&without));
