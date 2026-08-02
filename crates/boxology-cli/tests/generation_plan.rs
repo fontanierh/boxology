@@ -11,16 +11,21 @@ const ROOT_MANIFEST: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\
 
 fn implementation_crate(id: &str, suffix: &str, path: &str) -> String { format!("[[crates]]\ncargo_package = \"{id}-implementation{suffix}\"\npath = \"{path}\"\nrole = \"box-implementation\"\n") }
 
-fn candidate_manifest(id: &str, generator: &str, implementation: bool, implementation_path: &str, extra_implementation: bool, imports: bool, duplicate: bool) -> String {
+fn candidate_manifest_with(id: &str, generator: &str, implementation: bool, implementation_path: &str, extra_implementation: bool, import_ids: &[&str], duplicate: bool) -> String {
     let owned = match (implementation, extra_implementation) {
         (false, _) => "\"boxology.toml\", \"fixtures/**\"".to_owned(),
         (true, false) => format!("\"boxology.toml\", \"{implementation_path}/**\", \"fixtures/**\""),
         (true, true) => format!("\"boxology.toml\", \"{implementation_path}/**\", \"alternate/**\", \"fixtures/**\""),
     };
     let implementations = if implementation { let mut value = implementation_crate(id, "", implementation_path); if extra_implementation { value.push_str(&implementation_crate(id, "-alternate", "alternate")); } value } else { String::new() };
-    let imports = if imports { "[[imports]]\npackage = \"foreign\"\ncontract = \"foreign\"\n" } else { "" };
+    let imports = import_ids.iter().map(|id| format!("[[imports]]\npackage = \"{id}\"\ncontract = \"{id}\"\n")).collect::<String>();
     let (outputs, second) = if duplicate { ("[\"generated/contract/**\"]", "[[derived]]\nid = \"second\"\ngenerator = \"boxology-contract\"\ninputs = [\"**\"]\noutputs = [\"generated/other/**\"]\n") } else { ("[\"generated/**\"]", "") };
     format!("schema = 1\nid = {id:?}\nkind = \"box\"\nowned = [{owned}]\n\n{implementations}{imports}[[crates]]\ncargo_package = \"{id}-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = {generator:?}\ninputs = [\"**\"]\noutputs = {outputs}\n{second}")
+}
+
+fn candidate_manifest(id: &str, generator: &str, implementation: bool, implementation_path: &str, extra_implementation: bool, imports: bool, duplicate: bool) -> String {
+    let import_ids = if imports { vec!["foreign"] } else { Vec::new() };
+    candidate_manifest_with(id, generator, implementation, implementation_path, extra_implementation, &import_ids, duplicate)
 }
 
 const FOREIGN_MANIFEST: &str = "schema = 1\nid = \"foreign\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"foreign-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n";
@@ -62,6 +67,27 @@ fn workspace_with(config: WorkspaceConfig<'_>) -> Workspace {
 fn path(value: &str) -> RelativePath { RelativePath::new(value).unwrap() }
 fn id(value: &str) -> BoxId { BoxId::new(value).unwrap() }
 
+fn metadata_for(packages: &[&str]) -> String {
+    let members = packages.iter().flat_map(|id| [(format!("{id}/generated/contract"), format!("{id}-contract")), (format!("{id}/implementation"), format!("{id}-implementation"))]).collect::<Vec<_>>();
+    let ids = members.iter().map(|(directory, _)| format!("{:?}", format!("path+file:///w/{directory}#0.0.0"))).collect::<Vec<_>>().join(",");
+    let packages = members.iter().map(|(directory, name)| metadata_package(directory, name)).collect::<Vec<_>>().join(",");
+    format!(r#"{{"workspace_root":"/w","workspace_members":[{ids}],"packages":[{packages}]}}"#)
+}
+
+fn imported_workspace(imports: &[&str], targets: &[(&str, &str)]) -> Workspace {
+    let mut files: Vec<String> = ["Cargo.toml", "Cargo.lock", "boxology.toml", "greeter/boxology.toml", "greeter/implementation/Cargo.toml", "greeter/implementation/src/lib.rs", "greeter/generated/contract/Cargo.toml"].into_iter().map(String::from).collect();
+    let mut manifests = vec![(String::from("boxology.toml"), ROOT_MANIFEST.as_bytes().to_vec()), (String::from("greeter/boxology.toml"), candidate_manifest_with("greeter", "boxology-contract", true, "implementation", false, imports, false).into_bytes())];
+    for (id, generator) in targets {
+        files.extend([format!("{id}/boxology.toml"), format!("{id}/implementation/Cargo.toml"), format!("{id}/implementation/src/lib.rs"), format!("{id}/generated/contract/Cargo.toml")]);
+        manifests.push((format!("{id}/boxology.toml"), candidate_manifest(id, generator, true, "implementation", false, false, false).into_bytes()));
+    }
+    let mut packages = vec!["greeter"];
+    packages.extend(targets.iter().map(|(id, _)| *id));
+    let files = files.into_iter().map(|name| FileEntry::file(path(&name))).collect();
+    let manifests = manifests.into_iter().map(|(name, bytes)| (path(&name), bytes)).collect();
+    WorkspaceInputs::new(files, manifests, &metadata_for(&packages)).unwrap().check().unwrap()
+}
+
 fn error_is(result: Result<Vec<GenerationPlan>, PlanError>, code: &str, at: &str, detail: &str) {
     let error = result.expect_err("planning must reject the unsatisfied fixture");
     assert_eq!(error.code(), code);
@@ -72,6 +98,51 @@ fn error_is(result: Result<Vec<GenerationPlan>, PlanError>, code: &str, at: &str
 
 fn input_names(plan: &GenerationPlan) -> Vec<&str> { plan.inputs().iter().map(RelativePath::as_str).collect() }
 fn plan_ids(plans: &[GenerationPlan]) -> Vec<&str> { plans.iter().map(|plan| plan.package_id().as_str()).collect() }
+
+#[test]
+fn plan_resolves_import_by_identity_to_target_schema() {
+    let workspace = imported_workspace(&["hello"], &[("hello", "boxology-contract")]);
+    let plans = plan(&workspace, None).unwrap();
+    let greeter = plans.iter().find(|plan| plan.package_id().as_str() == "greeter").unwrap();
+    let [import] = greeter.imports() else { panic!("one resolved import is required") };
+    assert_eq!(import.package().as_str(), "hello");
+    assert_eq!(import.schema().as_str(), "hello/generated/schema.json");
+}
+
+#[test]
+fn plan_orders_importers_after_their_import_targets() {
+    // greeter < hello by package-id, so package-id order would emit the importer first.
+    let workspace = imported_workspace(&["hello"], &[("hello", "boxology-contract")]);
+    assert_eq!(plan_ids(&plan(&workspace, None).unwrap()), ["hello", "greeter"]);
+}
+
+#[test]
+fn imports_must_resolve_to_generation_candidates() {
+    error_is(plan(&imported_workspace(&["missing"], &[]), None), "BXW0084", "greeter/boxology.toml", "a declared import must name a discovered workspace package");
+    error_is(plan(&imported_workspace(&["hello"], &[("hello", "cargo")]), None), "BXW0085", "greeter/boxology.toml", "an imported package must declare a contract-generation output");
+}
+
+#[test]
+fn import_cycles_are_rejected() {
+    let mut files: Vec<String> = ["Cargo.toml", "Cargo.lock", "boxology.toml"].into_iter().map(String::from).collect();
+    let mut manifests = vec![(String::from("boxology.toml"), ROOT_MANIFEST.as_bytes().to_vec())];
+    for (id, imports) in [("alpha", &["zulu"][..]), ("zulu", &["alpha"][..])] {
+        files.extend([format!("{id}/boxology.toml"), format!("{id}/implementation/Cargo.toml"), format!("{id}/implementation/src/lib.rs"), format!("{id}/generated/contract/Cargo.toml")]);
+        manifests.push((format!("{id}/boxology.toml"), candidate_manifest_with(id, "boxology-contract", true, "implementation", false, imports, false).into_bytes()));
+    }
+    let files = files.into_iter().map(|name| FileEntry::file(path(&name))).collect();
+    let manifests = manifests.into_iter().map(|(name, bytes)| (path(&name), bytes)).collect();
+    let workspace = WorkspaceInputs::new(files, manifests, &metadata_for(&["alpha", "zulu"])).unwrap().check().unwrap();
+    error_is(plan(&workspace, None), "BXW0086", "alpha/boxology.toml", "generation candidates must not form an import cycle");
+}
+
+#[test]
+fn plan_preserves_import_declaration_order() {
+    let workspace = imported_workspace(&["zulu", "alpha"], &[("alpha", "boxology-contract"), ("zulu", "boxology-contract")]);
+    let plans = plan(&workspace, None).unwrap();
+    let greeter = plans.iter().find(|plan| plan.package_id().as_str() == "greeter").unwrap();
+    assert_eq!(greeter.imports().iter().map(|import| import.package().as_str()).collect::<Vec<_>>(), ["zulu", "alpha"]);
+}
 
 #[test]
 fn plan_is_complete_sorted_and_excludes_cargo_and_foreign_or_derived_files() {
@@ -100,7 +171,6 @@ fn planning_rejections_are_stable() {
         (workspace("other-tool", true, false, false, false), None, "BXW0064", "ping/boxology.toml", "only the boxology-contract generator is supported by generate"),
         (workspace("boxology-contract", true, false, false, false), Some(id("absent")), "BXW0065", "<request>", "the requested package must be a discovered workspace package"),
         (workspace("cargo", true, false, false, false), Some(id("ping")), "BXW0066", "ping/boxology.toml", "the selected package must declare a contract-generation output"),
-        (workspace("boxology-contract", true, true, false, false), None, "BXW0068", "ping/boxology.toml", "generation candidates must not declare imports outside their package inputs"),
         (workspace("boxology-contract", true, false, true, false), None, "BXW0069", "ping/boxology.toml", "a package must declare at most one contract-generation output"),
     ] { error_is(plan(&workspace, selection.as_ref()), code, at, detail); }
 }

@@ -195,8 +195,9 @@ impl std::error::Error for ExecuteError {
 
 /// Executes one plan against `root`, reading package inputs, generating its tree, and writing it.
 ///
-/// Inputs are read in sorted logical-path order after refusing symlinks in every input ancestor.
-/// The package directory is `root` joined with the plan's validated package root.
+/// Inputs are read in sorted logical-path order after refusing symlinks in every input ancestor;
+/// resolved imports follow in manifest declaration order. The package directory is `root` joined
+/// with the plan's validated package root.
 /// Pre-write capture records the checked-in schema bytes beside the regenerated tree bytes.
 ///
 /// # Errors
@@ -242,18 +243,34 @@ pub(crate) fn generate_tree(
         .into_iter()
         .map(|input| guarded(&package_dir, input.as_str(), true).map(|path| (input, path)))
         .collect::<Result<Vec<_>, ExecuteError>>()?;
-    let inputs = guarded_inputs
+    let mut inputs = guarded_inputs
         .into_iter()
         .map(|(input, path)| {
             let bytes = fs::read(&path).map_err(|_| ExecuteError::input(path))?;
             Ok((input.as_str().to_owned(), bytes))
         })
         .collect::<Result<Vec<_>, ExecuteError>>()?;
+    let raw_imports = plan
+        .imports()
+        .iter()
+        .map(|import| {
+            (
+                import.package().clone(),
+                import.schema().as_str().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for import in plan.imports() {
+        let schema = import.schema().clone();
+        let path = guarded(root, schema.as_str(), true)?;
+        let bytes = fs::read(&path).map_err(|_| ExecuteError::input(path))?;
+        inputs.push((schema.as_str().to_owned(), bytes));
+    }
     let request = GenerationRequest::new(
         plan.package_id().clone(),
         plan.crate_root().as_str().to_owned(),
         inputs,
-        Vec::new(),
+        raw_imports,
         OUTPUTS.iter().map(|path| (*path).to_owned()).collect(),
     )
     .map_err(|diagnostics| {

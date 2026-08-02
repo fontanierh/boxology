@@ -29,12 +29,12 @@ const GENERATED_PATHS: [&str; 4] = [
     "generated/contract/src/lib.rs",
     "generated/schema.json",
 ];
-const HELLO_SCHEMA: &str = "../hello/generated/schema.json";
+const HELLO_SCHEMA: &str = "hello/generated/schema.json";
 const PROVENANCE_ANCHOR: &[u8] = b"  \"provenance\": ";
 const PROVENANCE_TOKEN: &[u8] = b"\"@PROVENANCE@\"";
 
 fn assert_hello_schema_path(path: &str) {
-    assert_eq!(path, "../hello/generated/schema.json");
+    assert_eq!(path, "hello/generated/schema.json");
 }
 
 fn assert_generated_inventory(paths: &[&str]) {
@@ -274,7 +274,7 @@ fn greeter_generation_is_cold_import_bearing_exact_and_matches_checked_in_tree()
     let schema_input = request
         .inputs()
         .iter()
-        .find(|input| input.path().as_str() == "../hello/generated/schema.json")
+        .find(|input| input.path().as_str() == "hello/generated/schema.json")
         .expect("hello schema is a generation input");
     assert_eq!(
         schema_input.bytes(),
