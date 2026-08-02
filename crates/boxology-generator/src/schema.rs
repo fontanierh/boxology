@@ -1,7 +1,7 @@
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_contract_syntax::{
     CanonicalType, CapabilityDeclaration, Contract, ErrorVariant, VariantField, VariantPayload,
-    VariantValue,
+    VariantValue, exposure_spelling, idempotency_spelling,
 };
 use boxology_schema::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
@@ -114,11 +114,8 @@ fn capability(capability: &CapabilityDeclaration) -> SchemaCapability {
             leaf: leaf(capability.output_type),
         },
         shape: Shape::Unary,
-        // The controlled grammar admits exactly `exposure = external` and no idempotency
-        // attribute at all — the declaration's own `exposure`/`idempotency` fields are those two
-        // constants — so these are the only values format 1 has ever emitted.
-        max_exposure: ExposureLevel::External,
-        idempotency: Idempotency::None,
+        max_exposure: capability.exposure,
+        idempotency: capability.idempotency,
     }
 }
 
@@ -247,14 +244,31 @@ fn capability_expression(
     error_expr: &str,
 ) -> String {
     format!(
-        "::boxology_contract::CapabilityDescriptor::new(::boxology_contract::CapabilityId::new({box_id_expr}, ::boxology_contract::CapabilityName::new({name:?}).expect(\"generated capability name is valid\")), ::boxology_contract::TypeDescriptor::{input_constructor}(), ::boxology_contract::TypeDescriptor::{output_constructor}(), {error_expr}, ::boxology_contract::CapabilityShape::Unary, ::boxology_contract::ExposureLevel::External, ::boxology_contract::Idempotency::None, {deprecation},)",
+        "::boxology_contract::CapabilityDescriptor::new(::boxology_contract::CapabilityId::new({box_id_expr}, ::boxology_contract::CapabilityName::new({name:?}).expect(\"generated capability name is valid\")), ::boxology_contract::TypeDescriptor::{input_constructor}(), ::boxology_contract::TypeDescriptor::{output_constructor}(), {error_expr}, ::boxology_contract::CapabilityShape::Unary, {exposure}, {idempotency}, {deprecation},)",
         box_id_expr = box_id_expr,
         name = capability.name,
         input_constructor = descriptor_constructor(capability.input_type),
         output_constructor = descriptor_constructor(capability.output_type),
         error_expr = error_expr,
+        exposure = exposure_token(capability.exposure),
+        idempotency = idempotency_token(capability.idempotency),
         deprecation = rust_deprecation(&capability.deprecation),
     )
+}
+
+fn exposure_token(level: ExposureLevel) -> &'static str {
+    match level {
+        ExposureLevel::CodeOnly => "::boxology_contract::ExposureLevel::CodeOnly",
+        ExposureLevel::Internal => "::boxology_contract::ExposureLevel::Internal",
+        ExposureLevel::External => "::boxology_contract::ExposureLevel::External",
+    }
+}
+
+fn idempotency_token(value: Idempotency) -> &'static str {
+    match value {
+        Idempotency::None => "::boxology_contract::Idempotency::None",
+        Idempotency::Inherent => "::boxology_contract::Idempotency::Inherent",
+    }
 }
 
 fn rust_deprecation(note: &Option<String>) -> String {
@@ -325,10 +339,10 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
             capability.input_name.as_str(),
             capability.input_type.canonical_name(),
             capability.output_type.canonical_name(),
-            &capability.error,
+            capability.error.as_str(),
             "unary",
-            "external",
-            "none",
+            exposure_spelling(capability.exposure),
+            idempotency_spelling(capability.idempotency),
         ] {
             string(&mut out, value);
         }
@@ -394,33 +408,92 @@ mod tests {
         }
     }
 
-    /// `capability` hardcodes `external`/`none` instead of reading the declaration's own
-    /// `exposure`/`idempotency`, and may only do so while those are the sole values the controlled
-    /// grammar admits. This pins that premise from the parser's side, so widening the grammar
-    /// turns a test red here rather than silently flattening a new value onto `external`.
-    #[test]
-    fn the_grammar_admits_only_the_exposure_and_idempotency_the_mapping_hardcodes() {
-        let source = |marker| {
-            format!(
-                "#[error] pub enum E {{ V }} #[capability({marker})] \
-                 pub async fn g(n:String)->Result<String,E>;"
-            )
-        };
-        let contract: Contract = syn::parse_str(&source("exposure=external")).unwrap();
-        let declared = &contract.capabilities[0];
-        assert_eq!(declared.exposure, "external");
-        assert_eq!(declared.idempotency, "none");
-        let mapped = capability(declared);
-        assert_eq!(mapped.max_exposure, ExposureLevel::External);
-        assert_eq!(mapped.idempotency, Idempotency::None);
-        for widened in [
-            "exposure=internal",
-            "exposure=code_only",
-            "idempotency=inherent",
-        ] {
-            let rejected = syn::parse_str::<Contract>(&source(widened)).unwrap_err();
-            assert_eq!(rejected.to_string(), "exposure must be external");
+    fn unary(
+        name: &str,
+        exposure: ExposureLevel,
+        idempotency: Idempotency,
+    ) -> Contract {
+        Contract {
+            error: ErrorDeclaration {
+                docs: Vec::new(),
+                deprecation: None,
+                name: "E".to_owned(),
+                variants: vec![ErrorVariant {
+                    docs: Vec::new(),
+                    deprecation: None,
+                    name: "V".to_owned(),
+                    payload: VariantPayload::Unit,
+                }],
+            },
+            capabilities: vec![CapabilityDeclaration {
+                docs: Vec::new(),
+                deprecation: None,
+                name: name.to_owned(),
+                input_name: "n".to_owned(),
+                input_type: CanonicalType::String,
+                output_type: CanonicalType::String,
+                error: "E".to_owned(),
+                exposure,
+                idempotency,
+            }],
         }
+    }
+
+    /// Document mapping copies the model's exposure and idempotency for every legal combination.
+    #[test]
+    fn document_maps_every_exposure_and_idempotency_combination() {
+        let cases = [
+            (ExposureLevel::CodeOnly, Idempotency::None),
+            (ExposureLevel::CodeOnly, Idempotency::Inherent),
+            (ExposureLevel::Internal, Idempotency::None),
+            (ExposureLevel::Internal, Idempotency::Inherent),
+            (ExposureLevel::External, Idempotency::None),
+            (ExposureLevel::External, Idempotency::Inherent),
+        ];
+        for (exposure, idempotency) in cases {
+            let mapped = capability(&unary("g", exposure, idempotency).capabilities[0]);
+            assert_eq!(mapped.max_exposure, exposure);
+            assert_eq!(mapped.idempotency, idempotency);
+        }
+    }
+
+    /// Descriptor emission spells the model's exposure and idempotency tokens.
+    #[test]
+    fn descriptor_source_emits_model_exposure_and_idempotency_tokens() {
+        let non_default = unary("g", ExposureLevel::CodeOnly, Idempotency::Inherent);
+        let source = descriptor_source("box", &non_default, &[0; 32]);
+        assert!(source.contains("ExposureLevel::CodeOnly"), "{source}");
+        assert!(source.contains("Idempotency::Inherent"), "{source}");
+        let hello = unary("greet", ExposureLevel::External, Idempotency::None);
+        let hello_source = descriptor_source("hello", &hello, &[0; 32]);
+        assert!(hello_source.contains("ExposureLevel::External"), "{hello_source}");
+        assert!(hello_source.contains("Idempotency::None"), "{hello_source}");
+    }
+
+    /// Public revision tracks exposure, idempotency, and the effective capability name.
+    #[test]
+    fn revision_changes_with_exposure_and_idempotency() {
+        let base = unary("g", ExposureLevel::External, Idempotency::None);
+        let base_revision = revision("box", &base);
+        let mut exposure = base.clone();
+        exposure.capabilities[0].exposure = ExposureLevel::Internal;
+        assert_ne!(base_revision, revision("box", &exposure));
+        let mut idempotency = base.clone();
+        idempotency.capabilities[0].idempotency = Idempotency::Inherent;
+        assert_ne!(base_revision, revision("box", &idempotency));
+        let mut renamed = base.clone();
+        renamed.capabilities[0].name = "rescued".to_owned();
+        assert_ne!(base_revision, revision("box", &renamed));
+        const PINNED: &str = "626f786f6c6f67792e7075626c69632d636f6e74726163742d7265766973696f6e00000000010000000000000003626f7800000000000000010100000000000000014500000000000000000000000000000000010000000000000001560000000000000000000000000000000000010000000000000005626f782e6700000000000000016700000000000000000000000000000000016e0000000000000006537472696e670000000000000006537472696e670000000000000001450000000000000005756e6172790000000000000008696e7465726e616c0000000000000008696e686572656e74";
+        let pinned = unary("g", ExposureLevel::Internal, Idempotency::Inherent);
+        let bytes = projection("box", &pinned);
+        assert_eq!(
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            PINNED
+        );
     }
 
     /// Pins the seam: `document` is a mapping onto `boxology-schema` and nothing else, so a later
@@ -460,8 +533,8 @@ mod tests {
                 input_type: CanonicalType::U32,
                 output_type: CanonicalType::Bool,
                 error: "StoreError".to_owned(),
-                exposure: "external",
-                idempotency: "none",
+                exposure: ExposureLevel::External,
+                idempotency: Idempotency::None,
             }],
         };
         let expected = SchemaDocument {
@@ -575,8 +648,8 @@ mod tests {
                 input_type: CanonicalType::String,
                 output_type: CanonicalType::String,
                 error: "PayloadError".to_owned(),
-                exposure: "external",
-                idempotency: "none",
+                exposure: ExposureLevel::External,
+                idempotency: Idempotency::None,
             }],
         };
         let expected = SchemaDocument {
