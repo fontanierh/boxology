@@ -720,15 +720,24 @@ mod tests {
             argv,
         }
     }
-    fn workspace(name: &str) -> PathBuf {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/determinism-run-tests")
-            .join(format!(
-                "{name}-{}",
-                NEXT_RUN.fetch_add(1, Ordering::Relaxed)
-            ));
+    fn fresh_workspace(path: PathBuf) -> PathBuf {
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => panic!("reclaim stale workspace {}: {error}", path.display()),
+        }
         fs::create_dir_all(&path).unwrap();
         path
+    }
+    fn workspace(name: &str) -> PathBuf {
+        fresh_workspace(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/determinism-run-tests")
+                .join(format!(
+                    "{name}-{}",
+                    NEXT_RUN.fetch_add(1, Ordering::Relaxed)
+                )),
+        )
     }
     fn read(root: &Path, path: &str) -> Vec<u8> {
         fs::read(root.join(path)).unwrap()
@@ -753,6 +762,20 @@ mod tests {
     }
     fn child_args(name: &str, flag: &str, out: &Path) -> Vec<String> {
         vec![name.into(), flag.into(), out.to_string_lossy().into_owned()]
+    }
+
+    #[test]
+    fn workspace_helper_reclaims_stale_residue() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/determinism-run-tests/helper-stale-residue");
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(path.join("first")).unwrap();
+        fs::write(path.join("first/sentinel"), b"stale").unwrap();
+        let claimed = fresh_workspace(path.clone());
+        assert_eq!(claimed, path);
+        assert!(fs::read_dir(&claimed).unwrap().next().is_none());
+        fs::create_dir(claimed.join("first")).unwrap();
+        fs::remove_dir_all(claimed).unwrap();
     }
 
     #[test]
