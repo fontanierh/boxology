@@ -88,8 +88,10 @@ pub struct CapabilityDeclaration {
     pub docs: Vec<String>,
     /// Optional decoded deprecation note; empty means `#[deprecated]`.
     pub deprecation: Option<String>,
-    /// Capability name.
+    /// Wire capability identity (schema, descriptor, revision, digest).
     pub name: String,
+    /// Rust surface spelling of the capability method.
+    pub rust_name: String,
     /// Input name.
     pub input_name: String,
     /// Canonical scalar leaf accepted as the single input.
@@ -447,17 +449,17 @@ fn parse_capability(
     input.parse::<Token![async]>()?;
     input.parse::<Token![fn]>()?;
     let name_ident: syn::Ident = input.parse()?;
-    let name = identifier(&name_ident)?;
+    let rust_name = identifier(&name_ident)?;
     let name = match name_override {
         Some(overridden) => overridden,
         None => {
-            if !capability_name(&name) {
+            if !capability_name(&rust_name) {
                 return Err(error(
                     &name_ident,
                     "capability name must match [a-z][a-z0-9_]*",
                 ));
             }
-            name
+            rust_name.clone()
         }
     };
     let content;
@@ -494,6 +496,7 @@ fn parse_capability(
         docs,
         deprecation,
         name,
+        rust_name,
         input_name: identifier(&input_ident.ident)?,
         input_type,
         output_type,
@@ -530,6 +533,14 @@ fn parse_capability_metadata(
                             return Err(error(
                                 &value,
                                 "capability name override must match [a-z][a-z0-9_]*",
+                            ));
+                        }
+                        if canonicalize_ordinary_rust_identifier(&overridden).as_deref()
+                            != Some(overridden.as_str())
+                        {
+                            return Err(error(
+                                &value,
+                                "capability name override must be an ordinary non-raw Rust identifier",
                             ));
                         }
                         name = Some(overridden);
@@ -892,6 +903,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overridden.capabilities[0].name, "rescued");
+        assert_eq!(overridden.capabilities[0].rust_name, "BadName");
         let without = parse(
             format!(
                 "{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;"
@@ -924,6 +936,16 @@ mod tests {
                 "#[capability(name=\"Bad-Name\")]",
                 "capability name override must match [a-z][a-z0-9_]*",
                 "\"Bad-Name\"",
+            ),
+            (
+                "#[capability(name=\"match\")]",
+                "capability name override must be an ordinary non-raw Rust identifier",
+                "\"match\"",
+            ),
+            (
+                "#[capability(name=\"self\")]",
+                "capability name override must be an ordinary non-raw Rust identifier",
+                "\"self\"",
             ),
             (
                 "#[capability(exposure=private)]",

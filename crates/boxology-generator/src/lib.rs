@@ -292,7 +292,7 @@ fn checker_source(box_id: &str, contract: &Contract) -> String {
             };
         }
     "#
-        .replace("__CAPABILITY__", &capability.name)
+        .replace("__CAPABILITY__", &capability.rust_name)
         .replace("__ERROR__", &error.name)
         .replace("__INPUT_TY__", rust_value_type(capability.input_type, true))
         .replace("__OUTPUT_TY__", rust_value_type(capability.output_type, true))
@@ -305,7 +305,7 @@ fn checker_source(box_id: &str, contract: &Contract) -> String {
     let error_name = &error.name;
     let per_capability = |template: &str, capability: &CapabilityDeclaration| -> String {
         template
-            .replace("__CAP__", &capability.name)
+            .replace("__CAP__", &capability.rust_name)
             .replace("__INPUT_TY__", rust_value_type(capability.input_type, true))
             .replace(
                 "__OUTPUT_TY__",
@@ -621,7 +621,7 @@ fn adapter_source(
             prefix = prefix,
             input_constructor = schema::descriptor_constructor(capability.input_type),
             input_qualified = rust_value_type(capability.input_type, true),
-            capability_name = capability.name,
+            capability_name = capability.rust_name,
         )
     };
     // At a single capability the adapter keeps today's exact routing so the Hello golden stays
@@ -950,7 +950,7 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
                 {input_name}: {input_bare},
             ) -> Pin<Box<dyn Future<Output = Result<{output_bare}, {error_name}>> + Send + 'a>>;
 "#,
-                capability_name = capability.name,
+                capability_name = capability.rust_name,
                 input_name = capability.input_name,
                 input_bare = rust_value_type(capability.input_type, false),
                 output_bare = rust_value_type(capability.output_type, false),
@@ -1547,6 +1547,26 @@ macro_rules! __boxology_check_implementation {
         assert!(rust.contains("static __BOXOLOGY_CONTRACT_DESCRIPTOR"));
         assert!(rust.contains("pub fn contract_descriptor()"));
         syn::parse_file(rust).unwrap();
+    }
+
+    #[test]
+    fn name_override_keeps_wire_identity_and_rust_method_spelling() {
+        // D4 rename-preserving: wire identity stays in the schema/descriptor; checker, adapter,
+        // and Dispatch demand the Rust fn spelling. The PascalCase fn is admitted only because
+        // an override supplies the `[a-z][a-z0-9_]*` wire name.
+        let source = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(name=\"greet\",exposure=external)] pub async fn salute(name:String)->Result<String,GreetError>; }";
+        let tree = generate(&request_for("hello", source)).unwrap();
+        let schema: Value =
+            serde_json::from_slice(file(&tree, "generated/schema.json").bytes()).unwrap();
+        assert_eq!(schema["capabilities"][0]["name"], "greet");
+        let rust =
+            std::str::from_utf8(file(&tree, "generated/contract/src/lib.rs").bytes()).unwrap();
+        assert!(rust.contains("CapabilityName::new(\"greet\")"));
+        assert!(rust.contains("receiver.salute(context"));
+        assert!(rust.contains("fn salute<'a>("));
+        let adapter =
+            std::str::from_utf8(file(&tree, "generated/adapter/adapter.rs").bytes()).unwrap();
+        assert!(adapter.contains("HelloDispatch::salute("));
     }
 
     #[test]
