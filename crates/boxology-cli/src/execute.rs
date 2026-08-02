@@ -260,6 +260,12 @@ pub(crate) fn generate_tree(
             )
         })
         .collect::<Vec<_>>();
+    for import in plan.imports() {
+        let schema = import.schema().clone();
+        let path = guarded(root, schema.as_str(), true)?;
+        let bytes = fs::read(&path).map_err(|_| ExecuteError::input(path))?;
+        inputs.push((schema.as_str().to_owned(), bytes));
+    }
     let request = GenerationRequest::new(
         plan.package_id().clone(),
         plan.crate_root().as_str().to_owned(),
