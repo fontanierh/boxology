@@ -27,6 +27,13 @@ use crate::syntax::{DEFAULT_DEPTH_LIMIT, SyntaxLimits};
 /// The deadline applied to a request that carries no explicit timeout header.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// The inclusive composition-default request body cap (`03-runtime.md`).
+///
+/// The normative 1 MiB line landed with the wire contract in `111c472` (#68).
+/// The later 8 MiB constant in `d16042f` (#352) cited only "mirroring the
+/// client" and contradicted that line from the moment it landed. The server
+/// request cap (1 MiB) and the client response cap (8 MiB, `s3-http-binding.md`)
+/// are intentionally asymmetric — each matches its own spec; do not re-unify
+/// them on "mirror the client" reasoning.
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 /// The default complete HTTP/1 request-head cap, including its request line.
 const DEFAULT_MAX_REQUEST_HEAD_BYTES: usize = 16 * 1024;
