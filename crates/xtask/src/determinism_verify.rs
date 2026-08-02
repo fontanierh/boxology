@@ -276,43 +276,14 @@ mod tests {
     }
     #[test]
     fn artifact_skips_same_pid_residue() {
-        let pid = std::process::id();
         let parent =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-verify-tests");
-        fs::create_dir_all(&parent).unwrap();
-        let start = NEXT.load(Ordering::Relaxed);
-        let mut blocked = Vec::new();
-        // Plant trees/poison so adopt is visible beside the helper's own "s".
-        let budget = std::thread::available_parallelism()
-            .map(|n| n.get() as u64)
-            .unwrap_or(4);
-        let mut last = start;
-        for step in 0..4096u64 {
-            last = start + step;
-            let path = parent.join(format!("residue-{pid}-{last}"));
-            match fs::create_dir(&path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => panic!("plant residue: {error}"),
-            }
-            fs::create_dir_all(path.join("trees/poison")).unwrap();
-            fs::write(path.join("trees/poison/file"), b"adopt-me").unwrap();
-            blocked.push(Temp(path));
-            if last > NEXT.load(Ordering::Relaxed) + budget {
-                break;
-            }
-            assert!(
-                step + 1 < 4096,
-                "planting hit cap without covering counter+sibling"
-            );
-        }
-        let got = artifact("residue");
-        let name = got.0.file_name().unwrap().to_string_lossy();
-        let drawn: u64 = name.rsplit('-').next().unwrap().parse().unwrap();
-        assert_eq!(
-            drawn,
-            last + 1,
-            "artifact() must draw last-planted+1; got {name}"
+        let got = crate::scratch_test::assert_skips_same_pid_residue(
+            &parent,
+            "residue",
+            &NEXT,
+            || artifact("residue"),
+            |t| &t.0,
         );
         let mut names: Vec<_> = fs::read_dir(got.0.join("trees"))
             .unwrap()
@@ -325,13 +296,6 @@ mod tests {
             "adopted a foreign subject tree"
         );
         assert_eq!(verify(&got.0, TARGET, false), Ok(()));
-        for planted in &blocked {
-            assert_eq!(
-                fs::read(planted.0.join("trees/poison/file")).unwrap(),
-                b"adopt-me",
-                "artifact() must leave same-pid residue untouched"
-            );
-        }
     }
     fn edit(root: &Path, relative: &str, change: impl FnOnce(&mut Value)) {
         let path = root.join(relative);
