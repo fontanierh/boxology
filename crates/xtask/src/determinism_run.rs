@@ -727,14 +727,21 @@ mod tests {
         }
     }
     fn workspace(name: &str) -> Temp {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/determinism-run-tests")
-            .join(format!(
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-run-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let path = loop {
+            let candidate = parent.join(format!(
                 "{name}-{}-{}",
                 std::process::id(),
                 NEXT_RUN.fetch_add(1, Ordering::Relaxed)
             ));
-        fs::create_dir_all(&path).unwrap();
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create workspace: {error}"),
+            }
+        };
         Temp(path)
     }
     fn read(root: &Path, path: &str) -> Vec<u8> {
@@ -778,6 +785,23 @@ mod tests {
             !poisoned.exists(),
             "Temp Drop must clear residue on every exit path"
         );
+
+        // Plant same-pid residue across the next counter window so the helper
+        // must skip rather than adopt. Under create_dir_all this returns a
+        // non-empty adopted directory; under create_dir it advances past.
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-run-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let start = NEXT_RUN.load(Ordering::Relaxed);
+        let blocked: Vec<PathBuf> = (start..start + 64)
+            .map(|n| {
+                let path = parent.join(format!("scratch-pid-{pid}-{n}"));
+                let _ = fs::create_dir(&path);
+                fs::write(path.join("stale"), b"adopt-me").unwrap();
+                path
+            })
+            .collect();
+
         let second = workspace("scratch-pid");
         let second_leaf = second.0.file_name().unwrap().to_string_lossy();
         assert!(
@@ -785,7 +809,23 @@ mod tests {
             "same-name workspace() must still embed pid; got {second_leaf}"
         );
         assert_ne!(second.0, poisoned);
-        assert!(fs::read_dir(&second.0).unwrap().next().is_none());
+        assert!(
+            !blocked.iter().any(|path| path == &second.0),
+            "workspace() must skip same-pid residue, not adopt it; got {}",
+            second.0.display()
+        );
+        assert!(
+            fs::read_dir(&second.0).unwrap().next().is_none(),
+            "workspace() must return a clean directory, not adopted residue"
+        );
+        for path in &blocked {
+            assert_eq!(
+                fs::read(path.join("stale")).unwrap(),
+                b"adopt-me",
+                "workspace() must leave same-pid residue untouched"
+            );
+            let _ = fs::remove_dir_all(path);
+        }
     }
 
     #[test]
