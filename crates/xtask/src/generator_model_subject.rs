@@ -1399,6 +1399,74 @@ impl HelloService {{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_SUBJECT: AtomicU64 = AtomicU64::new(0);
+
+    struct SubjectTemp(PathBuf);
+    impl Drop for SubjectTemp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn subject_root(name: &str) -> SubjectTemp {
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let path = loop {
+            let candidate = parent.join(format!(
+                "{name}-{}-{}",
+                std::process::id(),
+                NEXT_SUBJECT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create subject root: {error}"),
+            }
+        };
+        SubjectTemp(path)
+    }
+
+    fn fixture_scratch(name: &str) -> SubjectTemp {
+        let path = loop {
+            let candidate = std::env::temp_dir().join(format!(
+                "boxology-fixture-{name}-{}-{}",
+                std::process::id(),
+                NEXT_SUBJECT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create fixture scratch: {error}"),
+            }
+        };
+        SubjectTemp(path)
+    }
+
+    #[test]
+    fn subject_root_skips_same_pid_residue() {
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests"),
+            "residue",
+            &NEXT_SUBJECT,
+            || subject_root("residue"),
+            |t| &t.0,
+        );
+    }
+
+    #[test]
+    fn fixture_scratch_skips_same_pid_residue() {
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &std::env::temp_dir(),
+            "boxology-fixture-residue",
+            &NEXT_SUBJECT,
+            || fixture_scratch("residue"),
+            |t| &t.0,
+        );
+    }
 
     #[test]
     fn payload_deferred_authority_mutants_are_rejected() {
@@ -1426,11 +1494,10 @@ mod tests {
     #[test]
     fn fixture_owner_symlink_is_rejected() {
         use std::os::unix::fs::symlink;
-        let root = std::env::temp_dir().join(format!("boxology-fixture-{}", std::process::id()));
-        fs::create_dir_all(root.join("target")).unwrap();
-        symlink(root.join("target"), root.join("owner")).unwrap();
-        assert!(discover_fixture_schema_owners_at(&root).is_err());
-        fs::remove_dir_all(root).unwrap();
+        let root = fixture_scratch("symlink");
+        fs::create_dir(root.0.join("target")).unwrap();
+        symlink(root.0.join("target"), root.0.join("owner")).unwrap();
+        assert!(discover_fixture_schema_owners_at(&root.0).is_err());
     }
 
     #[test]
@@ -1501,21 +1568,18 @@ mod tests {
 
     #[test]
     fn subject_call_publishes_raw_fixture_goldens() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/xtask-subject-tests")
-            .join(format!("{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        run(&root).unwrap();
+        let root = subject_root("goldens");
+        run(&root.0).unwrap();
         for fixture in &FIXTURES {
             let generated = generate(&fixture_request(fixture).unwrap()).unwrap();
             for file in generated.files() {
                 let path = root
+                    .0
                     .join("fixture-goldens")
                     .join(fixture.name)
                     .join(file.path());
                 assert_eq!(fs::read(path).unwrap(), file.bytes());
             }
         }
-        fs::remove_dir_all(root).unwrap();
     }
 }

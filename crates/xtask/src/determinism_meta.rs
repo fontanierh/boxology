@@ -8,6 +8,7 @@ use crate::determinism_run::{
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -156,6 +157,43 @@ fn exercise(
     assert!(!root.exists());
 }
 
+struct Temp(PathBuf);
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(name: &str) -> Temp {
+    let parent = workspace().join("target/determinism-meta-tests");
+    fs::create_dir_all(&parent).unwrap();
+    let path = loop {
+        let candidate = parent.join(format!(
+            "{name}-{}-{}",
+            std::process::id(),
+            NEXT_ARTIFACT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("create scratch: {error}"),
+        }
+    };
+    Temp(path)
+}
+
+#[test]
+fn scratch_skips_same_pid_residue() {
+    let parent = workspace().join("target/determinism-meta-tests");
+    crate::scratch_test::assert_skips_same_pid_residue(
+        &parent,
+        "residue",
+        &NEXT_ARTIFACT,
+        || scratch("residue"),
+        |t| &t.0,
+    );
+}
+
 fn compare_variants(
     name: &'static str,
     file: &str,
@@ -163,17 +201,10 @@ fn compare_variants(
     right: Variant<'_>,
     difference: ByteDiff,
 ) {
-    let temp = workspace()
-        .join("target/determinism-meta-tests")
-        .join(format!(
-            "{}-{}",
-            std::process::id(),
-            NEXT_ARTIFACT.fetch_add(1, Ordering::Relaxed)
-        ));
-    fs::create_dir_all(&temp).unwrap();
-    let (a, b) = (temp.join("a"), temp.join("b"));
-    assert_eq!(manifest_with(&temp, &a, &[subject(name, left.1)]), 0);
-    assert_eq!(manifest_with(&temp, &b, &[subject(name, right.1)]), 0);
+    let temp = scratch(name);
+    let (a, b) = (temp.0.join("a"), temp.0.join("b"));
+    assert_eq!(manifest_with(&temp.0, &a, &[subject(name, left.1)]), 0);
+    assert_eq!(manifest_with(&temp.0, &b, &[subject(name, right.1)]), 0);
     assert_eq!(
         fs::read(a.join("trees").join(name).join(file)).unwrap(),
         left.0
@@ -184,7 +215,6 @@ fn compare_variants(
     );
     assert_eq!(compare(&a, &b), 1);
     assert_eq!(byte_diff(left.0, right.0), Some(difference));
-    fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]

@@ -128,16 +128,41 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    fn temp(name: &str) -> PathBuf {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/determinism-compare-tests")
-            .join(format!(
+    struct Temp(PathBuf);
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    fn temp(name: &str) -> Temp {
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-compare-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let path = loop {
+            let candidate = parent.join(format!(
                 "{name}-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
-        fs::create_dir_all(&path).unwrap();
-        path
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create temp: {error}"),
+            }
+        };
+        Temp(path)
+    }
+    #[test]
+    fn temp_skips_same_pid_residue() {
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-compare-tests");
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &parent,
+            "residue",
+            &NEXT,
+            || temp("residue"),
+            |t| &t.0,
+        );
     }
     fn artifact(root: &Path, files: &[(&str, &[u8])]) {
         for (path, bytes) in files {
@@ -185,9 +210,9 @@ mod tests {
             prepare: None,
             argv: stable_argv,
         }];
-        let (a, b) = (workspace.join("a"), workspace.join("b"));
-        assert_eq!(manifest_with(&workspace, &a, &subject), 0);
-        assert_eq!(manifest_with(&workspace, &b, &subject), 0);
+        let (a, b) = (workspace.0.join("a"), workspace.0.join("b"));
+        assert_eq!(manifest_with(&workspace.0, &a, &subject), 0);
+        assert_eq!(manifest_with(&workspace.0, &b, &subject), 0);
         fs::remove_dir_all(a.join("evidence")).unwrap();
         assert!(matches!(
             evaluate(&a, &b),
@@ -195,12 +220,11 @@ mod tests {
         ));
         assert_eq!(compare(&a, &b), 0);
         assert_eq!(compare(&a, &a), 0);
-        fs::remove_dir_all(workspace).unwrap();
     }
     #[test]
     fn differing_bytes_have_the_exact_full_diagnostic() {
         let root = temp("bytes");
-        let (a, b) = (root.join("a"), root.join("b"));
+        let (a, b) = (root.0.join("a"), root.0.join("b"));
         artifact(&a, &[("s/file", b"abc")]);
         artifact(&b, &[("s/file", b"aXyz")]);
         assert_eq!(
@@ -212,12 +236,11 @@ mod tests {
             )
         );
         assert_eq!(compare(&a, &b), 1);
-        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn absent_record_has_no_offset_fields() {
         let root = temp("absent-record");
-        let (a, b) = (root.join("a"), root.join("b"));
+        let (a, b) = (root.0.join("a"), root.0.join("b"));
         artifact(&a, &[("s/a", b"same")]);
         artifact(&b, &[("s/a", b"same"), ("s/b", b"extra")]);
         let message = finding(&a, &b);
@@ -230,12 +253,11 @@ mod tests {
         );
         assert!(!message.contains("offset="));
         assert_eq!(compare(&a, &b), 1);
-        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn multiple_differences_count_all_pairs_and_choose_bytewise_first() {
         let root = temp("multiple");
-        let (a, b) = (root.join("a"), root.join("b"));
+        let (a, b) = (root.0.join("a"), root.0.join("b"));
         artifact(&a, &[("s/a", b"a"), ("s/z", b"z")]);
         artifact(&b, &[("s/a", b"x"), ("s/b", b"b")]);
         let message = finding(&a, &b);
@@ -243,13 +265,12 @@ mod tests {
             message.starts_with("cross-platform mismatch subject=s experiment=baseline first=s/a ")
         );
         assert!(message.ends_with(" differing=3"));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn argv_requires_exactly_two_plain_nonempty_paths() {
         let root = temp("argv");
-        artifact(&root, &[("s/file", b"same")]);
+        artifact(&root.0, &[("s/file", b"same")]);
         for args in [
             vec![],
             vec!["one".into()],
@@ -261,22 +282,21 @@ mod tests {
         ] {
             assert_eq!(from_args(&args), None);
         }
-        let path = root.to_string_lossy().into_owned();
+        let path = root.0.to_string_lossy().into_owned();
         assert_eq!(from_args(&[path.clone(), path]), Some(0));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn invalid_roots_and_manifests_are_side_specific_class_two() {
         let root = temp("invalid");
-        let valid = root.join("valid");
+        let valid = root.0.join("valid");
         artifact(&valid, &[("s/file", b"same")]);
-        let absent = root.join("absent");
-        let file = root.join("file");
+        let absent = root.0.join("absent");
+        let file = root.0.join("file");
         fs::write(&file, b"not a root").unwrap();
-        let missing = root.join("missing");
+        let missing = root.0.join("missing");
         fs::create_dir(&missing).unwrap();
-        let directory = root.join("directory");
+        let directory = root.0.join("directory");
         fs::create_dir_all(directory.join("MANIFEST")).unwrap();
         for (bad, side) in [
             (&absent, "left"),
@@ -292,7 +312,7 @@ mod tests {
             assert_eq!(compare(a, b), 2);
             assert!(infra_error(a, b).starts_with(&format!("read {side} MANIFEST:")));
         }
-        let malformed = root.join("malformed");
+        let malformed = root.0.join("malformed");
         fs::create_dir(&malformed).unwrap();
         fs::write(malformed.join("MANIFEST"), b"bad\n").unwrap();
         for (a, b, side) in [
@@ -305,13 +325,12 @@ mod tests {
                 format!("parse {side} MANIFEST: malformed manifest header")
             );
         }
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn retained_absence_degrades_but_corruption_is_class_two() {
         let root = temp("retained");
-        let (a, b) = (root.join("a"), root.join("b"));
+        let (a, b) = (root.0.join("a"), root.0.join("b"));
         artifact(&a, &[("s/file", b"abc")]);
         artifact(&b, &[("s/file", b"axc")]);
         let left_file = a.join("trees/s/file");
@@ -341,6 +360,5 @@ mod tests {
         artifact(&a, &[("s/file", &oversized)]);
         artifact(&b, &[("s/file", &different)]);
         assert_eq!(compare(&a, &b), 2);
-        fs::remove_dir_all(root).unwrap();
     }
 }

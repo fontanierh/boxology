@@ -720,15 +720,29 @@ mod tests {
             argv,
         }
     }
-    fn workspace(name: &str) -> PathBuf {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/determinism-run-tests")
-            .join(format!(
-                "{name}-{}",
+    struct Temp(PathBuf);
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    fn workspace(name: &str) -> Temp {
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-run-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let path = loop {
+            let candidate = parent.join(format!(
+                "{name}-{}-{}",
+                std::process::id(),
                 NEXT_RUN.fetch_add(1, Ordering::Relaxed)
             ));
-        fs::create_dir_all(&path).unwrap();
-        path
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create workspace: {error}"),
+            }
+        };
+        Temp(path)
     }
     fn read(root: &Path, path: &str) -> Vec<u8> {
         fs::read(root.join(path)).unwrap()
@@ -753,6 +767,34 @@ mod tests {
     }
     fn child_args(name: &str, flag: &str, out: &Path) -> Vec<String> {
         vec![name.into(), flag.into(), out.to_string_lossy().into_owned()]
+    }
+
+    #[test]
+    fn workspace_paths_embed_pid_and_drop_clears_residue() {
+        let pid = std::process::id().to_string();
+        let first = workspace("scratch-pid");
+        let leaf = first.0.file_name().unwrap().to_string_lossy();
+        assert!(
+            leaf.starts_with(&format!("scratch-pid-{pid}-")),
+            "workspace() must hand out {{name}}-{{pid}}-{{n}}; got {leaf}"
+        );
+        fs::write(first.0.join("sentinel"), b"stale").unwrap();
+        let poisoned = first.0.clone();
+        drop(first);
+        assert!(
+            !poisoned.exists(),
+            "Temp Drop must clear residue on every exit path"
+        );
+
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-run-tests");
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &parent,
+            "scratch-pid",
+            &NEXT_RUN,
+            || workspace("scratch-pid"),
+            |t| &t.0,
+        );
     }
 
     #[test]
@@ -802,19 +844,22 @@ mod tests {
     #[test]
     fn stable_subject_passes_the_protocol_and_removes_its_root() {
         let workspace = workspace("protocol-green");
-        let root = create_run_root(&workspace).unwrap();
-        let result = protocol(&workspace, &root, &[subject("stable", file_argv)]);
+        let root = create_run_root(&workspace.0).unwrap();
+        let result = protocol(&workspace.0, &root, &[subject("stable", file_argv)]);
         assert_eq!(finish_local(&root, result), 0);
         assert!(!root.exists());
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
     fn subject_failure_is_a_finding_and_later_experiments_still_run() {
         let workspace = workspace("subject-failure");
-        let root = create_run_root(&workspace).unwrap();
-        let findings =
-            protocol(&workspace, &root, &[subject("fail-probe", time_fail_argv)]).unwrap();
+        let root = create_run_root(&workspace.0).unwrap();
+        let findings = protocol(
+            &workspace.0,
+            &root,
+            &[subject("fail-probe", time_fail_argv)],
+        )
+        .unwrap();
         assert_eq!(
             findings,
             ["SUBJECT-FAILURE subject=fail-probe experiment=time status=exit status: 23"]
@@ -839,15 +884,18 @@ mod tests {
         assert_eq!(finish_local(&root, Ok(findings)), 1);
         assert!(root.is_dir());
         remove_run_root(&root).unwrap();
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
     fn context_probe_isolates_each_controlled_delta() {
         let workspace = workspace("context-probe");
-        let root = create_run_root(&workspace).unwrap();
-        let findings =
-            protocol(&workspace, &root, &[subject("context-probe", context_argv)]).unwrap();
+        let root = create_run_root(&workspace.0).unwrap();
+        let findings = protocol(
+            &workspace.0,
+            &root,
+            &[subject("context-probe", context_argv)],
+        )
+        .unwrap();
         let heads: Vec<_> = findings
             .iter()
             .map(|finding| finding.split_once(" baseline=").unwrap().0)
@@ -875,7 +923,6 @@ mod tests {
             assert_eq!(changed(&baseline, &context(&root, experiment)), [key]);
         }
         remove_run_root(&root).unwrap();
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
@@ -888,8 +935,12 @@ mod tests {
     #[test]
     fn scratch_is_empty_reused_and_retained_for_every_experiment() {
         let workspace = workspace("scratch-isolation");
-        let root = create_run_root(&workspace).unwrap();
-        let result = protocol(&workspace, &root, &[subject("scratch-probe", scratch_argv)]);
+        let root = create_run_root(&workspace.0).unwrap();
+        let result = protocol(
+            &workspace.0,
+            &root,
+            &[subject("scratch-probe", scratch_argv)],
+        );
         assert!(result.as_ref().unwrap().is_empty());
         for component in ["home", "tmp", "cwd"] {
             let path = |experiment| format!("scratch/{experiment}/{component}/seen");
@@ -901,16 +952,15 @@ mod tests {
         }
         assert_eq!(finish_local(&root, result), 0);
         assert!(!root.exists());
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
     fn repeat_mismatch_is_exact_and_retains_namespaced_evidence() {
         REPEAT_CALLS.store(0, Ordering::SeqCst);
         let workspace = workspace("repeat-mismatch");
-        let root = create_run_root(&workspace).unwrap();
+        let root = create_run_root(&workspace.0).unwrap();
         let findings =
-            protocol(&workspace, &root, &[subject("repeat-probe", repeat_argv)]).unwrap();
+            protocol(&workspace.0, &root, &[subject("repeat-probe", repeat_argv)]).unwrap();
         assert_eq!(
             findings,
             [
@@ -932,16 +982,15 @@ mod tests {
         assert_eq!(finish_local(&root, Ok(findings)), 1);
         assert!(root.exists());
         remove_run_root(&root).unwrap();
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
     fn capture_drains_both_pipes_and_persists_exact_bounded_prefixes() {
         let workspace = workspace("capture");
-        let published = workspace.join("published");
+        let published = workspace.0.join("published");
         assert_eq!(
             manifest_with(
-                &workspace,
+                &workspace.0,
                 &published,
                 &[subject("capture-probe", flood_argv)]
             ),
@@ -967,14 +1016,13 @@ mod tests {
         .unwrap();
         assert_eq!(envelope["capture"]["stdout_truncated"], true);
         assert_eq!(envelope["capture"]["stderr_truncated"], true);
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
     fn run_root_guard_refuses_recursive_deletion_and_preserves_contents() {
         let workspace = workspace("deletion-guard");
         for (name, marker) in [("absent", None), ("invalid", Some(b"not-v1\n"))] {
-            let root = workspace.join(name);
+            let root = workspace.0.join(name);
             fs::create_dir(&root).unwrap();
             if let Some(marker) = marker {
                 fs::write(root.join(MARKER), marker).unwrap();
@@ -984,7 +1032,6 @@ mod tests {
             assert_eq!(read(&root, "sentinel"), b"preserve me");
             assert!(root.is_dir());
         }
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
@@ -1035,7 +1082,7 @@ mod tests {
         ];
         let workspace = workspace("exit-classes");
         for (index, (case, expected)) in cases.into_iter().enumerate() {
-            let out = workspace.join(format!("case-{index}"));
+            let out = workspace.0.join(format!("case-{index}"));
             let code = match case {
                 Case::Success | Case::Unknown => {
                     fs::create_dir(&out).unwrap();
@@ -1062,7 +1109,7 @@ mod tests {
                     child_from_args(&child_args("trivial-tree", "--out", &out)).unwrap_or(2)
                 }
                 Case::Setup => manifest_with(
-                    &workspace,
+                    &workspace.0,
                     &out,
                     &[Subject {
                         name: "setup",
@@ -1071,24 +1118,23 @@ mod tests {
                     }],
                 ),
                 Case::SubprocessNonzero => {
-                    manifest_with(&workspace, &out, &[subject("nonzero", false_argv)])
+                    manifest_with(&workspace.0, &out, &[subject("nonzero", false_argv)])
                 }
                 Case::InvalidTree => {
-                    manifest_with(&workspace, &out, &[subject("invalid-tree", true_argv)])
+                    manifest_with(&workspace.0, &out, &[subject("invalid-tree", true_argv)])
                 }
             };
             assert_eq!(code, expected, "wrong exit class for {case:?}");
         }
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
     fn manifest_publication_is_stable_with_separate_variable_evidence() {
         let workspace = workspace("manifest");
         let subjects = [subject("fixture", file_argv)];
-        let (first, second) = (workspace.join("first"), workspace.join("second"));
-        assert_eq!(manifest_with(&workspace, &first, &subjects), 0);
-        assert_eq!(manifest_with(&workspace, &second, &subjects), 0);
+        let (first, second) = (workspace.0.join("first"), workspace.0.join("second"));
+        assert_eq!(manifest_with(&workspace.0, &first, &subjects), 0);
+        assert_eq!(manifest_with(&workspace.0, &second, &subjects), 0);
         assert_eq!(read(&first, "MANIFEST"), read(&second, "MANIFEST"));
         assert_ne!(
             read(&first, "evidence/run.json"),
@@ -1103,20 +1149,20 @@ mod tests {
             ["MANIFEST", "evidence", "trees"].map(OsString::from).into()
         );
         assert_eq!(read(&first, "trees/fixture/file.txt"), b"stable");
-        let atomic = workspace.join("atomic");
-        let source = workspace.join("source/fixture");
-        let capture = workspace.join("capture");
+        let atomic = workspace.0.join("atomic");
+        let source = workspace.0.join("source/fixture");
+        let capture = workspace.0.join("capture");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir(&capture).unwrap();
         fs::write(source.join("file.txt"), b"stable").unwrap();
-        let manifest = scan_subject_trees(&workspace.join("source")).unwrap();
+        let manifest = scan_subject_trees(&workspace.0.join("source")).unwrap();
         fs::write(source.join("file.txt"), b"mutant").unwrap();
         for stream in ["stdout", "stderr"] {
             fs::write(capture.join(format!("fixture.{stream}")), []).unwrap();
         }
         let error = publish(
             &atomic,
-            &workspace.join("source"),
+            &workspace.0.join("source"),
             &capture,
             &manifest,
             &["fixture"],
@@ -1128,33 +1174,34 @@ mod tests {
         assert!(!atomic.exists());
         assert!(
             !workspace
+                .0
                 .join(format!(".boxology-publish-{}-atomic", std::process::id()))
                 .exists()
         );
         assert_eq!(
             manifest_with(
-                &workspace,
-                &workspace.join("invalid"),
+                &workspace.0,
+                &workspace.0.join("invalid"),
                 &[subject("bad", true_argv)]
             ),
             1
         );
-        assert!(!workspace.join("invalid").exists());
+        assert!(!workspace.0.join("invalid").exists());
         let prior_manifest = read(&first, "MANIFEST");
         let prior_body = read(&first, "trees/fixture/file.txt");
-        assert_eq!(manifest_with(&workspace, &first, &subjects), 2);
+        assert_eq!(manifest_with(&workspace.0, &first, &subjects), 2);
         assert_eq!(read(&first, "MANIFEST"), prior_manifest);
         assert_eq!(read(&first, "trees/fixture/file.txt"), prior_body);
-        assert!(!fs::read_dir(&workspace).unwrap().any(|entry| {
+        assert!(!fs::read_dir(&workspace.0).unwrap().any(|entry| {
             entry
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
                 .starts_with(".boxology-publish-")
         }));
-        let capped = workspace.join("capped");
+        let capped = workspace.0.join("capped");
         assert_eq!(
-            manifest_with(&workspace, &capped, &[subject("cap", capped_argv)]),
+            manifest_with(&workspace.0, &capped, &[subject("cap", capped_argv)]),
             0
         );
         let envelope =
@@ -1163,6 +1210,5 @@ mod tests {
         assert!(!capped.join("trees/cap/00-over").exists());
         assert!(capped.join("trees/cap/16").exists());
         assert!(!capped.join("trees/cap/17").exists());
-        fs::remove_dir_all(workspace).unwrap();
     }
 }

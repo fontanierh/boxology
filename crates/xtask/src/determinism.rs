@@ -296,21 +296,29 @@ pub fn byte_diff(left: &[u8], right: &[u8]) -> Option<ByteDiff> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     struct Temp(PathBuf);
     impl Temp {
-        fn new() -> Self {
-            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/determinism-tests")
-                .join(format!(
-                    "{}-{}",
+        fn new(name: &str) -> Self {
+            let parent =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-tests");
+            fs::create_dir_all(&parent).unwrap();
+            let path = loop {
+                let candidate = parent.join(format!(
+                    "{name}-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));
-            fs::create_dir_all(&path).unwrap();
+                match fs::create_dir(&candidate) {
+                    Ok(()) => break candidate,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create temp: {error}"),
+                }
+            };
             Self(path)
         }
     }
@@ -318,6 +326,17 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+    #[test]
+    fn temp_skips_same_pid_residue() {
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-tests");
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &parent,
+            "residue",
+            &NEXT,
+            || Temp::new("residue"),
+            |t| &t.0,
+        );
     }
     fn line(path: &str, size: &str, sha: &str) -> Vec<u8> {
         format!("{HEADER}\n{path}\t{size}\t{sha}\n").into_bytes()
@@ -327,7 +346,7 @@ mod tests {
     }
     #[test]
     fn tree_roundtrip_is_stable_byte_sorted_and_hashes_known_bytes() {
-        let temp = Temp::new();
+        let temp = Temp::new("roundtrip");
         // `a.txt` and the directory `a/` conflict on a byte prefix: the walk emits
         // `a/z` first (`a` < `a.txt` as a name) while bytewise `a.txt` (0x2e) sorts
         // before `a/z` (0x2f). Only the top-level sort repairs that order.
@@ -388,16 +407,16 @@ mod tests {
     }
     #[test]
     fn tree_rejects_empty_invalid_links_special_files_and_small_caps() {
-        let empty = Temp::new();
+        let empty = Temp::new("empty");
         assert!(
             scan_tree("s", &empty.0)
                 .unwrap_err()
                 .contains("empty directory")
         );
-        let names = Temp::new();
+        let names = Temp::new("names");
         fs::write(names.0.join("bad\tname"), b"x").unwrap();
         assert!(scan_tree("s", &names.0).is_err());
-        let caps = Temp::new();
+        let caps = Temp::new("caps");
         fs::create_dir(caps.0.join("a")).unwrap();
         fs::write(caps.0.join("a/file"), b"").unwrap();
         fs::write(caps.0.join("z"), b"abc").unwrap();
@@ -414,11 +433,11 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            let link = Temp::new();
+            let link = Temp::new("link");
             fs::write(link.0.join("file"), b"x").unwrap();
             symlink(link.0.join("file"), link.0.join("link")).unwrap();
             assert!(scan_tree("s", &link.0).unwrap_err().contains("unsupported"));
-            let fifo = Temp::new();
+            let fifo = Temp::new("fifo");
             assert!(
                 Command::new("mkfifo")
                     .arg(fifo.0.join("pipe"))

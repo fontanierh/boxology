@@ -232,6 +232,7 @@ fn real_node(path: &Path, label: &str, directory: bool) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -247,10 +248,21 @@ mod tests {
         }
     }
     fn artifact(name: &str) -> Temp {
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/determinism-verify-tests")
-            .join(format!("{name}-{}-{id}", std::process::id()));
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-verify-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let root = loop {
+            let candidate = parent.join(format!(
+                "{name}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create artifact: {error}"),
+            }
+        };
         fs::create_dir_all(root.join("trees/s")).unwrap();
         fs::write(root.join("trees/s/file"), b"bytes").unwrap();
         let manifest = scan_subject_trees(&root.join("trees")).unwrap();
@@ -261,6 +273,29 @@ mod tests {
         fs::write(root.join("evidence/subjects/s/stdout.bin"), []).unwrap();
         fs::write(root.join("evidence/subjects/s/stderr.bin"), []).unwrap();
         Temp(root)
+    }
+    #[test]
+    fn artifact_skips_same_pid_residue() {
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-verify-tests");
+        let got = crate::scratch_test::assert_skips_same_pid_residue(
+            &parent,
+            "residue",
+            &NEXT,
+            || artifact("residue"),
+            |t| &t.0,
+        );
+        let mut names: Vec<_> = fs::read_dir(got.0.join("trees"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [std::ffi::OsString::from("s")],
+            "adopted a foreign subject tree"
+        );
+        assert_eq!(verify(&got.0, TARGET, false), Ok(()));
     }
     fn edit(root: &Path, relative: &str, change: impl FnOnce(&mut Value)) {
         let path = root.join(relative);

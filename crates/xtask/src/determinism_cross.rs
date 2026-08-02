@@ -141,20 +141,27 @@ mod tests {
     use super::*;
     use crate::determinism_run::{create_run_root, finish_local, protocol};
     use crate::determinism_verify::verify;
+    use std::io;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
     struct Temp(PathBuf);
     impl Temp {
         fn new(name: &str) -> Self {
-            let path = workspace()
-                .join("target/determinism-cross-tests")
-                .join(format!(
+            let parent = workspace().join("target/determinism-cross-tests");
+            fs::create_dir_all(&parent).unwrap();
+            let path = loop {
+                let candidate = parent.join(format!(
                     "{name}-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));
-            fs::create_dir_all(&path).unwrap();
+                match fs::create_dir(&candidate) {
+                    Ok(()) => break candidate,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create temp: {error}"),
+                }
+            };
             Self(path)
         }
     }
@@ -162,6 +169,18 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn temp_skips_same_pid_residue() {
+        let parent = workspace().join("target/determinism-cross-tests");
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &parent,
+            "residue",
+            &NEXT,
+            || Temp::new("residue"),
+            |t| &t.0,
+        );
     }
 
     fn workspace() -> PathBuf {
