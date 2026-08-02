@@ -52,6 +52,16 @@ const OVERSIZED_CHUNKED_BODY: &[u8] =
 const OVERSIZED_MALFORMED_BODY: &[u8] =
     b"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
 
+/// Hang budget for the 1 MiB default-limit boundary exchanges only.
+///
+/// Distinct from the shared 5s assertion timeout in `support/mod.rs`, which the
+/// small-payload `RAW_CASES` suite still relies on. Under CI's parallel
+/// `cargo test --workspace` load, a debug-build 1 MiB loopback round-trip
+/// (collect + parse a JSON string + echo a ~1 MiB response) routinely exceeds
+/// 5s even though the property under test is not timing-sensitive. Do not
+/// "harmonise" this back to 5s.
+const DEFAULT_BODY_LIMIT_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(60);
+
 const ROW_COUNT: usize = 47;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -725,7 +735,8 @@ async fn raw_hello_cases_are_canonical() {
 
         running
             .assert_then_shutdown(async move {
-                let response = raw_exchange(address, &request, case.exchange).await;
+                let response =
+                    raw_exchange(address, &request, case.exchange, Duration::from_secs(5)).await;
                 assert_response(&response, case.expected);
                 assert_eq!(
                     dispatches.load(Ordering::SeqCst),
@@ -736,6 +747,161 @@ async fn raw_hello_cases_are_canonical() {
             })
             .await;
     }
+}
+
+/// Pins the composition-default request-body limit from `03-runtime.md` (1 MiB).
+///
+/// Not folded into `RAW_CASES` / `ORACLE`: those require independently pinned
+/// exact raw request byte literals, and embedding a 1 MiB body would distort
+/// the table and blow the review-line budget. This test uses the same raw
+/// exchange helpers against a server with **no** `with_request_limits` tuning,
+/// so it is sensitive to `DEFAULT_MAX_BODY_BYTES` alone (existing oversized
+/// rows all configure `BODY_CAP_64` and never exercise the default).
+#[tokio::test]
+async fn default_request_body_limit_boundary_is_one_mib() {
+    const DEFAULT_LIMIT: usize = 1024 * 1024;
+
+    // Inclusive boundary: a body of exactly the default is accepted.
+    {
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let config =
+            HttpServerConfig::new("127.0.0.1:0".parse().expect("loopback address is valid"));
+        let running = RunningHello::start_with_config(
+            CountingHello {
+                dispatches: Arc::clone(&dispatches),
+            },
+            config,
+        );
+        let address = running.local_addr();
+        let body = json_string_body(DEFAULT_LIMIT);
+        let request = content_length_greet_request(&body);
+        let name = std::str::from_utf8(&body[1..body.len() - 1]).expect("ASCII JSON string");
+        let expected_body = format!(r#"{{"result":{{"value":"Hello, {name}!"}}}}"#);
+
+        running
+            .assert_then_shutdown_with(
+                async move {
+                    let response = raw_exchange(
+                        address,
+                        &request,
+                        Exchange::Whole,
+                        DEFAULT_BODY_LIMIT_BOUNDARY_TIMEOUT,
+                    )
+                    .await;
+                    let (head, response_body) = split_response(&response);
+                    let line_end = head
+                        .iter()
+                        .position(|byte| *byte == b'\n')
+                        .expect("valid HTTP response has a status line");
+                    let status_line = head[..line_end]
+                        .strip_suffix(b"\r")
+                        .unwrap_or(&head[..line_end]);
+                    assert_eq!(status_line, OK_STATUS);
+                    assert_eq!(response_body, expected_body.as_bytes());
+                    let headers = parse_headers(&head[line_end + 1..]);
+                    assert_header(&headers, b"content-type", Some(JSON));
+                    assert_eq!(
+                        dispatches.load(Ordering::SeqCst),
+                        1,
+                        "at-limit dispatch count"
+                    );
+                },
+                DEFAULT_BODY_LIMIT_BOUNDARY_TIMEOUT,
+                |result| result,
+            )
+            .await;
+    }
+
+    // One byte over the default is rejected with the canonical 413 body.
+    // The server rejects on the size-hint check before reading the body, emits
+    // 413, and closes with unread data still buffered — which produces RST while
+    // the client is still writing. Read concurrently with the write and ignore
+    // write errors so a reset or stalled write cannot prevent draining the 413.
+    // A raised default (e.g. 8 MiB) accepts this body and fails the oracle.
+    {
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let config =
+            HttpServerConfig::new("127.0.0.1:0".parse().expect("loopback address is valid"));
+        let running = RunningHello::start_with_config(
+            CountingHello {
+                dispatches: Arc::clone(&dispatches),
+            },
+            config,
+        );
+        let address = running.local_addr();
+        let body = json_string_body(DEFAULT_LIMIT + 1);
+        let request = content_length_greet_request(&body);
+
+        running
+            .assert_then_shutdown_with(
+                async move {
+                    let response = raw_exchange_allow_early_close(
+                        address,
+                        &request,
+                        DEFAULT_BODY_LIMIT_BOUNDARY_TIMEOUT,
+                    )
+                    .await;
+                    assert_response(&response, PTL);
+                    assert_eq!(
+                        dispatches.load(Ordering::SeqCst),
+                        0,
+                        "over-default dispatch count"
+                    );
+                },
+                DEFAULT_BODY_LIMIT_BOUNDARY_TIMEOUT,
+                |result| result,
+            )
+            .await;
+    }
+}
+
+fn json_string_body(total_len: usize) -> Vec<u8> {
+    assert!(total_len >= 2, "JSON string body needs surrounding quotes");
+    let mut body = Vec::with_capacity(total_len);
+    body.push(b'"');
+    body.resize(total_len - 1, b'A');
+    body.push(b'"');
+    body
+}
+
+fn content_length_greet_request(body: &[u8]) -> Vec<u8> {
+    let mut rendered = format!(
+        "POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    rendered.extend_from_slice(body);
+    rendered
+}
+
+async fn raw_exchange_allow_early_close(
+    address: std::net::SocketAddr,
+    request: &[u8],
+    limit: Duration,
+) -> Vec<u8> {
+    timeout(limit, async {
+        let stream = TcpStream::connect(address).await.expect("connect");
+        let (mut reader, mut writer) = stream.into_split();
+        let request = request.to_vec();
+        // Write outcome is not under test: size-hint rejection closes with unread
+        // body data and the kernel may RST mid-write (ECONNRESET) or stall the
+        // send window. Concurrent read drains the 413 before RST can discard it.
+        // Return the write half so a finished write does not FIN until after the
+        // read — an early half-close cancels an accepted request with no response.
+        let write_task = tokio::spawn(async move {
+            let _ = writer.write_all(&request).await;
+            writer
+        });
+        let mut response = Vec::new();
+        if let Err(error) = reader.read_to_end(&mut response).await {
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+        }
+        write_task.abort();
+        let _ = write_task.await;
+        response
+    })
+    .await
+    .expect("timeout")
 }
 
 #[test]
@@ -957,8 +1123,9 @@ async fn raw_exchange(
     address: std::net::SocketAddr,
     request: &[u8],
     exchange: Exchange,
+    limit: Duration,
 ) -> Vec<u8> {
-    timeout(Duration::from_secs(5), async {
+    timeout(limit, async {
         let mut stream = TcpStream::connect(address).await.expect("connect");
         match exchange {
             Exchange::Whole => {
