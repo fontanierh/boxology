@@ -245,7 +245,6 @@ mod tests {
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
-            let _ = fs::remove_file(&self.0);
         }
     }
     fn artifact(name: &str) -> Temp {
@@ -286,15 +285,19 @@ mod tests {
         // Size from the live counter, plus a sibling budget for allocates that
         // can advance NEXT between planting and artifact(). Plant directories
         // carrying an extra subject tree: artifact() adds to whatever is at the
-        // path, so an adopt puts "poison" into MANIFEST and verify() rejects
-        // the subject-set mismatch against evidence/subjects.
+        // path, so an adopt puts "poison" beside "s" and the directory-listing
+        // comparison below catches the foreign subject.
         let budget = std::thread::available_parallelism()
             .map(|n| n.get() as u64)
             .unwrap_or(4);
         loop {
             let n = start + blocked.len() as u64;
             let path = parent.join(format!("residue-{pid}-{n}"));
-            let _ = fs::create_dir(&path);
+            match fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("plant residue: {error}"),
+            }
             fs::create_dir_all(path.join("trees/poison")).unwrap();
             fs::write(path.join("trees/poison/file"), b"adopt-me").unwrap();
             blocked.push(Temp(path));

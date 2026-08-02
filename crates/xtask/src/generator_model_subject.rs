@@ -1412,12 +1412,12 @@ mod tests {
         }
     }
 
-    fn subject_root() -> SubjectTemp {
+    fn subject_root(name: &str) -> SubjectTemp {
         let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests");
         fs::create_dir_all(&parent).unwrap();
         let path = loop {
             let candidate = parent.join(format!(
-                "{}-{}",
+                "{name}-{}-{}",
                 std::process::id(),
                 NEXT_SUBJECT.fetch_add(1, Ordering::Relaxed)
             ));
@@ -1438,14 +1438,18 @@ mod tests {
         let start = NEXT_SUBJECT.load(Ordering::Relaxed);
         let mut blocked = Vec::new();
         // Size from the live counter, plus a sibling budget for allocates that
-        // can advance NEXT_SUBJECT between planting and subject_root().
+        // can advance NEXT_SUBJECT between the end of planting and our subject_root() call.
         let budget = std::thread::available_parallelism()
             .map(|n| n.get() as u64)
             .unwrap_or(4);
         loop {
             let n = start + blocked.len() as u64;
-            let path = parent.join(format!("{pid}-{n}"));
-            let _ = fs::create_dir(&path);
+            let path = parent.join(format!("residue-{pid}-{n}"));
+            match fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("plant residue: {error}"),
+            }
             fs::write(path.join("stale"), b"adopt-me").unwrap();
             blocked.push(SubjectTemp(path));
             if n > NEXT_SUBJECT.load(Ordering::Relaxed) + budget {
@@ -1453,7 +1457,7 @@ mod tests {
             }
         }
         let before = NEXT_SUBJECT.load(Ordering::Relaxed);
-        let got = subject_root();
+        let got = subject_root("residue");
         let after = NEXT_SUBJECT.load(Ordering::Relaxed);
         assert!(
             after > before + 1,
@@ -1574,7 +1578,7 @@ mod tests {
 
     #[test]
     fn subject_call_publishes_raw_fixture_goldens() {
-        let root = subject_root();
+        let root = subject_root("goldens");
         run(&root.0).unwrap();
         for fixture in &FIXTURES {
             let generated = generate(&fixture_request(fixture).unwrap()).unwrap();

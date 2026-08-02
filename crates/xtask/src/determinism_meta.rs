@@ -10,7 +10,6 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAP_A: &str = "a=1\nb=2\n";
@@ -20,9 +19,6 @@ const CRLF: &str = "line1\r\nline2\r\n";
 static MAP_ORDINAL: AtomicU64 = AtomicU64::new(0);
 static CRLF_ORDINAL: AtomicU64 = AtomicU64::new(0);
 static NEXT_ARTIFACT: AtomicU64 = AtomicU64::new(0);
-// Un-namespaced {pid}-{n} scratch paths are shared with compare_variants; gate
-// creation so the residue test can plant without racing sibling tests.
-static SCRATCH_GATE: Mutex<()> = Mutex::new(());
 type Argv = fn(&Path) -> (PathBuf, Vec<OsString>);
 type Variant<'a> = (&'a [u8], Argv);
 
@@ -168,15 +164,12 @@ impl Drop for Temp {
     }
 }
 
-fn scratch() -> Temp {
-    let _gate = SCRATCH_GATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+fn scratch(name: &str) -> Temp {
     let parent = workspace().join("target/determinism-meta-tests");
     fs::create_dir_all(&parent).unwrap();
     let path = loop {
         let candidate = parent.join(format!(
-            "{}-{}",
+            "{name}-{}-{}",
             std::process::id(),
             NEXT_ARTIFACT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -194,33 +187,29 @@ fn scratch_skips_same_pid_residue() {
     let pid = std::process::id();
     let parent = workspace().join("target/determinism-meta-tests");
     fs::create_dir_all(&parent).unwrap();
-    // Hold the gate only while planting; drop it before scratch() so the test
-    // exercises the real call site without re-entrant deadlock.
-    let blocked = {
-        let _gate = SCRATCH_GATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let start = NEXT_ARTIFACT.load(Ordering::Relaxed);
-        let mut blocked = Vec::new();
-        // Size from the live counter, plus a sibling budget for scratch()
-        // calls that can sneak between dropping the gate and our allocate.
-        let budget = std::thread::available_parallelism()
-            .map(|n| n.get() as u64)
-            .unwrap_or(4);
-        loop {
-            let n = start + blocked.len() as u64;
-            let path = parent.join(format!("{pid}-{n}"));
-            let _ = fs::create_dir(&path);
-            fs::write(path.join("stale"), b"adopt-me").unwrap();
-            blocked.push(Temp(path));
-            if n > NEXT_ARTIFACT.load(Ordering::Relaxed) + budget {
-                break;
-            }
+    let start = NEXT_ARTIFACT.load(Ordering::Relaxed);
+    let mut blocked = Vec::new();
+    // Size from the live counter, plus a sibling budget for allocates that
+    // can advance NEXT_ARTIFACT between the end of planting and our scratch() call.
+    let budget = std::thread::available_parallelism()
+        .map(|n| n.get() as u64)
+        .unwrap_or(4);
+    loop {
+        let n = start + blocked.len() as u64;
+        let path = parent.join(format!("residue-{pid}-{n}"));
+        match fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("plant residue: {error}"),
         }
-        blocked
-    };
+        fs::write(path.join("stale"), b"adopt-me").unwrap();
+        blocked.push(Temp(path));
+        if n > NEXT_ARTIFACT.load(Ordering::Relaxed) + budget {
+            break;
+        }
+    }
     let before = NEXT_ARTIFACT.load(Ordering::Relaxed);
-    let got = scratch();
+    let got = scratch("residue");
     let after = NEXT_ARTIFACT.load(Ordering::Relaxed);
     assert!(
         after > before + 1,
@@ -247,7 +236,7 @@ fn compare_variants(
     right: Variant<'_>,
     difference: ByteDiff,
 ) {
-    let temp = scratch();
+    let temp = scratch(name);
     let (a, b) = (temp.0.join("a"), temp.0.join("b"));
     assert_eq!(manifest_with(&temp.0, &a, &[subject(name, left.1)]), 0);
     assert_eq!(manifest_with(&temp.0, &b, &[subject(name, right.1)]), 0);
