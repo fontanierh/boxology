@@ -436,62 +436,50 @@ mod tests {
         }
     }
 
-    /// Document mapping copies the model's exposure and idempotency for every legal combination.
+    /// Document, descriptor source, and public-revision projection all follow the model.
     #[test]
-    fn document_maps_every_exposure_and_idempotency_combination() {
+    fn model_driven_exposure_and_idempotency_emission() {
+        #[rustfmt::skip]
         let cases = [
-            (ExposureLevel::CodeOnly, Idempotency::None),
-            (ExposureLevel::CodeOnly, Idempotency::Inherent),
-            (ExposureLevel::Internal, Idempotency::None),
-            (ExposureLevel::Internal, Idempotency::Inherent),
-            (ExposureLevel::External, Idempotency::None),
-            (ExposureLevel::External, Idempotency::Inherent),
+            (ExposureLevel::CodeOnly, Idempotency::None, "CodeOnly", "None"),
+            (ExposureLevel::CodeOnly, Idempotency::Inherent, "CodeOnly", "Inherent"),
+            (ExposureLevel::Internal, Idempotency::None, "Internal", "None"),
+            (ExposureLevel::Internal, Idempotency::Inherent, "Internal", "Inherent"),
+            (ExposureLevel::External, Idempotency::None, "External", "None"),
+            (ExposureLevel::External, Idempotency::Inherent, "External", "Inherent"),
         ];
-        for (exposure, idempotency) in cases {
-            let mapped = capability(&unary("g", exposure, idempotency).capabilities[0]);
-            assert_eq!(mapped.max_exposure, exposure);
-            assert_eq!(mapped.idempotency, idempotency);
-        }
-    }
-
-    /// Descriptor emission spells the model's exposure and idempotency tokens.
-    #[test]
-    fn descriptor_source_emits_model_exposure_and_idempotency_tokens() {
-        let non_default = unary("g", ExposureLevel::CodeOnly, Idempotency::Inherent);
-        let source = descriptor_source("box", &non_default, &[0; 32]);
-        assert!(source.contains("ExposureLevel::CodeOnly"), "{source}");
-        assert!(source.contains("Idempotency::Inherent"), "{source}");
-        let hello = unary("greet", ExposureLevel::External, Idempotency::None);
-        let hello_source = descriptor_source("hello", &hello, &[0; 32]);
-        assert!(
-            hello_source.contains("ExposureLevel::External"),
-            "{hello_source}"
-        );
-        assert!(hello_source.contains("Idempotency::None"), "{hello_source}");
-    }
-
-    /// Public revision tracks exposure, idempotency, and the effective capability name.
-    #[test]
-    fn revision_changes_with_exposure_and_idempotency() {
         let base = unary("g", ExposureLevel::External, Idempotency::None);
         let base_revision = revision("box", &base);
-        let mut exposure = base.clone();
-        exposure.capabilities[0].exposure = ExposureLevel::Internal;
-        assert_ne!(base_revision, revision("box", &exposure));
-        let mut idempotency = base.clone();
-        idempotency.capabilities[0].idempotency = Idempotency::Inherent;
-        assert_ne!(base_revision, revision("box", &idempotency));
+        for (exposure, idempotency, exposure_token, idempotency_token) in cases {
+            let contract = unary("g", exposure, idempotency);
+            let mapped = capability(&contract.capabilities[0]);
+            assert_eq!(mapped.max_exposure, exposure);
+            assert_eq!(mapped.idempotency, idempotency);
+            let source = descriptor_source("box", &contract, &[0; 32]);
+            assert!(
+                source.contains(&format!("ExposureLevel::{exposure_token}")),
+                "{source}"
+            );
+            assert!(
+                source.contains(&format!("Idempotency::{idempotency_token}")),
+                "{source}"
+            );
+            if (exposure, idempotency) != (ExposureLevel::External, Idempotency::None) {
+                assert_ne!(base_revision, revision("box", &contract));
+            }
+        }
         let mut renamed = base.clone();
         renamed.capabilities[0].name = "rescued".to_owned();
         assert_ne!(base_revision, revision("box", &renamed));
         const PINNED: &str = "626f786f6c6f67792e7075626c69632d636f6e74726163742d7265766973696f6e00000000010000000000000003626f7800000000000000010100000000000000014500000000000000000000000000000000010000000000000001560000000000000000000000000000000000010000000000000005626f782e6700000000000000016700000000000000000000000000000000016e0000000000000006537472696e670000000000000006537472696e670000000000000001450000000000000005756e6172790000000000000008696e7465726e616c0000000000000008696e686572656e74";
-        let pinned = unary("g", ExposureLevel::Internal, Idempotency::Inherent);
-        let bytes = projection("box", &pinned);
         assert_eq!(
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>(),
+            projection(
+                "box",
+                &unary("g", ExposureLevel::Internal, Idempotency::Inherent)
+            )
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
             PINNED
         );
     }
