@@ -6,12 +6,10 @@ use std::{
     ffi::OsString,
     fs,
     os::unix::ffi::OsStringExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Output},
-    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
-
-static NEXT: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
@@ -24,12 +22,22 @@ impl Drop for Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let cleanup = env::temp_dir().join(format!(
-            "boxology-init-cli-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&cleanup).unwrap();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos();
+        let mut attempt = 0;
+        let cleanup = loop {
+            let candidate = env::temp_dir().join(format!(
+                "boxology-init-cli-{}-{stamp}-{attempt}",
+                std::process::id()
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => attempt += 1,
+                Err(error) => panic!("create temporary fixture: {error}"),
+            }
+        };
         let root = cleanup.join("target");
         fs::create_dir(&root).unwrap();
         Self { root, cleanup }
@@ -53,6 +61,75 @@ impl Fixture {
 }
 fn text(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).unwrap()
+}
+
+fn regular_files(root: &Path) -> Vec<String> {
+    fn visit(root: &Path, directory: &Path, found: &mut Vec<String>) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let file_type = entry.file_type().unwrap();
+            if file_type.is_dir() {
+                visit(root, &path, found);
+            } else {
+                assert!(
+                    file_type.is_file(),
+                    "not a regular file: {}",
+                    path.display()
+                );
+                found.push(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    visit(root, root, &mut found);
+    found.sort();
+    found
+}
+
+fn assert_tree_matches_oracle(root: &Path) {
+    let oracle = initialize(&InitRequest::new("example", "../boxology").unwrap()).unwrap();
+    assert!(!oracle.files().is_empty());
+    let expected_paths: Vec<_> = oracle
+        .files()
+        .iter()
+        .map(|file| file.path().to_owned())
+        .collect();
+    assert_eq!(regular_files(root), expected_paths);
+
+    let mut expected_entries = Vec::new();
+    for file in oracle.files() {
+        let entry = file.path().split('/').next().unwrap().to_owned();
+        if !expected_entries.contains(&entry) {
+            expected_entries.push(entry);
+        }
+    }
+    expected_entries.sort();
+    let mut actual_entries: Vec<_> = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    actual_entries.sort();
+    assert_eq!(actual_entries, expected_entries);
+
+    for file in oracle.files() {
+        let path = root.join(file.path());
+        assert!(
+            path.is_file(),
+            "generated path is not a regular file: {path:?}"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            file.bytes(),
+            "bytes differ for {path:?}"
+        );
+    }
 }
 
 #[rustfmt::skip]
@@ -138,6 +215,39 @@ fn non_empty_target_names_offending_entries() {
     assert!(stderr.starts_with("BXI0006 "));
     assert!(stderr.contains("entries=[\".DS_Store\"]"));
     assert!(!stderr.contains("entries=[\".DS_Store\", \".git\"]"));
+}
+
+#[test]
+fn success_installs_the_library_tree_byte_exactly() {
+    let fixture = Fixture::new();
+    let output = fixture.run_init("example");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(text(&output.stdout), "initialized example\n");
+    assert!(text(&output.stderr).is_empty());
+    assert_tree_matches_oracle(&fixture.root);
+}
+
+#[test]
+fn success_keeps_a_preexisting_git_directory() {
+    let fixture = Fixture::new();
+    let head = fixture.root.join(".git").join("HEAD");
+    fs::create_dir_all(head.parent().unwrap()).unwrap();
+    fs::write(&head, b"known").unwrap();
+    let output = fixture.run_init("example");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(fs::read(&head).unwrap(), b"known");
+}
+
+#[test]
+fn cli_written_tree_is_sentinel_refused_on_rerun() {
+    let fixture = Fixture::new();
+    let first = fixture.run_init("example");
+    assert_eq!(first.status.code(), Some(0));
+    let output = fixture.run_init("example");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(stderr.starts_with("BXI0007 "));
+    assert!(!stderr.contains("BXI0006"));
 }
 
 #[test]
