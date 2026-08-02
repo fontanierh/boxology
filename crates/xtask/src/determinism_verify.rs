@@ -276,22 +276,32 @@ mod tests {
         Temp(root)
     }
     #[test]
-    fn artifact_skips_structural_same_pid_residue() {
-        // Structural conflict only: a file occupies the candidate path.
-        // Content-level poison inside an adopted directory is not detectable
-        // here — artifact() overwrites its own layout after create succeeds.
+    fn artifact_skips_same_pid_residue() {
         let pid = std::process::id();
         let parent =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-verify-tests");
         fs::create_dir_all(&parent).unwrap();
         let start = NEXT.load(Ordering::Relaxed);
-        let blocked: Vec<Temp> = (start..start + 64)
-            .map(|n| {
-                let path = parent.join(format!("residue-{pid}-{n}"));
-                fs::write(&path, b"adopt-me").unwrap();
-                Temp(path)
-            })
-            .collect();
+        let mut blocked = Vec::new();
+        // Size from the live counter, plus a sibling budget for allocates that
+        // can advance NEXT between planting and artifact(). Plant directories
+        // carrying an extra subject tree: artifact() adds to whatever is at the
+        // path, so an adopt puts "poison" into MANIFEST and verify() rejects
+        // the subject-set mismatch against evidence/subjects.
+        let budget = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4);
+        loop {
+            let n = start + blocked.len() as u64;
+            let path = parent.join(format!("residue-{pid}-{n}"));
+            let _ = fs::create_dir(&path);
+            fs::create_dir_all(path.join("trees/poison")).unwrap();
+            fs::write(path.join("trees/poison/file"), b"adopt-me").unwrap();
+            blocked.push(Temp(path));
+            if n > NEXT.load(Ordering::Relaxed) + budget {
+                break;
+            }
+        }
         let before = NEXT.load(Ordering::Relaxed);
         let got = artifact("residue");
         let after = NEXT.load(Ordering::Relaxed);
@@ -304,9 +314,20 @@ mod tests {
             "artifact() must skip same-pid residue, not adopt it; got {}",
             got.0.display()
         );
+        let mut names: Vec<_> = fs::read_dir(got.0.join("trees"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [std::ffi::OsString::from("s")],
+            "adopted a foreign subject tree"
+        );
+        assert_eq!(verify(&got.0, TARGET, false), Ok(()));
         for planted in &blocked {
             assert_eq!(
-                fs::read(&planted.0).unwrap(),
+                fs::read(planted.0.join("trees/poison/file")).unwrap(),
                 b"adopt-me",
                 "artifact() must leave same-pid residue untouched"
             );

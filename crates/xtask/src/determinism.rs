@@ -305,13 +305,17 @@ mod tests {
     // Un-namespaced {pid}-{n} paths are shared by every Temp::new caller; gate
     // creation so the residue test can plant without racing sibling tests.
     static TEMP_GATE: Mutex<()> = Mutex::new(());
+    fn sibling_budget() -> u64 {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4)
+    }
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {
-            let _gate = TEMP_GATE.lock().unwrap();
-            Self::create()
-        }
-        fn create() -> Self {
+            let _gate = TEMP_GATE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let parent =
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-tests");
             fs::create_dir_all(&parent).unwrap();
@@ -337,21 +341,34 @@ mod tests {
     }
     #[test]
     fn temp_skips_same_pid_residue() {
-        let _gate = TEMP_GATE.lock().unwrap();
         let pid = std::process::id();
         let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-tests");
         fs::create_dir_all(&parent).unwrap();
-        let start = NEXT.load(Ordering::Relaxed);
-        let blocked: Vec<Temp> = (start..start + 64)
-            .map(|n| {
+        // Hold the gate only while planting; drop it before Temp::new so the
+        // test exercises the real call site without re-entrant deadlock.
+        let blocked = {
+            let _gate = TEMP_GATE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let start = NEXT.load(Ordering::Relaxed);
+            let mut blocked = Vec::new();
+            // Size from the live counter, plus a sibling budget for Temp::new
+            // calls that can sneak between dropping the gate and our allocate.
+            let budget = sibling_budget();
+            loop {
+                let n = start + blocked.len() as u64;
                 let path = parent.join(format!("{pid}-{n}"));
-                fs::create_dir(&path).unwrap();
+                let _ = fs::create_dir(&path);
                 fs::write(path.join("stale"), b"adopt-me").unwrap();
-                Temp(path)
-            })
-            .collect();
+                blocked.push(Temp(path));
+                if n > NEXT.load(Ordering::Relaxed) + budget {
+                    break;
+                }
+            }
+            blocked
+        };
         let before = NEXT.load(Ordering::Relaxed);
-        let got = Temp::create();
+        let got = Temp::new();
         let after = NEXT.load(Ordering::Relaxed);
         assert!(
             after > before + 1,

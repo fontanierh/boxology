@@ -169,11 +169,9 @@ impl Drop for Temp {
 }
 
 fn scratch() -> Temp {
-    let _gate = SCRATCH_GATE.lock().unwrap();
-    scratch_exclusive()
-}
-
-fn scratch_exclusive() -> Temp {
+    let _gate = SCRATCH_GATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let parent = workspace().join("target/determinism-meta-tests");
     fs::create_dir_all(&parent).unwrap();
     let path = loop {
@@ -193,21 +191,36 @@ fn scratch_exclusive() -> Temp {
 
 #[test]
 fn scratch_skips_same_pid_residue() {
-    let _gate = SCRATCH_GATE.lock().unwrap();
     let pid = std::process::id();
     let parent = workspace().join("target/determinism-meta-tests");
     fs::create_dir_all(&parent).unwrap();
-    let start = NEXT_ARTIFACT.load(Ordering::Relaxed);
-    let blocked: Vec<Temp> = (start..start + 64)
-        .map(|n| {
+    // Hold the gate only while planting; drop it before scratch() so the test
+    // exercises the real call site without re-entrant deadlock.
+    let blocked = {
+        let _gate = SCRATCH_GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let start = NEXT_ARTIFACT.load(Ordering::Relaxed);
+        let mut blocked = Vec::new();
+        // Size from the live counter, plus a sibling budget for scratch()
+        // calls that can sneak between dropping the gate and our allocate.
+        let budget = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4);
+        loop {
+            let n = start + blocked.len() as u64;
             let path = parent.join(format!("{pid}-{n}"));
-            fs::create_dir(&path).unwrap();
+            let _ = fs::create_dir(&path);
             fs::write(path.join("stale"), b"adopt-me").unwrap();
-            Temp(path)
-        })
-        .collect();
+            blocked.push(Temp(path));
+            if n > NEXT_ARTIFACT.load(Ordering::Relaxed) + budget {
+                break;
+            }
+        }
+        blocked
+    };
     let before = NEXT_ARTIFACT.load(Ordering::Relaxed);
-    let got = scratch_exclusive();
+    let got = scratch();
     let after = NEXT_ARTIFACT.load(Ordering::Relaxed);
     assert!(
         after > before + 1,
