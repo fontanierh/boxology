@@ -1564,6 +1564,8 @@ macro_rules! __boxology_check_implementation {
         assert!(rust.contains("CapabilityName::new(\"greet\")"));
         assert!(rust.contains("receiver.salute(context"));
         assert!(rust.contains("fn salute<'a>("));
+        // Handle is the caller/import surface: it must use the wire name, not the fn spelling.
+        assert!(rust.contains("pub async fn greet("));
         let adapter =
             std::str::from_utf8(file(&tree, "generated/adapter/adapter.rs").bytes()).unwrap();
         assert!(adapter.contains("HelloDispatch::salute("));
