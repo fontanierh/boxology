@@ -119,7 +119,6 @@ fn text(bytes: &[u8]) -> &str {
 fn parsing_accepts_only_the_two_generate_forms() {
     for args in [
         vec![],
-        vec!["check"],
         vec!["generate", "--package"],
         vec!["generate", "--package", "ping", "extra"],
         vec!["generate", "--package=ping"],
@@ -133,7 +132,7 @@ fn parsing_accepts_only_the_two_generate_forms() {
         assert!(text(&output.stdout).is_empty());
         assert_eq!(
             text(&output.stderr),
-            "usage: boxology generate\n       boxology generate --package <id>\n"
+            "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n"
         );
     }
 }
@@ -149,7 +148,7 @@ fn non_unicode_argument_is_usage_failure_without_panic() {
     assert!(text(&output.stdout).is_empty());
     assert_eq!(
         text(&output.stderr),
-        "usage: boxology generate\n       boxology generate --package <id>\n"
+        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n"
     );
 }
 
@@ -251,4 +250,111 @@ fn corrupted_cargo_toml_is_reported_with_captured_cargo_output() {
     assert!(text(&output.stdout).is_empty());
     assert!(text(&output.stderr).contains("BXW0075 Cargo.toml: "));
     assert!(text(&output.stderr).contains("Cargo.toml"));
+}
+
+#[test]
+fn check_clean_workspace_reports_all_steps_and_exits_zero() {
+    let fixture = Fixture::new(false);
+    let generated = fixture.run(&["generate"]);
+    assert_eq!(generated.status.code(), Some(0));
+    let first = fixture.run(&["check"]);
+    let expected = "check discovery passed\n\
+                    check regeneration passed\n\
+                    check contract-classification skipped\n\
+                    \x20 contract classification skipped: base-revision classification is not implemented in this boxology version\n\
+                    check cargo-graph skipped\n\
+                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check fmt skipped\n\
+                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check clippy skipped\n\
+                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check tests skipped\n\
+                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check quality skipped\n\
+                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check result passed\n";
+    assert_eq!(first.status.code(), Some(0));
+    assert_eq!(text(&first.stdout), expected);
+    assert!(text(&first.stderr).is_empty());
+    let second = fixture.run(&["check"]);
+    assert_eq!(second.status.code(), Some(0));
+    assert_eq!(second.stdout, first.stdout);
+    assert_eq!(second.stderr, first.stderr);
+}
+
+#[test]
+fn check_tampered_and_missing_artifacts_fail_naming_repair() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let contract = fixture.root.join("ping/generated/contract/src/lib.rs");
+    let mut bytes = fs::read(&contract).unwrap();
+    bytes[0] ^= 1;
+    fs::write(contract, bytes).unwrap();
+    fs::remove_file(fixture.root.join("ping/generated/adapter/adapter.rs")).unwrap();
+    let output = fixture.run(&["check"]);
+    let stdout = text(&output.stdout);
+    let missing = [
+        "BXW0083 ping/generated/adapter/adapter.rs package=ping ",
+        "candidates=[kind=missing repair=\"boxology generate --package ping\"]",
+    ]
+    .concat();
+    let differing = [
+        "BXW0083 ping/generated/contract/src/lib.rs package=ping ",
+        "candidates=[kind=differing repair=\"boxology generate --package ping\"]",
+    ]
+    .concat();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).is_empty());
+    assert!(stdout.contains("check regeneration failed"));
+    assert!(stdout.contains(&missing));
+    assert!(stdout.contains(&differing));
+    assert!(stdout.find(&missing).unwrap() < stdout.find(&differing).unwrap());
+    assert!(stdout.ends_with("check result failed\n"));
+}
+
+#[test]
+fn check_deleted_generation_input_is_a_step_error() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fs::remove_file(fixture.root.join("ping/implementation/src/lib.rs")).unwrap();
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert!(text(&output.stderr).contains("BXW0070"));
+}
+
+#[test]
+fn check_workspace_findings_fail_before_composition() {
+    let fixture = Fixture::new(true);
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert!(text(&output.stderr).contains("BXW0044"));
+}
+
+#[test]
+fn check_metadata_failure_is_invocation() {
+    let fixture = Fixture::new(false);
+    let output = fixture.run_with(&["check"], "fail", true);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(text(&output.stdout).is_empty());
+    assert!(text(&output.stderr).starts_with("BXW0075 Cargo.toml: "));
+}
+
+#[test]
+fn check_rejects_unwired_flags_with_usage() {
+    let usage = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n";
+    for args in [
+        vec!["check", "--format", "json"],
+        vec!["check", "--base", "abc123"],
+        vec!["check", "extra"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_boxology"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "args: {args:?}");
+        assert!(text(&output.stdout).is_empty());
+        assert_eq!(text(&output.stderr), usage);
+    }
 }

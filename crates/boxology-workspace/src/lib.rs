@@ -1065,6 +1065,19 @@ impl Finding {
         found.candidates = named;
         found
     }
+    /// Constructs a finding for a coded rule owned by an effectful caller. The CLI uses this for
+    /// BXW0083 today and will use it for the later lockfile, formatting, clippy, test, and quality
+    /// steps; the caller owns the stability of `code` and supplies the rule's claimed source.
+    pub fn external(
+        code: &'static str,
+        text: &'static str,
+        source: &'static str,
+        path: RelativePath,
+        package: Option<BoxId>,
+        payload: String,
+    ) -> Self {
+        Self::about((code, text), source, path, package, payload)
+    }
     /// [`Finding::new`], for a rule from another normative source whose payload names no pattern
     /// claim. A defect of the `cargo metadata` document is about the whole document, not about a
     /// glob some manifest spells, so its [`Finding::candidates`] list is empty and stays so.
@@ -1247,10 +1260,29 @@ pub enum Completion {
     Passed,
     /// The step completed and reported its deterministically ordered findings.
     Failed(Findings),
+    /// The step is visible but has not been implemented in this Boxology version.
+    Skipped(StepSkip),
 }
 impl Completion {
     fn is_failed(&self) -> bool {
         matches!(self, Self::Failed(_))
+    }
+}
+/// Why an ordinary validation step is not run.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum StepSkip {
+    /// This Boxology version does not implement the step yet.
+    NotImplemented,
+}
+impl StepSkip {
+    /// Returns the frozen, deterministic human sentence for this skip reason.
+    pub const fn sentence(self) -> &'static str {
+        "not run: the step is not implemented in this boxology version"
+    }
+}
+impl fmt::Display for StepSkip {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.sentence())
     }
 }
 /// Why the base-relative contract-classification step could not run.
@@ -1260,6 +1292,8 @@ pub enum SkipReason {
     NoRepository,
     /// The repository has no merge base with the configured `main` branch.
     NoMergeBase,
+    /// Base-revision classification is not implemented in this Boxology version.
+    Unimplemented,
 }
 impl SkipReason {
     /// Returns the frozen, deterministic human sentence for this skip reason.
@@ -1268,6 +1302,9 @@ impl SkipReason {
             Self::NoRepository => "contract classification skipped: no repository is available",
             Self::NoMergeBase => {
                 "contract classification skipped: no merge base with main is available"
+            }
+            Self::Unimplemented => {
+                "contract classification skipped: base-revision classification is not implemented in this boxology version"
             }
         }
     }
@@ -1407,11 +1444,12 @@ impl fmt::Display for CheckStatus {
 }
 /// The pure, complete eight-step `boxology check` report.
 ///
-/// The named field types make a skip constructible only in the contract-classification field. The
-/// eight fields mirror 08-rust-build-topology.md's baseline rather than a positional outcome array,
-/// so a report cannot omit a step or attach a base skip to an ordinary validation step. Integrity
-/// errors never enter a report — they propagate as CLI errors before composition — and report-only
-/// classification findings are excluded from [`CheckReport::status`] deliberately under S5 D6.
+/// The named field types mirror 08-rust-build-topology.md's baseline rather than a positional
+/// outcome array, so a report cannot omit a step. During #327's remaining stack, ordinary steps
+/// may be explicitly skipped while their implementation lands; a skipped step is neither passed
+/// nor failed. Integrity errors never enter a report — they propagate as CLI errors before
+/// composition — and report-only classification findings are excluded from [`CheckReport::status`]
+/// deliberately under S5 D6.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckReport {
     /// The discovery/ownership/role validation outcome.
@@ -1490,6 +1528,11 @@ impl CheckReport {
         }
     }
     fn render_completion(&self, step: CheckStep, completion: &Completion, lines: &mut Vec<String>) {
+        if let Completion::Skipped(reason) = completion {
+            lines.push(format!("check {step} skipped"));
+            lines.push(format!("  {reason}"));
+            return;
+        }
         let status = if completion.is_failed() {
             CheckStatus::Failed
         } else {
@@ -1689,6 +1732,19 @@ jobs:
             quality: Completion::Passed,
         }
     }
+    fn all_skipped_report() -> CheckReport {
+        CheckReport {
+            contract_classification: ContractClassificationCompletion::Skipped(
+                SkipReason::Unimplemented,
+            ),
+            cargo_graph: Completion::Skipped(StepSkip::NotImplemented),
+            fmt: Completion::Skipped(StepSkip::NotImplemented),
+            clippy: Completion::Skipped(StepSkip::NotImplemented),
+            tests: Completion::Skipped(StepSkip::NotImplemented),
+            quality: Completion::Skipped(StepSkip::NotImplemented),
+            ..all_pass_report()
+        }
+    }
     fn skipped_report(reason: SkipReason) -> CheckReport {
         CheckReport {
             contract_classification: ContractClassificationCompletion::Skipped(reason),
@@ -1751,6 +1807,27 @@ jobs:
         );
     }
     #[test]
+    fn check_report_renders_all_unimplemented_steps_as_skipped() {
+        assert_eq!(
+            all_skipped_report().render_human(),
+            "check discovery passed\n\
+             check regeneration passed\n\
+             check contract-classification skipped\n\
+             \x20 contract classification skipped: base-revision classification is not implemented in this boxology version\n\
+             check cargo-graph skipped\n\
+             \x20 not run: the step is not implemented in this boxology version\n\
+             check fmt skipped\n\
+             \x20 not run: the step is not implemented in this boxology version\n\
+             check clippy skipped\n\
+             \x20 not run: the step is not implemented in this boxology version\n\
+             check tests skipped\n\
+             \x20 not run: the step is not implemented in this boxology version\n\
+             check quality skipped\n\
+             \x20 not run: the step is not implemented in this boxology version\n\
+             check result passed"
+        );
+    }
+    #[test]
     fn check_report_headers_are_each_exactly_once_in_order() {
         let rendered = failed_skipped_report(SkipReason::NoRepository).render_human();
         let lines: Vec<&str> = rendered.lines().collect();
@@ -1792,6 +1869,21 @@ jobs:
                 1
             );
         }
+        let mut ordinary = all_pass_report();
+        ordinary.cargo_graph = Completion::Skipped(StepSkip::NotImplemented);
+        let rendered = ordinary.render_human();
+        assert_eq!(
+            rendered
+                .matches(StepSkip::NotImplemented.sentence())
+                .count(),
+            1
+        );
+        assert_eq!(
+            rendered
+                .matches("  not run: the step is not implemented in this boxology version")
+                .count(),
+            1
+        );
     }
     #[test]
     fn exit_vocabulary_and_all_pass_or_skipped_reports_are_zero() {
@@ -1802,6 +1894,7 @@ jobs:
         assert_eq!(all_pass_report().exit_code(), 0);
         assert_eq!(skipped_report(SkipReason::NoRepository).exit_code(), 0);
         assert_eq!(skipped_report(SkipReason::NoMergeBase).exit_code(), 0);
+        assert_eq!(all_skipped_report().exit_code(), 0);
     }
     #[test]
     fn each_step_failure_has_explicit_exit_mapping() {
@@ -1892,6 +1985,23 @@ jobs:
             "  FIND001 alpha alpha/type/T/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\""
         ));
         assert!(rendered.ends_with("check result passed"));
+    }
+    #[test]
+    fn external_finding_round_trips_rule_and_source() {
+        let finding = Finding::external(
+            "EXT001",
+            "an external rule",
+            "tests/external-rule",
+            path("ping/generated/lib.rs"),
+            Some(id("ping")),
+            "kind=differing".to_owned(),
+        );
+        assert_eq!(
+            finding.to_string(),
+            "EXT001 ping/generated/lib.rs package=ping candidates=[kind=differing]"
+        );
+        assert_eq!(finding.rule(), "an external rule");
+        assert_eq!(finding.rule_source(), "tests/external-rule");
     }
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("test literals are workspace-relative paths")

@@ -36,12 +36,12 @@ const LIB_HASH: u64 = 3_815_777_340_312_689_332;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
 const GENERATE_HASH: u64 = 2_437_200_502_410_785_768;
 const EXECUTE_HASH: u64 = 11_213_979_871_116_802_205;
-const COMPARE_HASH: u64 = 14_944_756_614_594_564_047;
+const COMPARE_HASH: u64 = 12_138_161_763_628_885_121;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, selection.as_ref())\nexecute(root, generation)\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\ncompare_step(root, &workspace)\nfn not_implemented() -> Completion\nSkipReason::Unimplemented\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 2_327_141_899_214_887_966;
+const MAIN_HASH: u64 = 3_742_521_668_692_717_901;
 const HASHES: [u64; 8] = [
     LIB_HASH,
     WALK_HASH,
@@ -57,7 +57,7 @@ const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.ge
 const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nconst SCHEMA: &str = \"generated/schema.json\";\nfile.path() == SCHEMA";
 const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged base_schema submitted_schema ExecuteError code location path detail diagnostics write_error execute";
 const COMPARE_ANCHORS: &str = "plan(workspace, None)\nclassification.derived_output() == Some(plan.derived_output_id())\nDifferenceKind::Stale\ndifferences.sort_by\nBXW0083";
-const COMPARE_PUBLIC: &str = "DifferenceKind CompareDifference package path kind code detail repair_command CompareStepError compare_step";
+const COMPARE_PUBLIC: &str = "DifferenceKind as_str CompareDifference package path kind code detail repair_command rule_source CompareStepError compare_step";
 const CLASSIFY_ANCHORS: &str = "map_err(ClassifyError::base)\nmap_err(ClassifyError::submitted)\nmap_err(ClassifyError::pairing)\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
 const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify";
 const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED,\n            \"submitted\",\nCHECK_PAIRING,\n                \"pairing\",\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
