@@ -282,9 +282,10 @@ impl Parse for Contract {
         let error = parse_error(&attrs, &input.parse()?)?;
         let mut capabilities = Vec::new();
         let mut names = BTreeSet::new();
+        let mut rust_names = BTreeSet::new();
         while !input.is_empty() {
             let attrs = Attribute::parse_outer(input)?;
-            let capability = parse_capability(&attrs, input)?;
+            let (capability, rust_ident) = parse_capability(&attrs, input)?;
             if capability.error != error.name {
                 return Err(
                     input.error("capability error must directly name an in-block #[error] enum")
@@ -292,6 +293,12 @@ impl Parse for Contract {
             }
             if !names.insert(capability.name.clone()) {
                 return Err(input.error("capability names must be unique"));
+            }
+            if !rust_names.insert(capability.rust_name.clone()) {
+                return Err(syn::Error::new(
+                    rust_ident.span(),
+                    "capability Rust names must be unique",
+                ));
             }
             capabilities.push(capability);
         }
@@ -439,7 +446,7 @@ fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclara
 fn parse_capability(
     attrs: &[Attribute],
     input: ParseStream<'_>,
-) -> syn::Result<CapabilityDeclaration> {
+) -> syn::Result<(CapabilityDeclaration, syn::Ident)> {
     let (docs, deprecation, marker) = metadata(attrs, "capability")?;
     let Some(marker) = marker else {
         return Err(input.error("capability declaration requires #[capability]"));
@@ -492,18 +499,21 @@ fn parse_capability(
             "output must be unqualified Result<Leaf, Error>",
         ));
     };
-    Ok(CapabilityDeclaration {
-        docs,
-        deprecation,
-        name,
-        rust_name,
-        input_name: identifier(&input_ident.ident)?,
-        input_type,
-        output_type,
-        error: error_name,
-        exposure,
-        idempotency,
-    })
+    Ok((
+        CapabilityDeclaration {
+            docs,
+            deprecation,
+            name,
+            rust_name,
+            input_name: identifier(&input_ident.ident)?,
+            input_type,
+            output_type,
+            error: error_name,
+            exposure,
+            idempotency,
+        },
+        name_ident,
+    ))
 }
 
 fn parse_capability_metadata(
@@ -778,6 +788,7 @@ mod tests {
         assert_eq!(contract.error.variants[0].name, "EmptyName");
         assert_eq!(contract.capabilities.len(), 1);
         assert_eq!(contract.capabilities[0].name, "greet");
+        assert_eq!(contract.capabilities[0].rust_name, "greet");
         assert_eq!(contract.capabilities[0].input_name, "name");
         assert_eq!(contract.capabilities[0].error, "GreetError");
         assert_eq!(contract.capabilities[0].exposure, ExposureLevel::External);
@@ -971,6 +982,12 @@ mod tests {
             assert_eq!(error.to_string(), message, "{marker}");
             assert_eq!(&source[error.span().byte_range()], slice, "{marker}");
         }
+        let source = format!(
+            "{ERROR} #[capability(name=\"alpha\",exposure=external)] pub async fn same(n:String)->Result<String,GreetError>; #[capability(name=\"beta\",exposure=external)] pub async fn same(n:String)->Result<String,GreetError>;"
+        );
+        let error = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(error.to_string(), "capability Rust names must be unique");
+        assert_eq!(&source[error.span().byte_range()], "same");
     }
     #[test]
     fn non_default_metadata_semantic_encoding_is_pinned() {
