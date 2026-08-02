@@ -26,8 +26,8 @@ use crate::syntax::{DEFAULT_DEPTH_LIMIT, SyntaxLimits};
 
 /// The deadline applied to a request that carries no explicit timeout header.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// The inclusive request body cap, mirroring the client's response cap.
-const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// The inclusive composition-default request body cap (`03-runtime.md`).
+const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 /// The default complete HTTP/1 request-head cap, including its request line.
 const DEFAULT_MAX_REQUEST_HEAD_BYTES: usize = 16 * 1024;
 /// Hyper's minimum accepted `max_buf_size`; lower configured values use this.
