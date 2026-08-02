@@ -232,6 +232,7 @@ fn real_node(path: &Path, label: &str, directory: bool) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -244,13 +245,25 @@ mod tests {
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_file(&self.0);
         }
     }
     fn artifact(name: &str) -> Temp {
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/determinism-verify-tests")
-            .join(format!("{name}-{}-{id}", std::process::id()));
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-verify-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let root = loop {
+            let candidate = parent.join(format!(
+                "{name}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create artifact: {error}"),
+            }
+        };
         fs::create_dir_all(root.join("trees/s")).unwrap();
         fs::write(root.join("trees/s/file"), b"bytes").unwrap();
         let manifest = scan_subject_trees(&root.join("trees")).unwrap();
@@ -261,6 +274,43 @@ mod tests {
         fs::write(root.join("evidence/subjects/s/stdout.bin"), []).unwrap();
         fs::write(root.join("evidence/subjects/s/stderr.bin"), []).unwrap();
         Temp(root)
+    }
+    #[test]
+    fn artifact_skips_structural_same_pid_residue() {
+        // Structural conflict only: a file occupies the candidate path.
+        // Content-level poison inside an adopted directory is not detectable
+        // here — artifact() overwrites its own layout after create succeeds.
+        let pid = std::process::id();
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-verify-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let start = NEXT.load(Ordering::Relaxed);
+        let blocked: Vec<Temp> = (start..start + 64)
+            .map(|n| {
+                let path = parent.join(format!("residue-{pid}-{n}"));
+                fs::write(&path, b"adopt-me").unwrap();
+                Temp(path)
+            })
+            .collect();
+        let before = NEXT.load(Ordering::Relaxed);
+        let got = artifact("residue");
+        let after = NEXT.load(Ordering::Relaxed);
+        assert!(
+            after > before + 1,
+            "artifact() must iterate past residue (NEXT {before} -> {after}), not adopt on first try"
+        );
+        assert!(
+            !blocked.iter().any(|temp| temp.0 == got.0),
+            "artifact() must skip same-pid residue, not adopt it; got {}",
+            got.0.display()
+        );
+        for planted in &blocked {
+            assert_eq!(
+                fs::read(&planted.0).unwrap(),
+                b"adopt-me",
+                "artifact() must leave same-pid residue untouched"
+            );
+        }
     }
     fn edit(root: &Path, relative: &str, change: impl FnOnce(&mut Value)) {
         let path = root.join(relative);

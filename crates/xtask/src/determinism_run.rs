@@ -793,16 +793,22 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-run-tests");
         fs::create_dir_all(&parent).unwrap();
         let start = NEXT_RUN.load(Ordering::Relaxed);
-        let blocked: Vec<PathBuf> = (start..start + 64)
+        let blocked: Vec<Temp> = (start..start + 64)
             .map(|n| {
                 let path = parent.join(format!("scratch-pid-{pid}-{n}"));
                 let _ = fs::create_dir(&path);
                 fs::write(path.join("stale"), b"adopt-me").unwrap();
-                path
+                Temp(path)
             })
             .collect();
 
+        let before = NEXT_RUN.load(Ordering::Relaxed);
         let second = workspace("scratch-pid");
+        let after = NEXT_RUN.load(Ordering::Relaxed);
+        assert!(
+            after > before + 1,
+            "workspace() must iterate past residue (NEXT_RUN {before} -> {after}), not adopt on first try"
+        );
         let second_leaf = second.0.file_name().unwrap().to_string_lossy();
         assert!(
             second_leaf.starts_with(&format!("scratch-pid-{pid}-")),
@@ -810,21 +816,16 @@ mod tests {
         );
         assert_ne!(second.0, poisoned);
         assert!(
-            !blocked.iter().any(|path| path == &second.0),
+            !blocked.iter().any(|temp| temp.0 == second.0),
             "workspace() must skip same-pid residue, not adopt it; got {}",
             second.0.display()
         );
-        assert!(
-            fs::read_dir(&second.0).unwrap().next().is_none(),
-            "workspace() must return a clean directory, not adopted residue"
-        );
-        for path in &blocked {
+        for temp in &blocked {
             assert_eq!(
-                fs::read(path.join("stale")).unwrap(),
+                fs::read(temp.0.join("stale")).unwrap(),
                 b"adopt-me",
                 "workspace() must leave same-pid residue untouched"
             );
-            let _ = fs::remove_dir_all(path);
         }
     }
 

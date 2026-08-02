@@ -141,26 +141,68 @@ mod tests {
     use super::*;
     use crate::determinism_run::{create_run_root, finish_local, protocol};
     use crate::determinism_verify::verify;
+    use std::io;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
     struct Temp(PathBuf);
     impl Temp {
         fn new(name: &str) -> Self {
-            let path = workspace()
-                .join("target/determinism-cross-tests")
-                .join(format!(
+            let parent = workspace().join("target/determinism-cross-tests");
+            fs::create_dir_all(&parent).unwrap();
+            let path = loop {
+                let candidate = parent.join(format!(
                     "{name}-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));
-            fs::create_dir_all(&path).unwrap();
+                match fs::create_dir(&candidate) {
+                    Ok(()) => break candidate,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create temp: {error}"),
+                }
+            };
             Self(path)
         }
     }
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn temp_skips_same_pid_residue() {
+        let pid = std::process::id();
+        let parent = workspace().join("target/determinism-cross-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let start = NEXT.load(Ordering::Relaxed);
+        let blocked: Vec<Temp> = (start..start + 64)
+            .map(|n| {
+                let path = parent.join(format!("residue-{pid}-{n}"));
+                let _ = fs::create_dir(&path);
+                fs::write(path.join("stale"), b"adopt-me").unwrap();
+                Temp(path)
+            })
+            .collect();
+        let before = NEXT.load(Ordering::Relaxed);
+        let got = Temp::new("residue");
+        let after = NEXT.load(Ordering::Relaxed);
+        assert!(
+            after > before + 1,
+            "Temp::new must iterate past residue (NEXT {before} -> {after}), not adopt on first try"
+        );
+        assert!(
+            !blocked.iter().any(|temp| temp.0 == got.0),
+            "Temp::new must skip same-pid residue, not adopt it; got {}",
+            got.0.display()
+        );
+        for planted in &blocked {
+            assert_eq!(
+                fs::read(planted.0.join("stale")).unwrap(),
+                b"adopt-me",
+                "Temp::new must leave same-pid residue untouched"
+            );
         }
     }
 
