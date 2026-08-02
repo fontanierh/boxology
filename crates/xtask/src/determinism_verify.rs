@@ -282,17 +282,14 @@ mod tests {
         fs::create_dir_all(&parent).unwrap();
         let start = NEXT.load(Ordering::Relaxed);
         let mut blocked = Vec::new();
-        // Size from the live counter, plus a sibling budget for allocates that
-        // can advance NEXT between planting and artifact(). Plant directories
-        // carrying an extra subject tree: artifact() adds to whatever is at the
-        // path, so an adopt puts "poison" beside "s" and the directory-listing
-        // comparison below catches the foreign subject.
+        // Plant trees/poison so adopt is visible beside the helper's own "s".
         let budget = std::thread::available_parallelism()
             .map(|n| n.get() as u64)
             .unwrap_or(4);
-        loop {
-            let n = start + blocked.len() as u64;
-            let path = parent.join(format!("residue-{pid}-{n}"));
+        let mut last = start;
+        for step in 0..4096u64 {
+            last = start + step;
+            let path = parent.join(format!("residue-{pid}-{last}"));
             match fs::create_dir(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -301,21 +298,21 @@ mod tests {
             fs::create_dir_all(path.join("trees/poison")).unwrap();
             fs::write(path.join("trees/poison/file"), b"adopt-me").unwrap();
             blocked.push(Temp(path));
-            if n > NEXT.load(Ordering::Relaxed) + budget {
+            if last > NEXT.load(Ordering::Relaxed) + budget {
                 break;
             }
+            assert!(
+                step + 1 < 4096,
+                "planting hit cap without covering counter+sibling"
+            );
         }
-        let before = NEXT.load(Ordering::Relaxed);
         let got = artifact("residue");
-        let after = NEXT.load(Ordering::Relaxed);
-        assert!(
-            after > before + 1,
-            "artifact() must iterate past residue (NEXT {before} -> {after}), not adopt on first try"
-        );
-        assert!(
-            !blocked.iter().any(|temp| temp.0 == got.0),
-            "artifact() must skip same-pid residue, not adopt it; got {}",
-            got.0.display()
+        let name = got.0.file_name().unwrap().to_string_lossy();
+        let drawn: u64 = name.rsplit('-').next().unwrap().parse().unwrap();
+        assert_eq!(
+            drawn,
+            last + 1,
+            "artifact() must draw last-planted+1; got {name}"
         );
         let mut names: Vec<_> = fs::read_dir(got.0.join("trees"))
             .unwrap()

@@ -786,22 +786,18 @@ mod tests {
             "Temp Drop must clear residue on every exit path"
         );
 
-        // Plant same-pid residue covering the live counter so the helper must
-        // skip rather than adopt. Under create_dir_all this returns a non-empty
-        // adopted directory; under create_dir it advances past.
         let parent =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-run-tests");
         fs::create_dir_all(&parent).unwrap();
         let start = NEXT_RUN.load(Ordering::Relaxed);
         let mut blocked = Vec::new();
-        // Cover the live counter (shared with create_run_root) plus a sibling
-        // budget so allocates between planting and workspace() cannot skip past.
         let budget = std::thread::available_parallelism()
             .map(|n| n.get() as u64)
             .unwrap_or(4);
-        loop {
-            let n = start + blocked.len() as u64;
-            let path = parent.join(format!("scratch-pid-{pid}-{n}"));
+        let mut last = start;
+        for step in 0..4096u64 {
+            last = start + step;
+            let path = parent.join(format!("scratch-pid-{pid}-{last}"));
             match fs::create_dir(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -809,28 +805,22 @@ mod tests {
             }
             fs::write(path.join("stale"), b"adopt-me").unwrap();
             blocked.push(Temp(path));
-            if n > NEXT_RUN.load(Ordering::Relaxed) + budget {
+            if last > NEXT_RUN.load(Ordering::Relaxed) + budget {
                 break;
             }
+            assert!(
+                step + 1 < 4096,
+                "planting hit cap without covering counter+sibling"
+            );
         }
 
-        let before = NEXT_RUN.load(Ordering::Relaxed);
         let second = workspace("scratch-pid");
-        let after = NEXT_RUN.load(Ordering::Relaxed);
-        assert!(
-            after > before + 1,
-            "workspace() must iterate past residue (NEXT_RUN {before} -> {after}), not adopt on first try"
-        );
-        let second_leaf = second.0.file_name().unwrap().to_string_lossy();
-        assert!(
-            second_leaf.starts_with(&format!("scratch-pid-{pid}-")),
-            "same-name workspace() must still embed pid; got {second_leaf}"
-        );
-        assert_ne!(second.0, poisoned);
-        assert!(
-            !blocked.iter().any(|temp| temp.0 == second.0),
-            "workspace() must skip same-pid residue, not adopt it; got {}",
-            second.0.display()
+        let name = second.0.file_name().unwrap().to_string_lossy();
+        let drawn: u64 = name.rsplit('-').next().unwrap().parse().unwrap();
+        assert_eq!(
+            drawn,
+            last + 1,
+            "workspace() must draw last-planted+1; got {name}"
         );
         for temp in &blocked {
             assert_eq!(
