@@ -22,3 +22,4 @@ BXW0082|the base-revision and checked-in schema documents must pair and satisfy 
 BXW0083|a checked-in derived artifact must be byte-identical to regeneration; regenerate the accountable package with boxology generate --package <id>|specs/s5-manifest-and-validation.md D6; boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 2
 BXW0084|a declared import must name a discovered workspace package|specs/s5-manifest-and-validation.md D5
 BXW0085|an imported package must declare a contract-generation output|specs/s5-manifest-and-validation.md D5
+BXW0086|generation candidates must not form an import cycle|specs/s5-manifest-and-validation.md D5

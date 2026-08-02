@@ -60,7 +60,7 @@ const HELLO_SCHEMA: &[u8] = include_bytes!("../../fixtures/hello/generated/schem
 static FIXTURES: [Fixture; 3] = [
     fixture!(
         "greeter",
-        Some(("hello", "../hello/generated/schema.json", HELLO_SCHEMA))
+        Some(("hello", "hello/generated/schema.json", HELLO_SCHEMA))
     ),
     fixture!("hello", None),
     fixture!("ping", None),

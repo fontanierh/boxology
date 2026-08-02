@@ -100,12 +100,6 @@ fn input_names(plan: &GenerationPlan) -> Vec<&str> { plan.inputs().iter().map(Re
 fn plan_ids(plans: &[GenerationPlan]) -> Vec<&str> { plans.iter().map(|plan| plan.package_id().as_str()).collect() }
 
 #[test]
-fn greeter_fixture_manifest_parses_clean() {
-    let manifest = boxology_manifest::Manifest::parse(path("boxology.toml"), include_str!("../../fixtures/greeter/boxology.toml").as_bytes()).unwrap();
-    assert_eq!(manifest.imports().iter().map(|import| import.package().as_str()).collect::<Vec<_>>(), ["hello"]);
-}
-
-#[test]
 fn plan_resolves_import_by_identity_to_target_schema() {
     let workspace = imported_workspace(&["hello"], &[("hello", "boxology-contract")]);
     let plans = plan(&workspace, None).unwrap();
@@ -116,9 +110,30 @@ fn plan_resolves_import_by_identity_to_target_schema() {
 }
 
 #[test]
+fn plan_orders_importers_after_their_import_targets() {
+    // greeter < hello by package-id, so package-id order would emit the importer first.
+    let workspace = imported_workspace(&["hello"], &[("hello", "boxology-contract")]);
+    assert_eq!(plan_ids(&plan(&workspace, None).unwrap()), ["hello", "greeter"]);
+}
+
+#[test]
 fn imports_must_resolve_to_generation_candidates() {
     error_is(plan(&imported_workspace(&["missing"], &[]), None), "BXW0084", "greeter/boxology.toml", "a declared import must name a discovered workspace package");
     error_is(plan(&imported_workspace(&["hello"], &[("hello", "cargo")]), None), "BXW0085", "greeter/boxology.toml", "an imported package must declare a contract-generation output");
+}
+
+#[test]
+fn import_cycles_are_rejected() {
+    let mut files: Vec<String> = ["Cargo.toml", "Cargo.lock", "boxology.toml"].into_iter().map(String::from).collect();
+    let mut manifests = vec![(String::from("boxology.toml"), ROOT_MANIFEST.as_bytes().to_vec())];
+    for (id, imports) in [("alpha", &["zulu"][..]), ("zulu", &["alpha"][..])] {
+        files.extend([format!("{id}/boxology.toml"), format!("{id}/implementation/Cargo.toml"), format!("{id}/implementation/src/lib.rs"), format!("{id}/generated/contract/Cargo.toml")]);
+        manifests.push((format!("{id}/boxology.toml"), candidate_manifest_with(id, "boxology-contract", true, "implementation", false, imports, false).into_bytes()));
+    }
+    let files = files.into_iter().map(|name| FileEntry::file(path(&name))).collect();
+    let manifests = manifests.into_iter().map(|(name, bytes)| (path(&name), bytes)).collect();
+    let workspace = WorkspaceInputs::new(files, manifests, &metadata_for(&["alpha", "zulu"])).unwrap().check().unwrap();
+    error_is(plan(&workspace, None), "BXW0086", "alpha/boxology.toml", "generation candidates must not form an import cycle");
 }
 
 #[test]

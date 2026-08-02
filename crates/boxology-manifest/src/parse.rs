@@ -1111,6 +1111,7 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
             reserved[27].clone(),
             reserved[32].clone(),
             reserved[33].clone(),
+            reserved[34].clone(),
         ];
         let expected = [
             ("walk.rs", &reserved[19..22]),
@@ -1128,9 +1129,9 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
     #[test]
     fn repository_bxw_allocations_are_disjoint() {
         // Workspace owns 0042-0060; CLI walk owns 0061-0063, generation planning owns
-        // 0064-0067, 0069, and 0084-0085; execution owns 0070-0073. The manifest owns 0074.
+        // 0064-0067, 0069, and 0084-0086; execution owns 0070-0073. The manifest owns 0074.
         let reserved: Vec<String> = (42..=73)
-            .chain([84, 85])
+            .chain([84, 85, 86])
             .map(|number| format!("BX{}{number:04}", 'W'))
             .collect();
         assert!(
@@ -1173,7 +1174,7 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
     #[test]
     fn cli_allocation_owner_mutations_are_rejected() {
         let reserved: Vec<String> = (42..=73)
-            .chain([84, 85])
+            .chain([84, 85, 86])
             .map(|number| format!("BX{}{number:04}", 'W'))
             .collect();
         let walk = include_str!("../../boxology-cli/src/walk.rs");

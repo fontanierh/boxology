@@ -4,6 +4,7 @@
 use boxology_contract::BoxId;
 use boxology_manifest::{CrateRole, GlobPattern, RelativePath};
 use boxology_workspace::{Package, Workspace};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 type Rule = (&'static str, &'static str, &'static str);
@@ -21,6 +22,7 @@ const DUPLICATE_OUTPUTS_TEXT: &str =
 const UNKNOWN_IMPORT_TEXT: &str = "a declared import must name a discovered workspace package";
 const NO_IMPORT_CANDIDATE_TEXT: &str =
     "an imported package must declare a contract-generation output";
+const IMPORT_CYCLE_TEXT: &str = "generation candidates must not form an import cycle";
 const UNKNOWN_GENERATOR: Rule = ("BXW0064", UNKNOWN_GENERATOR_TEXT, SOURCE);
 const UNKNOWN_PACKAGE: Rule = ("BXW0065", UNKNOWN_PACKAGE_TEXT, SOURCE);
 const NO_CANDIDATE: Rule = ("BXW0066", NO_CANDIDATE_TEXT, SOURCE);
@@ -28,6 +30,7 @@ const IMPLEMENTATION_ROOT: Rule = ("BXW0067", IMPLEMENTATION_ROOT_TEXT, SOURCE);
 const DUPLICATE_OUTPUTS: Rule = ("BXW0069", DUPLICATE_OUTPUTS_TEXT, SOURCE);
 const UNKNOWN_IMPORT: Rule = ("BXW0084", UNKNOWN_IMPORT_TEXT, SOURCE);
 const NO_IMPORT_CANDIDATE: Rule = ("BXW0085", NO_IMPORT_CANDIDATE_TEXT, SOURCE);
+const IMPORT_CYCLE: Rule = ("BXW0086", IMPORT_CYCLE_TEXT, SOURCE);
 const SCHEMA: &str = "generated/schema.json";
 
 /// One declared import resolved to the imported package's checked-in schema.
@@ -121,7 +124,7 @@ impl fmt::Display for PlanError {
     }
 }
 impl std::error::Error for PlanError {}
-/// Selects contract-generator candidates and assembles their pure plans in package-id order.
+/// Selects contract-generator candidates and assembles their pure plans in import-dependency order.
 pub fn plan(
     workspace: &Workspace,
     selection: Option<&BoxId>,
@@ -152,7 +155,54 @@ pub fn plan(
         }
         plans.push(assemble(workspace, package, candidates[0])?);
     }
-    Ok(plans)
+    order_plans(plans)
+}
+/// Orders plans so each import target precedes its importers; package-id breaks ties.
+fn order_plans(plans: Vec<GenerationPlan>) -> Result<Vec<GenerationPlan>, PlanError> {
+    let mut by_id: BTreeMap<BoxId, GenerationPlan> = plans
+        .into_iter()
+        .map(|plan| (plan.package_id().clone(), plan))
+        .collect();
+    let ids: BTreeSet<_> = by_id.keys().cloned().collect();
+    let mut indegree: BTreeMap<BoxId, usize> = ids.iter().map(|id| (id.clone(), 0)).collect();
+    let mut dependents: BTreeMap<BoxId, Vec<BoxId>> = BTreeMap::new();
+    for (id, plan) in &by_id {
+        for import in plan.imports() {
+            let target = import.package();
+            if !ids.contains(target) {
+                continue;
+            }
+            *indegree.get_mut(id).expect("indegree covers every plan") += 1;
+            dependents
+                .entry(target.clone())
+                .or_default()
+                .push(id.clone());
+        }
+    }
+    let mut ready: BTreeSet<BoxId> = indegree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut ordered = Vec::with_capacity(by_id.len());
+    while let Some(id) = ready.pop_first() {
+        if let Some(next) = dependents.get(&id) {
+            for dependent in next {
+                let degree = indegree
+                    .get_mut(dependent)
+                    .expect("dependents are plan identities");
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.insert(dependent.clone());
+                }
+            }
+        }
+        ordered.push(by_id.remove(&id).expect("ready identity is a plan"));
+    }
+    if let Some((_, plan)) = by_id.into_iter().next() {
+        return Err(failure(IMPORT_CYCLE, plan.manifest_path().clone()));
+    }
+    Ok(ordered)
 }
 fn contract_outputs(
     package: &Package,
