@@ -1,0 +1,158 @@
+schema = 1
+id = "boxology-platform"
+kind = "platform"
+owned = [
+    ".agents/**",
+    ".cargo/**",
+    ".claude",
+    ".editorconfig",
+    ".gitattributes",
+    ".github/**",
+    ".gitignore",
+    "AGENTS.md",
+    "Cargo.toml",
+    "README.md",
+    "boxology-details/**",
+    "boxology-whitepaper.md",
+    "boxology.toml",
+    "crates/boxology-classifier/**",
+    "crates/boxology-cli/**",
+    "crates/boxology-contract-syntax/**",
+    "crates/boxology-contract/**",
+    "crates/boxology-generator-model/**",
+    "crates/boxology-generator-writer/**",
+    "crates/boxology-generator/**",
+    "crates/boxology-http-conformance/**",
+    "crates/boxology-http/**",
+    "crates/boxology-init/**",
+    "crates/boxology-macros/**",
+    "crates/boxology-manifest/**",
+    "crates/boxology-runtime/**",
+    "crates/boxology-schema/**",
+    "crates/boxology-telegram/**",
+    "crates/boxology-workspace/**",
+    "crates/boxology/**",
+    "crates/fixtures/fixture-tests/**",
+    "crates/fixtures/generated-style-fmt/**",
+    "crates/xtask/**",
+    "deny.toml",
+    "ops/**",
+    "records/**",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    "specs/**",
+]
+fixtures = [
+    "crates/fixtures/greeter/**",
+    "crates/fixtures/hello/**",
+    "crates/fixtures/ping-app/**",
+    "crates/fixtures/ping/**",
+    "goldens/generated-project/**",
+]
+protected = [".github/workflows/**", "crates/xtask/**"]
+
+[[derived]]
+id = "lockfile"
+generator = "cargo"
+inputs = ["**/Cargo.toml"]
+outputs = ["Cargo.lock"]
+
+[[crates]]
+cargo_package = "boxology"
+path = "crates/boxology"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-classifier"
+path = "crates/boxology-classifier"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-cli"
+path = "crates/boxology-cli"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-contract"
+path = "crates/boxology-contract"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-contract-syntax"
+path = "crates/boxology-contract-syntax"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-generator"
+path = "crates/boxology-generator"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-generator-model"
+path = "crates/boxology-generator-model"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-generator-writer"
+path = "crates/boxology-generator-writer"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-http"
+path = "crates/boxology-http"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-http-conformance"
+path = "crates/boxology-http-conformance"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-init"
+path = "crates/boxology-init"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-macros"
+path = "crates/boxology-macros"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-manifest"
+path = "crates/boxology-manifest"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-runtime"
+path = "crates/boxology-runtime"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-schema"
+path = "crates/boxology-schema"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-telegram"
+path = "crates/boxology-telegram"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-workspace"
+path = "crates/boxology-workspace"
+role = "platform"
+
+[[crates]]
+cargo_package = "boxology-fixture-tests"
+path = "crates/fixtures/fixture-tests"
+role = "platform"
+
+[[crates]]
+cargo_package = "generated-style-fmt"
+path = "crates/fixtures/generated-style-fmt"
+role = "platform"
+
+[[crates]]
+cargo_package = "xtask"
+path = "crates/xtask"
+role = "platform"
