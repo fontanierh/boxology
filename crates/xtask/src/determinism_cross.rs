@@ -177,14 +177,22 @@ mod tests {
         let parent = workspace().join("target/determinism-cross-tests");
         fs::create_dir_all(&parent).unwrap();
         let start = NEXT.load(Ordering::Relaxed);
-        let blocked: Vec<Temp> = (start..start + 64)
-            .map(|n| {
-                let path = parent.join(format!("residue-{pid}-{n}"));
-                let _ = fs::create_dir(&path);
-                fs::write(path.join("stale"), b"adopt-me").unwrap();
-                Temp(path)
-            })
-            .collect();
+        let mut blocked = Vec::new();
+        // Size from the live counter, plus a sibling budget for allocates that
+        // can advance NEXT between the end of planting and our Temp::new call.
+        let budget = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4);
+        loop {
+            let n = start + blocked.len() as u64;
+            let path = parent.join(format!("residue-{pid}-{n}"));
+            let _ = fs::create_dir(&path);
+            fs::write(path.join("stale"), b"adopt-me").unwrap();
+            blocked.push(Temp(path));
+            if n > NEXT.load(Ordering::Relaxed) + budget {
+                break;
+            }
+        }
         let before = NEXT.load(Ordering::Relaxed);
         let got = Temp::new("residue");
         let after = NEXT.load(Ordering::Relaxed);

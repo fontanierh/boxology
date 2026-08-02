@@ -1399,6 +1399,79 @@ impl HelloService {{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_SUBJECT: AtomicU64 = AtomicU64::new(0);
+
+    struct SubjectTemp(PathBuf);
+    impl Drop for SubjectTemp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn subject_root() -> SubjectTemp {
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let path = loop {
+            let candidate = parent.join(format!(
+                "{}-{}",
+                std::process::id(),
+                NEXT_SUBJECT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create subject root: {error}"),
+            }
+        };
+        SubjectTemp(path)
+    }
+
+    #[test]
+    fn subject_root_skips_same_pid_residue() {
+        let pid = std::process::id();
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests");
+        fs::create_dir_all(&parent).unwrap();
+        let start = NEXT_SUBJECT.load(Ordering::Relaxed);
+        let mut blocked = Vec::new();
+        // Size from the live counter, plus a sibling budget for allocates that
+        // can advance NEXT_SUBJECT between planting and subject_root().
+        let budget = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4);
+        loop {
+            let n = start + blocked.len() as u64;
+            let path = parent.join(format!("{pid}-{n}"));
+            let _ = fs::create_dir(&path);
+            fs::write(path.join("stale"), b"adopt-me").unwrap();
+            blocked.push(SubjectTemp(path));
+            if n > NEXT_SUBJECT.load(Ordering::Relaxed) + budget {
+                break;
+            }
+        }
+        let before = NEXT_SUBJECT.load(Ordering::Relaxed);
+        let got = subject_root();
+        let after = NEXT_SUBJECT.load(Ordering::Relaxed);
+        assert!(
+            after > before + 1,
+            "subject_root() must iterate past residue (NEXT_SUBJECT {before} -> {after}), not adopt on first try"
+        );
+        assert!(
+            !blocked.iter().any(|temp| temp.0 == got.0),
+            "subject_root() must skip same-pid residue, not adopt it; got {}",
+            got.0.display()
+        );
+        for planted in &blocked {
+            assert_eq!(
+                fs::read(planted.0.join("stale")).unwrap(),
+                b"adopt-me",
+                "subject_root() must leave same-pid residue untouched"
+            );
+        }
+    }
 
     #[test]
     fn payload_deferred_authority_mutants_are_rejected() {
@@ -1501,21 +1574,18 @@ mod tests {
 
     #[test]
     fn subject_call_publishes_raw_fixture_goldens() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/xtask-subject-tests")
-            .join(format!("{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        run(&root).unwrap();
+        let root = subject_root();
+        run(&root.0).unwrap();
         for fixture in &FIXTURES {
             let generated = generate(&fixture_request(fixture).unwrap()).unwrap();
             for file in generated.files() {
                 let path = root
+                    .0
                     .join("fixture-goldens")
                     .join(fixture.name)
                     .join(file.path());
                 assert_eq!(fs::read(path).unwrap(), file.bytes());
             }
         }
-        fs::remove_dir_all(root).unwrap();
     }
 }

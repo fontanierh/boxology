@@ -786,21 +786,29 @@ mod tests {
             "Temp Drop must clear residue on every exit path"
         );
 
-        // Plant same-pid residue across the next counter window so the helper
-        // must skip rather than adopt. Under create_dir_all this returns a
-        // non-empty adopted directory; under create_dir it advances past.
+        // Plant same-pid residue covering the live counter so the helper must
+        // skip rather than adopt. Under create_dir_all this returns a non-empty
+        // adopted directory; under create_dir it advances past.
         let parent =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/determinism-run-tests");
         fs::create_dir_all(&parent).unwrap();
         let start = NEXT_RUN.load(Ordering::Relaxed);
-        let blocked: Vec<Temp> = (start..start + 64)
-            .map(|n| {
-                let path = parent.join(format!("scratch-pid-{pid}-{n}"));
-                let _ = fs::create_dir(&path);
-                fs::write(path.join("stale"), b"adopt-me").unwrap();
-                Temp(path)
-            })
-            .collect();
+        let mut blocked = Vec::new();
+        // Cover the live counter (shared with create_run_root) plus a sibling
+        // budget so allocates between planting and workspace() cannot skip past.
+        let budget = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(4);
+        loop {
+            let n = start + blocked.len() as u64;
+            let path = parent.join(format!("scratch-pid-{pid}-{n}"));
+            let _ = fs::create_dir(&path);
+            fs::write(path.join("stale"), b"adopt-me").unwrap();
+            blocked.push(Temp(path));
+            if n > NEXT_RUN.load(Ordering::Relaxed) + budget {
+                break;
+            }
+        }
 
         let before = NEXT_RUN.load(Ordering::Relaxed);
         let second = workspace("scratch-pid");
