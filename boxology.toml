@@ -43,6 +43,9 @@ owned = [
     "specs/**",
 ]
 fixtures = [
+    # Gitignored, but the walk prunes only .git and target: a contributor's
+    # agent worktree here would otherwise discover as a real package.
+    ".agents/worktrees/**",
     "crates/fixtures/greeter/**",
     "crates/fixtures/hello/**",
     "crates/fixtures/ping-app/**",
