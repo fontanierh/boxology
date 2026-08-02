@@ -88,10 +88,8 @@ pub struct CapabilityDeclaration {
     pub docs: Vec<String>,
     /// Optional decoded deprecation note; empty means `#[deprecated]`.
     pub deprecation: Option<String>,
-    /// Wire capability identity (schema, descriptor, revision, digest).
+    /// Capability name.
     pub name: String,
-    /// Rust surface spelling of the capability method.
-    pub rust_name: String,
     /// Input name.
     pub input_name: String,
     /// Canonical scalar leaf accepted as the single input.
@@ -282,10 +280,9 @@ impl Parse for Contract {
         let error = parse_error(&attrs, &input.parse()?)?;
         let mut capabilities = Vec::new();
         let mut names = BTreeSet::new();
-        let mut rust_names = BTreeSet::new();
         while !input.is_empty() {
             let attrs = Attribute::parse_outer(input)?;
-            let (capability, rust_ident) = parse_capability(&attrs, input)?;
+            let capability = parse_capability(&attrs, input)?;
             if capability.error != error.name {
                 return Err(
                     input.error("capability error must directly name an in-block #[error] enum")
@@ -293,12 +290,6 @@ impl Parse for Contract {
             }
             if !names.insert(capability.name.clone()) {
                 return Err(input.error("capability names must be unique"));
-            }
-            if !rust_names.insert(capability.rust_name.clone()) {
-                return Err(syn::Error::new(
-                    rust_ident.span(),
-                    "capability Rust names must be unique",
-                ));
             }
             capabilities.push(capability);
         }
@@ -446,31 +437,20 @@ fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclara
 fn parse_capability(
     attrs: &[Attribute],
     input: ParseStream<'_>,
-) -> syn::Result<(CapabilityDeclaration, syn::Ident)> {
+) -> syn::Result<CapabilityDeclaration> {
     let (docs, deprecation, marker) = metadata(attrs, "capability")?;
     let Some(marker) = marker else {
         return Err(input.error("capability declaration requires #[capability]"));
     };
-    let (name_override, exposure, idempotency) = parse_capability_metadata(marker)?;
+    let (exposure, idempotency) = parse_capability_metadata(marker)?;
     input.parse::<Token![pub]>()?;
     input.parse::<Token![async]>()?;
     input.parse::<Token![fn]>()?;
-    let name_ident: syn::Ident = input.parse()?;
-    let rust_name = identifier(&name_ident)?;
-    // The override replaces only the wire identity. The Rust method spelling stays subject to the
-    // snake_case capability-name grammar unconditionally — generated trait methods carry no
-    // `#![allow(non_snake_case)]`, so admitting PascalCase here would emit uncompilable code under
-    // `RUSTFLAGS="-D warnings"`.
-    if !capability_name(&rust_name) {
-        return Err(error(
-            &name_ident,
-            "capability name must match [a-z][a-z0-9_]*",
-        ));
+    let name: syn::Ident = input.parse()?;
+    let name = identifier(&name)?;
+    if !capability_name(&name) {
+        return Err(input.error("capability name must match [a-z][a-z0-9_]*"));
     }
-    let name = match name_override {
-        Some(overridden) => overridden,
-        None => rust_name.clone(),
-    };
     let content;
     syn::parenthesized!(content in input);
     let args = content.parse_terminated(FnArg::parse, Token![,])?;
@@ -501,27 +481,20 @@ fn parse_capability(
             "output must be unqualified Result<Leaf, Error>",
         ));
     };
-    Ok((
-        CapabilityDeclaration {
-            docs,
-            deprecation,
-            name,
-            rust_name,
-            input_name: identifier(&input_ident.ident)?,
-            input_type,
-            output_type,
-            error: error_name,
-            exposure,
-            idempotency,
-        },
-        name_ident,
-    ))
+    Ok(CapabilityDeclaration {
+        docs,
+        deprecation,
+        name,
+        input_name: identifier(&input_ident.ident)?,
+        input_type,
+        output_type,
+        error: error_name,
+        exposure,
+        idempotency,
+    })
 }
 
-fn parse_capability_metadata(
-    attr: &Attribute,
-) -> syn::Result<(Option<String>, ExposureLevel, Idempotency)> {
-    let mut name = None;
+fn parse_capability_metadata(attr: &Attribute) -> syn::Result<(ExposureLevel, Idempotency)> {
     let mut exposure = None;
     let mut idempotency = None;
     match &attr.meta {
@@ -532,31 +505,6 @@ fn parse_capability_metadata(
                 let key_name = identifier(&key)?;
                 input.parse::<Token![=]>()?;
                 match key_name.as_str() {
-                    "name" => {
-                        if name.is_some() {
-                            return Err(error(&key, "duplicate capability metadata"));
-                        }
-                        let lit = input.parse::<Lit>()?;
-                        let Lit::Str(value) = lit else {
-                            return Err(error(&lit, "capability name override must be a string"));
-                        };
-                        let overridden = value.value();
-                        if !capability_name(&overridden) {
-                            return Err(error(
-                                &value,
-                                "capability name override must match [a-z][a-z0-9_]*",
-                            ));
-                        }
-                        if canonicalize_ordinary_rust_identifier(&overridden).as_deref()
-                            != Some(overridden.as_str())
-                        {
-                            return Err(error(
-                                &value,
-                                "capability name override must be an ordinary non-raw Rust identifier",
-                            ));
-                        }
-                        name = Some(overridden);
-                    }
                     "exposure" => {
                         if exposure.is_some() {
                             return Err(error(&key, "duplicate capability metadata"));
@@ -607,7 +555,6 @@ fn parse_capability_metadata(
         }
     }
     Ok((
-        name,
         exposure.unwrap_or(ExposureLevel::CodeOnly),
         idempotency.unwrap_or(Idempotency::None),
     ))
@@ -790,7 +737,6 @@ mod tests {
         assert_eq!(contract.error.variants[0].name, "EmptyName");
         assert_eq!(contract.capabilities.len(), 1);
         assert_eq!(contract.capabilities[0].name, "greet");
-        assert_eq!(contract.capabilities[0].rust_name, "greet");
         assert_eq!(contract.capabilities[0].input_name, "name");
         assert_eq!(contract.capabilities[0].error, "GreetError");
         assert_eq!(contract.capabilities[0].exposure, ExposureLevel::External);
@@ -844,28 +790,6 @@ mod tests {
         }
     }
     #[test]
-    fn name_override_replaces_identity_and_digest() {
-        let overridden = parse(
-            format!(
-                "{ERROR} #[capability(name=\"rescued\")] pub async fn salute(name:String)->Result<String,GreetError>;"
-            )
-            .parse()
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(overridden.capabilities[0].name, "rescued");
-        assert_eq!(overridden.capabilities[0].rust_name, "salute");
-        let without = parse(
-            format!(
-                "{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;"
-            )
-            .parse()
-            .unwrap(),
-        )
-        .unwrap();
-        assert_ne!(semantic_digest(&overridden), semantic_digest(&without));
-    }
-    #[test]
     fn capability_metadata_rejections_have_precise_spans() {
         let rejected = [
             (
@@ -874,29 +798,14 @@ mod tests {
                 "unknown",
             ),
             (
+                "#[capability(name=\"greet\")]",
+                "unknown capability metadata",
+                "name",
+            ),
+            (
                 "#[capability(exposure=external,exposure=internal)]",
                 "duplicate capability metadata",
                 "exposure",
-            ),
-            (
-                "#[capability(name=7)]",
-                "capability name override must be a string",
-                "7",
-            ),
-            (
-                "#[capability(name=\"Bad-Name\")]",
-                "capability name override must match [a-z][a-z0-9_]*",
-                "\"Bad-Name\"",
-            ),
-            (
-                "#[capability(name=\"match\")]",
-                "capability name override must be an ordinary non-raw Rust identifier",
-                "\"match\"",
-            ),
-            (
-                "#[capability(name=\"self\")]",
-                "capability name override must be an ordinary non-raw Rust identifier",
-                "\"self\"",
             ),
             (
                 "#[capability(exposure=private)]",
@@ -922,26 +831,11 @@ mod tests {
             assert_eq!(error.to_string(), message, "{marker}");
             assert_eq!(&source[error.span().byte_range()], slice, "{marker}");
         }
-        let source = format!(
-            "{ERROR} #[capability(name=\"alpha\",exposure=external)] pub async fn same(n:String)->Result<String,GreetError>; #[capability(name=\"beta\",exposure=external)] pub async fn same(n:String)->Result<String,GreetError>;"
-        );
-        let error = parse(source.parse().unwrap()).unwrap_err();
-        assert_eq!(error.to_string(), "capability Rust names must be unique");
-        assert_eq!(&source[error.span().byte_range()], "same");
-        let source = format!(
-            "{ERROR} #[capability(name=\"ok\",exposure=external)] pub async fn BadName(name:String)->Result<String,GreetError>;"
-        );
-        let error = parse(source.parse().unwrap()).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "capability name must match [a-z][a-z0-9_]*"
-        );
-        assert_eq!(&source[error.span().byte_range()], "BadName");
     }
     #[test]
     fn non_default_metadata_semantic_encoding_is_pinned() {
         let contract = parse(
-            "#[error] pub enum E { V } #[capability(name=\"rescued\",exposure=internal,idempotency=inherent)] pub async fn salute(x:String)->Result<String,E>;"
+            "#[error] pub enum E { V } #[capability(exposure=internal,idempotency=inherent)] pub async fn rescued(x:String)->Result<String,E>;"
                 .parse()
                 .unwrap(),
         )
@@ -992,6 +886,16 @@ mod tests {
         ] {
             assert!(parse(source.parse().unwrap()).is_err(), "{source}");
         }
+        // `{CAP} {CAP} {ERROR}` above fails at parse_error (first item is not `#[error]`).
+        // This is the row that reaches the wire-name uniqueness pass.
+        let duplicate_wire = format!("{ERROR} {CAP} {CAP}");
+        let error = parse(duplicate_wire.parse().unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("capability names must be unique"),
+            "{error}"
+        );
         for boundary in [
             "Vec<u8>",
             "Option<u8>",
