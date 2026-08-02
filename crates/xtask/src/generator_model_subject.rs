@@ -1430,10 +1430,10 @@ mod tests {
         SubjectTemp(path)
     }
 
-    fn fixture_scratch() -> SubjectTemp {
+    fn fixture_scratch(name: &str) -> SubjectTemp {
         let path = loop {
             let candidate = std::env::temp_dir().join(format!(
-                "boxology-fixture-{}-{}",
+                "boxology-fixture-{name}-{}-{}",
                 std::process::id(),
                 NEXT_SUBJECT.fetch_add(1, Ordering::Relaxed)
             ));
@@ -1446,62 +1446,26 @@ mod tests {
         SubjectTemp(path)
     }
 
-    fn assert_skips_same_pid_residue(
-        parent: &Path,
-        prefix: &str,
-        allocate: impl FnOnce() -> SubjectTemp,
-    ) {
-        fs::create_dir_all(parent).unwrap();
-        let pid = std::process::id();
-        let start = NEXT_SUBJECT.load(Ordering::Relaxed);
-        let mut blocked = Vec::new();
-        let budget = std::thread::available_parallelism()
-            .map(|n| n.get() as u64)
-            .unwrap_or(4);
-        let mut last = start;
-        for step in 0..4096u64 {
-            last = start + step;
-            let path = parent.join(format!("{prefix}-{pid}-{last}"));
-            match fs::create_dir(&path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => panic!("plant residue: {error}"),
-            }
-            fs::write(path.join("stale"), b"adopt-me").unwrap();
-            blocked.push(SubjectTemp(path));
-            if last > NEXT_SUBJECT.load(Ordering::Relaxed) + budget {
-                break;
-            }
-            assert!(
-                step + 1 < 4096,
-                "planting hit cap without covering counter+sibling"
-            );
-        }
-        let got = allocate();
-        let name = got.0.file_name().unwrap().to_string_lossy();
-        let drawn: u64 = name.rsplit('-').next().unwrap().parse().unwrap();
-        assert_eq!(drawn, last + 1, "must draw last-planted+1; got {name}");
-        for planted in &blocked {
-            assert_eq!(
-                fs::read(planted.0.join("stale")).unwrap(),
-                b"adopt-me",
-                "must leave same-pid residue untouched"
-            );
-        }
-    }
-
     #[test]
     fn subject_root_skips_same_pid_residue() {
-        assert_skips_same_pid_residue(
+        crate::scratch_test::assert_skips_same_pid_residue(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests"),
             "residue",
+            &NEXT_SUBJECT,
             || subject_root("residue"),
+            |t| &t.0,
         );
     }
 
     #[test]
     fn fixture_scratch_skips_same_pid_residue() {
-        assert_skips_same_pid_residue(&std::env::temp_dir(), "boxology-fixture", fixture_scratch);
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &std::env::temp_dir(),
+            "boxology-fixture-residue",
+            &NEXT_SUBJECT,
+            || fixture_scratch("residue"),
+            |t| &t.0,
+        );
     }
 
     #[test]
@@ -1530,7 +1494,7 @@ mod tests {
     #[test]
     fn fixture_owner_symlink_is_rejected() {
         use std::os::unix::fs::symlink;
-        let root = fixture_scratch();
+        let root = fixture_scratch("symlink");
         fs::create_dir(root.0.join("target")).unwrap();
         symlink(root.0.join("target"), root.0.join("owner")).unwrap();
         assert!(discover_fixture_schema_owners_at(&root.0).is_err());

@@ -22,6 +22,8 @@ mod generated_project_subject;
 mod generator_model_subject;
 mod links;
 mod records;
+#[cfg(test)]
+mod scratch_test;
 mod skill_audit;
 mod workspace_subject;
 

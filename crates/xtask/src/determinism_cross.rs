@@ -173,48 +173,14 @@ mod tests {
 
     #[test]
     fn temp_skips_same_pid_residue() {
-        let pid = std::process::id();
         let parent = workspace().join("target/determinism-cross-tests");
-        fs::create_dir_all(&parent).unwrap();
-        let start = NEXT.load(Ordering::Relaxed);
-        let mut blocked = Vec::new();
-        let budget = std::thread::available_parallelism()
-            .map(|n| n.get() as u64)
-            .unwrap_or(4);
-        let mut last = start;
-        for step in 0..4096u64 {
-            last = start + step;
-            let path = parent.join(format!("residue-{pid}-{last}"));
-            match fs::create_dir(&path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => panic!("plant residue: {error}"),
-            }
-            fs::write(path.join("stale"), b"adopt-me").unwrap();
-            blocked.push(Temp(path));
-            if last > NEXT.load(Ordering::Relaxed) + budget {
-                break;
-            }
-            assert!(
-                step + 1 < 4096,
-                "planting hit cap without covering counter+sibling"
-            );
-        }
-        let got = Temp::new("residue");
-        let name = got.0.file_name().unwrap().to_string_lossy();
-        let drawn: u64 = name.rsplit('-').next().unwrap().parse().unwrap();
-        assert_eq!(
-            drawn,
-            last + 1,
-            "Temp::new must draw last-planted+1; got {name}"
+        crate::scratch_test::assert_skips_same_pid_residue(
+            &parent,
+            "residue",
+            &NEXT,
+            || Temp::new("residue"),
+            |t| &t.0,
         );
-        for planted in &blocked {
-            assert_eq!(
-                fs::read(planted.0.join("stale")).unwrap(),
-                b"adopt-me",
-                "Temp::new must leave same-pid residue untouched"
-            );
-        }
     }
 
     fn workspace() -> PathBuf {
