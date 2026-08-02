@@ -1072,11 +1072,20 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
 ///
 /// A routing static name can in principle collide with the shared error-descriptor static
 /// (`{ERROR}_DESCRIPTOR`) for adversarial identifiers — e.g. box `error`, capability `descriptor`,
-/// error enum `Error`. The accepted decision is that such an adversarial-identifier collision fails
-/// closed as a duplicate-definition rustc error in the generated crate — two statics of the same
-/// name never compile, so misrouting is impossible and the failure is loud, not silent. A
-/// generator-side diagnostic that rejects the collision before emission is deferred as a future
-/// hardening; it is not required now.
+/// error enum `Error`. The same deferred class covers other derived-identifier collisions the
+/// generator synthesises: `pascal_case` Future/Responder type names (wire names `foo_bar` and
+/// `foo__bar` both map to `FooBar`, giving E0428) and a capability named `from_erased` colliding
+/// with a generated handle method (E0592). The accepted decision is that such derived-identifier
+/// collisions fail closed as a duplicate-definition rustc error in the generated crate — two
+/// statics or types of the same name never compile, so misrouting is impossible and the failure is
+/// loud, not silent. A generator-side diagnostic that rejects the collision before emission is
+/// deferred as a future hardening; it is not required now.
+///
+/// That deferral does not cover collisions of a directly declared spelling. The user wrote the
+/// Rust method identifier; when an override splits wire identity from that spelling, two
+/// declarations can share a `rust_name` while carrying distinct wire names. Guarding that
+/// uniqueness is owned here because the collision is a property of the declaration, not of a
+/// derivation.
 fn capability_static_name(box_id: &str, cap_name: &str) -> String {
     format!(
         "{}_{}",
@@ -1552,16 +1561,21 @@ macro_rules! __boxology_check_implementation {
     #[test]
     fn name_override_keeps_wire_identity_and_rust_method_spelling() {
         // D4 rename-preserving: wire identity stays in the schema/descriptor; checker, adapter,
-        // and Dispatch demand the Rust fn spelling. The PascalCase fn is admitted only because
-        // an override supplies the `[a-z][a-z0-9_]*` wire name.
-        let source = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(name=\"greet\",exposure=external)] pub async fn salute(name:String)->Result<String,GreetError>; }";
+        // and Dispatch demand the Rust fn spelling. Two capabilities force the multi-capability
+        // checker template (`per_capability` / `__CAP__`), so an override cannot silently pin the
+        // wire name into the method-matching arms.
+        let source = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(name=\"greet\",exposure=external)] pub async fn salute(name:String)->Result<String,GreetError>; #[capability(exposure=external)] pub async fn farewell(name:String)->Result<String,GreetError>; }";
         let tree = generate(&request_for("hello", source)).unwrap();
         let schema: Value =
             serde_json::from_slice(file(&tree, "generated/schema.json").bytes()).unwrap();
         assert_eq!(schema["capabilities"][0]["name"], "greet");
+        assert_eq!(schema["capabilities"][1]["name"], "farewell");
         let rust =
             std::str::from_utf8(file(&tree, "generated/contract/src/lib.rs").bytes()).unwrap();
         assert!(rust.contains("CapabilityName::new(\"greet\")"));
+        // Multi-capability checker template; pretty-print yields `@ find_salute` (space after `@`).
+        assert!(rust.contains("@ find_salute"));
+        assert!(rust.contains("@ find_farewell"));
         assert!(rust.contains("receiver.salute(context"));
         assert!(rust.contains("fn salute<'a>("));
         // Handle is the caller/import surface: it must use the wire name, not the fn spelling.

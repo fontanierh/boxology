@@ -457,17 +457,19 @@ fn parse_capability(
     input.parse::<Token![fn]>()?;
     let name_ident: syn::Ident = input.parse()?;
     let rust_name = identifier(&name_ident)?;
+    // The override replaces only the wire identity. The Rust method spelling stays subject to the
+    // snake_case capability-name grammar unconditionally — generated trait methods carry no
+    // `#![allow(non_snake_case)]`, so admitting PascalCase here would emit uncompilable code under
+    // `RUSTFLAGS="-D warnings"`.
+    if !capability_name(&rust_name) {
+        return Err(error(
+            &name_ident,
+            "capability name must match [a-z][a-z0-9_]*",
+        ));
+    }
     let name = match name_override {
         Some(overridden) => overridden,
-        None => {
-            if !capability_name(&rust_name) {
-                return Err(error(
-                    &name_ident,
-                    "capability name must match [a-z][a-z0-9_]*",
-                ));
-            }
-            rust_name.clone()
-        }
+        None => rust_name.clone(),
     };
     let content;
     syn::parenthesized!(content in input);
@@ -907,14 +909,14 @@ mod tests {
     fn name_override_replaces_identity_and_digest() {
         let overridden = parse(
             format!(
-                "{ERROR} #[capability(name=\"rescued\")] pub async fn BadName(name:String)->Result<String,GreetError>;"
+                "{ERROR} #[capability(name=\"rescued\")] pub async fn salute(name:String)->Result<String,GreetError>;"
             )
             .parse()
             .unwrap(),
         )
         .unwrap();
         assert_eq!(overridden.capabilities[0].name, "rescued");
-        assert_eq!(overridden.capabilities[0].rust_name, "BadName");
+        assert_eq!(overridden.capabilities[0].rust_name, "salute");
         let without = parse(
             format!(
                 "{ERROR} #[capability] pub async fn greet(name:String)->Result<String,GreetError>;"
@@ -988,11 +990,20 @@ mod tests {
         let error = parse(source.parse().unwrap()).unwrap_err();
         assert_eq!(error.to_string(), "capability Rust names must be unique");
         assert_eq!(&source[error.span().byte_range()], "same");
+        let source = format!(
+            "{ERROR} #[capability(name=\"ok\",exposure=external)] pub async fn BadName(name:String)->Result<String,GreetError>;"
+        );
+        let error = parse(source.parse().unwrap()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "capability name must match [a-z][a-z0-9_]*"
+        );
+        assert_eq!(&source[error.span().byte_range()], "BadName");
     }
     #[test]
     fn non_default_metadata_semantic_encoding_is_pinned() {
         let contract = parse(
-            "#[error] pub enum E { V } #[capability(name=\"rescued\",exposure=internal,idempotency=inherent)] pub async fn BadName(x:String)->Result<String,E>;"
+            "#[error] pub enum E { V } #[capability(name=\"rescued\",exposure=internal,idempotency=inherent)] pub async fn salute(x:String)->Result<String,E>;"
                 .parse()
                 .unwrap(),
         )
