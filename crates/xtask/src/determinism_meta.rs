@@ -8,7 +8,9 @@ use crate::determinism_run::{
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAP_A: &str = "a=1\nb=2\n";
@@ -18,6 +20,9 @@ const CRLF: &str = "line1\r\nline2\r\n";
 static MAP_ORDINAL: AtomicU64 = AtomicU64::new(0);
 static CRLF_ORDINAL: AtomicU64 = AtomicU64::new(0);
 static NEXT_ARTIFACT: AtomicU64 = AtomicU64::new(0);
+// Un-namespaced {pid}-{n} scratch paths are shared with compare_variants; gate
+// creation so the residue test can plant without racing sibling tests.
+static SCRATCH_GATE: Mutex<()> = Mutex::new(());
 type Argv = fn(&Path) -> (PathBuf, Vec<OsString>);
 type Variant<'a> = (&'a [u8], Argv);
 
@@ -156,6 +161,72 @@ fn exercise(
     assert!(!root.exists());
 }
 
+struct Temp(PathBuf);
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch() -> Temp {
+    let _gate = SCRATCH_GATE.lock().unwrap();
+    scratch_exclusive()
+}
+
+fn scratch_exclusive() -> Temp {
+    let parent = workspace().join("target/determinism-meta-tests");
+    fs::create_dir_all(&parent).unwrap();
+    let path = loop {
+        let candidate = parent.join(format!(
+            "{}-{}",
+            std::process::id(),
+            NEXT_ARTIFACT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("create scratch: {error}"),
+        }
+    };
+    Temp(path)
+}
+
+#[test]
+fn scratch_skips_same_pid_residue() {
+    let _gate = SCRATCH_GATE.lock().unwrap();
+    let pid = std::process::id();
+    let parent = workspace().join("target/determinism-meta-tests");
+    fs::create_dir_all(&parent).unwrap();
+    let start = NEXT_ARTIFACT.load(Ordering::Relaxed);
+    let blocked: Vec<Temp> = (start..start + 64)
+        .map(|n| {
+            let path = parent.join(format!("{pid}-{n}"));
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("stale"), b"adopt-me").unwrap();
+            Temp(path)
+        })
+        .collect();
+    let before = NEXT_ARTIFACT.load(Ordering::Relaxed);
+    let got = scratch_exclusive();
+    let after = NEXT_ARTIFACT.load(Ordering::Relaxed);
+    assert!(
+        after > before + 1,
+        "scratch() must iterate past residue (NEXT_ARTIFACT {before} -> {after}), not adopt on first try"
+    );
+    assert!(
+        !blocked.iter().any(|temp| temp.0 == got.0),
+        "scratch() must skip same-pid residue, not adopt it; got {}",
+        got.0.display()
+    );
+    for planted in &blocked {
+        assert_eq!(
+            fs::read(planted.0.join("stale")).unwrap(),
+            b"adopt-me",
+            "scratch() must leave same-pid residue untouched"
+        );
+    }
+}
+
 fn compare_variants(
     name: &'static str,
     file: &str,
@@ -163,17 +234,10 @@ fn compare_variants(
     right: Variant<'_>,
     difference: ByteDiff,
 ) {
-    let temp = workspace()
-        .join("target/determinism-meta-tests")
-        .join(format!(
-            "{}-{}",
-            std::process::id(),
-            NEXT_ARTIFACT.fetch_add(1, Ordering::Relaxed)
-        ));
-    fs::create_dir_all(&temp).unwrap();
-    let (a, b) = (temp.join("a"), temp.join("b"));
-    assert_eq!(manifest_with(&temp, &a, &[subject(name, left.1)]), 0);
-    assert_eq!(manifest_with(&temp, &b, &[subject(name, right.1)]), 0);
+    let temp = scratch();
+    let (a, b) = (temp.0.join("a"), temp.0.join("b"));
+    assert_eq!(manifest_with(&temp.0, &a, &[subject(name, left.1)]), 0);
+    assert_eq!(manifest_with(&temp.0, &b, &[subject(name, right.1)]), 0);
     assert_eq!(
         fs::read(a.join("trees").join(name).join(file)).unwrap(),
         left.0
@@ -184,7 +248,6 @@ fn compare_variants(
     );
     assert_eq!(compare(&a, &b), 1);
     assert_eq!(byte_diff(left.0, right.0), Some(difference));
-    fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]
