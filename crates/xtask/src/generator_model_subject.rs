@@ -1430,21 +1430,38 @@ mod tests {
         SubjectTemp(path)
     }
 
-    #[test]
-    fn subject_root_skips_same_pid_residue() {
+    fn fixture_scratch() -> SubjectTemp {
+        let path = loop {
+            let candidate = std::env::temp_dir().join(format!(
+                "boxology-fixture-{}-{}",
+                std::process::id(),
+                NEXT_SUBJECT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create fixture scratch: {error}"),
+            }
+        };
+        SubjectTemp(path)
+    }
+
+    fn assert_skips_same_pid_residue(
+        parent: &Path,
+        prefix: &str,
+        allocate: impl FnOnce() -> SubjectTemp,
+    ) {
+        fs::create_dir_all(parent).unwrap();
         let pid = std::process::id();
-        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests");
-        fs::create_dir_all(&parent).unwrap();
         let start = NEXT_SUBJECT.load(Ordering::Relaxed);
         let mut blocked = Vec::new();
-        // Size from the live counter, plus a sibling budget for allocates that
-        // can advance NEXT_SUBJECT between the end of planting and our subject_root() call.
         let budget = std::thread::available_parallelism()
             .map(|n| n.get() as u64)
             .unwrap_or(4);
-        loop {
-            let n = start + blocked.len() as u64;
-            let path = parent.join(format!("residue-{pid}-{n}"));
+        let mut last = start;
+        for step in 0..4096u64 {
+            last = start + step;
+            let path = parent.join(format!("{prefix}-{pid}-{last}"));
             match fs::create_dir(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -1452,29 +1469,39 @@ mod tests {
             }
             fs::write(path.join("stale"), b"adopt-me").unwrap();
             blocked.push(SubjectTemp(path));
-            if n > NEXT_SUBJECT.load(Ordering::Relaxed) + budget {
+            if last > NEXT_SUBJECT.load(Ordering::Relaxed) + budget {
                 break;
             }
+            assert!(
+                step + 1 < 4096,
+                "planting hit cap without covering counter+sibling"
+            );
         }
-        let before = NEXT_SUBJECT.load(Ordering::Relaxed);
-        let got = subject_root("residue");
-        let after = NEXT_SUBJECT.load(Ordering::Relaxed);
-        assert!(
-            after > before + 1,
-            "subject_root() must iterate past residue (NEXT_SUBJECT {before} -> {after}), not adopt on first try"
-        );
-        assert!(
-            !blocked.iter().any(|temp| temp.0 == got.0),
-            "subject_root() must skip same-pid residue, not adopt it; got {}",
-            got.0.display()
-        );
+        let got = allocate();
+        let name = got.0.file_name().unwrap().to_string_lossy();
+        let drawn: u64 = name.rsplit('-').next().unwrap().parse().unwrap();
+        assert_eq!(drawn, last + 1, "must draw last-planted+1; got {name}");
         for planted in &blocked {
             assert_eq!(
                 fs::read(planted.0.join("stale")).unwrap(),
                 b"adopt-me",
-                "subject_root() must leave same-pid residue untouched"
+                "must leave same-pid residue untouched"
             );
         }
+    }
+
+    #[test]
+    fn subject_root_skips_same_pid_residue() {
+        assert_skips_same_pid_residue(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/xtask-subject-tests"),
+            "residue",
+            || subject_root("residue"),
+        );
+    }
+
+    #[test]
+    fn fixture_scratch_skips_same_pid_residue() {
+        assert_skips_same_pid_residue(&std::env::temp_dir(), "boxology-fixture", fixture_scratch);
     }
 
     #[test]
@@ -1503,11 +1530,10 @@ mod tests {
     #[test]
     fn fixture_owner_symlink_is_rejected() {
         use std::os::unix::fs::symlink;
-        let root = std::env::temp_dir().join(format!("boxology-fixture-{}", std::process::id()));
-        fs::create_dir_all(root.join("target")).unwrap();
-        symlink(root.join("target"), root.join("owner")).unwrap();
-        assert!(discover_fixture_schema_owners_at(&root).is_err());
-        fs::remove_dir_all(root).unwrap();
+        let root = fixture_scratch();
+        fs::create_dir(root.0.join("target")).unwrap();
+        symlink(root.0.join("target"), root.0.join("owner")).unwrap();
+        assert!(discover_fixture_schema_owners_at(&root.0).is_err());
     }
 
     #[test]

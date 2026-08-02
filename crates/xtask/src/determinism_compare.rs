@@ -160,14 +160,13 @@ mod tests {
         fs::create_dir_all(&parent).unwrap();
         let start = NEXT.load(Ordering::Relaxed);
         let mut blocked = Vec::new();
-        // Size from the live counter, plus a sibling budget for allocates that
-        // can advance NEXT between the end of planting and our temp() call.
         let budget = std::thread::available_parallelism()
             .map(|n| n.get() as u64)
             .unwrap_or(4);
-        loop {
-            let n = start + blocked.len() as u64;
-            let path = parent.join(format!("residue-{pid}-{n}"));
+        let mut last = start;
+        for step in 0..4096u64 {
+            last = start + step;
+            let path = parent.join(format!("residue-{pid}-{last}"));
             match fs::create_dir(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -175,21 +174,21 @@ mod tests {
             }
             fs::write(path.join("stale"), b"adopt-me").unwrap();
             blocked.push(Temp(path));
-            if n > NEXT.load(Ordering::Relaxed) + budget {
+            if last > NEXT.load(Ordering::Relaxed) + budget {
                 break;
             }
+            assert!(
+                step + 1 < 4096,
+                "planting hit cap without covering counter+sibling"
+            );
         }
-        let before = NEXT.load(Ordering::Relaxed);
         let got = temp("residue");
-        let after = NEXT.load(Ordering::Relaxed);
-        assert!(
-            after > before + 1,
-            "temp() must iterate past residue (NEXT {before} -> {after}), not adopt on first try"
-        );
-        assert!(
-            !blocked.iter().any(|temp| temp.0 == got.0),
-            "temp() must skip same-pid residue, not adopt it; got {}",
-            got.0.display()
+        let name = got.0.file_name().unwrap().to_string_lossy();
+        let drawn: u64 = name.rsplit('-').next().unwrap().parse().unwrap();
+        assert_eq!(
+            drawn,
+            last + 1,
+            "temp() must draw last-planted+1; got {name}"
         );
         for planted in &blocked {
             assert_eq!(
