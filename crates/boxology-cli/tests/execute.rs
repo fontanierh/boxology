@@ -79,8 +79,159 @@ fn fixture(outputs: &str) -> Fixture {
     Fixture { root, plan }
 }
 
+const PROJECT_FILES: [&str; 7] = [
+    "boxology.toml",
+    "implementation/Cargo.toml",
+    "implementation/src/lib.rs",
+    "generated/contract/Cargo.toml",
+    "generated/contract/src/lib.rs",
+    "generated/adapter/adapter.rs",
+    "generated/schema.json",
+];
+
+fn fixture_bytes(package: &str, file: &str) -> &'static [u8] {
+    match (package, file) {
+        ("hello", "boxology.toml") => include_bytes!("../../fixtures/hello/boxology.toml"),
+        ("hello", "implementation/Cargo.toml") => {
+            include_bytes!("../../fixtures/hello/implementation/Cargo.toml")
+        }
+        ("hello", "implementation/src/lib.rs") => {
+            include_bytes!("../../fixtures/hello/implementation/src/lib.rs")
+        }
+        ("hello", "generated/contract/Cargo.toml") => {
+            include_bytes!("../../fixtures/hello/generated/contract/Cargo.toml")
+        }
+        ("hello", "generated/contract/src/lib.rs") => {
+            include_bytes!("../../fixtures/hello/generated/contract/src/lib.rs")
+        }
+        ("hello", "generated/adapter/adapter.rs") => {
+            include_bytes!("../../fixtures/hello/generated/adapter/adapter.rs")
+        }
+        ("hello", "generated/schema.json") => {
+            include_bytes!("../../fixtures/hello/generated/schema.json")
+        }
+        ("greeter", "boxology.toml") => include_bytes!("../../fixtures/greeter/boxology.toml"),
+        ("greeter", "implementation/Cargo.toml") => {
+            include_bytes!("../../fixtures/greeter/implementation/Cargo.toml")
+        }
+        ("greeter", "implementation/src/lib.rs") => {
+            include_bytes!("../../fixtures/greeter/implementation/src/lib.rs")
+        }
+        ("greeter", "generated/contract/Cargo.toml") => {
+            include_bytes!("../../fixtures/greeter/generated/contract/Cargo.toml")
+        }
+        ("greeter", "generated/contract/src/lib.rs") => {
+            include_bytes!("../../fixtures/greeter/generated/contract/src/lib.rs")
+        }
+        ("greeter", "generated/adapter/adapter.rs") => {
+            include_bytes!("../../fixtures/greeter/generated/adapter/adapter.rs")
+        }
+        ("greeter", "generated/schema.json") => {
+            include_bytes!("../../fixtures/greeter/generated/schema.json")
+        }
+        _ => panic!("unknown fixture file {package}/{file}"),
+    }
+}
+
+fn fixture_metadata() -> String {
+    let members = ["hello", "greeter"]
+        .into_iter()
+        .flat_map(|id| {
+            [
+                (format!("{id}/generated/contract"), format!("{id}-contract")),
+                (
+                    format!("{id}/implementation"),
+                    format!("{id}-implementation"),
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let ids = members
+        .iter()
+        .map(|(directory, _)| format!("{:?}", format!("path+file:///w/{directory}#0.0.0")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let packages = members
+        .iter()
+        .map(|(directory, name)| {
+            format!(
+                r#"{{"id":{:?},"name":{name:?},"manifest_path":"/w/{directory}/Cargo.toml","dependencies":[]}}"#,
+                format!("path+file:///w/{directory}#0.0.0")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(r#"{{"workspace_root":"/w","workspace_members":[{ids}],"packages":[{packages}]}}"#)
+}
+
+fn fixture_workspace() -> Workspace {
+    let mut files: Vec<String> = ["Cargo.toml", "Cargo.lock", "boxology.toml"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let mut manifests = vec![(path("boxology.toml"), ROOT_MANIFEST.as_bytes().to_vec())];
+    for package in ["hello", "greeter"] {
+        files.extend(PROJECT_FILES.iter().map(|file| format!("{package}/{file}")));
+        manifests.push((
+            path(&format!("{package}/boxology.toml")),
+            fixture_bytes(package, "boxology.toml").to_vec(),
+        ));
+    }
+    let files = files
+        .into_iter()
+        .map(|name| FileEntry::file(path(&name)))
+        .collect();
+    WorkspaceInputs::new(files, manifests, &fixture_metadata())
+        .unwrap()
+        .check()
+        .unwrap()
+}
+
+struct FixtureProjects {
+    root: PathBuf,
+    plan: GenerationPlan,
+}
+
+impl Drop for FixtureProjects {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn fixture_projects() -> FixtureProjects {
+    let root = std::env::temp_dir().join(format!(
+        "boxology-cli-imports-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    for package in ["hello", "greeter"] {
+        for file in PROJECT_FILES {
+            let path = root.join(package).join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, fixture_bytes(package, file)).unwrap();
+        }
+    }
+    let plan = plan(&fixture_workspace(), None)
+        .unwrap()
+        .into_iter()
+        .find(|plan| plan.package_id().as_str() == "greeter")
+        .unwrap();
+    FixtureProjects { root, plan }
+}
+
 fn package_dir(fixture: &Fixture) -> PathBuf {
     fixture.root.join("ping")
+}
+
+#[test]
+fn imported_fixture_schema_is_hydrated_into_typed_adapter() {
+    let fixture = fixture_projects();
+    execute(&fixture.root, &fixture.plan).unwrap();
+    let adapter = String::from_utf8(
+        fs::read(fixture.root.join("greeter/generated/adapter/adapter.rs")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(adapter.matches("pub hello: HelloImport").count(), 1);
 }
 
 fn request(fixture: &Fixture) -> GenerationRequest {

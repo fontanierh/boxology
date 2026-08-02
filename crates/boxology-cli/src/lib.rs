@@ -33,5 +33,5 @@ pub use check::{
 pub use classify::{ClassifyError, classify};
 pub use compare::{CompareDifference, CompareStepError, DifferenceKind, compare_step};
 pub use execute::{ExecuteError, Outcome, execute};
-pub use generate::{GenerationPlan, PlanError, plan};
+pub use generate::{GenerationPlan, PlanError, ResolvedImport, plan};
 pub use walk::{WalkError, WalkedWorkspace, walk};

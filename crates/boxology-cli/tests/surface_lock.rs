@@ -31,11 +31,11 @@ const SOURCES: &[(&str, &str)] = &[
     ("main.rs", MAIN),
 ];
 const GOLDEN: &str = include_str!("bxw.golden");
-const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0068 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083";
-const LIB_HASH: u64 = 3_815_777_340_312_689_332;
+const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085";
+const LIB_HASH: u64 = 7_458_413_996_371_438_303;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
-const GENERATE_HASH: u64 = 2_437_200_502_410_785_768;
-const EXECUTE_HASH: u64 = 11_213_979_871_116_802_205;
+const GENERATE_HASH: u64 = 11_517_087_325_682_261_582;
+const EXECUTE_HASH: u64 = 18_234_891_910_544_483_514;
 const COMPARE_HASH: u64 = 12_138_161_763_628_885_121;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
@@ -53,8 +53,8 @@ const HASHES: [u64; 8] = [
     MAIN_HASH,
 ];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
-const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.generator() == CONTRACT_GENERATOR\nclassification.package() == package.id()\nclassification.derived_output().is_none()\nentry.role() == CrateRole::BoxImplementation\npackage.relative(classification.path())?";
-const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nconst SCHEMA: &str = \"generated/schema.json\";\nfile.path() == SCHEMA";
+const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.generator() == CONTRACT_GENERATOR\ntarget.id() == import.package()\nclassification.package() == package.id()\nclassification.derived_output().is_none()\nentry.role() == CrateRole::BoxImplementation\npackage.relative(classification.path())?";
+const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nfor import in plan.imports()\nguarded(root, schema.as_str(), true)\nimport.package().clone()\nconst SCHEMA: &str = \"generated/schema.json\";\nfile.path() == SCHEMA";
 const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged base_schema submitted_schema ExecuteError code location path detail diagnostics write_error execute";
 const COMPARE_ANCHORS: &str = "plan(workspace, None)\nclassification.derived_output() == Some(plan.derived_output_id())\nDifferenceKind::Stale\ndifferences.sort_by\nBXW0083";
 const COMPARE_PUBLIC: &str = "DifferenceKind as_str CompareDifference package path kind code detail repair_command rule_source CompareStepError compare_step";

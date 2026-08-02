@@ -6,7 +6,6 @@ BXW0064|only the boxology-contract generator is supported by generate|specs/s5-m
 BXW0065|the requested package must be a discovered workspace package|specs/s5-manifest-and-validation.md D5
 BXW0066|the selected package must declare a contract-generation output|specs/s5-manifest-and-validation.md D5
 BXW0067|a generation candidate must declare exactly one box-implementation crate|specs/s5-manifest-and-validation.md D5
-BXW0068|generation candidates must not declare imports outside their package inputs|specs/s5-manifest-and-validation.md D5
 BXW0069|a package must declare at most one contract-generation output|specs/s5-manifest-and-validation.md D5
 BXW0070|a generation input must be a readable regular file|specs/s5-manifest-and-validation.md D5
 BXW0071|the contract generator returned diagnostics|specs/s5-manifest-and-validation.md D5
@@ -21,3 +20,5 @@ BXW0080|the base-revision schema document must satisfy the strict format-1 reade
 BXW0081|the checked-in schema document must satisfy the strict format-1 reader|specs/s4-contract-change-classification.md D1; specs/s5-manifest-and-validation.md D6
 BXW0082|the base-revision and checked-in schema documents must pair and satisfy classifier integrity|specs/s4-contract-change-classification.md D2 D6; specs/s5-manifest-and-validation.md D6
 BXW0083|a checked-in derived artifact must be byte-identical to regeneration; regenerate the accountable package with boxology generate --package <id>|specs/s5-manifest-and-validation.md D6; boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 2
+BXW0084|a declared import must name a discovered workspace package|specs/s5-manifest-and-validation.md D5
+BXW0085|an imported package must declare a contract-generation output|specs/s5-manifest-and-validation.md D5

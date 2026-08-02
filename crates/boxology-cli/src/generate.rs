@@ -16,16 +16,37 @@ const UNKNOWN_PACKAGE_TEXT: &str = "the requested package must be a discovered w
 const NO_CANDIDATE_TEXT: &str = "the selected package must declare a contract-generation output";
 const IMPLEMENTATION_ROOT_TEXT: &str =
     "a generation candidate must declare exactly one box-implementation crate";
-const IMPORTS_TEXT: &str =
-    "generation candidates must not declare imports outside their package inputs";
 const DUPLICATE_OUTPUTS_TEXT: &str =
     "a package must declare at most one contract-generation output";
+const UNKNOWN_IMPORT_TEXT: &str = "a declared import must name a discovered workspace package";
+const NO_IMPORT_CANDIDATE_TEXT: &str =
+    "an imported package must declare a contract-generation output";
 const UNKNOWN_GENERATOR: Rule = ("BXW0064", UNKNOWN_GENERATOR_TEXT, SOURCE);
 const UNKNOWN_PACKAGE: Rule = ("BXW0065", UNKNOWN_PACKAGE_TEXT, SOURCE);
 const NO_CANDIDATE: Rule = ("BXW0066", NO_CANDIDATE_TEXT, SOURCE);
 const IMPLEMENTATION_ROOT: Rule = ("BXW0067", IMPLEMENTATION_ROOT_TEXT, SOURCE);
-const IMPORTS: Rule = ("BXW0068", IMPORTS_TEXT, SOURCE);
 const DUPLICATE_OUTPUTS: Rule = ("BXW0069", DUPLICATE_OUTPUTS_TEXT, SOURCE);
+const UNKNOWN_IMPORT: Rule = ("BXW0084", UNKNOWN_IMPORT_TEXT, SOURCE);
+const NO_IMPORT_CANDIDATE: Rule = ("BXW0085", NO_IMPORT_CANDIDATE_TEXT, SOURCE);
+const SCHEMA: &str = "generated/schema.json";
+
+/// One declared import resolved to the imported package's checked-in schema.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedImport {
+    package: BoxId,
+    schema: RelativePath,
+}
+impl ResolvedImport {
+    /// Returns the imported package identity.
+    pub fn package(&self) -> &BoxId {
+        &self.package
+    }
+    /// Returns the workspace-relative path of the imported package's schema.
+    pub fn schema(&self) -> &RelativePath {
+        &self.schema
+    }
+}
+
 /// The pure inputs needed by the next generation-execution slice.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenerationPlan {
@@ -35,6 +56,7 @@ pub struct GenerationPlan {
     derived_output: BoxId,
     crate_root: RelativePath,
     inputs: Vec<RelativePath>,
+    imports: Vec<ResolvedImport>,
     outputs: Vec<GlobPattern>,
 }
 impl GenerationPlan {
@@ -61,6 +83,10 @@ impl GenerationPlan {
     /// Returns matching package-relative non-derived inputs in stable classification order.
     pub fn inputs(&self) -> &[RelativePath] {
         &self.inputs
+    }
+    /// Returns declared imports resolved in manifest declaration order.
+    pub fn imports(&self) -> &[ResolvedImport] {
+        &self.imports
     }
     /// Returns the selected output's declared patterns in declaration order.
     pub fn outputs(&self) -> &[GlobPattern] {
@@ -161,9 +187,39 @@ fn assemble(
             package.manifest_path().clone(),
         ));
     }
-    if !package.manifest().imports().is_empty() {
-        return Err(failure(IMPORTS, package.manifest_path().clone()));
-    }
+    let imports = package
+        .manifest()
+        .imports()
+        .iter()
+        .map(|import| {
+            let Some(target) = workspace
+                .packages()
+                .iter()
+                .find(|target| target.id() == import.package())
+            else {
+                return Err(failure(UNKNOWN_IMPORT, package.manifest_path().clone()));
+            };
+            let candidates = contract_outputs(target)?;
+            if candidates.is_empty() {
+                return Err(failure(
+                    NO_IMPORT_CANDIDATE,
+                    package.manifest_path().clone(),
+                ));
+            }
+            if candidates.len() > 1 {
+                return Err(failure(DUPLICATE_OUTPUTS, target.manifest_path().clone()));
+            }
+            let schema = target.root().map_or_else(
+                || SCHEMA.to_owned(),
+                |root| format!("{}/{}", root.as_str(), SCHEMA),
+            );
+            let schema = RelativePath::new(schema).expect("fixed schema path is valid");
+            Ok(ResolvedImport {
+                package: import.package().clone(),
+                schema,
+            })
+        })
+        .collect::<Result<Vec<_>, PlanError>>()?;
     let raw_root = format!("{}/src/lib.rs", implementations[0].path().as_str());
     let Some(crate_root) = RelativePath::new(raw_root).ok() else {
         return Err(failure(
@@ -193,6 +249,7 @@ fn assemble(
         derived_output: output.id().clone(),
         crate_root,
         inputs,
+        imports,
         outputs: output.outputs().to_vec(),
     })
 }
