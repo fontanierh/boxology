@@ -601,7 +601,7 @@ fn metadata<'a>(
                     return Err(error(attr, "invalid deprecated attribute"));
                 }
             });
-        } else if !marker_name.is_empty() && name == marker_name {
+        } else if name == marker_name {
             if marker.is_some() {
                 return Err(error(attr, "duplicate marker"));
             }
@@ -887,7 +887,8 @@ mod tests {
             assert!(parse(source.parse().unwrap()).is_err(), "{source}");
         }
         // `{CAP} {CAP} {ERROR}` above fails at parse_error (first item is not `#[error]`).
-        // This is the row that reaches the wire-name uniqueness pass.
+        // `capability_error_mismatch_and_duplicate_names_fail_closed` already reaches the
+        // uniqueness pass and proves it errors; this row pins which message it errors with.
         let duplicate_wire = format!("{ERROR} {CAP} {CAP}");
         let error = parse(duplicate_wire.parse().unwrap()).unwrap_err();
         assert!(
