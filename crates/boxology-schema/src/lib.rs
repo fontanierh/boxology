@@ -19,7 +19,7 @@
 // claims BXC0001–BXC0023 and BXC0029–BXC0030, the whole format-1 read inventory: BXC0001–BXC0006 the document gates,
 // with unknown key, missing key, and wrong type generic across every level rather than repeated
 // per level (`boxology-manifest`'s shape, keeping the initial read inventory compact);
-// BXC0007 and BXC0008 the reader's two narrowings; BXC0009 the revision spelling; BXC0010–BXC0014
+// BXC0007 and BXC0008 the exposure and idempotency spelling gates; BXC0009 the revision spelling; BXC0010–BXC0014
 // the identity namespaces; BXC0015–BXC0023 the contract grammar's own rules. D2's BXC0024–BXC0025
 // are registered here, but emitted and reachability-proven by the classifier. D6's BXC0037–BXC0038
 // are likewise registered here — with constructors and rule_of/source_of arms — but emitted and
@@ -27,11 +27,9 @@
 // and BXC0039–BXC0043 as reserved findings with no rule-text arms here; BXC0029–BXC0030 remain
 // named-payload-field rules.
 //
-// The two narrowings are fail-closed and deliberate. `boxology-contract-syntax` hardcodes
-// `external` and `none` and rejects every other exposure and idempotency, so no document this
-// codec wrote can carry one, and admitting one would mean classifying a document no emitter
-// produced. The consequence: widening the emitted grammar must widen this reader in the same
-// change, or documents valid under the widened grammar are rejected here.
+// BXC0007 and BXC0008 accept the exposure and idempotency spellings S2 D3 lists and reject every
+// other spelling. Widening the emitted grammar must widen this reader in the same change, or
+// documents valid under the widened grammar are rejected here.
 //
 // Recorded non-goals and divergences, so that freezing the inventory does not bury them.
 // Duplicate JSON object keys are **not** detected: `serde_json` silently keeps the last, so two
@@ -347,9 +345,8 @@ impl SchemaField {
     }
 }
 
-/// Returns an exposure level's S2 D3 grammar token. Spelling every level is not a claim that a
-/// format-1 document may carry every level: the serializer is total over `ExposureLevel`, the
-/// emitter builds only `External`, and the strict reader admits only that (BXC0007).
+/// Returns an exposure level's S2 D3 grammar token. The serializer is total over `ExposureLevel`;
+/// the strict reader admits the same three spellings (BXC0007).
 fn exposure_name(level: ExposureLevel) -> &'static str {
     match level {
         ExposureLevel::CodeOnly => "code_only",
@@ -748,8 +745,7 @@ mod tests {
     /// must read, which makes `canonical_name` a wire authority in its own right. A typo in a leaf
     /// no fixture happens to use is invisible until it surfaces as a cross-version
     /// incompatibility, so each of the 13 leaves, the one shape, and both enumerations are locked
-    /// exactly. Locking what `ExposureLevel::Internal` *spells* is not a claim that a format-1
-    /// document may hold it: no emitter writes it and the reader rejects it (BXC0007, BXC0008).
+    /// exactly.
     #[test]
     fn wire_vocabulary_spellings_are_locked() {
         #[rustfmt::skip]
