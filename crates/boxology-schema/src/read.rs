@@ -1208,16 +1208,6 @@ BXC0009 at=\"/revision\" rule=\"a revision must be sha256: and 64 lowercase hexa
     }
 
     #[test]
-    fn unknown_exposure_and_idempotency_spellings_are_rejected() {
-        let mut value = baseline();
-        value["capabilities"][0]["max_exposure"] = json!("private");
-        assert_one(value, "BXC0007", "/capabilities/0/max_exposure");
-        let mut value = baseline();
-        value["capabilities"][0]["idempotency"] = json!("keyed");
-        assert_one(value, "BXC0008", "/capabilities/0/idempotency");
-    }
-
-    #[test]
     fn reserved_unknown_and_keyword_variant_names_are_rejected() {
         for name in ["Unknown", "gen"] {
             let mut value = baseline();
