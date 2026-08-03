@@ -229,15 +229,19 @@ native determinism fixture.
 
 The activated `pr.yml` Linux lane assigns `checks-linux`, `deny`, both determinism
 consumers, and `validation` to `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]`.
-The Linux evidence and determinism verification target is `aarch64-unknown-linux-gnu`;
-the `checks-macos` native determinism gate and scheduled advisory workflow use
-`[self-hosted, macOS, ARM64, boxology-macos-pr]`. The x86 audit workflow is
-intentionally removed for this emergency migration; x86 coverage is a deferred
-follow-up and is not part of the active CI contract. Consequently every enabled
-workflow job runs through this MacBook and uses no GitHub-hosted Actions minutes.
-The full workspace test suite runs once in `checks-linux`; the native Mac gate
-reuses the per-slot Cargo target and checks platform-specific determinism without
-rebuilding the entire workspace a second time.
+The Linux evidence and determinism verification target is `aarch64-unknown-linux-gnu`.
+`checks-linux` is the slim producer: fail-fast `boxology check`, local
+`cargo xtask determinism`, Linux determinism manifests, and the Linux `xtask`
+binary for the cross-platform consumers. Canonical full behavioral validation —
+`boxology check` plus complete `cargo xtask ci` (PR `--base` / main `--no-budget`)
+and macOS determinism artifact production — runs on
+`[self-hosted, macOS, ARM64, boxology-macos-pr]`, which also hosts the scheduled
+advisory workflow. The x86 audit workflow is intentionally removed for this
+emergency migration; x86 coverage is a deferred follow-up and is not part of the
+active CI contract. Consequently every enabled workflow job runs through this
+MacBook and uses no GitHub-hosted Actions minutes. Native Mac slots reuse the
+per-slot Cargo target with four Cargo jobs; Linux containers remain capped at
+one CPU and 2 GiB and no longer rebuild the full behavioral suite.
 
 ## Health, cleanup, and rollback
 

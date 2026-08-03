@@ -8,9 +8,11 @@
 # that judge it. Until S5/S7, protection is human review of changes to
 # .github/workflows/ and crates/xtask.
 #
-# Wall-clock monitored target (D4, not an acceptance invariant): per-job
-# duration excluding queue time, on cache-hit runs, median of the last ten
-# main runs; alarm threshold 10 minutes. Measure with:
+# Wall-clock monitored target (D4, not an acceptance invariant): cache-hit
+# aggregate run duration excluding queue time, median of the last ten main
+# runs; alarm threshold 8 minutes. Native macOS is the canonical full
+# `cargo xtask ci` lane; Linux is the slim determinism/check producer.
+# Measure with:
 #   gh run list --workflow pr.yml --branch main --status success --limit 10
 #   gh api repos/<owner>/<repo>/actions/runs/<id>/jobs   # started_at -> completed_at
 
@@ -69,18 +71,15 @@ jobs:
             cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
           fi
           test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
-      # Fail-fast ownership/classification gate before the long xtask ci suite.
-      # Unconditional: covers both the pull_request and main-push paths below.
+      # Fail-fast ownership/classification gate before the Linux determinism
+      # producer. Unconditional on pull_request and main-push paths.
       - name: boxology check
         run: cargo run -q -p boxology-cli --bin boxology -- check
-      - name: cargo xtask ci (pull request)
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: cargo xtask ci --base "$BASE_SHA"
-      - name: cargo xtask ci (main push)
-        if: github.event_name == 'push'
-        run: cargo xtask ci --no-budget
+      # Slim Linux lane: local determinism protocol only. Full behavioral
+      # validation lives on checks-macos; keep producing the xtask binary and
+      # Linux determinism roots for the cross-platform consumers.
+      - name: cargo xtask determinism
+        run: cargo xtask determinism
       - name: Upload xtask-linux-arm64 (attempt 1)
         id: ulx_bin_1
         continue-on-error: true
@@ -204,6 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install pinned toolchain
         run: |
@@ -223,17 +223,29 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-          key: cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+            ~/.cargo/bin/cargo-deny
+          key: cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
             cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-
-      # Linux runs the full workspace test suite. Native macOS keeps the
-      # platform-specific gate and avoids rebuilding the entire workspace a
-      # second time for every PR. Building boxology-cli for check is a partial
-      # build (S7 D4 T4/T5), not a full workspace rebuild.
+      - name: Install pinned cargo-deny
+        run: |
+          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
+            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
+          fi
+          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
+      # Canonical full validation lane: fail-fast boxology check, then the
+      # complete host-local ci suite (including local determinism). Persistent
+      # per-slot targets and four Cargo jobs make this the fast behavioral gate.
       - name: boxology check
         run: cargo run -q -p boxology-cli --bin boxology -- check
-      - name: cargo xtask determinism (native macOS gate)
-        run: cargo xtask determinism
+      - name: cargo xtask ci (pull request)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: cargo xtask ci --base "$BASE_SHA"
+      - name: cargo xtask ci (main push)
+        if: github.event_name == 'push'
+        run: cargo xtask ci --no-budget
       - name: Produce determinism artifacts
         env:
           COPYFILE_DISABLE: "1"
