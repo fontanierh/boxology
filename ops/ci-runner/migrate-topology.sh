@@ -10,11 +10,13 @@ STAGE_ROOT="$INSTALL_ROOT/topology-stage"
 LOCK="$INSTALL_ROOT/topology-migration.lock"
 SCRIPT_ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 TIMEOUT_SECONDS=1800
+STALE_RUN_AGE_SECONDS=86400
 mutated=0
 backup=
 lock_acquired=0
 verified_backup=
 linux_base_source=
+ack_stale_run=
 
 base_labels='com.fontanierh.boxology-ci-runner
 com.fontanierh.boxology-ci-macos-runner'
@@ -33,7 +35,7 @@ cleanup() {
   if ((lock_acquired == 1)); then rmdir "$LOCK"; fi
   if ((status != 0 && mutated == 1)); then
     printf 'runner migration: FAILED SAFE; workflow dispatch was not restored\n' >&2
-    [[ -z "$backup" ]] || printf 'runner migration: restore with %s restore %s\n' "$0" "$backup" >&2
+    [[ -z "$backup" ]] || printf 'runner migration: restore with %s restore %s%s\n' "$0" "$backup" "${ack_stale_run:+ --ack-stale-run $ack_stale_run}" >&2
   fi
   exit "$status"
 }
@@ -55,33 +57,65 @@ require_tools() {
 
 runner_count() {
   label=$1
-  gh api "repos/$REPOSITORY/actions/runners?per_page=100" |
-    jq -er --arg label "$label" '[.runners[] | select(.labels | any(.name == $label))] | length'
+  response="$(gh api "repos/$REPOSITORY/actions/runners?per_page=100")" || return 2
+  jq -e '(.total_count | type == "number" and . == floor and . >= 0) and (.runners | type == "array") and (.total_count == (.runners | length)) and all(.runners[]; (.id | type == "number" and . == floor and . > 0) and (.name | type == "string") and (.status | type == "string") and (.busy | type == "boolean") and (.labels | type == "array") and all(.labels[]; .name | type == "string"))' <<< "$response" >/dev/null || return 2
+  jq -er --arg label "$label" '[.runners[] | select(.labels | any(.name == $label))] | length' <<< "$response" || return 2
+}
+
+strict_epoch() {
+  parsed="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null)" || return 2
+  [[ "$(date -u -r "$parsed" '+%Y-%m-%dT%H:%M:%SZ')" = "$1" ]] || return 2
+  printf '%s\n' "$parsed"
+}
+
+validate_stale_ack() {
+  id=$1; now="$(date -u +%s)" || return 2
+  run="$(gh api "repos/$REPOSITORY/actions/runs/$id")" || return 2
+  jobs="$(gh api "repos/$REPOSITORY/actions/runs/$id/jobs?per_page=100")" || return 2
+  repo="$(gh api "repos/$REPOSITORY")" || return 2
+  jq -e --argjson id "$id" '(.id == $id) and (.status | type == "string" and . != "completed") and (.updated_at | type == "string") and (.event == "pull_request") and (.pull_requests == []) and (.head_branch | type == "string" and length > 0) and (.head_sha | type == "string" and test("^[0-9a-f]{40}$"))' <<< "$run" >/dev/null || return 2
+  jq -e '(.total_count == 0) and (.jobs | type == "array" and length == 0)' <<< "$jobs" >/dev/null || return 2
+  updated="$(jq -er .updated_at <<< "$run")" || return 2; epoch="$(strict_epoch "$updated")" || return 2
+  age=$((now - epoch)); ((age > STALE_RUN_AGE_SECONDS)) || return 2
+  default_branch="$(jq -er '.default_branch | strings | select(length > 0)' <<< "$repo")" || return 2
+  encoded_default="$(jq -rn --arg value "$default_branch" '$value | @uri')" || return 2
+  default_ref="$(gh api "repos/$REPOSITORY/git/ref/heads/$encoded_default")" || return 2
+  default_sha="$(jq -er '.object.sha | strings | select(test("^[0-9a-f]{40}$"))' <<< "$default_ref")" || return 2
+  head_sha="$(jq -er .head_sha <<< "$run")" || return 2; [[ "$head_sha" != "$default_sha" ]] || return 2
+  head_branch="$(jq -er .head_branch <<< "$run")" || return 2; encoded_head="$(jq -rn --arg value "$head_branch" '$value | @uri')" || return 2
+  if ref_result="$(gh api --include "repos/$REPOSITORY/git/ref/heads/$encoded_head" 2>&1)"; then return 2; fi
+  grep -Eq '^HTTP/[0-9.]+ 404 ' <<< "$ref_result" || return 2
+  printf 'runner migration: acknowledged stale control-plane run id=%s age_seconds=%s\n' "$id" "$age" >&2
 }
 
 active_run_count() {
-  gh run list --repo "$REPOSITORY" --all --limit 1000 --json status |
-    jq -er '[.[] | select(.status != "completed")] | length'
+  runs="$(gh run list --repo "$REPOSITORY" --all --limit 1000 --json databaseId,status)" || return 2
+  jq -e 'type == "array" and all(.[]; (.databaseId | type == "number") and (.status | type == "string"))' <<< "$runs" >/dev/null || return 2
+  [[ -z "$ack_stale_run" ]] || validate_stale_ack "$ack_stale_run" || return 2
+  jq -er --argjson id "${ack_stale_run:-0}" '[.[] | select(.status != "completed" and .databaseId != $id)] | length' <<< "$runs" || return 2
 }
 
 busy_runner_count() {
-  gh api "repos/$REPOSITORY/actions/runners?per_page=100" |
-    jq -er '[.runners[] | select(.busy)] | length'
+  response="$(gh api "repos/$REPOSITORY/actions/runners?per_page=100")" || return 2
+  jq -e '(.total_count | type == "number" and . == floor and . >= 0) and (.runners | type == "array") and (.total_count == (.runners | length)) and all(.runners[]; (.id | type == "number" and . == floor and . > 0) and (.name | type == "string") and (.status | type == "string") and (.busy | type == "boolean") and (.labels | type == "array") and all(.labels[]; .name | type == "string"))' <<< "$response" >/dev/null || return 2
+  jq -er '[.runners[] | select(.busy)] | length' <<< "$response" || return 2
 }
 
 wait_until() {
   description=$1
   shift
   deadline=$((SECONDS + TIMEOUT_SECONDS))
-  while ! "$@"; do
+  while true; do
+    if "$@"; then return 0; else status=$?; fi
+    [[ "$status" = 1 ]] || die "$description check failed"
     ((SECONDS < deadline)) || die "timed out waiting for $description"
     sleep 5
   done
 }
 
-drained() { [[ "$(active_run_count)" = 0 && "$(busy_runner_count)" = 0 ]]; }
-label_is_zero() { [[ "$(runner_count "$1")" = 0 ]]; }
-label_is_count() { [[ "$(runner_count "$1")" = "$2" ]]; }
+drained() { active="$(active_run_count)" || return $?; busy="$(busy_runner_count)" || return $?; [[ "$active" = 0 && "$busy" = 0 ]]; }
+label_is_zero() { count="$(runner_count "$1")" || return $?; [[ "$count" = 0 ]]; }
+label_is_count() { count="$(runner_count "$1")" || return $?; [[ "$count" = "$2" ]]; }
 
 save_active_workflows() {
   destination=$1
@@ -90,7 +124,8 @@ save_active_workflows() {
 }
 
 workflows_disabled() {
-  [[ -z "$(gh workflow list --repo "$REPOSITORY" --all --limit 1000 --json state --jq '.[] | select(.state == "active") | .state')" ]]
+  states="$(gh workflow list --repo "$REPOSITORY" --all --limit 1000 --json state --jq '.[] | select(.state == "active") | .state')" || return 2
+  [[ -z "$states" ]]
 }
 
 disable_dispatch() {
@@ -209,6 +244,7 @@ bootout_if_loaded() {
 }
 
 stop_all_supervisors() {
+  drained || die 'drain changed immediately before supervisor bootout'
   for label in $extra_labels $slot_labels $base_labels; do bootout_if_loaded "$label"; done
   wait_until 'Linux JIT registrations to reconcile to zero' label_is_zero boxology-linux-arm64-pr
   wait_until 'macOS JIT registrations to reconcile to zero' label_is_zero boxology-macos-pr
@@ -326,7 +362,7 @@ restore() {
 
 require_tools
 case "${1:-}" in
-  activate) [[ $# = 1 ]] || die 'usage: migrate-topology.sh activate'; activate ;;
-  restore) [[ $# = 2 ]] || die 'usage: migrate-topology.sh restore BACKUP'; restore "$2" ;;
-  *) die 'usage: migrate-topology.sh activate | restore BACKUP' ;;
+  activate) [[ $# = 1 || ($# = 3 && "$2" = --ack-stale-run && "$3" =~ ^[0-9]+$) ]] || die 'usage: migrate-topology.sh activate [--ack-stale-run RUN_ID]'; [[ $# = 1 ]] || ack_stale_run=$3; activate ;;
+  restore) [[ $# = 2 || ($# = 4 && "$3" = --ack-stale-run && "$4" =~ ^[0-9]+$) ]] || die 'usage: migrate-topology.sh restore BACKUP [--ack-stale-run RUN_ID]'; [[ $# = 2 ]] || ack_stale_run=$4; restore "$2" ;;
+  *) die 'usage: migrate-topology.sh activate [--ack-stale-run RUN_ID] | restore BACKUP [--ack-stale-run RUN_ID]' ;;
 esac

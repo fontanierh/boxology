@@ -267,6 +267,14 @@ is restored. One base job plus one three-child slot manager is the only loaded
 topology, and each child has a distinct lock/root, so there is no fifth process
 that can race the `MAX_RUNNERS=4` check.
 
+The normal drain blocks on every non-completed run from enabled or disabled
+workflows and every busy runner. There is no automatic age exemption. An operator
+may deliberately acknowledge one unterminalizable GitHub control-plane record
+with `activate --ack-stale-run RUN_ID` (or the equivalent option after a restore
+backup). The exact numeric run is freshly revalidated as older than 24 hours,
+non-completed, jobless, an orphaned `pull_request`, off the current default SHA,
+and without a live head ref. It is logged, and all API/schema changes fail closed.
+
 ```sh
 ./ops/ci-runner/migrate-topology.sh activate
 ```
