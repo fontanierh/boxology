@@ -3,14 +3,14 @@
 #![forbid(unsafe_code)]
 
 use crate::{
-    PlanError,
-    execute::{ExecuteError, generate_tree, guarded},
+    GenerationPlan, PlanError,
+    execute::{ExecuteError, generate_tree, guarded, read_optional_file},
     plan,
 };
 use boxology_contract::BoxId;
 use boxology_generator::GeneratedTree;
 use boxology_manifest::RelativePath;
-use boxology_workspace::Workspace;
+use boxology_workspace::{Completion, SelectedSchema, Workspace};
 use std::{fmt, fs, io, path::Path};
 
 type Rule = (&'static str, &'static str, &'static str);
@@ -137,17 +137,24 @@ pub fn compare_step(
     workspace: &Workspace,
 ) -> Result<Vec<CompareDifference>, CompareStepError> {
     let plans = plan(workspace, None)?;
+    compare_plans(root, workspace, &plans)
+}
+
+/// Compares already-planned contract generations with their checked-in derived files.
+///
+/// This is the check command's reuse seam: composition validation and regeneration comparison
+/// consume the same plans, so canonical schema paths cannot drift between the two steps.
+pub fn compare_plans(
+    root: &Path,
+    workspace: &Workspace,
+    plans: &[GenerationPlan],
+) -> Result<Vec<CompareDifference>, CompareStepError> {
     let mut differences = Vec::new();
     for plan in plans {
         let package_root = plan.package_root().map_or("", RelativePath::as_str);
         let package_dir = guarded(root, package_root, false)?;
         guarded(&package_dir, plan.crate_root().as_str(), true)?;
-        let (package_dir, tree) = generate_tree(root, &plan)?;
-        let package = workspace
-            .packages()
-            .iter()
-            .find(|package| package.id() == plan.package_id())
-            .expect("every generation plan belongs to a workspace package");
+        let (package_dir, tree) = generate_tree(root, plan)?;
         let generated = generated_paths(&tree);
         for (path, file) in generated.iter().zip(tree.files()) {
             match checked_in(&package_dir, path) {
@@ -173,7 +180,7 @@ pub fn compare_step(
             classification.package() == plan.package_id()
                 && classification.derived_output() == Some(plan.derived_output_id())
         }) {
-            let Some(path) = package.relative(classification.path()) else {
+            let Some(path) = package_relative(plan, classification.path()) else {
                 continue;
             };
             if !generated.contains(&path) {
@@ -187,6 +194,40 @@ pub fn compare_step(
             .then_with(|| left.path.cmp(&right.path))
     });
     Ok(differences)
+}
+
+fn package_relative(plan: &GenerationPlan, path: &RelativePath) -> Option<RelativePath> {
+    let Some(root) = plan.package_root() else {
+        return Some(path.clone());
+    };
+    let relative = path
+        .as_str()
+        .strip_prefix(root.as_str())?
+        .strip_prefix('/')?;
+    RelativePath::new(relative.to_owned()).ok()
+}
+
+/// Reads every plan-authoritative checked-in schema and validates all compositions.
+///
+/// A missing schema remains ordinary validation data. Existing paths are read only after the
+/// execution boundary's ancestor guard accepts them; guard and read failures remain fatal.
+pub fn composition_step(
+    root: &Path,
+    workspace: &Workspace,
+    plans: &[GenerationPlan],
+) -> Result<Completion, ExecuteError> {
+    let schemas = plans
+        .iter()
+        .map(|plan| {
+            read_optional_file(root, plan.schema_path()).map(|bytes| {
+                SelectedSchema::new(plan.package_id().clone(), plan.schema_path().clone(), bytes)
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(match workspace.check_compositions(&schemas) {
+        Ok(()) => Completion::Passed,
+        Err(findings) => Completion::Failed(findings),
+    })
 }
 
 fn generated_paths(tree: &GeneratedTree) -> Vec<RelativePath> {

@@ -109,10 +109,33 @@ impl Fixture {
         }
         command.output().unwrap()
     }
+
+    fn compose(&self, boxes: &[&str], bindings: &[(&str, &str)]) {
+        fs::create_dir_all(self.root.join("app")).unwrap();
+        let boxes = boxes
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut manifest = format!(
+            "schema = 1\nid = \"app\"\nkind = \"composition\"\nowned = [\"boxology.toml\"]\n\n[composition]\nboxes = [{boxes}]\n"
+        );
+        for (selector, exposure) in bindings {
+            manifest.push_str(&format!(
+                "\n[[composition.bindings]]\nbox = \"ping\"\ncapability = {selector:?}\ntransport = \"http\"\nexposure = {exposure:?}\n"
+            ));
+        }
+        fs::write(self.root.join("app/boxology.toml"), manifest).unwrap();
+    }
 }
 
 fn text(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).unwrap()
+}
+
+fn schema(box_id: &str, capabilities: &[(&str, &str)]) -> Vec<u8> {
+    let capabilities = capabilities.iter().map(|(name, exposure)| format!(r#"{{"deprecation":null,"docs":[],"error":"Fault","id":"{box_id}.{name}","idempotency":"none","input":{{"name":"value","type":"String"}},"max_exposure":"{exposure}","name":"{name}","output":{{"type":"String"}},"shape":"unary"}}"#)).collect::<Vec<_>>().join(",");
+    format!(r#"{{"box_id":"{box_id}","capabilities":[{capabilities}],"provenance":null,"revision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","schema_format":1,"types":[{{"deprecation":null,"docs":[],"kind":"error","name":"Fault","variants":[{{"deprecation":null,"docs":[],"name":"Failed","payload":"unit"}}]}}]}}"#).into_bytes()
 }
 
 #[test]
@@ -283,6 +306,98 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
 }
 
 #[test]
+fn check_validates_exact_and_wildcard_composition_with_the_planned_schema() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.compose(
+        &["ping"],
+        &[("ping.ping", "external"), ("ping.*", "external")],
+    );
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    assert!(
+        text(&output.stdout).starts_with("check discovery passed\ncheck regeneration passed\n")
+    );
+}
+
+#[test]
+fn check_reports_schema_selector_and_exposure_findings_in_the_eight_step_report() {
+    let missing = Fixture::new(false);
+    assert_eq!(missing.run(&["generate"]).status.code(), Some(0));
+    missing.compose(&["ping"], &[("ping.*", "external")]);
+    fs::remove_file(missing.root.join("ping/generated/schema.json")).unwrap();
+    let output = missing.run(&["check"]);
+    let report = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).is_empty());
+    let missing_schema = "BXW0088 app/boxology.toml package=app candidates=[box=ping schema=ping/generated/schema.json kind=missing]";
+    let regeneration = "BXW0083 ping/generated/schema.json package=ping candidates=[kind=missing repair=\"boxology generate --package ping\"]";
+    assert!(report.find(missing_schema).unwrap() < report.find(regeneration).unwrap());
+    assert!(report.ends_with("check result failed\n"));
+
+    for (bytes, kind) in [
+        (b"bad".to_vec(), "unreadable"),
+        (schema("other", &[("alpha", "external")]), "mismatched"),
+    ] {
+        let fixture = Fixture::new(false);
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        fixture.compose(&["ping"], &[("ping.*", "external")]);
+        fs::write(fixture.root.join("ping/generated/schema.json"), bytes).unwrap();
+        let first = fixture.run(&["check"]);
+        let second = fixture.run(&["check"]);
+        assert_eq!(first.status.code(), Some(1));
+        assert_eq!(first.stdout, second.stdout);
+        assert_eq!(first.stderr, second.stderr);
+        assert!(text(&first.stderr).is_empty());
+        assert!(text(&first.stdout).contains(&format!(
+            "BXW0088 app/boxology.toml package=app candidates=[box=ping schema=ping/generated/schema.json kind={kind}]"
+        )));
+        assert!(text(&first.stdout).contains(
+            "BXW0083 ping/generated/schema.json package=ping candidates=[kind=differing repair=\"boxology generate --package ping\"]"
+        ));
+    }
+
+    let selector = Fixture::new(false);
+    assert_eq!(selector.run(&["generate"]).status.code(), Some(0));
+    selector.compose(&["ping"], &[("ping.missing", "external")]);
+    let output = selector.run(&["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).contains(
+        "BXW0089 app/boxology.toml package=app candidates=[selector=ping.missing transport=http]"
+    ));
+
+    let exposure = Fixture::new(false);
+    assert_eq!(exposure.run(&["generate"]).status.code(), Some(0));
+    exposure.compose(&["ping"], &[("ping.*", "external")]);
+    fs::write(
+        exposure.root.join("ping/generated/schema.json"),
+        schema("ping", &[("zulu", "code_only"), ("alpha", "internal")]),
+    )
+    .unwrap();
+    let output = exposure.run(&["check"]);
+    let report = text(&output.stdout);
+    let alpha = "capability=ping.alpha exposure=external max=internal";
+    let zulu = "capability=ping.zulu exposure=external max=code_only";
+    assert_eq!(output.status.code(), Some(1));
+    assert!(report.find(alpha).unwrap() < report.find(zulu).unwrap());
+}
+
+#[test]
+fn check_reports_an_absent_selected_box_as_bxw0087() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.compose(&["absent"], &[]);
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).is_empty());
+    assert!(
+        text(&output.stdout)
+            .contains("BXW0087 app/boxology.toml package=app candidates=[box=absent]")
+    );
+}
+
+#[test]
 fn check_tampered_and_missing_artifacts_fail_naming_repair() {
     let fixture = Fixture::new(false);
     assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
@@ -321,6 +436,25 @@ fn check_deleted_generation_input_is_a_step_error() {
     assert_eq!(output.status.code(), Some(1));
     assert!(text(&output.stdout).is_empty());
     assert!(text(&output.stderr).contains("BXW0070"));
+}
+
+#[test]
+fn check_guard_rejection_is_fatal_without_a_misleading_report() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.compose(&["ping"], &[("ping.*", "external")]);
+    let schema = fixture.root.join("ping/generated/schema.json");
+    let target = fixture.root.join("ping/generated/real-schema.json");
+    fs::rename(&schema, &target).unwrap();
+    symlink("real-schema.json", &schema).unwrap();
+
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert!(text(&output.stderr).starts_with("BXW0076 "));
+    assert!(!text(&output.stderr).contains("check discovery"));
 }
 
 #[test]

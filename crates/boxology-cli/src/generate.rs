@@ -58,6 +58,7 @@ pub struct GenerationPlan {
     package_root: Option<RelativePath>,
     derived_output: BoxId,
     crate_root: RelativePath,
+    schema_path: RelativePath,
     inputs: Vec<RelativePath>,
     imports: Vec<ResolvedImport>,
     outputs: Vec<GlobPattern>,
@@ -82,6 +83,10 @@ impl GenerationPlan {
     /// Returns the exact package-relative implementation crate root.
     pub fn crate_root(&self) -> &RelativePath {
         &self.crate_root
+    }
+    /// Returns the canonical workspace-relative checked-in schema path.
+    pub fn schema_path(&self) -> &RelativePath {
+        &self.schema_path
     }
     /// Returns matching package-relative non-derived inputs in stable classification order.
     pub fn inputs(&self) -> &[RelativePath] {
@@ -259,14 +264,9 @@ fn assemble(
             if candidates.len() > 1 {
                 return Err(failure(DUPLICATE_OUTPUTS, target.manifest_path().clone()));
             }
-            let schema = target.root().map_or_else(
-                || SCHEMA.to_owned(),
-                |root| format!("{}/{}", root.as_str(), SCHEMA),
-            );
-            let schema = RelativePath::new(schema).expect("fixed schema path is valid");
             Ok(ResolvedImport {
                 package: import.package().clone(),
-                schema,
+                schema: schema_path(target),
             })
         })
         .collect::<Result<Vec<_>, PlanError>>()?;
@@ -292,16 +292,26 @@ fn assemble(
                 .then_some(path)
         })
         .collect();
+    let schema_path = schema_path(package);
     Ok(GenerationPlan {
         package: package.id().clone(),
         manifest_path: package.manifest_path().clone(),
         package_root: package.root().cloned(),
         derived_output: output.id().clone(),
         crate_root,
+        schema_path,
         inputs,
         imports,
         outputs: output.outputs().to_vec(),
     })
+}
+
+fn schema_path(package: &Package) -> RelativePath {
+    let path = package.root().map_or_else(
+        || SCHEMA.to_owned(),
+        |root| format!("{}/{}", root.as_str(), SCHEMA),
+    );
+    RelativePath::new(path).expect("fixed schema path is valid")
 }
 fn request_path() -> RelativePath {
     RelativePath::new("<request>").expect("static request path is valid")

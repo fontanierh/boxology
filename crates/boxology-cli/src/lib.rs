@@ -31,7 +31,10 @@ pub use check::{
     CheckClassificationError, ClassifyStepError, DuplicatePackages, PackageSchemas, classify_step,
 };
 pub use classify::{ClassifyError, classify};
-pub use compare::{CompareDifference, CompareStepError, DifferenceKind, compare_step};
+pub use compare::{
+    CompareDifference, CompareStepError, DifferenceKind, compare_plans, compare_step,
+    composition_step,
+};
 pub use execute::{ExecuteError, Outcome, execute};
 pub use generate::{GenerationPlan, PlanError, ResolvedImport, plan};
 pub use walk::{WalkError, WalkedWorkspace, walk};
