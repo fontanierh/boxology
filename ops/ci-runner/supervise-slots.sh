@@ -2,13 +2,13 @@
 set -euo pipefail
 umask 077
 
-SLOT_COUNT="${SLOT_COUNT:-19}"
+SLOT_COUNT="${SLOT_COUNT:-3}"
 SLOT_START="${SLOT_START:-2}"
 SUPERVISOR="${SUPERVISOR:-/Users/jim/.crab/ci-runner/supervise-macos.sh}"
 SLOT_ROOT_PREFIX="${SLOT_ROOT_PREFIX:-/Users/jim/.crab/ci-runner/macos-runner-slot-}"
 RUNTIME_ROOT_PREFIX="${RUNTIME_ROOT_PREFIX:-/tmp/boxology-ci-macos-runner-slot-}"
 LOG_ROOT="${LOG_ROOT:-/Users/jim/.crab/ci-runner/logs/macos-slots}"
-SLOT_MAX_RUNNERS="${SLOT_MAX_RUNNERS:-20}"
+SLOT_MAX_RUNNERS="${SLOT_MAX_RUNNERS:-4}"
 SLOT_CARGO_BUILD_JOBS="${SLOT_CARGO_BUILD_JOBS:-4}"
 SLOT_RUST_TEST_THREADS="${SLOT_RUST_TEST_THREADS:-4}"
 SLOT_CONTAINER_CPUS="${SLOT_CONTAINER_CPUS:-1}"

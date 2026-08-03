@@ -1,18 +1,20 @@
 # Boxology Mac-hosted CI runners
 
-This is the authoritative runbook for S0-T8. It provisions twenty disposable
-GitHub Actions JIT slots for each active label on the MacBook: Linux jobs run in the
-native ARM64 Colima VM, and macOS jobs run on the native Apple-silicon host.
+This is the authoritative runbook for S0-T8. It provisions eight useful
+GitHub Actions JIT runners on the MacBook: four Linux runners in the native
+ARM64 Colima VM and four macOS runners on the native Apple-silicon host.
 Every enabled workflow uses one of these labels; no enabled workflow targets a
 GitHub-hosted runner.
 
-Each label has one base supervisor plus nineteen slot supervisors, split between
-the original nine-slot manager and a ten-slot expansion manager. A slot owns one
+Each label has one base supervisor plus three slot supervisors. A slot owns one
 JIT runner, one disposable workspace, and one cache root, so independent PRs can
 run concurrently without sharing checkout state. Native Mac slots keep a private
 per-slot Cargo target directory between jobs and use `CARGO_BUILD_JOBS=4` and
 `RUST_TEST_THREADS=4`; runner installations use APFS copy-on-write clones, and
-extra Linux containers remain capped at one CPU and 2 GiB.
+Linux slot containers remain capped at one CPU and 2 GiB. The four-per-platform
+bound matches the host's useful CPU and memory capacity. More slots fragmented
+the per-slot Cargo caches and increased contention without shortening the
+required-check critical path.
 
 ## Pinned inputs
 
@@ -134,17 +136,13 @@ before extraction:
 "$HOME/.crab/ci-runner/macos-runner-base/bin/Runner.Listener" --version
 ```
 
-Copy `supervise-macos.sh` and
-`com.fontanierh.boxology-ci-macos-runner.plist` outside the checkout, then load
-the user LaunchAgent:
+Validate the reviewed macOS supervisor and plist in the checkout. Do not copy
+them over installed files: the migration procedure must snapshot the live
+versions before it installs these repo-owned bytes.
 
 ```sh
-install -m 700 ops/ci-runner/supervise-macos.sh "$HOME/.crab/ci-runner/supervise-macos.sh"
-install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-macos-runner.plist \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner.plist"
-plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner.plist"
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner.plist"
-launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-macos-runner"
+bash -n ops/ci-runner/supervise-macos.sh
+plutil -lint ops/ci-runner/com.fontanierh.boxology-ci-macos-runner.plist
 ```
 
 The native supervisor uses the same Keychain item as the Linux supervisor,
@@ -158,27 +156,32 @@ runner logs because job output can contain secrets. The native runner is not
 container-isolated: it is accepted only for this private repository and trusted
 Henry/agent collaborators.
 
-Activate the nineteen native Mac slots alongside the base supervisor:
+Stage the three native Mac slots alongside the base supervisor:
 
 ```sh
-install -m 700 ops/ci-runner/supervise-slots.sh "$HOME/.crab/ci-runner/supervise-slots.sh"
-install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots.plist \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
-plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
-launchctl bootstrap "gui/$(id -u)" \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots.plist"
-install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist"
-plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist"
-launchctl bootstrap "gui/$(id -u)" \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-macos-runner-slots-extra.plist"
+bash -n ops/ci-runner/supervise-slots.sh
+plutil -lint ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots.plist
 ```
 
 ## JIT lifecycle and smoke test
 
-Install the reviewed `supervise.sh` outside this mutable checkout, make it
-executable, and invoke it with non-secret settings such as
-`REPOSITORY=fontanierh/boxology` and `CI_RUNNER_IMAGE=boxology-linux-arm64-pr:verified`.
+Copy the reviewed `supervise.sh` only to the dedicated topology staging
+directory, then invoke that staged copy with a smoke-specific runtime directory
+and non-secret settings. Never overwrite
+`$HOME/.crab/ci-runner/supervise.sh` before `migrate-topology.sh activate` has
+snapshotted the installed version.
+
+```sh
+mkdir -p "$HOME/.crab/ci-runner/topology-stage"
+chmod 700 "$HOME/.crab/ci-runner/topology-stage"
+install -m 700 ops/ci-runner/supervise.sh \
+  "$HOME/.crab/ci-runner/topology-stage/supervise.sh"
+REPOSITORY=fontanierh/boxology \
+CI_RUNNER_IMAGE=boxology-linux-arm64-pr:verified \
+RUNTIME_DIR=/tmp/boxology-ci-linux-stage-smoke \
+  "$HOME/.crab/ci-runner/topology-stage/supervise.sh"
+```
+
 Set `RUNNER_GROUP_ID` when the repository's approved runner group is not the
 default `1`.
 It reads the Keychain item, verifies the pinned Docker context and repository privacy.
@@ -191,30 +194,27 @@ The smoke workflow keeps `persist-credentials: false` and asserts only broker-PA
 That argument is visible to same-user job processes by design. This residual is accepted only for trusted private collaborators; do not activate if that boundary changes.
 Each slot supervisor waits for one job, emits sanitized state-only diagnostics, then removes failed JIT registrations, the container, and the unique volume. Failed cleanup retains owned handles/lock and backs off; a lock refuses a concurrent supervisor.
 
-Only after a successful Linux smoke run, replace every placeholder in the plist,
-copy it and the reviewed supervisor to paths outside the checkout, then validate
-and load it in the user launchd domain:
+Only after a successful Linux smoke run, create a resolved Linux base plist in
+the dedicated staging directory and replace every placeholder there. Never copy
+it over the installed plist: the migration snapshots the installed version first,
+then consumes this staged file only when no installed Linux base exists.
 
 ```sh
-plutil -lint /PATH/TO/com.fontanierh.boxology-ci-runner.plist
-launchctl bootstrap "gui/$(id -u)" /PATH/TO/com.fontanierh.boxology-ci-runner.plist
-launchctl print "gui/$(id -u)/com.fontanierh.boxology-ci-runner"
+mkdir -p "$HOME/.crab/ci-runner/topology-stage"
+chmod 700 "$HOME/.crab/ci-runner/topology-stage"
+install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-runner.plist \
+  "$HOME/.crab/ci-runner/topology-stage/com.fontanierh.boxology-ci-runner.plist"
+# Resolve every placeholder in the staged copy, then:
+plutil -lint "$HOME/.crab/ci-runner/topology-stage/com.fontanierh.boxology-ci-runner.plist"
+! grep -Eq '/ABSOLUTE/PATH|OWNER/REPOSITORY|VERIFIED-IMAGE' \
+  "$HOME/.crab/ci-runner/topology-stage/com.fontanierh.boxology-ci-runner.plist"
 ```
 
-Activate the nineteen Linux slots alongside the base supervisor:
+Stage the three Linux slots alongside the base supervisor:
 
 ```sh
-install -m 700 ops/ci-runner/supervise-slots.sh "$HOME/.crab/ci-runner/supervise-slots.sh"
-install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-runner-slots.plist \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
-plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
-launchctl bootstrap "gui/$(id -u)" \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots.plist"
-install -m 600 ops/ci-runner/com.fontanierh.boxology-ci-runner-slots-extra.plist \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots-extra.plist"
-plutil -lint "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots-extra.plist"
-launchctl bootstrap "gui/$(id -u)" \
-  "$HOME/Library/LaunchAgents/com.fontanierh.boxology-ci-runner-slots-extra.plist"
+bash -n ops/ci-runner/supervise.sh ops/ci-runner/supervise-slots.sh
+plutil -lint ops/ci-runner/com.fontanierh.boxology-ci-runner-slots.plist
 ```
 
 The Linux workflow is manual-only and remains the operator's end-to-end health check. Dispatch
@@ -252,16 +252,44 @@ runs. Parallel lanes are deliberately not added together.
 ## Health, cleanup, and rollback
 
 Check `colima status --profile boxology-ci-arm64`, `DOCKER_CONTEXT=colima-boxology-ci-arm64`,
-the image architecture/identity/SHA labels, all base, slot, and expansion launchd jobs, and the GitHub
+the image architecture/identity/SHA labels, the four base/slot launchd jobs, and the GitHub
 runner labels. Inspect the current Linux container only for fixed state fields
 and mounts; the sole mount must be the fresh named runner volume. Never collect
 raw runner logs because job output can contain secrets.
 
+Use the reviewed migration procedure rather than assembling launchctl commands
+by hand. It first records and disables every active workflow, then waits for both
+queued/running runs and busy runners to drain. It durably snapshots the installed
+supervisor scripts and plists, unloads the old topology, waits for its JIT
+registrations to disappear, and bootstraps Linux and macOS serially. Each
+platform must reconcile from zero to exactly four registrations before dispatch
+is restored. One base job plus one three-child slot manager is the only loaded
+topology, and each child has a distinct lock/root, so there is no fifth process
+that can race the `MAX_RUNNERS=4` check.
+
+```sh
+./ops/ci-runner/migrate-topology.sh activate
+```
+
+The command prints its backup directory. Keep that directory until the new
+topology has completed smoke and production runs. It fails closed with workflow
+dispatch disabled after any topology mutation error and prints the exact restore command.
+Restore is also dispatch-safe, drains work, verifies the backup checksums, and
+reinstalls both the saved scripts and saved plists before loading the previous
+topology:
+
+```sh
+./ops/ci-runner/migrate-topology.sh restore \
+  /Users/jim/.crab/ci-runner/topology-backups/<backup>
+```
+
 To stop service, unload the installed plist(s), remove only the current Linux
 container/volume and native macOS run directory, and stop the dedicated Colima
 profile. A stale supervisor lock
-may be removed only after confirming no supervisor process remains. To roll back the
-active lane, revert the workflow routing while leaving both smoke workflows available.
+may be removed only after confirming no supervisor process remains. To roll back
+the runner-count migration, use the concrete `restore` command above.
+To roll back the active lane, revert the workflow routing while leaving both
+smoke workflows available.
 Do not register a persistent runner or widen the
 container's mounts, network, capabilities, or credentials as a rollback shortcut.
 
