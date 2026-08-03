@@ -49,3 +49,9 @@ Each entry is, in order: a `## YYYY-MM-DD — #issue` heading, one blank line, o
 - Classification: `mechanical`
 - Observation: Twenty JIT slots per platform exceeded the MacBook's useful CPU and memory capacity, fragmented per-slot Cargo caches, and added contention without reducing the required-check critical path.
 - Evidence: [#497](https://github.com/fontanierh/boxology/issues/497) bounds the repo-owned topology to one base plus three standard slots for each platform, eight runners total, and retires both ten-slot expansion LaunchAgents.
+
+## 2026-08-03 — #503
+
+- Classification: `mechanical`
+- Observation: The independently recoverable process-reaper suite and `boxology-init` package test were serialized inside the canonical Mac pull-request job, leaving available native runner capacity idle while that job determined the required-check critical path.
+- Evidence: [#503](https://github.com/fontanierh/boxology/issues/503) splits those suites into a required parallel native Mac capstone. Run 30828942886 measured `checks-macos` at 11m04s versus `checks-linux` at 4m22s; main-push deep CI retains the unchanged full-workspace test.
