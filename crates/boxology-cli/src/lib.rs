@@ -21,12 +21,14 @@ pub fn cargo_metadata_command(root: &Path) -> Command {
     command
 }
 
+mod base;
 mod check;
 mod classify;
 mod compare;
 mod execute;
 mod generate;
 mod walk;
+pub use base::{BaseError, BaseSchemasError, GitToolError, base_package_schemas};
 pub use check::{
     CheckClassificationError, ClassifyStepError, DuplicatePackages, PackageSchemas, classify_step,
 };

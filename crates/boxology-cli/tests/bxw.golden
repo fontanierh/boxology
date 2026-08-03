@@ -1,4 +1,4 @@
-sources=lib.rs,walk.rs,generate.rs,execute.rs,compare.rs,classify.rs,check.rs,main.rs
+sources=lib.rs,walk.rs,generate.rs,execute.rs,compare.rs,classify.rs,check.rs,base.rs,main.rs
 BXW0061|workspace root must be a real directory containing a regular Cargo.toml|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0062|filesystem refused a directory, symlink, or manifest read|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
 BXW0063|walked name/path is not a valid RelativePath|boxology-details/02-packages.md discovery walk; S5-T4 #326 PR1 task authority
@@ -23,3 +23,5 @@ BXW0083|a checked-in derived artifact must be byte-identical to regeneration; re
 BXW0084|a declared import must name a discovered workspace package|specs/s5-manifest-and-validation.md D5
 BXW0085|an imported package must declare a contract-generation output|specs/s5-manifest-and-validation.md D5
 BXW0086|generation candidates must not form an import cycle|specs/s5-manifest-and-validation.md D5
+BXW0091|the explicit base revision must resolve to a Git commit|specs/s5-manifest-and-validation.md D6
+BXW0092|a base-revision schema object must be readable as a Git blob|specs/s5-manifest-and-validation.md D6
