@@ -107,6 +107,7 @@ fn plan_resolves_import_by_identity_to_target_schema() {
     let [import] = greeter.imports() else { panic!("one resolved import is required") };
     assert_eq!(import.package().as_str(), "hello");
     assert_eq!(import.schema().as_str(), "hello/generated/schema.json");
+    assert_eq!(greeter.schema_path().as_str(), "greeter/generated/schema.json");
 }
 
 #[test]

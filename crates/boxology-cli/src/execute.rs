@@ -30,7 +30,6 @@ const COVERAGE: Rule = ("BXW0073", COVERAGE_TEXT, INFERRED_SOURCE);
 // This is an inference: D5 requires reading the checked-in schema as classification base, and the
 // CLI's ingestion refuses symlinks and non-regular files with the same strength as BXW0070.
 const SCHEMA_FILE: Rule = ("BXW0076", SCHEMA_TEXT, INFERRED_SOURCE);
-const SCHEMA: &str = "generated/schema.json";
 
 /// The files changed by one accepted execution, in deterministic logical-path order.
 #[derive(Debug, Eq, PartialEq)]
@@ -211,11 +210,11 @@ pub fn execute(root: &Path, plan: &GenerationPlan) -> Result<Outcome, ExecuteErr
     let submitted_schema = tree
         .files()
         .iter()
-        .find(|file| file.path() == SCHEMA)
+        .find(|file| file.path() == package_schema_path(plan))
         .expect("generator outputs include schema.json")
         .bytes()
         .to_vec();
-    let base_schema = read_base_schema(&package_dir)?;
+    let base_schema = read_base_schema(root, plan)?;
     guarded(root, package_root, false)?;
     let changes = boxology_generator_writer::write(&package_dir, &tree, plan.outputs())
         .map_err(|error| ExecuteError::writer(package_dir, error))?;
@@ -293,17 +292,37 @@ pub(crate) fn generate_tree(
     Ok((package_dir, tree))
 }
 
-fn read_base_schema(package_dir: &Path) -> Result<Option<Vec<u8>>, ExecuteError> {
-    let location = package_dir.join(SCHEMA);
+fn read_base_schema(root: &Path, plan: &GenerationPlan) -> Result<Option<Vec<u8>>, ExecuteError> {
+    read_optional_file(root, plan.schema_path())
+}
+
+pub(crate) fn read_optional_file(
+    root: &Path,
+    logical: &RelativePath,
+) -> Result<Option<Vec<u8>>, ExecuteError> {
+    let location = root.join(logical.as_str());
     match fs::symlink_metadata(&location) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(_) | Ok(_) => {
-            let path = guarded(package_dir, SCHEMA, true)
+            let path = guarded(root, logical.as_str(), true)
                 .map_err(|error| ExecuteError::schema(error.location().to_path_buf()))?;
             let bytes = fs::read(&path).map_err(|_| ExecuteError::schema(path))?;
             Ok(Some(bytes))
         }
     }
+}
+
+fn package_schema_path(plan: &GenerationPlan) -> &str {
+    plan.package_root().map_or_else(
+        || plan.schema_path().as_str(),
+        |root| {
+            plan.schema_path()
+                .as_str()
+                .strip_prefix(root.as_str())
+                .and_then(|path| path.strip_prefix('/'))
+                .expect("the plan's schema is inside its package root")
+        },
+    )
 }
 
 pub(crate) fn guarded(root: &Path, relative: &str, file: bool) -> Result<PathBuf, ExecuteError> {

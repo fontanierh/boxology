@@ -32,16 +32,16 @@ const SOURCES: &[(&str, &str)] = &[
 ];
 const GOLDEN: &str = include_str!("bxw.golden");
 const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086";
-const LIB_HASH: u64 = 7_458_413_996_371_438_303;
+const LIB_HASH: u64 = 14_541_858_497_907_057_322;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
-const GENERATE_HASH: u64 = 10_825_424_268_891_396_963;
-const EXECUTE_HASH: u64 = 18_234_891_910_544_483_514;
-const COMPARE_HASH: u64 = 12_138_161_763_628_885_121;
+const GENERATE_HASH: u64 = 6_806_705_769_110_740_046;
+const EXECUTE_HASH: u64 = 7_835_130_255_287_244_320;
+const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\ncompare_step(root, &workspace)\nfn not_implemented() -> Completion\nSkipReason::Unimplemented\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nfn not_implemented() -> Completion\nSkipReason::Unimplemented\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 3_742_521_668_692_717_901;
+const MAIN_HASH: u64 = 12_994_957_424_409_890_940;
 const HASHES: [u64; 8] = [
     LIB_HASH,
     WALK_HASH,
@@ -54,10 +54,10 @@ const HASHES: [u64; 8] = [
 ];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
 const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.generator() == CONTRACT_GENERATOR\ntarget.id() == import.package()\nclassification.package() == package.id()\nclassification.derived_output().is_none()\nentry.role() == CrateRole::BoxImplementation\npackage.relative(classification.path())?";
-const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nfor import in plan.imports()\nguarded(root, schema.as_str(), true)\nimport.package().clone()\nconst SCHEMA: &str = \"generated/schema.json\";\nfile.path() == SCHEMA";
+const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nfor import in plan.imports()\nguarded(root, schema.as_str(), true)\nimport.package().clone()\nread_optional_file(root, plan.schema_path())\nfile.path() == package_schema_path(plan)";
 const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged base_schema submitted_schema ExecuteError code location path detail diagnostics write_error execute";
-const COMPARE_ANCHORS: &str = "plan(workspace, None)\nclassification.derived_output() == Some(plan.derived_output_id())\nDifferenceKind::Stale\ndifferences.sort_by\nBXW0083";
-const COMPARE_PUBLIC: &str = "DifferenceKind as_str CompareDifference package path kind code detail repair_command rule_source CompareStepError compare_step";
+const COMPARE_ANCHORS: &str = "plan(workspace, None)\nclassification.derived_output() == Some(plan.derived_output_id())\npackage_relative(plan, classification.path())\nDifferenceKind::Stale\ndifferences.sort_by\nread_optional_file(root, plan.schema_path())\nworkspace.check_compositions(&schemas)\nBXW0083";
+const COMPARE_PUBLIC: &str = "DifferenceKind as_str CompareDifference package path kind code detail repair_command rule_source CompareStepError compare_step compare_plans composition_step";
 const CLASSIFY_ANCHORS: &str = "map_err(ClassifyError::base)\nmap_err(ClassifyError::submitted)\nmap_err(ClassifyError::pairing)\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
 const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify";
 const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED,\n            \"submitted\",\nCHECK_PAIRING,\n                \"pairing\",\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
@@ -294,10 +294,13 @@ fn source_surface_is_exact_and_mutation_resistant() {
             "boxology_generator_writer::write(root, &tree, plan.outputs())",
         ),
         (
-            "const SCHEMA: &str = \"generated/schema.json\";",
-            "const SCHEMA: &str = OUTPUTS[3];",
+            "read_optional_file(root, plan.schema_path())",
+            "read_optional_file(root, plan.crate_root())",
         ),
-        ("file.path() == SCHEMA", "file.path() == OUTPUTS[3]"),
+        (
+            "file.path() == package_schema_path(plan)",
+            "file.path() == OUTPUTS[3]",
+        ),
     ] {
         let changed = EXECUTE.replace(anchor, replacement);
         rejects(

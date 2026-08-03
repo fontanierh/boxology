@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use boxology_cli::{
-    CompareDifference, ExecuteError, PlanError, cargo_metadata_command, compare_step, execute,
-    plan, walk,
+    CompareDifference, ExecuteError, PlanError, cargo_metadata_command, compare_plans,
+    composition_step, execute, plan, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -129,7 +129,15 @@ fn run_check(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> u8 {
-    let differences = match compare_step(root, &workspace) {
+    let plans = match plan(&workspace, None) {
+        Ok(plans) => plans,
+        Err(error) => return report_plan_failure(error, stderr),
+    };
+    let discovery = match composition_step(root, &workspace, &plans) {
+        Ok(discovery) => discovery,
+        Err(error) => return report_execute_failure(error, stderr),
+    };
+    let differences = match compare_plans(root, &workspace, &plans) {
         Ok(differences) => differences,
         Err(error) => {
             let _ = writeln!(stderr, "{error}");
@@ -146,7 +154,7 @@ fn run_check(
         Completion::Failed(Findings::new(entries).expect("differences produce findings"))
     };
     let report = CheckReport {
-        discovery: Completion::Passed,
+        discovery,
         regeneration,
         contract_classification: ContractClassificationCompletion::Skipped(
             SkipReason::Unimplemented,

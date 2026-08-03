@@ -1,4 +1,6 @@
-use boxology_cli::{CompareDifference, DifferenceKind, GenerationPlan, compare_step, plan};
+use boxology_cli::{
+    CompareDifference, DifferenceKind, GenerationPlan, compare_plans, compare_step, plan,
+};
 use boxology_contract::BoxId;
 use boxology_generator::{OUTPUTS, generate};
 use boxology_generator_model::GenerationRequest;
@@ -76,6 +78,20 @@ fn workspace(stale: bool) -> Workspace {
         .unwrap()
         .check()
         .unwrap()
+}
+
+fn root_only_workspace() -> Workspace {
+    WorkspaceInputs::new(
+        ["Cargo.toml", "Cargo.lock", "boxology.toml"]
+            .into_iter()
+            .map(|name| FileEntry::file(path(name)))
+            .collect(),
+        vec![(path("boxology.toml"), ROOT_MANIFEST.as_bytes().to_vec())],
+        r#"{"workspace_root":"/w","workspace_members":[],"packages":[]}"#,
+    )
+    .unwrap()
+    .check()
+    .unwrap()
 }
 
 fn request(root: &Path, plan: &GenerationPlan) -> GenerationRequest {
@@ -159,6 +175,23 @@ fn clean_workspace_compares_empty() {
     let fixture = fixture(false);
     let differences = compare_step(&fixture.root, &fixture.workspace).unwrap();
     assert!(differences.is_empty());
+    let plans = plan(&fixture.workspace, None).unwrap();
+    assert!(
+        compare_plans(&fixture.root, &fixture.workspace, &plans)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn compare_plans_accepts_a_different_checked_workspace_without_panicking() {
+    let fixture = fixture(false);
+    let plans = plan(&fixture.workspace, None).unwrap();
+    assert!(
+        compare_plans(&fixture.root, &root_only_workspace(), &plans)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
