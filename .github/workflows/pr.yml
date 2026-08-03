@@ -64,7 +64,6 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/bin/cargo-deny
-            target
           key: cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
             cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
@@ -203,6 +202,9 @@ jobs:
   checks-macos:
     runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "2"
+      RUST_TEST_THREADS: "2"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -325,6 +327,9 @@ jobs:
   macos-capstone:
     runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
     timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: "2"
+      RUST_TEST_THREADS: "2"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -353,6 +358,9 @@ jobs:
   macos-born-valid:
     runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
     timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: "2"
+      RUST_TEST_THREADS: "2"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
