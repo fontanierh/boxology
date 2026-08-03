@@ -153,14 +153,38 @@ impl Exposure {
     }
 }
 
-/// One wiring of one box-qualified capability, held as a `CapabilityId` rather than as its two
-/// segments: it already carries both validated halves, and BXW0041 needs the qualifier back. The
-/// declared `box` is validated and deliberately not stored, as `[[imports]]` does with `contract`:
-/// BXW0041 requires it to equal the capability's own qualifier, so a field could only hold that
-/// same id a second time.
+/// The capability or capability set selected by one composition binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CapabilitySelector {
+    /// Exactly one box-qualified capability.
+    Exact(CapabilityId),
+    /// Every capability declared by one box, including capabilities added in the future.
+    All(BoxId),
+}
+impl CapabilitySelector {
+    /// Returns the box qualifier shared by every capability this selector can match.
+    pub fn box_id(&self) -> &BoxId {
+        match self {
+            Self::Exact(capability) => capability.box_id(),
+            Self::All(box_id) => box_id,
+        }
+    }
+}
+impl std::fmt::Display for CapabilitySelector {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exact(capability) => capability.fmt(formatter),
+            Self::All(box_id) => write!(formatter, "{box_id}.*"),
+        }
+    }
+}
+
+/// One wiring of one box-qualified capability selector. The declared `box` is validated and
+/// deliberately not stored, as `[[imports]]` does with `contract`: BXW0041 requires it to equal
+/// the selector's own qualifier, so a field could only hold that same id a second time.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Binding {
-    capability: CapabilityId,
+    selector: CapabilitySelector,
     transport: Transport,
     exposure: Option<Exposure>,
 }
@@ -170,7 +194,8 @@ impl Binding {
         self.exposure
     }
     ref_getters! {
-        #[doc = "Returns the box-qualified capability."] capability: &CapabilityId = capability;
+        #[doc = "Returns the box-qualified capability selector."] selector: &CapabilitySelector = selector;
+        #[doc = "Returns the box-qualified capability selector; compatibility alias for `selector`."] capability: &CapabilitySelector = selector;
     }
     copy_getters! {
         #[doc = "Returns the declared transport."] transport: Transport = transport;
@@ -686,11 +711,13 @@ impl Parser<'_> {
                 self.check(table, "box", "BXW0040", selected.then_some(id))
             });
             let cap = self.field(table, "capability", whole);
-            let named = cap.and_then(|t| self.check(table, "capability", "BXW0037", qualified(t)));
+            let selected = cap.and_then(|text| {
+                self.check(table, "capability", "BXW0037", capability_selector(text))
+            });
             // A `box` absent is already coded as absent, and one rejected qualifies nothing.
-            let capability = named.and_then(|id| {
-                let own = raw.is_none_or(|text| text == id.box_id().as_str());
-                self.check(table, "capability", "BXW0041", own.then_some(id))
+            let selector = selected.and_then(|selector| {
+                let own = raw.is_none_or(|text| text == selector.box_id().as_str());
+                self.check(table, "capability", "BXW0041", own.then_some(selector))
             });
             let transport = self
                 .field(table, "transport", whole)
@@ -703,9 +730,9 @@ impl Parser<'_> {
                     None
                 }
             });
-            let wired = box_id.zip(capability).zip(transport);
-            bindings.extend(wired.map(|((_, capability), transport)| Binding {
-                capability,
+            let wired = box_id.zip(selector).zip(transport);
+            bindings.extend(wired.map(|((_, selector), transport)| Binding {
+                selector,
                 transport,
                 exposure,
             }));
@@ -713,14 +740,21 @@ impl Parser<'_> {
         bindings
     }
 }
-/// The `<box>.<name>` binding-capability grammar, composed of the contract crate's own identities
-/// so it cannot drift: a box reference, the first dot, and a box-local `[a-z][a-z0-9_]*` name.
-fn qualified(text: &str) -> Option<CapabilityId> {
+/// The `<box>.<name>` exact-capability grammar, composed of the contract crate's own identities so
+/// it cannot drift: a box reference, the first dot, and a box-local `[a-z][a-z0-9_]*` name.
+fn exact_capability(text: &str) -> Option<CapabilityId> {
     let (box_id, name) = text.split_once('.')?;
     Some(CapabilityId::new(
         BoxId::new(box_id).ok()?,
         CapabilityName::new(name).ok()?,
     ))
+}
+/// The complete binding-selector grammar: one exact capability or a complete `<box>.*` suffix.
+fn capability_selector(text: &str) -> Option<CapabilitySelector> {
+    if let Some(box_id) = text.strip_suffix(".*") {
+        return BoxId::new(box_id).ok().map(CapabilitySelector::All);
+    }
+    exact_capability(text).map(CapabilitySelector::Exact)
 }
 /// The `[a-z][a-z0-9-]*` identity grammar, taken from `BoxId` so the two cannot drift apart.
 fn identity(text: &str) -> Option<String> {
@@ -770,7 +804,9 @@ fn rule_of(code: Code) -> Code {
         "BXW0034" => "this list must contain at least one entry",
         "BXW0035" => "box references must match [a-z][a-z0-9-]*",
         "BXW0036" => "selected boxes must be unique",
-        "BXW0037" => "binding capabilities must be box-qualified names",
+        "BXW0037" => {
+            "binding capabilities must be exact box-qualified names or box-qualified * selectors"
+        }
         "BXW0038" => "binding transport must be in-process or http",
         "BXW0039" => "binding exposure must be code_only, internal, or external",
         "BXW0040" => "every binding must reference a selected box",
@@ -999,7 +1035,7 @@ BXW0033 boxology.toml:7:1-7:10 offending="manifest key generator" rule="generato
 BXW0034 boxology.toml:6:1-6:6 offending="manifest key boxes" rule="this list must contain at least one entry" source="specs/s5-manifest-and-validation.md D2"
 BXW0035 boxology.toml:6:10-6:13 offending="manifest key boxes" rule="box references must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
 BXW0036 boxology.toml:6:15-6:18 offending="manifest key boxes" rule="selected boxes must be unique" source="specs/s5-manifest-and-validation.md D2"
-BXW0037 boxology.toml:9:1-9:11 offending="manifest key capability" rule="binding capabilities must be box-qualified names" source="specs/s5-manifest-and-validation.md D2"
+BXW0037 boxology.toml:9:1-9:11 offending="manifest key capability" rule="binding capabilities must be exact box-qualified names or box-qualified * selectors" source="specs/s5-manifest-and-validation.md D2"
 BXW0038 boxology.toml:10:1-10:10 offending="manifest key transport" rule="binding transport must be in-process or http" source="specs/s5-manifest-and-validation.md D2"
 BXW0039 boxology.toml:11:1-11:9 offending="manifest key exposure" rule="binding exposure must be code_only, internal, or external" source="specs/s5-manifest-and-validation.md D2"
 BXW0040 boxology.toml:8:1-8:4 offending="manifest key box" rule="every binding must reference a selected box" source="specs/s5-manifest-and-validation.md D2"
@@ -1890,6 +1926,11 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].capability().box_id().as_str(), "hello");
         assert_eq!(bindings[0].capability().to_string(), "hello.greet");
+        assert_eq!(bindings[0].selector().to_string(), "hello.greet");
+        assert!(matches!(
+            bindings[0].selector(),
+            CapabilitySelector::Exact(capability) if capability.to_string() == "hello.greet"
+        ));
         assert_eq!(bindings[0].transport(), Transport::InProcess);
         assert_eq!(bindings[0].exposure(), None);
         // Declaring no binding reads as omitting the section: selecting boxes is one claim,
@@ -1921,13 +1962,40 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         // A rejected box reference still qualifies nothing, so both report, in span order.
         let both = ["BXW0035", "BXW0041"];
         assert_eq!(codes(&wired("Hello", "hello.greet")), both);
-        // The capability grammar is a box id, the first dot, then [a-z][a-z0-9_]*.
-        for name in "hello hello.Greet hello.greet-x hello. .greet hello.a.b".split(' ') {
+        // The capability grammar is an exact id or a complete box-qualified wildcard suffix.
+        for name in [
+            "*",
+            "*.*",
+            ".*",
+            "hello.g*",
+            "hello.**",
+            "hello.*.*",
+            "hello.*.extra",
+            "hello..*",
+            "hello",
+            "hello.Greet",
+            "hello.greet-x",
+            "hello.",
+            ".greet",
+            "hello.a.b",
+            " hello.*",
+            "hello.* ",
+            "Hello.*",
+        ] {
             assert_eq!(codes(&wired("hello", name)), ["BXW0037"], "{name}");
         }
         for name in ["hello.greet", "hello.a_1", "hello.a__b"] {
             assert!(parse(&wired("hello", name)).is_ok(), "{name}");
         }
+        let wildcard = parse(&wired("hello", "hello.*")).expect("wildcard selector");
+        let selector = wildcard.composition().expect("declared").bindings()[0].selector();
+        assert_eq!(selector.box_id().as_str(), "hello");
+        assert_eq!(selector.to_string(), "hello.*");
+        assert_eq!(
+            selector,
+            &CapabilitySelector::All(BoxId::new("hello").unwrap())
+        );
+        assert_eq!(codes(&wired("hello", "other.*")), ["BXW0041"]);
         // An absent required key is located at the element it is missing from, and an element
         // missing its `box` is coded as absent rather than also called misqualified.
         let unnamed = bound(r#"capability = "hello.greet"|transport = "http""#);
