@@ -269,6 +269,9 @@ fn run_ci(base: Option<&str>) -> u8 {
     }
     println!("toolchain: PASS");
 
+    if !deep {
+        println!("test-tier: PR excludes boxology-init; macos-capstone runs it in parallel");
+    }
     let mut checks = vec![
         (
             "audit",
@@ -277,9 +280,7 @@ fn run_ci(base: Option<&str>) -> u8 {
         ("fmt", timed("fmt", run_fmt)),
         (
             "test",
-            timed("test", || {
-                run_cargo(&["test", "--workspace", "--all-features"])
-            }),
+            timed("test", || run_cargo(workspace_test_args(deep))),
         ),
         (
             "fixture-projects",
@@ -354,6 +355,20 @@ fn run_ci(base: Option<&str>) -> u8 {
     } else {
         eprintln!("summary: FAIL ({})", failed.join(", "));
         1
+    }
+}
+
+fn workspace_test_args(deep: bool) -> &'static [&'static str] {
+    if deep {
+        &["test", "--workspace", "--all-features"]
+    } else {
+        &[
+            "test",
+            "--workspace",
+            "--all-features",
+            "--exclude",
+            "boxology-init",
+        ]
     }
 }
 
@@ -877,6 +892,24 @@ mod tests {
         assert_eq!(
             trailing_whitespace_lines(b"space \0\n"),
             Vec::<usize>::new()
+        );
+    }
+
+    #[test]
+    fn workspace_test_argv_pins_pr_exclusion_and_full_deep_suite() {
+        assert_eq!(
+            workspace_test_args(false),
+            &[
+                "test",
+                "--workspace",
+                "--all-features",
+                "--exclude",
+                "boxology-init",
+            ]
+        );
+        assert_eq!(
+            workspace_test_args(true),
+            &["test", "--workspace", "--all-features"]
         );
     }
 }

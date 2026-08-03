@@ -10,8 +10,9 @@
 #
 # Wall-clock monitored target (D4, not an acceptance invariant): cache-hit
 # required-check critical path excluding queue time, median of the last ten
-# main runs; alarm threshold 8 minutes. Native macOS is the canonical
-# behavioral lane; Linux is the slim determinism/check producer.
+# main runs; alarm threshold 8 minutes. Native macOS jobs are the canonical
+# behavioral lanes; Linux is the slim determinism/check producer. The native
+# Mac capstone runs slow, independent acceptance suites beside checks-macos.
 # Measure with:
 #   gh run list --workflow pr.yml --branch main --status success --limit 10
 #   gh api repos/<owner>/<repo>/actions/runs/<id>/jobs   # started_at -> completed_at
@@ -237,8 +238,6 @@ jobs:
       # additionally run deferred deep compiler, docs, and editor checks.
       - name: boxology check
         run: cargo run -q -p boxology-cli --bin boxology -- check
-      - name: process-reaper fixture suite
-        run: bash ops/process-reaper/tests/run-tests.sh
       - name: cargo xtask ci (pull request)
         if: github.event_name == 'pull_request'
         env:
@@ -329,6 +328,43 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 1
+
+  macos-capstone:
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$ImageOS" = macos-arm64-host
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/bin/cargo-deny
+          key: cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-
+      - name: process-reaper fixture suite
+        run: bash ops/process-reaper/tests/run-tests.sh
+      # Main-push deep CI retains boxology-init in its full workspace test.
+      - name: boxology-init acceptance suite
+        if: github.event_name == 'pull_request'
+        run: cargo test -p boxology-init --all-features
 
   deny:
     runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
@@ -576,7 +612,7 @@ jobs:
         run: ./xtask-linux-arm64/xtask determinism-meta-cross linux-meta macos-meta
 
   validation:
-    needs: [checks-linux, checks-macos, deny, determinism-compare, determinism-meta-cross]
+    needs: [checks-linux, checks-macos, macos-capstone, deny, determinism-compare, determinism-meta-cross]
     if: always()
     runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
     timeout-minutes: 5
