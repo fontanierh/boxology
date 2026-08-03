@@ -1,12 +1,12 @@
 # S5 Spec — Manifest and Validation Tooling
 
-[Stream definition](../boxology-details/11-v0-streams.md#s5--manifest-and-validation-tooling) · Status: **accepted** (one independent review round; findings addressed by the amendment of 2026-07-24)
+[Stream definition](../boxology-details/11-v0-streams.md#s5--manifest-and-validation-tooling) · Status: **accepted** (amended by maintainer decision on 2026-08-03)
 
 S5 builds the workspace tooling: `boxology.toml` parsing and discovery, ownership and path classification, crate-role mapping, the Cargo-edge policy checker, lockfile validation, and the `boxology generate` / `boxology check` commands with the emitted GitHub Actions workflow. The manifest format, discovery walk, ownership and derived-artifact rules, edge-policy table, check baseline, exit codes, and JSON contract are normative in [Packages](../boxology-details/02-packages.md) and [Rust Build Topology](../boxology-details/08-rust-build-topology.md); this spec does not restate them. It records implementation decisions, resolves the details the normative text delegates, and scopes the v0 subset honestly. It also consumes [S2](s2-contract-generator.md) (regeneration, `GenerationRequest` orchestration owned by #107) and [S4](s4-contract-change-classification.md) (classification, the shared `boxology-schema` codec).
 
 ## Purpose
 
-S5 turns the merge-discipline substrate into commands a repository actually runs: the same `boxology check` for developers, the lead, and generated CI, with no hidden validation layer. It is also the absorption target fixed by S0 D10 — when S7 adopts manifests on this repository, `cargo xtask ci` delegates platform validation to `boxology check` and the bootstrap registries are deleted. Every check S5 ships must therefore be manifest-derived from birth; S5 may not introduce a second hand-maintained registry.
+S5 turns the merge-discipline substrate into commands a repository actually runs: the same `boxology check` for developers, the lead, and generated CI, with no hidden validation layer. It is also the absorption target fixed by S0 D10 — S7 adopts manifests and gates repository CI with `boxology check`, then the first task immediately post-v0 (#342) delegates platform validation from `cargo xtask ci` and deletes the bootstrap registries. Every check S5 ships must therefore be manifest-derived from birth; S5 may not introduce a second hand-maintained registry.
 
 ## Non-goals
 
@@ -63,7 +63,7 @@ Candidates are packages with declared derived outputs whose generator is the wor
 - **Lockfile** (step 4 subset): freshness is proven by pinned `--locked` resolution (an out-of-date lockfile is a coded failure); classification per D3. With `--base`, a **scope finding** honors S0 D6's "mechanical enforcement arrives with S5" at reporting strength: a lockfile diff while no manifest dependency declaration of the accountable package changed is a coded finding (the `cargo update`-drive-by case). The full minimal-closure attribution replay is deferred with the merger.
 - **Base default**: without `--base`, local `check` resolves the base to the merge base with `main` — the fixed v0 branch name, a recorded narrowing of 08's "configured main branch" (configurability arrives with a manifest-schema extension, not a guessed key). Where no such revision exists (no repository, unborn branch), base-relative steps are skipped and the report says so explicitly. CI always passes `--base`.
 - **Exit-code mapping**: repository-validation defects — discovery/ownership/role/edge violations, unowned or foreign-source paths, stale or tampered artifacts, lockfile failures, failing fmt/clippy/tests/quality commands — exit `1`. **Contract-classification findings of every class are report-only** and do not by themselves change the exit code: per 08's policy boundary the platform reports and the harness gates, and in v0 the harness is the human reading the report. This is what makes "reported even when policy authorizes the merge" operable without override machinery.
-- **Formatting** (step 5): the hand-authored package selection is **derived from manifests** — owned crate paths minus declared derived outputs — never a second registry; this is the data that deletes S0's bootstrap lists at S7.
+- **Formatting** (step 5): the hand-authored package selection is **derived from manifests** — owned crate paths minus declared derived outputs — never a second S5 registry; this is the data that deletes S0's bootstrap lists in immediate-post-v0 #342.
 - **Quality commands** (step 8): executed sequentially in package-id order, trusted per the foundation threat boundary, output captured, any nonzero exit failing the run. The checker contains no per-project branch; the generated Hello project's conformance tests enter through its own manifest.
 
 ### D7 — The emitted workflow is S5 data
@@ -107,10 +107,12 @@ T1–T3 form a stack independent of S2 and S4 and may begin at once; T1 starts i
 - Provider roles, isolation-profile validation, package-scoped validation, independent build roots — deferred per the normative documents.
 - Exact `BXW####` codes, the JSON field inventory, and glob-dialect corner cases — task-spec work (T1/T5 authority).
 - Identity lifecycle (#3) and the new-package creation protocol (#47) — unchanged, still open.
-- The `xtask ci` delegation itself — executed at S7 adoption per S0 D10, not by this stream.
+- The `xtask ci` delegation itself — executed by immediate-post-v0 S7-T5/#342 per S0 D10, not by this stream; S7's manifest adoption and `boxology check` CI gate precede it.
 
 ## Tracker notes
 
-The stream definition in `11-v0-streams.md` gains its spec link in this PR's diff; no other normative document changes. On merge, the operator files the six task issues plus S5-COMPLETE with `stream:s5` labels, recording the T4 dependencies on #107, #316, and #318. #74's boxification list already names `boxology check`; no edit needed. #3 and #47 are cited, not changed. S0 D10's absorption contract is consumed as-is; no S0 premise changes.
+The stream definition in `11-v0-streams.md` gains its spec link in this PR's diff; no other normative document changes. On merge, the operator files the six task issues plus S5-COMPLETE with `stream:s5` labels, recording the T4 dependencies on #107, #316, and #318. #74's boxification list already names `boxology check`; no edit needed. #3 and #47 are cited, not changed. The 2026-08-03 amendment below reconciles this spec to S0 D10's revised absorption schedule.
 
 **Amendment of 2026-07-24** (one independent review round): recorded the D5 single-generator narrowing with its trigger; added the D6 lockfile-scope finding reconciling S0 D6's promise at reporting strength; pinned the no-flag base default (merge base with `main`, recorded narrowing) and the exit-code mapping (validation defects exit `1`; classification findings report-only); added the D2 fixture-opacity declaration with its 02-packages discovery extension in this diff; assigned composition/declared-import cross-document validation to T5 with its #316 dependency; added #319 to T4/T5; pinned declaration-based edge reading and recorded the `include!` residual; scoped determinism claims around captured tool output; reworded the command-surface non-goal and the T1–T3 parallel-start sentence. Operator edits on merge: #326 and #327 gain the #319 dependency; #327 gains cross-document validation scope and the #316 dependency.
+
+**Amendment of 2026-08-03** (maintainer acceleration decision): reconciled the absorption schedule with S0 D10 and S7 D5. S7 adopts root manifests and keeps `boxology check` gating repository CI in v0; S7-T5/#342 deletes the temporary xtask registries and completes delegation as the first task immediately post-v0.

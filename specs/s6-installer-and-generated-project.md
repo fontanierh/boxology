@@ -1,6 +1,6 @@
 # S6 Spec — Installer and Generated Project
 
-[Stream definition](../boxology-details/11-v0-streams.md#s6--installer-and-generated-project) · Status: **accepted** (one independent review round; findings addressed by the amendment of 2026-07-24)
+[Stream definition](../boxology-details/11-v0-streams.md#s6--installer-and-generated-project) · Status: **accepted** (amended by maintainer decision on 2026-08-03)
 
 S6 builds the deterministic initializer and the project it generates: the Cargo workspace, the Hello box (implementation and generated contract), the application composition with in-process and HTTP bindings, the root platform package, all manifests, and repository CI — ending in the working database-free Hello World invocable through Rust and HTTP. The installation flow, generated-project contents, and milestone scenario are normative in the [Product Contract](../boxology-details/07-product-contract.md); the manifest model and check baseline in [Packages](../boxology-details/02-packages.md) and [Rust Build Topology](../boxology-details/08-rust-build-topology.md). This spec records implementation decisions and consumes the outputs of S1–S5; it does not restate them.
 
@@ -54,18 +54,17 @@ Identical `InitRequest` and installer version produce byte-identical trees on Li
 
 ### D6 — Born-valid conformance
 
-The complete end-to-end proof is an S6-owned integration test in this repository: initialize into a temporary directory, `git init` and commit the initial tree (so `check`'s base default resolves per S5 D6), run the real toolchain (`cargo build` first — materializing the lockfile the platform manifest declares, then the generated quality commands), invoke the capability through the in-process Rust binding and through HTTP against the running composition, and run `boxology check` — all green, on both platforms, asserting along the way that the materialized `Cargo.lock` classifies as the platform package's derived artifact. This is milestone steps 2–3 and 7 made mechanical; S7 owns steps 1, 4, 5, and 6.
+The complete end-to-end proof is one S6-owned integration test run natively on macOS in this repository: initialize into a temporary directory, `git init` and commit the initial tree (so `check`'s base default resolves per S5 D6), run the real toolchain (`cargo build` first — materializing the lockfile the platform manifest declares, then the generated quality commands), invoke the capability through the in-process Rust binding and through HTTP against the running composition, and run `boxology check` — all green, asserting along the way that the materialized `Cargo.lock` classifies as the platform package's derived artifact. This is milestone steps 2–3 and 7 made mechanical; S7 owns steps 1, 4, 5, and 6. Linux remains an independent producer in D5's byte-determinism matrix, but v0 does not duplicate this behavioral/toolchain run there.
 
 ## Acceptance criteria
 
 1. The generated tree is byte-identical across repetition, roots, time, locale, timezone, Linux, and macOS; the T1 determinism subject is green in S0's gating lane from its first PR onward.
-2. The generated project passes `boxology check` after the documented first ordinary Cargo invocation, with no other repair step, on both platforms.
+2. In one native-macOS born-valid run, the generated project passes `boxology check` after the documented first ordinary Cargo invocation, with no other repair step.
 3. The capability answers correctly through the in-process Rust binding and through HTTP against the same composition, via the generated quality commands — with no Hello-specific branch in any checker.
 4. The embedded generation is byte-identical to standalone regeneration: `boxology generate` on the fresh project rewrites nothing. V0 assumes installer and `boxology` binaries built from the same source checkout (recorded with S5 D5's single-generator narrowing); cross-release skew handling arrives with the first published release.
 5. Fail-closed behavior is proven: non-empty target (beyond `.git/`), re-run against a generated project, and invalid request each fail with asserted `BXI` codes; an interrupted write never yields a tree bearing the completion sentinel, and a sentinel-less partial tree is detected and reported by the re-run check.
 6. The emitted CI workflow byte-matches S5's golden document; the generated README documents build, both invocation paths, validation, and the first-build lockfile step.
-7. Adding `greet(name)` to the generated Hello box classifies as additive under S4 against the initial schema — proven by a fixture pair, pre-validating S7's acceptance task.
-8. The installer builds and runs from a source checkout via `cargo install --path` on both platforms.
+7. The installer builds and runs from a source checkout via `cargo install --path` in the native-macOS born-valid run. The real `greet(name)` evolution and its additive classification are proved once in S7's acceptance run (#340), not duplicated here with a synthetic fixture pair.
 
 ## Task list
 
@@ -74,9 +73,9 @@ The complete end-to-end proof is an S6-owned integration test in this repository
 | T1 | `boxology-init` pure library: `InitRequest`, tree assembly, embedded S2 generation, determinism subject | 2 |
 | T2 | Generated project content: workspace, three packages, initial contract shape, composition wiring, README, quality commands, CI placement | 2–3 |
 | T3 | CLI binary: flags, fail-closed target validation, atomic write, provenance/version | 1 |
-| T4 | Born-valid closure: end-to-end integration proof (build, both invocations, check), goldens, cross-platform coverage | 2 |
+| T4 | Born-valid closure: one native-macOS integration proof (install, build, both invocations, check), goldens, cross-platform byte-determinism coverage | 2 |
 
-T1 and T2 interleave as one stack (content is assembled by the library); T3 follows; T4 remains last, followed by the S6-COMPLETE check against this spec. The stream depends on S1–S5 artifacts: T1 consumes S2's generation and write orchestration (#107); T2 consumes S1 assembly, S3's server binding (#112), S5's workflow document (#327), and coordinates with the fixture corpus (#100); T4 consumes S5's `check` (#327) and S4's classification for AC7.
+T1 and T2 interleave as one stack (content is assembled by the library); T3 follows; T4 remains last, followed by the S6-COMPLETE check against this spec. The stream depends on S1–S5 artifacts: T1 consumes S2's generation and write orchestration (#107); T2 consumes S1 assembly, S3's server binding (#112), S5's workflow document (#327), and coordinates with the fixture corpus (#100); T4 consumes S5's `check` (#327). S7-T3/#340 consumes S4's classifier for the real additive-change proof.
 
 ## Matters left open
 
@@ -90,3 +89,5 @@ T1 and T2 interleave as one stack (content is assembled by the library); T3 foll
 The stream definition in `11-v0-streams.md` gains its spec link in this PR's diff; no other normative document changes. On merge, the operator files the four task issues plus S6-COMPLETE with `stream:s6` labels, recording the cross-stream dependencies above. #100's premise gains a consumer (installer/fixture alignment) but no obligation; #74 and the recorded v0 exclusions are cited unchanged.
 
 **Amendment of 2026-07-24** (one independent review round): decided the platform dependency source (`InitRequest`-carried path dependencies to the source checkout, canonical placeholder in goldens); redefined born-valid around the documented first Cargo invocation and made D6 interpose `git init` + `cargo build` before `check`; specified the staged-rename write mechanism with completion sentinel and scoped AC5 to it; added `rust-toolchain.toml` and platform generator configuration to the emitted tree, with the `Cargo.lock` declaration shape pinned jointly with S5; moved the HTTP conformance command to the composition's quality contract; recorded the same-checkout assumption under AC4; stated the installer box is a new corpus fixture; disambiguated the target-root layout and assigned the empty-target precondition to S7's skill. AC7 ownership consolidates in T4/#335 with its S4 dependency (operator issue edits: #333 drops the AC7 claim; #335 gains it explicitly).
+
+**Amendment of 2026-08-03** (maintainer acceleration decision): the born-valid/install behavioral proof runs once, natively on macOS, while the Linux/macOS byte-determinism matrix remains mandatory; the synthetic S6 fixture-pair proof of `greet(name)` is removed and the real S7-T3/#340 acceptance evolution becomes the sole additive-classification evidence. Operator reconciliation updates #335, #336, and #340 to this split.
