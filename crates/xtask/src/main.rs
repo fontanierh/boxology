@@ -107,6 +107,19 @@ type ExternalTestRunner<'a> = dyn FnMut(&[&str]) -> Option<(bool, Vec<u8>)> + 'a
 type SkillCommand = (&'static str, fn(&Path) -> u8);
 const SKILL_COMMANDS: &[SkillCommand] = &[("skill-audit", skill_audit::run)];
 const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
+const CAPSTONE_PACKAGES: &[&str] = &[
+    "boxology-init",
+    "boxology-generator",
+    "boxology-workspace",
+    "xtask",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CiTier {
+    PullRequest,
+    Deep,
+    Capstone,
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -127,6 +140,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
         {
             run_ci(Some(base))
         }
+        [command] if command == "ci-capstone" => run_ci_capstone(),
         [command, flag, base]
             if command == "budget"
                 && flag == "--base"
@@ -208,7 +222,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-capstone\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -239,28 +253,30 @@ fn external_test_checks(
         .collect()
 }
 
-/// Runs for any `base` (unused: not gated on budget). Summary keeps verdicts via [`ci_failure_names`].
-fn fold_external_test_checks(
-    base: Option<&str>,
-    root: &Path,
-    run: &mut ExternalTestRunner<'_>,
-) -> Vec<(&'static str, bool)> {
-    let _ = base;
-    external_test_checks(root, run)
-}
-
-/// Missing registered external-test names, then false verdicts. Used as `run_ci` outcome.
-fn ci_failure_names(checks: &[(&'static str, bool)]) -> Vec<&'static str> {
-    let mut failed: Vec<&'static str> = EXTERNAL_TEST_SPECS
-        .iter()
-        .filter_map(|(name, _)| (!checks.iter().any(|(n, _)| n == name)).then_some(*name))
-        .collect();
+/// Missing tier-required external-test names, then false verdicts.
+fn ci_failure_names(tier: CiTier, checks: &[(&'static str, bool)]) -> Vec<&'static str> {
+    let mut failed = Vec::new();
+    if tier == CiTier::Capstone && !checks.iter().any(|(name, _)| *name == "fixture-projects") {
+        failed.push("fixture-projects");
+    }
+    if tier != CiTier::PullRequest {
+        failed.extend(
+            EXTERNAL_TEST_SPECS
+                .iter()
+                .filter_map(|(name, _)| (!checks.iter().any(|(n, _)| n == name)).then_some(*name)),
+        );
+    }
     failed.extend(checks.iter().filter_map(|(n, ok)| (!*ok).then_some(*n)));
     failed
 }
 
 fn run_ci(base: Option<&str>) -> u8 {
     let deep = base.is_none();
+    let tier = if deep {
+        CiTier::Deep
+    } else {
+        CiTier::PullRequest
+    };
     let toolchain = timed("toolchain", check_toolchain);
     if let Err(error) = toolchain {
         eprintln!("toolchain: FAIL: {error}");
@@ -270,7 +286,10 @@ fn run_ci(base: Option<&str>) -> u8 {
     println!("toolchain: PASS");
 
     if !deep {
-        println!("test-tier: PR excludes boxology-init; macos-capstone runs it in parallel");
+        println!(
+            "test-tier: PR delegates boxology-init, boxology-generator, \
+             boxology-workspace, xtask, fixture-projects, and external gates to macos-capstone"
+        );
     }
     let mut checks = vec![
         (
@@ -282,12 +301,12 @@ fn run_ci(base: Option<&str>) -> u8 {
             "test",
             timed("test", || run_cargo(workspace_test_args(deep))),
         ),
-        (
-            "fixture-projects",
-            timed("fixture-projects", || fixture_projects::run(&root(), deep)),
-        ),
     ];
     if deep {
+        checks.push((
+            "fixture-projects",
+            timed("fixture-projects", || fixture_projects::run(&root(), true)),
+        ));
         checks.extend([
             (
                 "clippy",
@@ -320,10 +339,10 @@ fn run_ci(base: Option<&str>) -> u8 {
             ),
             ("doc", timed("doc", run_doc)),
         ]);
+        checks.extend(external_test_checks(&root(), &mut |args| {
+            external_test::cargo(&root(), args)
+        }));
     }
-    checks.extend(fold_external_test_checks(base, &root(), &mut |args| {
-        external_test::cargo(&root(), args)
-    }));
     checks.extend([
         ("key-order", timed("key-order", run_key_order)),
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
@@ -348,7 +367,45 @@ fn run_ci(base: Option<&str>) -> u8 {
         }
         None => println!("budget: SKIPPED (--no-budget)"),
     }
-    let failed = ci_failure_names(&checks);
+    summarize_ci(tier, &checks)
+}
+
+fn run_ci_capstone() -> u8 {
+    let toolchain = timed("toolchain", check_toolchain);
+    if let Err(error) = toolchain {
+        eprintln!("toolchain: FAIL: {error}");
+        eprintln!("summary: FAIL (toolchain)");
+        return 1;
+    }
+    println!("toolchain: PASS");
+    println!("test-tier: macos-capstone");
+
+    let mut checks = CAPSTONE_PACKAGES
+        .iter()
+        .map(|&package| {
+            let args = package_test_args(package);
+            (package, timed(package, || run_cargo(&args)))
+        })
+        .collect::<Vec<_>>();
+    checks.push((
+        "fixture-projects",
+        timed("fixture-projects", || fixture_projects::run(&root(), false)),
+    ));
+    checks.extend(external_test_checks(&root(), &mut |args| {
+        external_test::cargo(&root(), args)
+    }));
+    for &(name, passed) in &checks {
+        println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
+    }
+    summarize_ci(CiTier::Capstone, &checks)
+}
+
+fn package_test_args(package: &str) -> [&str; 4] {
+    ["test", "-p", package, "--all-features"]
+}
+
+fn summarize_ci(tier: CiTier, checks: &[(&'static str, bool)]) -> u8 {
+    let failed = ci_failure_names(tier, checks);
     if failed.is_empty() {
         println!("summary: PASS");
         0
@@ -368,6 +425,12 @@ fn workspace_test_args(deep: bool) -> &'static [&'static str] {
             "--all-features",
             "--exclude",
             "boxology-init",
+            "--exclude",
+            "boxology-generator",
+            "--exclude",
+            "boxology-workspace",
+            "--exclude",
+            "xtask",
         ]
     }
 }
@@ -840,34 +903,59 @@ mod tests {
     }
 
     #[test]
-    fn run_ci_outcome_keeps_external_tests_and_propagates() {
+    fn external_expectations_are_tier_aware_and_false_results_propagate() {
         let production = include_str!("main.rs")
             .split_once("\nmod tests {")
             .unwrap()
             .0;
         assert!(
-            production.contains("ci_failure_names(&checks)"),
-            "run_ci must summarize through ci_failure_names"
+            production.contains("summarize_ci(tier, &checks)"),
+            "run_ci must summarize with its tier"
         );
-        for base in [None, Some("origin/main")] {
-            let mut hit = 0;
-            let checks = fold_external_test_checks(base, &root(), &mut |_| {
-                hit += 1;
-                Some((false, Vec::new()))
-            });
-            assert!(hit > 0 && checks.len() == 3, "fold under {base:?}");
-            assert_eq!(ci_failure_names(&checks).len(), 3, "false→fail {base:?}");
-        }
-        let mut discarded: Vec<_> = EXTERNAL_TEST_SPECS
+        assert!(
+            production.contains(
+                "tier == CiTier::Capstone && !checks.iter().any(|(name, _)| *name == \
+                 \"fixture-projects\")"
+            ),
+            "capstone must fail closed if fixture-projects is displaced"
+        );
+        let passed: Vec<_> = EXTERNAL_TEST_SPECS
             .iter()
             .map(|(n, _)| (*n, true))
             .collect();
-        assert!(ci_failure_names(&discarded).is_empty());
-        discarded.clear();
+        for tier in [CiTier::PullRequest, CiTier::Deep] {
+            assert!(ci_failure_names(tier, &passed).is_empty(), "{tier:?}");
+        }
+        let mut capstone_passed = passed.clone();
+        capstone_passed.push(("fixture-projects", true));
+        assert!(ci_failure_names(CiTier::Capstone, &capstone_passed).is_empty());
+        assert!(ci_failure_names(CiTier::PullRequest, &[]).is_empty());
         assert_eq!(
-            ci_failure_names(&discarded).len(),
+            ci_failure_names(CiTier::Deep, &[]),
+            vec![
+                "surface-lock",
+                "classifier-surface-lock",
+                "generator-source-inventory"
+            ]
+        );
+        assert_eq!(
+            ci_failure_names(CiTier::Capstone, &[]),
+            vec![
+                "fixture-projects",
+                "surface-lock",
+                "classifier-surface-lock",
+                "generator-source-inventory"
+            ]
+        );
+
+        let failed: Vec<_> = EXTERNAL_TEST_SPECS
+            .iter()
+            .map(|(name, _)| (*name, false))
+            .collect();
+        assert_eq!(
+            ci_failure_names(CiTier::PullRequest, &failed).len(),
             3,
-            "mutation survived: post-fold discard must fail CI outcome"
+            "present false verdicts fail even when PR permits delegation"
         );
     }
 
@@ -905,11 +993,36 @@ mod tests {
                 "--all-features",
                 "--exclude",
                 "boxology-init",
+                "--exclude",
+                "boxology-generator",
+                "--exclude",
+                "boxology-workspace",
+                "--exclude",
+                "xtask",
             ]
         );
         assert_eq!(
             workspace_test_args(true),
             &["test", "--workspace", "--all-features"]
         );
+    }
+
+    #[test]
+    fn capstone_package_inventory_and_argv_are_exact() {
+        assert_eq!(
+            CAPSTONE_PACKAGES,
+            &[
+                "boxology-init",
+                "boxology-generator",
+                "boxology-workspace",
+                "xtask"
+            ]
+        );
+        for package in CAPSTONE_PACKAGES {
+            assert_eq!(
+                package_test_args(package),
+                ["test", "-p", *package, "--all-features"]
+            );
+        }
     }
 }

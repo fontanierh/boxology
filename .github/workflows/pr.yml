@@ -34,6 +34,8 @@ concurrency:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_DENY_VERSION: "0.20.2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   checks-linux:
@@ -219,15 +221,6 @@ jobs:
           test "$(uname -m)" = arm64
           test "$ImageOS" = macos-arm64-host
           test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/bin/cargo-deny
-          key: cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-          restore-keys: |
-            cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-
       - name: Install pinned cargo-deny
         run: |
           if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
@@ -350,21 +343,12 @@ jobs:
           test "$(uname -m)" = arm64
           test "$ImageOS" = macos-arm64-host
           test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/bin/cargo-deny
-          key: cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-          restore-keys: |
-            cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-
       - name: process-reaper fixture suite
         run: bash ops/process-reaper/tests/run-tests.sh
-      # Main-push deep CI retains boxology-init in its full workspace test.
-      - name: boxology-init acceptance suite
+      # Main-push deep CI retains the unchanged full workspace and fixture suites.
+      - name: cargo xtask ci-capstone
         if: github.event_name == 'pull_request'
-        run: cargo test -p boxology-init --all-features
+        run: cargo xtask ci-capstone
 
   deny:
     runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]

@@ -55,3 +55,4 @@ Each entry is, in order: a `## YYYY-MM-DD — #issue` heading, one blank line, o
 - Classification: `mechanical`
 - Observation: The independently recoverable process-reaper suite and `boxology-init` package test were serialized inside the canonical Mac pull-request job, leaving available native runner capacity idle while that job determined the required-check critical path.
 - Evidence: [#503](https://github.com/fontanierh/boxology/issues/503) splits those suites into a required parallel native Mac capstone. Run 30828942886 measured `checks-macos` at 11m04s versus `checks-linux` at 4m22s; main-push deep CI retains the unchanged full-workspace test.
+- Status (2026-08-03): Round two also delegates the generator, workspace, and xtask package tests, shallow fixture-project checks, and external-test integrity gates; both native Mac jobs drop Actions cache traffic, the workflow globally drops debuginfo, and main-push deep coverage remains unchanged.
