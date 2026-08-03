@@ -2203,23 +2203,20 @@ macro_rules! __boxology_check_implementation {
     #[test]
     fn public_revision_tracks_every_public_semantic_and_only_public_semantics() {
         let base = revision(CONTRACT);
-        for changed in [
-            CONTRACT.replace("GreetError", "HelloError"),
-            CONTRACT.replace("#[error]", "#[doc=\"error\"] #[error]"),
-            CONTRACT.replace("#[error]", "#[deprecated] #[error]"),
-            CONTRACT.replace("EmptyName", "MissingName"),
-            CONTRACT.replace("EmptyName", "#[doc=\"empty\"] EmptyName"),
-            CONTRACT.replace("EmptyName", "#[deprecated(note=\"old\")] EmptyName"),
-            CONTRACT.replace("EmptyName", "EmptyName, Busy"),
-            CONTRACT.replace("#[capability", "#[doc=\"greet\"] #[capability"),
-            CONTRACT.replace("#[capability", "#[deprecated] #[capability"),
-            CONTRACT.replace("fn greet", "fn welcome"),
-            CONTRACT.replace("(name:", "(person:"),
-        ] {
+        assert_eq!(
+            hello_mutations()
+                .iter()
+                .map(|mutation| mutation.name)
+                .collect::<Vec<_>>(),
+            HELLO_MUTATION_NAMES
+        );
+        for mutation in hello_mutations() {
+            let changed = mutation.apply(CONTRACT);
             assert_ne!(
                 revision(&changed),
                 base,
-                "mutation did not change revision: {changed}"
+                "mutation `{}` did not change revision",
+                mutation.name
             );
         }
         let first = CONTRACT.replace("EmptyName", "EmptyName, Busy");
@@ -2421,6 +2418,243 @@ macro_rules! __boxology_check_implementation {
     /// Mixed payload fixture mirroring PR1 `mixed_payloads` — the cross-crate semantic anchor.
     const MIXED: &str = "boxology::contract! { #[error] pub enum PayloadError { Unit, #[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32), #[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }, EmptyNamed {} } #[capability(exposure=external)] pub async fn inspect(name:String)->Result<String,PayloadError>; }";
 
+    #[derive(Clone, Copy)]
+    struct Mutation {
+        name: &'static str,
+        anchor: &'static str,
+        replacement: &'static str,
+    }
+
+    impl Mutation {
+        fn apply(self, source: &str) -> String {
+            let expected = usize::from(self.name == "error_rename") + 1;
+            assert_eq!(
+                source.matches(self.anchor).count(),
+                expected,
+                "mutation anchor must occur exactly {expected} time(s): {}",
+                self.anchor
+            );
+            source.replace(self.anchor, self.replacement)
+        }
+    }
+
+    const HELLO_MUTATION_NAMES: [&str; 11] = [
+        "error_rename",
+        "error_docs",
+        "error_deprecation",
+        "variant_rename",
+        "variant_docs",
+        "variant_deprecation",
+        "variant_added",
+        "capability_docs",
+        "capability_deprecation",
+        "capability_rename",
+        "input_name",
+    ];
+
+    fn hello_mutations() -> [Mutation; 11] {
+        [
+            Mutation {
+                name: "error_rename",
+                anchor: "GreetError",
+                replacement: "HelloError",
+            },
+            Mutation {
+                name: "error_docs",
+                anchor: "#[error]",
+                replacement: "#[doc=\"error\"] #[error]",
+            },
+            Mutation {
+                name: "error_deprecation",
+                anchor: "#[error]",
+                replacement: "#[deprecated] #[error]",
+            },
+            Mutation {
+                name: "variant_rename",
+                anchor: "EmptyName",
+                replacement: "MissingName",
+            },
+            Mutation {
+                name: "variant_docs",
+                anchor: "EmptyName",
+                replacement: "#[doc=\"empty\"] EmptyName",
+            },
+            Mutation {
+                name: "variant_deprecation",
+                anchor: "EmptyName",
+                replacement: "#[deprecated(note=\"old\")] EmptyName",
+            },
+            Mutation {
+                name: "variant_added",
+                anchor: "EmptyName",
+                replacement: "EmptyName, Busy",
+            },
+            Mutation {
+                name: "capability_docs",
+                anchor: "#[capability",
+                replacement: "#[doc=\"greet\"] #[capability",
+            },
+            Mutation {
+                name: "capability_deprecation",
+                anchor: "#[capability",
+                replacement: "#[deprecated] #[capability",
+            },
+            Mutation {
+                name: "capability_rename",
+                anchor: "fn greet",
+                replacement: "fn welcome",
+            },
+            Mutation {
+                name: "input_name",
+                anchor: "(name:",
+                replacement: "(person:",
+            },
+        ]
+    }
+
+    const MIXED_MUTATION_NAMES: [&str; 21] = [
+        "unit_to_value",
+        "value_to_unit",
+        "value_to_named",
+        "named_to_value",
+        "named_empty_to_unit",
+        "named_empty_field_added",
+        "variant_order",
+        "field_order",
+        "value_type_u32_to_u64",
+        "field_type_string_to_bool",
+        "field_type_i64_to_u8",
+        "field_rename_message_to_text",
+        "variant_docs",
+        "payload_docs",
+        "payload_deprecation_removed",
+        "payload_note",
+        "variant_deprecation_removed",
+        "field_note",
+        "field_docs_added",
+        "variant_removed",
+        "variant_added",
+    ];
+
+    fn mixed_mutations() -> [Mutation; 21] {
+        [
+            Mutation {
+                name: "unit_to_value",
+                anchor: "Unit,",
+                replacement: "Unit(u32),",
+            },
+            Mutation {
+                name: "value_to_unit",
+                anchor: "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
+                replacement: "Value",
+            },
+            Mutation {
+                name: "value_to_named",
+                anchor: "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
+                replacement: "Value { detail: u32 }",
+            },
+            Mutation {
+                name: "named_to_value",
+                anchor: "#[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }",
+                replacement: "Named(String)",
+            },
+            Mutation {
+                name: "named_empty_to_unit",
+                anchor: "EmptyNamed {}",
+                replacement: "EmptyNamed",
+            },
+            Mutation {
+                name: "named_empty_field_added",
+                anchor: "EmptyNamed {}",
+                replacement: "EmptyNamed { spare: bool }",
+            },
+            Mutation {
+                name: "variant_order",
+                anchor: "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32), #[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }",
+                replacement: "#[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }, #[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
+            },
+            Mutation {
+                name: "field_order",
+                anchor: "#[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64",
+                replacement: "#[deprecated(note=\"use text\")] code: i64, #[doc=\"message field\"] message: String",
+            },
+            Mutation {
+                name: "value_type_u32_to_u64",
+                anchor: "u32)",
+                replacement: "u64)",
+            },
+            Mutation {
+                name: "field_type_string_to_bool",
+                anchor: "message: String",
+                replacement: "message: bool",
+            },
+            Mutation {
+                name: "field_type_i64_to_u8",
+                anchor: "code: i64",
+                replacement: "code: u8",
+            },
+            Mutation {
+                name: "field_rename_message_to_text",
+                anchor: "message: String",
+                replacement: "text: String",
+            },
+            Mutation {
+                name: "variant_docs",
+                anchor: "\"value variant\"",
+                replacement: "\"variant\"",
+            },
+            Mutation {
+                name: "payload_docs",
+                anchor: "\"value payload\"",
+                replacement: "\"payload\"",
+            },
+            Mutation {
+                name: "payload_deprecation_removed",
+                anchor: " #[deprecated(note=\"use detail\")]",
+                replacement: "",
+            },
+            Mutation {
+                name: "payload_note",
+                anchor: "\"use detail\"",
+                replacement: "\"use other\"",
+            },
+            Mutation {
+                name: "variant_deprecation_removed",
+                anchor: " #[deprecated(note=\"retired\")]",
+                replacement: "",
+            },
+            Mutation {
+                name: "field_note",
+                anchor: "\"use text\"",
+                replacement: "\"use code\"",
+            },
+            Mutation {
+                name: "field_docs_added",
+                anchor: "code: i64",
+                replacement: "#[doc=\"code field\"] code: i64",
+            },
+            Mutation {
+                name: "variant_removed",
+                anchor: ", EmptyNamed {}",
+                replacement: "",
+            },
+            Mutation {
+                name: "variant_added",
+                anchor: "Unit,",
+                replacement: "Unit, Other,",
+            },
+        ]
+    }
+
+    fn mixed_error_rename() -> String {
+        assert_eq!(
+            MIXED.matches("PayloadError").count(),
+            2,
+            "error rename must cover the enum and capability sites"
+        );
+        MIXED.replace("PayloadError", "StorageFault")
+    }
+
     fn mixed_contract() -> boxology_generator_model::ControlledContract {
         scalar_model(MIXED)
     }
@@ -2589,92 +2823,326 @@ macro_rules! __boxology_check_implementation {
     #[test]
     fn mixed_payload_mutations_change_the_public_revision() {
         let base = schema::revision("payloads", mixed_contract().model());
-        let mutations = [
-            ("unit_to_value", "Unit,", "Unit(u32),"),
-            (
-                "value_to_unit",
-                "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
-                "Value",
-            ),
-            (
-                "value_to_named",
-                "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
-                "Value { detail: u32 }",
-            ),
-            (
-                "named_to_value",
-                "#[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }",
-                "Named(String)",
-            ),
-            ("named_empty_to_unit", "EmptyNamed {}", "EmptyNamed"),
-            (
-                "named_empty_field_added",
-                "EmptyNamed {}",
-                "EmptyNamed { spare: bool }",
-            ),
-            (
-                "variant_order",
-                "#[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32), #[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }",
-                "#[deprecated(note=\"retired\")] Named { #[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64 }, #[doc=\"value variant\"] Value(#[doc=\"value payload\"] #[deprecated(note=\"use detail\")] u32)",
-            ),
-            (
-                "field_order",
-                "#[doc=\"message field\"] message: String, #[deprecated(note=\"use text\")] code: i64",
-                "#[deprecated(note=\"use text\")] code: i64, #[doc=\"message field\"] message: String",
-            ),
-            ("value_type_u32_to_u64", "u32)", "u64)"),
-            (
-                "field_type_string_to_bool",
-                "message: String",
-                "message: bool",
-            ),
-            ("field_type_i64_to_u8", "code: i64", "code: u8"),
-            (
-                "field_rename_message_to_text",
-                "message: String",
-                "text: String",
-            ),
-            ("variant_docs", "\"value variant\"", "\"variant\""),
-            ("payload_docs", "\"value payload\"", "\"payload\""),
-            (
-                "payload_deprecation_removed",
-                " #[deprecated(note=\"use detail\")]",
-                "",
-            ),
-            ("payload_note", "\"use detail\"", "\"use other\""),
-            (
-                "variant_deprecation_removed",
-                " #[deprecated(note=\"retired\")]",
-                "",
-            ),
-            ("field_note", "\"use text\"", "\"use code\""),
-            (
-                "field_docs_added",
-                "code: i64",
-                "#[doc=\"code field\"] code: i64",
-            ),
-            ("variant_removed", ", EmptyNamed {}", ""),
-            ("variant_added", "Unit,", "Unit, Other,"),
-        ];
-        assert_eq!(mutations.len(), 21);
-        for (name, anchor, replacement) in mutations {
-            assert_unique(anchor);
-            let mutated = MIXED.replace(anchor, replacement);
+        assert_eq!(
+            mixed_mutations()
+                .iter()
+                .map(|mutation| mutation.name)
+                .collect::<Vec<_>>(),
+            MIXED_MUTATION_NAMES
+        );
+        for mutation in mixed_mutations() {
+            let mutated = mutation.apply(MIXED);
             assert_ne!(
                 mixed_revision_of(&mutated),
                 base,
-                "mutation `{name}` must change the public revision"
+                "mutation `{}` must change the public revision",
+                mutation.name
             );
         }
 
-        // Renaming PayloadError spans the enum and capability sites — mutate the model directly.
-        let mut renamed = mixed_contract().model().clone();
-        renamed.error.name = "StorageFault".to_owned();
-        renamed.capabilities[0].error = "StorageFault".to_owned();
         assert_ne!(
-            schema::revision("payloads", &renamed),
+            mixed_revision_of(&mixed_error_rename()),
             base,
             "mutation `error_rename` must change the public revision"
+        );
+    }
+
+    fn generated_document(box_id: &str, source: &str) -> SchemaDocument {
+        let contract = scalar_model(source);
+        let revision = schema::revision(box_id, contract.model());
+        SchemaDocument::parse(&schema::document(
+            box_id,
+            contract.model(),
+            &revision,
+            contract.semantic_digest(),
+            "0.0.0",
+        ))
+        .unwrap()
+    }
+
+    type ExpectedFinding = (
+        &'static str,
+        &'static str,
+        boxology_classifier::Class,
+        Option<&'static str>,
+    );
+
+    fn expected_findings(corpus: &str, name: &str) -> Vec<ExpectedFinding> {
+        use boxology_classifier::Class::{
+            Additive, CompatibleWithConditions, Deprecation, Documentation, Incompatible,
+        };
+        let conditional = Some("unknown-variant tolerance");
+        match (corpus, name) {
+            ("hello", "error_rename") => vec![
+                ("BXC0044", "hello.greet/error", Incompatible, None),
+                ("BXC0032", "hello/type/GreetError", Incompatible, None),
+                ("BXC0031", "hello/type/HelloError", Additive, None),
+            ],
+            ("hello", "error_docs") => {
+                vec![("BXC0033", "hello/type/GreetError", Documentation, None)]
+            }
+            ("hello", "error_deprecation") => {
+                vec![("BXC0034", "hello/type/GreetError", Deprecation, None)]
+            }
+            ("hello", "variant_rename") => vec![
+                (
+                    "BXC0035",
+                    "hello/type/GreetError/variant/EmptyName",
+                    Incompatible,
+                    None,
+                ),
+                (
+                    "BXC0036",
+                    "hello/type/GreetError/variant/MissingName",
+                    CompatibleWithConditions,
+                    conditional,
+                ),
+            ],
+            ("hello", "variant_docs") => vec![(
+                "BXC0033",
+                "hello/type/GreetError/variant/EmptyName",
+                Documentation,
+                None,
+            )],
+            ("hello", "variant_deprecation") => vec![(
+                "BXC0034",
+                "hello/type/GreetError/variant/EmptyName",
+                Deprecation,
+                None,
+            )],
+            ("hello", "variant_added") => vec![(
+                "BXC0036",
+                "hello/type/GreetError/variant/Busy",
+                CompatibleWithConditions,
+                conditional,
+            )],
+            ("hello", "capability_docs") => vec![("BXC0033", "hello.greet", Documentation, None)],
+            ("hello", "capability_deprecation") => {
+                vec![("BXC0034", "hello.greet", Deprecation, None)]
+            }
+            ("hello", "capability_rename") => vec![
+                ("BXC0040", "hello.greet", Incompatible, None),
+                ("BXC0039", "hello.welcome", Additive, None),
+            ],
+            ("hello", "input_name") => vec![("BXC0041", "hello.greet/input", Incompatible, None)],
+            ("mixed", "unit_to_value" | "named_empty_to_unit" | "value_type_u32_to_u64") => {
+                vec![("BXC0052", "payloads.inspect/error", Incompatible, None)]
+            }
+            ("mixed", "value_to_unit" | "value_to_named") => vec![
+                ("BXC0052", "payloads.inspect/error", Incompatible, None),
+                (
+                    "BXC0033",
+                    "payloads/type/PayloadError/variant/Value",
+                    Documentation,
+                    None,
+                ),
+            ],
+            ("mixed", "named_to_value") => vec![
+                ("BXC0052", "payloads.inspect/error", Incompatible, None),
+                (
+                    "BXC0034",
+                    "payloads/type/PayloadError/variant/Named",
+                    Deprecation,
+                    None,
+                ),
+            ],
+            ("mixed", "named_empty_field_added") => vec![(
+                "BXC0049",
+                "payloads/type/PayloadError/variant/EmptyNamed/field/spare",
+                Additive,
+                None,
+            )],
+            ("mixed", "variant_order" | "field_order") => {
+                vec![("BXC0028", "payloads", Incompatible, None)]
+            }
+            ("mixed", "field_type_string_to_bool") => vec![(
+                "BXC0051",
+                "payloads/type/PayloadError/variant/Named/field/message",
+                Incompatible,
+                None,
+            )],
+            ("mixed", "field_type_i64_to_u8") => vec![(
+                "BXC0051",
+                "payloads/type/PayloadError/variant/Named/field/code",
+                Incompatible,
+                None,
+            )],
+            ("mixed", "field_rename_message_to_text") => vec![
+                (
+                    "BXC0050",
+                    "payloads/type/PayloadError/variant/Named/field/message",
+                    Incompatible,
+                    None,
+                ),
+                (
+                    "BXC0049",
+                    "payloads/type/PayloadError/variant/Named/field/text",
+                    Additive,
+                    None,
+                ),
+            ],
+            ("mixed", "variant_docs" | "payload_docs") => vec![(
+                "BXC0033",
+                "payloads/type/PayloadError/variant/Value",
+                Documentation,
+                None,
+            )],
+            ("mixed", "payload_deprecation_removed" | "payload_note") => vec![(
+                "BXC0034",
+                "payloads/type/PayloadError/variant/Value",
+                Deprecation,
+                None,
+            )],
+            ("mixed", "variant_deprecation_removed") => vec![(
+                "BXC0034",
+                "payloads/type/PayloadError/variant/Named",
+                Deprecation,
+                None,
+            )],
+            ("mixed", "field_note") => vec![(
+                "BXC0034",
+                "payloads/type/PayloadError/variant/Named/field/code",
+                Deprecation,
+                None,
+            )],
+            ("mixed", "field_docs_added") => vec![(
+                "BXC0033",
+                "payloads/type/PayloadError/variant/Named/field/code",
+                Documentation,
+                None,
+            )],
+            ("mixed", "variant_removed") => vec![(
+                "BXC0035",
+                "payloads/type/PayloadError/variant/EmptyNamed",
+                Incompatible,
+                None,
+            )],
+            ("mixed", "variant_added") => vec![(
+                "BXC0036",
+                "payloads/type/PayloadError/variant/Other",
+                CompatibleWithConditions,
+                conditional,
+            )],
+            ("mixed", "error_rename") => vec![
+                ("BXC0044", "payloads.inspect/error", Incompatible, None),
+                ("BXC0032", "payloads/type/PayloadError", Incompatible, None),
+                ("BXC0031", "payloads/type/StorageFault", Additive, None),
+            ],
+            _ => panic!("missing expected findings for {corpus}/{name}"),
+        }
+    }
+
+    fn assert_classification(
+        corpus: &str,
+        name: &str,
+        base: &SchemaDocument,
+        submitted: &SchemaDocument,
+    ) {
+        let report = boxology_classifier::classify(Some(base), Some(submitted)).unwrap();
+        let observed = report
+            .findings()
+            .iter()
+            .map(|finding| {
+                (
+                    finding.code(),
+                    finding.path(),
+                    finding.class(),
+                    finding.condition(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = expected_findings(corpus, name);
+        assert_eq!(observed, expected, "mutation {corpus}/{name}");
+        assert_ne!(
+            report.verdict(),
+            boxology_classifier::Class::Unchanged,
+            "mutation {corpus}/{name}"
+        );
+    }
+
+    #[test]
+    fn classifier_maps_the_exact_generator_mutation_corpora() {
+        assert_eq!(
+            hello_mutations()
+                .iter()
+                .map(|mutation| mutation.name)
+                .collect::<Vec<_>>(),
+            HELLO_MUTATION_NAMES
+        );
+        let hello = generated_document("hello", CONTRACT);
+        for mutation in hello_mutations() {
+            assert_classification(
+                "hello",
+                mutation.name,
+                &hello,
+                &generated_document("hello", &mutation.apply(CONTRACT)),
+            );
+        }
+
+        assert_eq!(
+            mixed_mutations()
+                .iter()
+                .map(|mutation| mutation.name)
+                .collect::<Vec<_>>(),
+            MIXED_MUTATION_NAMES
+        );
+        let mixed = generated_document("payloads", MIXED);
+        for mutation in mixed_mutations() {
+            assert_classification(
+                "mixed",
+                mutation.name,
+                &mixed,
+                &generated_document("payloads", &mutation.apply(MIXED)),
+            );
+        }
+        assert_classification(
+            "mixed",
+            "error_rename",
+            &mixed,
+            &generated_document("payloads", &mixed_error_rename()),
+        );
+    }
+
+    fn assert_unchanged(base: &SchemaDocument, submitted: &SchemaDocument, label: &str) {
+        let report = boxology_classifier::classify(Some(base), Some(submitted)).unwrap();
+        assert!(report.findings().is_empty(), "negative control {label}");
+        assert_eq!(
+            report.verdict(),
+            boxology_classifier::Class::Unchanged,
+            "negative control {label}"
+        );
+    }
+
+    #[test]
+    fn classifier_ignores_generator_negative_controls() {
+        let base = generated_document("payloads", MIXED);
+        let decorated = "// ignored\nboxology::contract! { #[error] pub enum PayloadError { Unit, #[doc = \"value variant\"] Value(#[doc = \"value payload\"] #[deprecated(note = \"use detail\")] u32), #[deprecated(note = \"retired\")] Named { #[doc = \"message field\"] message: String, #[deprecated(note = \"use text\")] code: i64 }, EmptyNamed {} } /* ignored */ #[capability(exposure = external)] pub async fn inspect(name: String)->Result<String,PayloadError>; }";
+        assert_unchanged(
+            &base,
+            &generated_document("payloads", decorated),
+            "decorated source",
+        );
+
+        let nfc = MIXED.replace("message: String", "\u{e9}: String");
+        let nfd = MIXED.replace("message: String", "e\u{301}: String");
+        assert_unchanged(
+            &generated_document("payloads", &nfc),
+            &generated_document("payloads", &nfd),
+            "NFC normalization",
+        );
+
+        let mut provenance = base.clone();
+        provenance.provenance = boxology_schema::Provenance::new(json!({"generator": "different"}));
+        assert_unchanged(&base, &provenance, "provenance");
+
+        let canonical = base.canonical_bytes();
+        let compact =
+            serde_json::to_vec(&serde_json::from_slice::<Value>(&canonical).unwrap()).unwrap();
+        assert_ne!(canonical, compact);
+        assert_unchanged(
+            &SchemaDocument::parse(&canonical).unwrap(),
+            &SchemaDocument::parse(&compact).unwrap(),
+            "stored encoding",
         );
     }
 

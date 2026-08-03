@@ -102,6 +102,7 @@ dependencies = [
 name = "boxology-generator"
 version = "0.0.0"
 dependencies = [
+ "boxology-classifier",
  "boxology-contract",
  "boxology-contract-syntax",
  "boxology-generator-model",
