@@ -175,6 +175,7 @@ dependencies = [
  "boxology-generator",
  "boxology-generator-model",
  "boxology-manifest",
+ "boxology-workspace",
 ]
 
 [[package]]
