@@ -69,6 +69,10 @@ jobs:
             cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
           fi
           test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
+      # Fail-fast ownership/classification gate before the long xtask ci suite.
+      # Unconditional: covers both the pull_request and main-push paths below.
+      - name: boxology check
+        run: cargo run -q -p boxology-cli --bin boxology -- check
       - name: cargo xtask ci (pull request)
         if: github.event_name == 'pull_request'
         env:
@@ -224,7 +228,10 @@ jobs:
             cargo-deps-macos-${{ runner.os }}-${{ runner.arch }}-
       # Linux runs the full workspace test suite. Native macOS keeps the
       # platform-specific gate and avoids rebuilding the entire workspace a
-      # second time for every PR.
+      # second time for every PR. Building boxology-cli for check is a partial
+      # build (S7 D4 T4/T5), not a full workspace rebuild.
+      - name: boxology check
+        run: cargo run -q -p boxology-cli --bin boxology -- check
       - name: cargo xtask determinism (native macOS gate)
         run: cargo xtask determinism
       - name: Produce determinism artifacts
