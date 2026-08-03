@@ -3,8 +3,8 @@
 //! The classifier reads only the supplied [`SchemaDocument`] values. It consults no filesystem,
 //! environment, network, clock, locale, process, or execution state, and has no policy controls
 //! that could hide or relabel a finding. Named type-graph rows emit structured findings; every
-//! unmatched difference falls to the fail-closed default. Five structural capability rows are
-//! named; reserved capability metadata and reorder differences remain fail-closed.
+//! unmatched difference falls to the fail-closed default. Structural capability, metadata,
+//! named-field, and payload rows are named; reorder differences remain fail-closed.
 //! Canonical report renderings are available as [`render_text`] and [`render_json`].
 
 #![deny(missing_docs)]
@@ -193,6 +193,33 @@ const CODE_INPUT_LEAF_CHANGED: &str = "BXC0042";
 /// Capability output leaf type changed (D5 incompatible row).
 const CODE_OUTPUT_LEAF_CHANGED: &str = "BXC0043";
 
+/// Capability declared error changed (D5 incompatible row).
+const CODE_ERROR_CHANGED: &str = "BXC0044";
+
+/// Capability exposure raised (D5 additive row).
+const CODE_EXPOSURE_RAISED: &str = "BXC0045";
+
+/// Capability exposure lowered (D5 incompatible row).
+const CODE_EXPOSURE_LOWERED: &str = "BXC0046";
+
+/// Capability idempotency strengthened (D5 additive row).
+const CODE_IDEMPOTENCY_STRENGTHENED: &str = "BXC0047";
+
+/// Capability idempotency weakened (D5 incompatible row).
+const CODE_IDEMPOTENCY_WEAKENED: &str = "BXC0048";
+
+/// Named payload field added (D5 role-sensitive row).
+const CODE_FIELD_ADDED: &str = "BXC0049";
+
+/// Named payload field removed (D5 incompatible row).
+const CODE_FIELD_REMOVED: &str = "BXC0050";
+
+/// Named payload field type changed (D5 incompatible row).
+const CODE_FIELD_TYPE_CHANGED: &str = "BXC0051";
+
+/// Error payload kind or value type changed (D5 incompatible row).
+const CODE_PAYLOAD_CHANGED: &str = "BXC0052";
+
 /// Migration condition for referenced error-enum variant addition.
 const CONDITION_UNKNOWN_VARIANT: &str = "unknown-variant tolerance";
 
@@ -212,11 +239,10 @@ fn fail_closed_finding(base: &SchemaDocument) -> Finding {
 /// not a named additive/conditional row. Documentation, deprecation, and removals classify by their
 /// D5 table row regardless of reachability (D5's preamble tension with those rows is tracked under
 /// #319). Capability additions, removals, input-name changes, input-leaf changes, and output-leaf
-/// changes use their named rows. Capability documentation, deprecation, declared-error,
-/// exposure, idempotency, and reorder changes, like the raw field and payload-shape changes,
-/// remain reserved and fail closed at `<box>`. A revision-only difference (no type or capability
-/// delta) yields an empty finding list; `classify` turns that empty result into the D6 check-B
-/// integrity error.
+/// changes use their named rows. Capability metadata and named payload fields use their D5 rows;
+/// capability, type, variant, and field reorders remain fail closed at `<box>`. A revision-only
+/// difference (no type or capability delta) yields an empty finding list; `classify` turns that
+/// empty result into the D6 check-B integrity error.
 fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) -> Vec<Finding> {
     let roles = reachability(base, submitted);
     let changes = type_changes(base, submitted, &roles);
@@ -302,18 +328,105 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                     condition: None,
                 });
             }
-            // Unreferenced type/variant additions, reorderings, and reserved payload-shape
-            // changes have no named row in this slice.
+            TypeChange::PayloadDocsChanged {
+                type_name,
+                variant_name,
+            }
+            | TypeChange::FieldDocsChanged {
+                type_name,
+                variant_name,
+                field_name: _,
+            } => {
+                let path = match change {
+                    TypeChange::FieldDocsChanged { field_name, .. } => {
+                        field_path(base, type_name, variant_name, field_name)
+                    }
+                    _ => variant_path(base, type_name, variant_name),
+                };
+                findings.push(Finding {
+                    code: CODE_DOCS_CHANGED,
+                    path,
+                    class: Class::Documentation,
+                    condition: None,
+                });
+            }
+            TypeChange::PayloadDeprecationChanged {
+                type_name,
+                variant_name,
+            }
+            | TypeChange::FieldDeprecationChanged {
+                type_name,
+                variant_name,
+                field_name: _,
+            } => {
+                let path = match change {
+                    TypeChange::FieldDeprecationChanged { field_name, .. } => {
+                        field_path(base, type_name, variant_name, field_name)
+                    }
+                    _ => variant_path(base, type_name, variant_name),
+                };
+                findings.push(Finding {
+                    code: CODE_DEPRECATION_CHANGED,
+                    path,
+                    class: Class::Deprecation,
+                    condition: None,
+                });
+            }
+            TypeChange::FieldAdded {
+                type_name,
+                variant_name,
+                field_name,
+                roles,
+            } if roles.input || roles.output => findings.push(Finding {
+                code: CODE_FIELD_ADDED,
+                path: field_path(base, type_name, variant_name, field_name),
+                class: if roles.input {
+                    Class::Incompatible
+                } else {
+                    Class::Additive
+                },
+                condition: None,
+            }),
+            TypeChange::FieldRemoved {
+                type_name,
+                variant_name,
+                field_name,
+                ..
+            } => findings.push(Finding {
+                code: CODE_FIELD_REMOVED,
+                path: field_path(base, type_name, variant_name, field_name),
+                class: Class::Incompatible,
+                condition: None,
+            }),
+            TypeChange::FieldTypeChanged {
+                type_name,
+                variant_name,
+                field_name,
+            } => findings.push(Finding {
+                code: CODE_FIELD_TYPE_CHANGED,
+                path: field_path(base, type_name, variant_name, field_name),
+                class: Class::Incompatible,
+                condition: None,
+            }),
+            TypeChange::VariantPayloadChanged { type_name, .. }
+            | TypeChange::PayloadTypeChanged { type_name, .. } => {
+                let paths = error_paths(base, submitted, type_name);
+                if paths.is_empty() {
+                    unclassified = true;
+                }
+                findings.extend(paths.into_iter().map(|path| Finding {
+                    code: CODE_PAYLOAD_CHANGED,
+                    path,
+                    class: Class::Incompatible,
+                    condition: None,
+                }));
+            }
+            // Unreferenced type/variant/field additions and reorderings have no named row.
             TypeChange::TypeAdded { .. }
             | TypeChange::VariantAdded { .. }
             | TypeChange::TypesReordered
             | TypeChange::VariantsReordered { .. }
-            | TypeChange::VariantPayloadChanged { .. }
             | TypeChange::FieldAdded { .. }
-            | TypeChange::FieldRemoved { .. }
-            | TypeChange::FieldDocsChanged { .. }
-            | TypeChange::FieldDeprecationChanged { .. }
-            | TypeChange::FieldTypeChanged { .. }
             | TypeChange::FieldsReordered { .. } => {
                 unclassified = true;
             }
@@ -353,24 +466,99 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 class: Class::Incompatible,
                 condition: None,
             }),
-            CapabilityChange::CapabilitiesReordered
-            | CapabilityChange::CapabilityDocsChanged { .. }
-            | CapabilityChange::CapabilityDeprecationChanged { .. }
-            | CapabilityChange::CapabilityErrorChanged { .. }
-            | CapabilityChange::CapabilityExposureChanged { .. }
-            | CapabilityChange::CapabilityIdempotencyChanged { .. } => {
+            CapabilityChange::CapabilityDocsChanged { name } => findings.push(Finding {
+                code: CODE_DOCS_CHANGED,
+                path: capability_path(base, name),
+                class: Class::Documentation,
+                condition: None,
+            }),
+            CapabilityChange::CapabilityDeprecationChanged { name } => findings.push(Finding {
+                code: CODE_DEPRECATION_CHANGED,
+                path: capability_path(base, name),
+                class: Class::Deprecation,
+                condition: None,
+            }),
+            CapabilityChange::CapabilityErrorChanged { name } => findings.push(Finding {
+                code: CODE_ERROR_CHANGED,
+                path: capability_suffix_path(base, name, "error"),
+                class: Class::Incompatible,
+                condition: None,
+            }),
+            CapabilityChange::CapabilityExposureChanged {
+                name,
+                base: base_level,
+                submitted: submitted_level,
+            } => match exposure_classification(*base_level, *submitted_level) {
+                Some((code, class)) => findings.push(Finding {
+                    code,
+                    path: capability_suffix_path(base, name, "exposure"),
+                    class,
+                    condition: None,
+                }),
+                None => unclassified = true,
+            },
+            CapabilityChange::CapabilityIdempotencyChanged {
+                name,
+                base: base_property,
+                submitted: submitted_property,
+            } => match idempotency_classification(*base_property, *submitted_property) {
+                Some((code, class)) => findings.push(Finding {
+                    code,
+                    path: capability_suffix_path(base, name, "idempotency"),
+                    class,
+                    condition: None,
+                }),
+                None => unclassified = true,
+            },
+            CapabilityChange::CapabilitiesReordered => {
                 unclassified = true;
             }
         }
     }
 
-    // Fail-closed default: unmatched type-graph kinds or reserved capability kinds emit one
-    // BXC0028 at <box>. Every other capability difference has a named change above. An empty
+    // Fail-closed default: unmatched type-graph kinds or capability reorderings emit one BXC0028
+    // at <box>. Every other capability difference has a named change above. An empty
     // finding list (revision-only) is left empty for classify's check B.
     if unclassified {
         findings.push(fail_closed_finding(base));
     }
     findings
+}
+
+fn exposure_classification(
+    base: ExposureLevel,
+    submitted: ExposureLevel,
+) -> Option<(&'static str, Class)> {
+    match (base, submitted) {
+        (ExposureLevel::CodeOnly, ExposureLevel::Internal | ExposureLevel::External)
+        | (ExposureLevel::Internal, ExposureLevel::External) => {
+            Some((CODE_EXPOSURE_RAISED, Class::Additive))
+        }
+        (ExposureLevel::Internal | ExposureLevel::External, ExposureLevel::CodeOnly)
+        | (ExposureLevel::External, ExposureLevel::Internal) => {
+            Some((CODE_EXPOSURE_LOWERED, Class::Incompatible))
+        }
+        (ExposureLevel::CodeOnly, ExposureLevel::CodeOnly)
+        | (ExposureLevel::Internal, ExposureLevel::Internal)
+        | (ExposureLevel::External, ExposureLevel::External) => None,
+    }
+}
+
+fn idempotency_classification(
+    base: Idempotency,
+    submitted: Idempotency,
+) -> Option<(&'static str, Class)> {
+    match (base, submitted) {
+        (Idempotency::None, Idempotency::Inherent) => {
+            Some((CODE_IDEMPOTENCY_STRENGTHENED, Class::Additive))
+        }
+        (Idempotency::Inherent, Idempotency::None) => {
+            Some((CODE_IDEMPOTENCY_WEAKENED, Class::Incompatible))
+        }
+        (Idempotency::None, Idempotency::None) | (Idempotency::Inherent, Idempotency::Inherent) => {
+            None
+        }
+    }
 }
 
 fn capability_path(base: &SchemaDocument, name: &str) -> String {
@@ -383,6 +571,10 @@ fn capability_input_path(base: &SchemaDocument, name: &str) -> String {
 
 fn capability_output_path(base: &SchemaDocument, name: &str) -> String {
     [capability_path(base, name).as_str(), "/output"].concat()
+}
+
+fn capability_suffix_path(base: &SchemaDocument, name: &str, suffix: &str) -> String {
+    [capability_path(base, name).as_str(), "/", suffix].concat()
 }
 
 fn type_path(base: &SchemaDocument, name: &str) -> String {
@@ -398,6 +590,38 @@ fn variant_path(base: &SchemaDocument, type_name: &str, variant_name: &str) -> S
         variant_name,
     ]
     .concat()
+}
+
+fn field_path(
+    base: &SchemaDocument,
+    type_name: &str,
+    variant_name: &str,
+    field_name: &str,
+) -> String {
+    [
+        variant_path(base, type_name, variant_name).as_str(),
+        "/field/",
+        field_name,
+    ]
+    .concat()
+}
+
+fn error_paths(base: &SchemaDocument, submitted: &SchemaDocument, type_name: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for document in [base, submitted] {
+        for capability in &document.capabilities {
+            if capability.error == type_name {
+                paths.push(capability_suffix_path(
+                    base,
+                    capability.name.as_str(),
+                    "error",
+                ));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -448,6 +672,18 @@ enum TypeChange {
         type_name: String,
         variant_name: String,
         roles: Roles,
+    },
+    PayloadDocsChanged {
+        type_name: String,
+        variant_name: String,
+    },
+    PayloadDeprecationChanged {
+        type_name: String,
+        variant_name: String,
+    },
+    PayloadTypeChanged {
+        type_name: String,
+        variant_name: String,
     },
     FieldAdded {
         type_name: String,
@@ -845,6 +1081,37 @@ fn append_matched_variant_changes(
                 submitted_fields,
                 roles,
             );
+        }
+        (
+            SchemaPayload::Value {
+                docs: base_docs,
+                deprecation: base_deprecation,
+                ty: base_type,
+            },
+            SchemaPayload::Value {
+                docs: submitted_docs,
+                deprecation: submitted_deprecation,
+                ty: submitted_type,
+            },
+        ) => {
+            if base_docs != submitted_docs {
+                changes.push(TypeChange::PayloadDocsChanged {
+                    type_name: type_name.to_owned(),
+                    variant_name: base.name.clone(),
+                });
+            }
+            if base_deprecation != submitted_deprecation {
+                changes.push(TypeChange::PayloadDeprecationChanged {
+                    type_name: type_name.to_owned(),
+                    variant_name: base.name.clone(),
+                });
+            }
+            if base_type != submitted_type {
+                changes.push(TypeChange::PayloadTypeChanged {
+                    type_name: type_name.to_owned(),
+                    variant_name: base.name.clone(),
+                });
+            }
         }
         (base_payload, submitted_payload) if base_payload != submitted_payload => {
             changes.push(TypeChange::VariantPayloadChanged {

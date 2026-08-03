@@ -1,7 +1,7 @@
 use boxology_classifier::classify;
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
     SchemaPayload, SchemaType, SchemaVariant, Shape,
 };
 use serde_json::json;
@@ -252,6 +252,15 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0041", "\"BXC0041\""),
         ("BXC0042", "\"BXC0042\""),
         ("BXC0043", "\"BXC0043\""),
+        ("BXC0044", "\"BXC0044\""),
+        ("BXC0045", "\"BXC0045\""),
+        ("BXC0046", "\"BXC0046\""),
+        ("BXC0047", "\"BXC0047\""),
+        ("BXC0048", "\"BXC0048\""),
+        ("BXC0049", "\"BXC0049\""),
+        ("BXC0050", "\"BXC0050\""),
+        ("BXC0051", "\"BXC0051\""),
+        ("BXC0052", "\"BXC0052\""),
         ("BXC0036 condition", "\"unknown-variant tolerance\""),
         (
             "BXC0037",
@@ -396,11 +405,78 @@ fn every_classifier_code_is_reachable() {
     let output_leaf_changed =
         classify(Some(&document("hello")), Some(&output_leaf_changed)).unwrap();
 
-    let mut capability_metadata_changed = document("hello");
-    capability_metadata_changed.capabilities[0].deprecation = Some("retired".to_owned());
-    capability_metadata_changed.revision = OTHER_REVISION.to_owned();
-    let capability_metadata_changed =
-        classify(Some(&document("hello")), Some(&capability_metadata_changed)).unwrap();
+    let mut capability_metadata = document("hello");
+    let capability = &mut capability_metadata.capabilities[0];
+    capability.docs.push("docs".to_owned());
+    capability.deprecation = Some("retired".to_owned());
+    capability.error = "OtherError".to_owned();
+    capability.max_exposure = ExposureLevel::Internal;
+    capability.idempotency = Idempotency::Inherent;
+    capability_metadata.revision = OTHER_REVISION.to_owned();
+    let capability_metadata =
+        classify(Some(&document("hello")), Some(&capability_metadata)).unwrap();
+
+    let mut high = document("hello");
+    high.capabilities[0].idempotency = Idempotency::Inherent;
+    let mut low = high.clone();
+    low.capabilities[0].max_exposure = ExposureLevel::CodeOnly;
+    high.revision = OTHER_REVISION.to_owned();
+    let raised = classify(Some(&low), Some(&high)).unwrap();
+    low.revision = OTHER_REVISION.to_owned();
+    high.revision = REVISION.to_owned();
+    high.capabilities[0].idempotency = Idempotency::None;
+    let weakened = classify(Some(&low), Some(&high)).unwrap();
+
+    let mut field_base = document("hello");
+    field_base.types[0].variants[0].payload = SchemaPayload::Named(vec![
+        SchemaField {
+            docs: Vec::new(),
+            deprecation: None,
+            name: "old".to_owned(),
+            ty: BoundaryLeaf::String,
+        },
+        SchemaField {
+            docs: Vec::new(),
+            deprecation: None,
+            name: "changed".to_owned(),
+            ty: BoundaryLeaf::String,
+        },
+    ]);
+    let mut field_submitted = field_base.clone();
+    field_submitted.types[0].variants[0].payload = SchemaPayload::Named(vec![
+        SchemaField {
+            docs: Vec::new(),
+            deprecation: None,
+            name: "changed".to_owned(),
+            ty: BoundaryLeaf::Bool,
+        },
+        SchemaField {
+            docs: Vec::new(),
+            deprecation: None,
+            name: "new".to_owned(),
+            ty: BoundaryLeaf::String,
+        },
+    ]);
+    field_submitted.revision = OTHER_REVISION.to_owned();
+    let fields = classify(Some(&field_base), Some(&field_submitted)).unwrap();
+
+    let mut payload = document("hello");
+    payload.types[0].variants[0].payload = SchemaPayload::Value {
+        docs: Vec::new(),
+        deprecation: None,
+        ty: BoundaryLeaf::String,
+    };
+    payload.revision = OTHER_REVISION.to_owned();
+    let payload = classify(Some(&document("hello")), Some(&payload)).unwrap();
+
+    let mut reordered_base = document("hello");
+    let mut extra = reordered_base.capabilities[0].clone();
+    extra.name = CapabilityName::new("wave").unwrap();
+    reordered_base.capabilities.push(extra);
+    let mut reordered = reordered_base.clone();
+    reordered.capabilities.swap(0, 1);
+    reordered.revision = OTHER_REVISION.to_owned();
+    let fail_closed = classify(Some(&reordered_base), Some(&reordered)).unwrap();
 
     let mut type_removed_base = document("hello");
     type_removed_base.capabilities.push(SchemaCapability {
@@ -486,54 +562,38 @@ fn every_classifier_code_is_reachable() {
         .unwrap_err()
         .into_vec();
 
-    let type_added_code = additive
-        .findings()
-        .iter()
-        .find(|finding| finding.code() == "BXC0031")
-        .unwrap()
-        .code();
-    let capability_added_code = additive
-        .findings()
-        .iter()
-        .find(|finding| finding.code() == "BXC0039")
-        .unwrap()
-        .code();
-    let capability_removed_code = capability_removed.findings()[0].code();
-    let input_name_changed_code = input_name_changed.findings()[0].code();
-    let input_leaf_changed_code = input_leaf_changed.findings()[0].code();
-    let output_leaf_changed_code = output_leaf_changed.findings()[0].code();
-    let capability_metadata_changed_code = capability_metadata_changed.findings()[0].code();
-    let type_removed_code = type_removed
-        .findings()
-        .iter()
-        .find(|finding| finding.code() == "BXC0032")
-        .unwrap()
-        .code();
-    assert_eq!(
-        [
-            missing[0].code(),
-            mismatch[0].code(),
-            introduced.findings()[0].code(),
-            removed.findings()[0].code(),
-            capability_metadata_changed_code,
-            type_added_code,
-            type_removed_code,
-            docs.findings()[0].code(),
-            deprecation.findings()[0].code(),
-            variant_removed.findings()[0].code(),
-            conditional.findings()[0].code(),
-            integrity_equal[0].code(),
-            integrity_silence[0].code(),
-            capability_added_code,
-            capability_removed_code,
-            input_name_changed_code,
-            input_leaf_changed_code,
-            output_leaf_changed_code,
-        ],
-        [
-            "BXC0024", "BXC0025", "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033",
-            "BXC0034", "BXC0035", "BXC0036", "BXC0037", "BXC0038", "BXC0039", "BXC0040", "BXC0041",
-            "BXC0042", "BXC0043",
-        ]
-    );
+    let mut reached = vec![
+        missing[0].code(),
+        mismatch[0].code(),
+        integrity_equal[0].code(),
+        integrity_silence[0].code(),
+    ];
+    for report in [
+        &introduced,
+        &removed,
+        &additive,
+        &capability_removed,
+        &input_name_changed,
+        &input_leaf_changed,
+        &output_leaf_changed,
+        &capability_metadata,
+        &raised,
+        &weakened,
+        &fields,
+        &payload,
+        &fail_closed,
+        &type_removed,
+        &docs,
+        &deprecation,
+        &variant_removed,
+        &conditional,
+    ] {
+        reached.extend(report.findings().iter().map(|finding| finding.code()));
+    }
+    reached.sort_unstable();
+    reached.dedup();
+    let mut expected = boxology_schema::CLASSIFIER_RESERVED_CODES.to_vec();
+    expected.extend(["BXC0024", "BXC0025", "BXC0037", "BXC0038"]);
+    expected.sort_unstable();
+    assert_eq!(reached, expected);
 }

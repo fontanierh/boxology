@@ -64,7 +64,7 @@ fn named_document() -> SchemaDocument {
     document
 }
 
-fn named_fields(document: &mut SchemaDocument) -> &mut [SchemaField] {
+fn named_fields(document: &mut SchemaDocument) -> &mut Vec<SchemaField> {
     let SchemaPayload::Named(fields) = &mut document.types[0].variants[0].payload else {
         unreachable!("named payload")
     };
@@ -358,48 +358,37 @@ fn type_changes_detects_coarse_payload_change() {
 }
 
 #[test]
-fn non_named_payload_kind_and_value_changes_remain_coarse() {
-    let cases = [
-        (
-            SchemaPayload::Named(Vec::new()),
-            SchemaPayload::Value {
-                docs: Vec::new(),
-                deprecation: None,
-                ty: BoundaryLeaf::String,
-            },
-        ),
-        (
-            SchemaPayload::Value {
-                docs: Vec::new(),
-                deprecation: None,
-                ty: BoundaryLeaf::String,
-            },
-            SchemaPayload::Value {
-                docs: vec!["Changed.".to_owned()],
-                deprecation: Some("retired".to_owned()),
-                ty: BoundaryLeaf::Bool,
-            },
-        ),
-    ];
-
-    for (base_payload, submitted_payload) in cases {
-        let mut base = document("hello");
-        base.types[0].variants[0].payload = base_payload;
-        let mut submitted = base.clone();
-        submitted.types[0].variants[0].payload = submitted_payload;
-        let roles = reachability(&base, &submitted);
-        assert_eq!(
-            type_changes(&base, &submitted, &roles),
-            Vec::from([TypeChange::VariantPayloadChanged {
+fn value_payload_metadata_and_type_changes_are_independent() {
+    let mut base = document("hello");
+    base.types[0].variants[0].payload = SchemaPayload::Value {
+        docs: Vec::new(),
+        deprecation: None,
+        ty: BoundaryLeaf::String,
+    };
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].payload = SchemaPayload::Value {
+        docs: vec!["Changed.".to_owned()],
+        deprecation: Some("retired".to_owned()),
+        ty: BoundaryLeaf::Bool,
+    };
+    let roles = reachability(&base, &submitted);
+    assert_eq!(
+        type_changes(&base, &submitted, &roles),
+        Vec::from([
+            TypeChange::PayloadDocsChanged {
                 type_name: "GreetError".to_owned(),
                 variant_name: "EmptyName".to_owned(),
-                roles: Roles {
-                    input: false,
-                    output: true,
-                },
-            }])
-        );
-    }
+            },
+            TypeChange::PayloadDeprecationChanged {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+            },
+            TypeChange::PayloadTypeChanged {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+            },
+        ])
+    );
 }
 
 #[test]
@@ -691,7 +680,7 @@ fn unclassified_beside_named_finding_fails_closed() {
 }
 
 #[test]
-fn variant_payload_change_with_differing_revision_fails_closed() {
+fn variant_payload_kind_change_is_incompatible_at_capability_error() {
     let base = document("hello");
     let mut submitted = base.clone();
     submitted.types[0].variants[0].payload = SchemaPayload::Value {
@@ -700,7 +689,12 @@ fn variant_payload_change_with_differing_revision_fails_closed() {
         ty: BoundaryLeaf::String,
     };
     submitted.revision = OTHER_REVISION.to_owned();
-    assert_unclassified_pair(base, submitted);
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_exact_report(
+        &report,
+        &[("BXC0052", "hello.greet/error", Class::Incompatible, None)],
+        Class::Incompatible,
+    );
 }
 
 #[test]
@@ -942,24 +936,55 @@ fn input_name_and_leaf_changes_share_one_path_and_sort_by_code() {
 }
 
 #[test]
-fn capability_metadata_beside_named_finding_fails_closed() {
+fn capability_metadata_rows_are_exact_and_maximum_severity_wins() {
     let base = document("hello");
     let mut submitted = base.clone();
+    submitted.capabilities[0].docs.push("More docs.".to_owned());
+    submitted.capabilities[0].deprecation = Some("retired".to_owned());
     submitted.capabilities[0].error = "WaveError".to_owned();
-    submitted.types[0].docs.push("Extra type docs.".to_owned());
+    submitted.capabilities[0].max_exposure = ExposureLevel::Internal;
+    submitted.capabilities[0].idempotency = Idempotency::Inherent;
     submitted.revision = OTHER_REVISION.to_owned();
-    assert_ne!(base.capabilities, submitted.capabilities);
-    assert_ne!(base.types, submitted.types);
-    assert_ne!(base.revision, submitted.revision);
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
         &[
-            ("BXC0028", "hello", Class::Incompatible, None),
+            ("BXC0033", "hello.greet", Class::Documentation, None),
+            ("BXC0034", "hello.greet", Class::Deprecation, None),
+            ("BXC0044", "hello.greet/error", Class::Incompatible, None),
+            ("BXC0046", "hello.greet/exposure", Class::Incompatible, None),
+            ("BXC0047", "hello.greet/idempotency", Class::Additive, None),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn exposure_and_idempotency_directions_have_distinct_codes() {
+    let mut low = document("hello");
+    low.capabilities[0].max_exposure = ExposureLevel::CodeOnly;
+    let mut high = low.clone();
+    high.capabilities[0].max_exposure = ExposureLevel::External;
+    high.capabilities[0].idempotency = Idempotency::Inherent;
+    high.revision = OTHER_REVISION.to_owned();
+    assert_exact_report(
+        &classify(Some(&low), Some(&high)).unwrap(),
+        &[
+            ("BXC0045", "hello.greet/exposure", Class::Additive, None),
+            ("BXC0047", "hello.greet/idempotency", Class::Additive, None),
+        ],
+        Class::Additive,
+    );
+    low.revision = OTHER_REVISION.to_owned();
+    high.revision = REVISION.to_owned();
+    assert_exact_report(
+        &classify(Some(&high), Some(&low)).unwrap(),
+        &[
+            ("BXC0046", "hello.greet/exposure", Class::Incompatible, None),
             (
-                "BXC0033",
-                "hello/type/GreetError",
-                Class::Documentation,
+                "BXC0048",
+                "hello.greet/idempotency",
+                Class::Incompatible,
                 None,
             ),
         ],
@@ -996,7 +1021,7 @@ fn mixed_variant_addition_and_type_docs_keeps_conditional_verdict() {
 }
 
 #[test]
-fn mixed_variant_addition_and_capability_docs_keeps_fail_closed() {
+fn mixed_variant_addition_and_capability_docs_keeps_conditional_verdict() {
     let base = document("hello");
     let mut submitted = base.clone();
     submitted.types[0].variants.push(variant("Other"));
@@ -1006,7 +1031,7 @@ fn mixed_variant_addition_and_capability_docs_keeps_fail_closed() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0028", "hello", Class::Incompatible, None),
+            ("BXC0033", "hello.greet", Class::Documentation, None),
             (
                 "BXC0036",
                 "hello/type/GreetError/variant/Other",
@@ -1014,7 +1039,7 @@ fn mixed_variant_addition_and_capability_docs_keeps_fail_closed() {
                 Some("unknown-variant tolerance"),
             ),
         ],
-        Class::Incompatible,
+        Class::CompatibleWithConditions,
     );
 }
 
@@ -1089,76 +1114,103 @@ fn variant_rename_is_remove_plus_add() {
 }
 
 #[test]
-fn capability_and_reserved_payload_mutations_fail_closed() {
-    // Capability-level and reserved payload-shape mutations still fail closed. Named type-graph
-    // rows (docs, deprecation, referenced add/remove, variant add/remove) are covered by dedicated
-    // classify tests above; type/variant renames by the two tests immediately above; revision-only
-    // by the check-B integrity test above.
-    let mutations: &[fn(&mut SchemaDocument)] = &[
-        |document| document.capabilities[0].docs.push("New docs.".to_owned()),
-        |document| document.capabilities[0].deprecation = Some("use wave2".to_owned()),
-        |document| document.capabilities[0].error = "WaveError".to_owned(),
-        |document| document.capabilities[0].max_exposure = ExposureLevel::Internal,
-        |document| document.capabilities[0].idempotency = Idempotency::Inherent,
-        |document| {
-            document.types[0].variants[0].payload = SchemaPayload::Value {
-                docs: Vec::new(),
-                deprecation: None,
-                ty: BoundaryLeaf::String,
-            }
-        },
-        |document| document.types[0].variants[0].payload = SchemaPayload::Named(Vec::new()),
-    ];
-    for mutate in mutations {
-        let mut submitted = document("hello");
-        mutate(&mut submitted);
-        submitted.revision = OTHER_REVISION.to_owned();
-        assert_unclassified_pair(document("hello"), submitted);
-    }
-    // Shape has only `Unary` in the current format-1 vocabulary, so it has no effective mutation.
-}
-
-#[test]
-fn named_payload_fields_fail_closed() {
-    let mutations: &[fn(&mut SchemaDocument)] = &[
-        |document| named_fields(document)[0].docs.push("new docs".to_owned()),
-        |document| named_fields(document)[0].deprecation = Some("retired".to_owned()),
-        |document| named_fields(document)[0].name = "renamed".to_owned(),
-        |document| named_fields(document)[0].ty = BoundaryLeaf::Bool,
-        |document| named_fields(document).swap(0, 1),
-    ];
-    for mutate in mutations {
-        let base = named_document();
-        let mut submitted = base.clone();
-        mutate(&mut submitted);
-        submitted.revision = OTHER_REVISION.to_owned();
-        assert_unclassified_pair(base, submitted);
-    }
-}
-#[test]
-fn named_payload_change_beside_named_finding_fails_closed() {
-    // Isolates VariantPayloadChanged: equal-revision payload mutations never enter classify_paired_documents.
+fn named_payload_field_rows_are_exact_and_sorted() {
     let base = named_document();
     let mut submitted = base.clone();
-    named_fields(&mut submitted)[0]
-        .docs
-        .push("new docs".to_owned());
-    submitted.types[0].docs.push("Extra type docs.".to_owned());
+    let fields = named_fields(&mut submitted);
+    fields[0].docs.push("new docs".to_owned());
+    fields[0].deprecation = Some("retired".to_owned());
+    fields[0].ty = BoundaryLeaf::Bool;
+    fields.remove(1);
+    fields.push(SchemaField {
+        docs: Vec::new(),
+        deprecation: None,
+        name: "third".to_owned(),
+        ty: BoundaryLeaf::String,
+    });
     submitted.revision = OTHER_REVISION.to_owned();
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
         &[
-            ("BXC0028", "hello", Class::Incompatible, None),
             (
                 "BXC0033",
-                "hello/type/GreetError",
+                "hello/type/GreetError/variant/EmptyName/field/first",
                 Class::Documentation,
+                None,
+            ),
+            (
+                "BXC0034",
+                "hello/type/GreetError/variant/EmptyName/field/first",
+                Class::Deprecation,
+                None,
+            ),
+            (
+                "BXC0051",
+                "hello/type/GreetError/variant/EmptyName/field/first",
+                Class::Incompatible,
+                None,
+            ),
+            (
+                "BXC0050",
+                "hello/type/GreetError/variant/EmptyName/field/second",
+                Class::Incompatible,
+                None,
+            ),
+            (
+                "BXC0049",
+                "hello/type/GreetError/variant/EmptyName/field/third",
+                Class::Additive,
                 None,
             ),
         ],
         Class::Incompatible,
     );
+}
+
+#[test]
+fn payload_value_metadata_and_type_classify_independently() {
+    let mut base = document("hello");
+    base.types[0].variants[0].payload = SchemaPayload::Value {
+        docs: Vec::new(),
+        deprecation: None,
+        ty: BoundaryLeaf::String,
+    };
+    let mut submitted = base.clone();
+    submitted.types[0].variants[0].payload = SchemaPayload::Value {
+        docs: vec!["new docs".to_owned()],
+        deprecation: Some("retired".to_owned()),
+        ty: BoundaryLeaf::Bool,
+    };
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_exact_report(
+        &classify(Some(&base), Some(&submitted)).unwrap(),
+        &[
+            ("BXC0052", "hello.greet/error", Class::Incompatible, None),
+            (
+                "BXC0033",
+                "hello/type/GreetError/variant/EmptyName",
+                Class::Documentation,
+                None,
+            ),
+            (
+                "BXC0034",
+                "hello/type/GreetError/variant/EmptyName",
+                Class::Deprecation,
+                None,
+            ),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[test]
+fn named_payload_field_reorder_stays_fail_closed() {
+    let base = named_document();
+    let mut submitted = base.clone();
+    named_fields(&mut submitted).swap(0, 1);
+    submitted.revision = OTHER_REVISION.to_owned();
+    assert_unclassified_pair(base, submitted);
 }
 
 #[test]
