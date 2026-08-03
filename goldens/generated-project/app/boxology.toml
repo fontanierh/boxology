@@ -1,0 +1,26 @@
+schema = 1
+id = "ping-app"
+kind = "composition"
+owned = ["boxology.toml", "composition/**"]
+
+[quality]
+commands = ["cargo test -p ping-app"]
+
+[[crates]]
+cargo_package = "ping-app"
+path = "composition"
+role = "composition"
+
+[composition]
+boxes = ["ping"]
+
+[[composition.bindings]]
+box = "ping"
+capability = "ping.ping"
+transport = "in-process"
+
+[[composition.bindings]]
+box = "ping"
+capability = "ping.ping"
+transport = "http"
+exposure = "external"
