@@ -9,9 +9,9 @@
 # .github/workflows/ and crates/xtask.
 #
 # Wall-clock monitored target (D4, not an acceptance invariant): cache-hit
-# aggregate run duration excluding queue time, median of the last ten main
-# runs; alarm threshold 8 minutes. Native macOS is the canonical full
-# `cargo xtask ci` lane; Linux is the slim determinism/check producer.
+# required-check critical path excluding queue time, median of the last ten
+# main runs; alarm threshold 8 minutes. Native macOS is the canonical
+# behavioral lane; Linux is the slim determinism/check producer.
 # Measure with:
 #   gh run list --workflow pr.yml --branch main --status success --limit 10
 #   gh api repos/<owner>/<repo>/actions/runs/<id>/jobs   # started_at -> completed_at
@@ -233,9 +233,8 @@ jobs:
             cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
           fi
           test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
-      # Canonical full validation lane: fail-fast boxology check, then the
-      # complete host-local ci suite (including local determinism). Persistent
-      # per-slot targets and four Cargo jobs make this the fast behavioral gate.
+      # Canonical behavioral lane: PRs run the fast merge suite; main pushes
+      # additionally run deferred deep compiler, docs, and editor checks.
       - name: boxology check
         run: cargo run -q -p boxology-cli --bin boxology -- check
       - name: cargo xtask ci (pull request)

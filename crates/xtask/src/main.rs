@@ -260,6 +260,7 @@ fn ci_failure_names(checks: &[(&'static str, bool)]) -> Vec<&'static str> {
 }
 
 fn run_ci(base: Option<&str>) -> u8 {
+    let deep = base.is_none();
     let toolchain = timed("toolchain", check_toolchain);
     if let Err(error) = toolchain {
         eprintln!("toolchain: FAIL: {error}");
@@ -274,7 +275,6 @@ fn run_ci(base: Option<&str>) -> u8 {
             timed("audit", || registered_ci_skill_audits(&root())),
         ),
         ("fmt", timed("fmt", run_fmt)),
-        ("editor", timed("editor", run_editor)),
         (
             "clippy",
             timed("clippy", || {
@@ -297,15 +297,34 @@ fn run_ci(base: Option<&str>) -> u8 {
         ),
         (
             "fixture-projects",
-            timed("fixture-projects", || fixture_projects::run(&root())),
+            timed("fixture-projects", || fixture_projects::run(&root(), deep)),
         ),
     ];
+    if deep {
+        checks.extend([
+            ("editor", timed("editor", run_editor)),
+            (
+                "generator-deep-tests",
+                timed("generator-deep-tests", || {
+                    run_cargo(&[
+                        "test",
+                        "-p",
+                        "boxology-generator",
+                        "--all-features",
+                        "--",
+                        "--ignored",
+                        "--test-threads=1",
+                    ])
+                }),
+            ),
+            ("doc", timed("doc", run_doc)),
+        ]);
+    }
     checks.extend(fold_external_test_checks(base, &root(), &mut |args| {
         external_test::cargo(&root(), args)
     }));
     checks.extend([
         ("key-order", timed("key-order", run_key_order)),
-        ("doc", timed("doc", run_doc)),
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
         ("links", timed("links", || links::check(&root()))),
         (
