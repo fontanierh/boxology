@@ -52,10 +52,10 @@ Exact stable pin in `rust-toolchain.toml` (latest stable at T1 time, recorded th
 ### D4 — PR validation workflow
 
 `pr.yml` runs on pull requests and pushes to `main`. Every enabled workflow job
-runs on the MacBook: each active label exposes twenty disposable slots. Linux jobs use the disposable
+runs on the MacBook: each active label exposes four disposable runners. Linux jobs use the disposable
 `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]` runner supplied by S0-T8,
 while native macOS jobs use `[self-hosted, macOS, ARM64, boxology-macos-pr]`.
-Each lane has one base supervisor plus nineteen slot supervisors, with bounded
+Each lane has one base supervisor plus three slot supervisors, with bounded
 per-slot build/test parallelism, APFS-cloned native Mac runner directories,
 private native Mac target caches, and Linux container resources. The x86 audit workflow is removed for
 this emergency migration and is a deferred follow-up.
@@ -151,7 +151,7 @@ capability, and privilege bounds. Native macOS is trusted host execution and
 has no container boundary; its archive checksum, host OS version, architecture,
 and target triple are required evidence.
 
-Activation gates are: a private repository with trusted Henry/agent collaborators; an operator-provided dedicated GitHub credential stored only in a macOS Keychain item; verified Linux image and native runner archive; clean Linux and macOS smoke dispatches; and health checks showing twenty configured slots per lane. The supervisors fail closed when a prerequisite, API response, identity, or lock is invalid and never use `gh` credentials for unattended provisioning. Rollback is to unload the base, slot, and expansion supervisors, remove only their owned run state, stop the dedicated Colima profile, and revert workflow routing. The hosted x86 lane is not restored by rollback.
+Activation gates are: a private repository with trusted Henry/agent collaborators; an operator-provided dedicated GitHub credential stored only in a macOS Keychain item; verified Linux image and native runner archive; clean Linux and macOS smoke dispatches; and health checks showing four configured runners per lane. The supervisors fail closed when a prerequisite, API response, identity, or lock is invalid and never use `gh` credentials for unattended provisioning. Rollback is to unload the base and slot supervisors, remove only their owned run state, stop the dedicated Colima profile, and revert workflow routing. The hosted x86 lane is not restored by rollback.
 
 The broker PAT never enters either runner job environment. Ordinary GitHub Actions
 read/runtime credentials may be present for checkout; smoke workflows keep

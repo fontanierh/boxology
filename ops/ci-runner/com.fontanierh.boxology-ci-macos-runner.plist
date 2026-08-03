@@ -12,6 +12,7 @@
     <key>RUNNER_ROOT</key><string>/Users/jim/.crab/ci-runner/macos-runner</string>
     <key>KEYCHAIN_SERVICE</key><string>com.fontanierh.boxology-ci-runner</string>
     <key>KEYCHAIN_ACCOUNT</key><string>jim</string>
+    <key>MAX_RUNNERS</key><string>4</string>
     <key>PATH</key><string>/Users/jim/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>

@@ -43,3 +43,9 @@ Each entry is, in order: a `## YYYY-MM-DD — #issue` heading, one blank line, o
 - Classification: `semantic`
 - Observation: V0 completion requires closed stream evidence audits plus an explicit ordered ledger of already-excluded, deferred, or otherwise non-gating follow-ups, rather than literal zero-open tracker debt; every accepted criterion still needs evidence or a merged normative re-scope.
 - Evidence: [#343](https://github.com/fontanierh/boxology/issues/343) and [S7 D7](../specs/s7-skill-acceptance-self-hosting.md#d7--s7-complete-is-the-v0-gate).
+
+## 2026-08-03 — #497
+
+- Classification: `mechanical`
+- Observation: Twenty JIT slots per platform exceeded the MacBook's useful CPU and memory capacity, fragmented per-slot Cargo caches, and added contention without reducing the required-check critical path.
+- Evidence: [#497](https://github.com/fontanierh/boxology/issues/497) bounds the repo-owned topology to one base plus three standard slots for each platform, eight runners total, and retires both ten-slot expansion LaunchAgents.

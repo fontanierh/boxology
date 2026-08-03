@@ -13,9 +13,9 @@
     <key>KEYCHAIN_SERVICE</key><string>com.fontanierh.boxology-ci-runner</string>
     <key>KEYCHAIN_ACCOUNT</key><string>jim</string>
     <key>SUPERVISOR</key><string>/Users/jim/.crab/ci-runner/supervise.sh</string>
-    <key>SLOT_COUNT</key><string>9</string>
+    <key>SLOT_COUNT</key><string>3</string>
     <key>SLOT_START</key><string>2</string>
-    <key>SLOT_MAX_RUNNERS</key><string>20</string>
+    <key>SLOT_MAX_RUNNERS</key><string>4</string>
     <key>SLOT_ROOT_PREFIX</key><string>/Users/jim/.crab/ci-runner/linux-runner-slot-</string>
     <key>RUNTIME_ROOT_PREFIX</key><string>/tmp/boxology-ci-runner-slot-</string>
     <key>LOG_ROOT</key><string>/Users/jim/.crab/ci-runner/logs/linux-slots</string>
