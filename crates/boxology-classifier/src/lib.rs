@@ -11,7 +11,8 @@
 #![forbid(unsafe_code)]
 
 use boxology_schema::{
-    Diagnostic, Diagnostics, SchemaCapability, SchemaDocument, SchemaType, SchemaVariant,
+    Diagnostic, Diagnostics, ExposureLevel, Idempotency, SchemaCapability, SchemaDocument,
+    SchemaField, SchemaPayload, SchemaType, SchemaVariant,
 };
 use std::collections::BTreeMap;
 
@@ -212,9 +213,10 @@ fn fail_closed_finding(base: &SchemaDocument) -> Finding {
 /// D5 table row regardless of reachability (D5's preamble tension with those rows is tracked under
 /// #319). Capability additions, removals, input-name changes, input-leaf changes, and output-leaf
 /// changes use their named rows. Capability documentation, deprecation, declared-error,
-/// exposure, idempotency, and reorder changes, like `VariantPayloadChanged`, remain reserved and
-/// fail closed at `<box>`. A revision-only difference (no type or capability delta) yields an empty
-/// finding list; `classify` turns that empty result into the D6 check-B integrity error.
+/// exposure, idempotency, and reorder changes, like the raw field and payload-shape changes,
+/// remain reserved and fail closed at `<box>`. A revision-only difference (no type or capability
+/// delta) yields an empty finding list; `classify` turns that empty result into the D6 check-B
+/// integrity error.
 fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) -> Vec<Finding> {
     let roles = reachability(base, submitted);
     let changes = type_changes(base, submitted, &roles);
@@ -306,7 +308,13 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
             | TypeChange::VariantAdded { .. }
             | TypeChange::TypesReordered
             | TypeChange::VariantsReordered { .. }
-            | TypeChange::VariantPayloadChanged { .. } => {
+            | TypeChange::VariantPayloadChanged { .. }
+            | TypeChange::FieldAdded { .. }
+            | TypeChange::FieldRemoved { .. }
+            | TypeChange::FieldDocsChanged { .. }
+            | TypeChange::FieldDeprecationChanged { .. }
+            | TypeChange::FieldTypeChanged { .. }
+            | TypeChange::FieldsReordered { .. } => {
                 unclassified = true;
             }
         }
@@ -346,7 +354,11 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 condition: None,
             }),
             CapabilityChange::CapabilitiesReordered
-            | CapabilityChange::CapabilityMetadataChanged { .. } => {
+            | CapabilityChange::CapabilityDocsChanged { .. }
+            | CapabilityChange::CapabilityDeprecationChanged { .. }
+            | CapabilityChange::CapabilityErrorChanged { .. }
+            | CapabilityChange::CapabilityExposureChanged { .. }
+            | CapabilityChange::CapabilityIdempotencyChanged { .. } => {
                 unclassified = true;
             }
         }
@@ -437,17 +449,76 @@ enum TypeChange {
         variant_name: String,
         roles: Roles,
     },
+    FieldAdded {
+        type_name: String,
+        variant_name: String,
+        field_name: String,
+        roles: Roles,
+    },
+    FieldRemoved {
+        type_name: String,
+        variant_name: String,
+        field_name: String,
+        roles: Roles,
+    },
+    FieldDocsChanged {
+        type_name: String,
+        variant_name: String,
+        field_name: String,
+    },
+    FieldDeprecationChanged {
+        type_name: String,
+        variant_name: String,
+        field_name: String,
+    },
+    FieldTypeChanged {
+        type_name: String,
+        variant_name: String,
+        field_name: String,
+    },
+    FieldsReordered {
+        type_name: String,
+        variant_name: String,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum CapabilityChange {
-    CapabilityAdded { name: String },
-    CapabilityRemoved { name: String },
+    CapabilityAdded {
+        name: String,
+    },
+    CapabilityRemoved {
+        name: String,
+    },
     CapabilitiesReordered,
-    CapabilityMetadataChanged { name: String },
-    InputNameChanged { name: String },
-    InputLeafChanged { name: String },
-    OutputLeafChanged { name: String },
+    CapabilityDocsChanged {
+        name: String,
+    },
+    CapabilityDeprecationChanged {
+        name: String,
+    },
+    CapabilityErrorChanged {
+        name: String,
+    },
+    CapabilityExposureChanged {
+        name: String,
+        base: ExposureLevel,
+        submitted: ExposureLevel,
+    },
+    CapabilityIdempotencyChanged {
+        name: String,
+        base: Idempotency,
+        submitted: Idempotency,
+    },
+    InputNameChanged {
+        name: String,
+    },
+    InputLeafChanged {
+        name: String,
+    },
+    OutputLeafChanged {
+        name: String,
+    },
 }
 
 /// Reachability over the union of both documents' capability graphs.
@@ -647,14 +718,33 @@ fn append_matched_capability_changes(
             name: base.name.as_str().to_owned(),
         });
     }
-    if base.docs != submitted.docs
-        || base.deprecation != submitted.deprecation
-        || base.error != submitted.error
-        || base.max_exposure != submitted.max_exposure
-        || base.idempotency != submitted.idempotency
-    {
-        changes.push(CapabilityChange::CapabilityMetadataChanged {
+    if base.docs != submitted.docs {
+        changes.push(CapabilityChange::CapabilityDocsChanged {
             name: base.name.as_str().to_owned(),
+        });
+    }
+    if base.deprecation != submitted.deprecation {
+        changes.push(CapabilityChange::CapabilityDeprecationChanged {
+            name: base.name.as_str().to_owned(),
+        });
+    }
+    if base.error != submitted.error {
+        changes.push(CapabilityChange::CapabilityErrorChanged {
+            name: base.name.as_str().to_owned(),
+        });
+    }
+    if base.max_exposure != submitted.max_exposure {
+        changes.push(CapabilityChange::CapabilityExposureChanged {
+            name: base.name.as_str().to_owned(),
+            base: base.max_exposure,
+            submitted: submitted.max_exposure,
+        });
+    }
+    if base.idempotency != submitted.idempotency {
+        changes.push(CapabilityChange::CapabilityIdempotencyChanged {
+            name: base.name.as_str().to_owned(),
+            base: base.idempotency,
+            submitted: submitted.idempotency,
         });
     }
 }
@@ -745,11 +835,101 @@ fn append_matched_variant_changes(
             variant_name: base.name.clone(),
         });
     }
-    if base.payload != submitted.payload {
-        changes.push(TypeChange::VariantPayloadChanged {
+    match (&base.payload, &submitted.payload) {
+        (SchemaPayload::Named(base_fields), SchemaPayload::Named(submitted_fields)) => {
+            append_named_field_changes(
+                changes,
+                type_name,
+                base.name.as_str(),
+                base_fields,
+                submitted_fields,
+                roles,
+            );
+        }
+        (base_payload, submitted_payload) if base_payload != submitted_payload => {
+            changes.push(TypeChange::VariantPayloadChanged {
+                type_name: type_name.to_owned(),
+                variant_name: base.name.clone(),
+                roles,
+            });
+        }
+        _ => {}
+    }
+}
+
+fn index_fields(fields: &[SchemaField]) -> BTreeMap<&str, &SchemaField> {
+    let mut index = BTreeMap::new();
+    for field in fields {
+        index.insert(field.name.as_str(), field);
+    }
+    index
+}
+
+fn append_named_field_changes(
+    changes: &mut Vec<TypeChange>,
+    type_name: &str,
+    variant_name: &str,
+    base_fields: &[SchemaField],
+    submitted_fields: &[SchemaField],
+    roles: Roles,
+) {
+    let base_by_name = index_fields(base_fields);
+    let submitted_by_name = index_fields(submitted_fields);
+
+    for base_field in base_fields {
+        match submitted_by_name.get(base_field.name.as_str()) {
+            None => changes.push(TypeChange::FieldRemoved {
+                type_name: type_name.to_owned(),
+                variant_name: variant_name.to_owned(),
+                field_name: base_field.name.clone(),
+                roles,
+            }),
+            Some(submitted_field) => {
+                if base_field.docs != submitted_field.docs {
+                    changes.push(TypeChange::FieldDocsChanged {
+                        type_name: type_name.to_owned(),
+                        variant_name: variant_name.to_owned(),
+                        field_name: base_field.name.clone(),
+                    });
+                }
+                if base_field.deprecation != submitted_field.deprecation {
+                    changes.push(TypeChange::FieldDeprecationChanged {
+                        type_name: type_name.to_owned(),
+                        variant_name: variant_name.to_owned(),
+                        field_name: base_field.name.clone(),
+                    });
+                }
+                if base_field.ty != submitted_field.ty {
+                    changes.push(TypeChange::FieldTypeChanged {
+                        type_name: type_name.to_owned(),
+                        variant_name: variant_name.to_owned(),
+                        field_name: base_field.name.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    for submitted_field in submitted_fields {
+        if !base_by_name.contains_key(submitted_field.name.as_str()) {
+            changes.push(TypeChange::FieldAdded {
+                type_name: type_name.to_owned(),
+                variant_name: variant_name.to_owned(),
+                field_name: submitted_field.name.clone(),
+                roles,
+            });
+        }
+    }
+
+    if common_name_sequence_differs(
+        base_fields.iter().map(|field| field.name.as_str()),
+        submitted_fields.iter().map(|field| field.name.as_str()),
+        &base_by_name,
+        &submitted_by_name,
+    ) {
+        changes.push(TypeChange::FieldsReordered {
             type_name: type_name.to_owned(),
-            variant_name: base.name.clone(),
-            roles,
+            variant_name: variant_name.to_owned(),
         });
     }
 }

@@ -358,6 +358,194 @@ fn type_changes_detects_coarse_payload_change() {
 }
 
 #[test]
+fn non_named_payload_kind_and_value_changes_remain_coarse() {
+    let cases = [
+        (
+            SchemaPayload::Named(Vec::new()),
+            SchemaPayload::Value {
+                docs: Vec::new(),
+                deprecation: None,
+                ty: BoundaryLeaf::String,
+            },
+        ),
+        (
+            SchemaPayload::Value {
+                docs: Vec::new(),
+                deprecation: None,
+                ty: BoundaryLeaf::String,
+            },
+            SchemaPayload::Value {
+                docs: vec!["Changed.".to_owned()],
+                deprecation: Some("retired".to_owned()),
+                ty: BoundaryLeaf::Bool,
+            },
+        ),
+    ];
+
+    for (base_payload, submitted_payload) in cases {
+        let mut base = document("hello");
+        base.types[0].variants[0].payload = base_payload;
+        let mut submitted = base.clone();
+        submitted.types[0].variants[0].payload = submitted_payload;
+        let roles = reachability(&base, &submitted);
+        assert_eq!(
+            type_changes(&base, &submitted, &roles),
+            Vec::from([TypeChange::VariantPayloadChanged {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                roles: Roles {
+                    input: false,
+                    output: true,
+                },
+            }])
+        );
+    }
+}
+
+#[test]
+fn capability_changes_emit_independent_metadata_kinds_in_contract_order() {
+    let base = document("hello");
+    let mut submitted = base.clone();
+    let capability = &mut submitted.capabilities[0];
+    capability.docs.push("More detail.".to_owned());
+    capability.deprecation = Some("use wave".to_owned());
+    capability.error = "OtherError".to_owned();
+    capability.max_exposure = ExposureLevel::Internal;
+    capability.idempotency = Idempotency::Inherent;
+
+    assert_eq!(
+        capability_changes(&base, &submitted),
+        Vec::from([
+            CapabilityChange::CapabilityDocsChanged {
+                name: "greet".to_owned(),
+            },
+            CapabilityChange::CapabilityDeprecationChanged {
+                name: "greet".to_owned(),
+            },
+            CapabilityChange::CapabilityErrorChanged {
+                name: "greet".to_owned(),
+            },
+            CapabilityChange::CapabilityExposureChanged {
+                name: "greet".to_owned(),
+                base: ExposureLevel::External,
+                submitted: ExposureLevel::Internal,
+            },
+            CapabilityChange::CapabilityIdempotencyChanged {
+                name: "greet".to_owned(),
+                base: Idempotency::None,
+                submitted: Idempotency::Inherent,
+            },
+        ])
+    );
+}
+
+#[test]
+fn named_field_changes_emit_aligned_raw_kinds_in_deterministic_order() {
+    let mut base = named_document();
+    let SchemaPayload::Named(base_fields) = &mut base.types[0].variants[0].payload else {
+        unreachable!("named payload")
+    };
+    base_fields.push(SchemaField {
+        docs: Vec::new(),
+        deprecation: None,
+        name: "third".to_owned(),
+        ty: BoundaryLeaf::Bool,
+    });
+
+    let mut submitted = base.clone();
+    let SchemaPayload::Named(submitted_fields) = &mut submitted.types[0].variants[0].payload else {
+        unreachable!("named payload")
+    };
+    submitted_fields[0].docs.push("New docs.".to_owned());
+    submitted_fields[0].deprecation = Some("retired".to_owned());
+    submitted_fields[0].ty = BoundaryLeaf::U64;
+    submitted_fields.remove(1);
+    submitted_fields.swap(0, 1);
+    submitted_fields.push(SchemaField {
+        docs: Vec::new(),
+        deprecation: None,
+        name: "fourth".to_owned(),
+        ty: BoundaryLeaf::String,
+    });
+
+    let roles = reachability(&base, &submitted);
+    assert_eq!(
+        type_changes(&base, &submitted, &roles),
+        Vec::from([
+            TypeChange::FieldDocsChanged {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                field_name: "first".to_owned(),
+            },
+            TypeChange::FieldDeprecationChanged {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                field_name: "first".to_owned(),
+            },
+            TypeChange::FieldTypeChanged {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                field_name: "first".to_owned(),
+            },
+            TypeChange::FieldRemoved {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                field_name: "second".to_owned(),
+                roles: Roles {
+                    input: false,
+                    output: true,
+                },
+            },
+            TypeChange::FieldAdded {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                field_name: "fourth".to_owned(),
+                roles: Roles {
+                    input: false,
+                    output: true,
+                },
+            },
+            TypeChange::FieldsReordered {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+            },
+        ])
+    );
+}
+
+#[test]
+fn named_field_rename_is_raw_remove_then_add() {
+    let base = named_document();
+    let mut submitted = base.clone();
+    named_fields(&mut submitted)[0].name = "renamed".to_owned();
+
+    let roles = reachability(&base, &submitted);
+    assert_eq!(
+        type_changes(&base, &submitted, &roles),
+        Vec::from([
+            TypeChange::FieldRemoved {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                field_name: "first".to_owned(),
+                roles: Roles {
+                    input: false,
+                    output: true,
+                },
+            },
+            TypeChange::FieldAdded {
+                type_name: "GreetError".to_owned(),
+                variant_name: "EmptyName".to_owned(),
+                field_name: "renamed".to_owned(),
+                roles: Roles {
+                    input: false,
+                    output: true,
+                },
+            },
+        ])
+    );
+}
+
+#[test]
 fn type_changes_treats_type_rename_as_remove_plus_add() {
     let base = document("hello");
     let mut submitted = base.clone();
