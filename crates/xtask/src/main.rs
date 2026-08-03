@@ -95,6 +95,15 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         tests: &["production_source_inventory_is_exact"],
         body_digest: "bf4b0a931f675233c45103a5a1c772b79ffe8622c9d3aa7b9b8023563e82dd72",
     };
+const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
+    package: "boxology-init",
+    target: "born_valid",
+    manifest: "crates/boxology-init/Cargo.toml",
+    source: "crates/boxology-init/tests/born_valid.rs",
+    default_source: "tests/born_valid.rs",
+    tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
+    body_digest: "4a7605cd5c686be0bf3239f0f35d09c2085c41a8c2fddcc3b4e9bd026f0d232b",
+};
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("surface-lock", &SURFACE_LOCK_SPEC),
     ("classifier-surface-lock", &CLASSIFIER_SURFACE_LOCK_SPEC),
@@ -141,6 +150,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
             run_ci(Some(base))
         }
         [command] if command == "ci-capstone" => run_ci_capstone(),
+        [command] if command == "ci-born-valid" => run_ci_born_valid(),
         [command, flag, base]
             if command == "budget"
                 && flag == "--base"
@@ -222,7 +232,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-capstone\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-capstone\n       cargo xtask ci-born-valid\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -400,8 +410,36 @@ fn run_ci_capstone() -> u8 {
     summarize_ci(CiTier::Capstone, &checks)
 }
 
-fn package_test_args(package: &str) -> [&str; 4] {
-    ["test", "-p", package, "--all-features"]
+fn run_ci_born_valid() -> u8 {
+    let toolchain = timed("toolchain", check_toolchain);
+    if let Err(error) = toolchain {
+        eprintln!("toolchain: FAIL: {error}");
+        eprintln!("summary: FAIL (toolchain)");
+        return 1;
+    }
+    println!("toolchain: PASS");
+    println!("test-tier: macos-born-valid");
+
+    let passed = timed("boxology-init-born-valid", || {
+        external_test::run_with_cargo(&root(), &BORN_VALID_SPEC, |args| {
+            external_test::cargo(&root(), args)
+        })
+        .map_err(|error| eprintln!("boxology-init-born-valid: {error}"))
+        .is_ok()
+    });
+    println!(
+        "boxology-init-born-valid: {}",
+        if passed { "PASS" } else { "FAIL" }
+    );
+    summarize_ci(CiTier::PullRequest, &[("boxology-init-born-valid", passed)])
+}
+
+fn package_test_args(package: &'static str) -> Vec<&'static str> {
+    let mut args = vec!["test", "-p", package, "--all-features"];
+    if package == BORN_VALID_SPEC.package {
+        args.extend(["--", "--skip", BORN_VALID_SPEC.tests[0]]);
+    }
+    args
 }
 
 fn summarize_ci(tier: CiTier, checks: &[(&'static str, bool)]) -> u8 {
@@ -1018,10 +1056,22 @@ mod tests {
                 "xtask"
             ]
         );
-        for package in CAPSTONE_PACKAGES {
+        assert_eq!(
+            package_test_args("boxology-init"),
+            [
+                "test",
+                "-p",
+                "boxology-init",
+                "--all-features",
+                "--",
+                "--skip",
+                "initialized_project_is_born_valid_and_regeneration_is_a_no_op"
+            ]
+        );
+        for package in &CAPSTONE_PACKAGES[1..] {
             assert_eq!(
                 package_test_args(package),
-                ["test", "-p", *package, "--all-features"]
+                ["test", "-p", package, "--all-features"]
             );
         }
     }

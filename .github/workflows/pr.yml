@@ -350,6 +350,32 @@ jobs:
         if: github.event_name == 'pull_request'
         run: cargo xtask ci-capstone
 
+  macos-born-valid:
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$ImageOS" = macos-arm64-host
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
+      # Main-push deep CI retains the unchanged full workspace test suite.
+      - name: cargo xtask ci-born-valid
+        if: github.event_name == 'pull_request'
+        run: cargo xtask ci-born-valid
+
   deny:
     runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
     timeout-minutes: 30
@@ -596,7 +622,7 @@ jobs:
         run: ./xtask-linux-arm64/xtask determinism-meta-cross linux-meta macos-meta
 
   validation:
-    needs: [checks-linux, checks-macos, macos-capstone, deny, determinism-compare, determinism-meta-cross]
+    needs: [checks-linux, checks-macos, macos-capstone, macos-born-valid, deny, determinism-compare, determinism-meta-cross]
     if: always()
     runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
     timeout-minutes: 5
