@@ -16,6 +16,15 @@ const CONTRACT: &[u8] = br#"boxology::contract! {
     #[capability(exposure = external)]
     pub async fn ping(nonce: u64) -> Result<u64, HelloError>;
 }"#;
+const CONTRACT_WITH_GREET: &[u8] = br#"boxology::contract! {
+    #[error]
+    pub enum HelloError { EmptyName }
+    #[capability(exposure = external)]
+    pub async fn ping(nonce: u64) -> Result<u64, HelloError>;
+    #[capability(exposure = external)]
+    pub async fn greet(name: String) -> Result<String, HelloError>;
+}"#;
+const USAGE: &str = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n";
 const ROOT_MANIFEST: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 const PACKAGE_MANIFEST: &str = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n";
 const METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
@@ -27,6 +36,8 @@ struct Fixture {
     cargo: PathBuf,
     metadata: PathBuf,
     log: PathBuf,
+    git_log: PathBuf,
+    base_blob: PathBuf,
 }
 
 impl Drop for Fixture {
@@ -72,19 +83,23 @@ impl Fixture {
         let cargo = cargo_dir.join("cargo");
         fs::write(
             &cargo,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BOXOLOGY_ARG_LOG\"\nif [ \"${BOXOLOGY_MODE:-ok}\" = fail ]; then printf '%s\\n' 'synthetic cargo metadata stderr' >&2; exit 17; fi\nif [ \"${BOXOLOGY_MODE:-ok}\" = nonutf8 ]; then printf '\\377'; exit 0; fi\ncat \"$BOXOLOGY_METADATA\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BOXOLOGY_ARG_LOG\"\nif [ \"${BOXOLOGY_MODE:-ok}\" = fail ]; then printf '%s\\n' 'synthetic cargo metadata stderr' >&2; exit 17; fi\nif [ \"${BOXOLOGY_MODE:-ok}\" = nonutf8 ]; then printf '\\377'; exit 0; fi\n/bin/cat \"$BOXOLOGY_METADATA\"\n",
         )
         .unwrap();
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
         let metadata = cleanup.join("metadata.json");
         fs::write(&metadata, METADATA).unwrap();
         let log = cleanup.join("argv.log");
+        let git_log = cleanup.join("git-argv.log");
+        let base_blob = cleanup.join("base-schema.json");
         Self {
             root,
             cleanup,
             cargo,
             metadata,
             log,
+            git_log,
+            base_blob,
         }
     }
 
@@ -98,6 +113,8 @@ impl Fixture {
         command.env("BOXOLOGY_ARG_LOG", &self.log);
         command.env("BOXOLOGY_METADATA", &self.metadata);
         command.env("BOXOLOGY_MODE", mode);
+        command.env("BOXOLOGY_GIT_ARG_LOG", &self.git_log);
+        command.env("BOXOLOGY_BASE_BLOB", &self.base_blob);
         if fake_cargo {
             let old_path = env::var_os("PATH").unwrap_or_default();
             let path = format!(
@@ -108,6 +125,18 @@ impl Fixture {
             command.env("PATH", path);
         }
         command.output().unwrap()
+    }
+
+    fn run_without_git(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_boxology"))
+            .args(args)
+            .current_dir(&self.root)
+            .env("BOXOLOGY_ARG_LOG", &self.log)
+            .env("BOXOLOGY_METADATA", &self.metadata)
+            .env("BOXOLOGY_MODE", "ok")
+            .env("PATH", self.cargo.parent().unwrap())
+            .output()
+            .unwrap()
     }
 
     fn compose(&self, boxes: &[&str], bindings: &[(&str, &str)]) {
@@ -126,6 +155,45 @@ impl Fixture {
             ));
         }
         fs::write(self.root.join("app/boxology.toml"), manifest).unwrap();
+    }
+
+    fn git(&self, args: &[&str]) -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&self.root)
+            .output()
+            .unwrap()
+    }
+
+    fn commit(&self, message: &str) {
+        if !self.root.join(".git").exists() {
+            assert!(self.git(&["init", "-q"]).status.success());
+            assert!(
+                self.git(&["config", "user.name", "Boxology Test"])
+                    .status
+                    .success()
+            );
+            assert!(
+                self.git(&["config", "user.email", "boxology@example.invalid"])
+                    .status
+                    .success()
+            );
+        }
+        assert!(self.git(&["add", "."]).status.success());
+        let output = self.git(&["commit", "-q", "-m", message]);
+        assert!(output.status.success(), "{}", text(&output.stderr));
+    }
+
+    fn install_fake_git(&self, exists_status: u8) {
+        let git = self.cargo.parent().unwrap().join("git");
+        fs::write(
+            &git,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_GIT_ARG_LOG\"\nprintf '%s\\n' -- >> \"$BOXOLOGY_GIT_ARG_LOG\"\ncase \"$1 $2\" in\n  'rev-parse --verify') printf '%040d\\n' 0;;\n  'ls-tree --name-only') printf '%s\\0' \"$6\";;\n  'cat-file -e') exit {exists_status};;\n  'cat-file blob') /bin/cat \"$BOXOLOGY_BASE_BLOB\";;\n  *) exit 19;;\nesac\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
 
@@ -153,10 +221,7 @@ fn parsing_accepts_only_the_two_generate_forms() {
             .unwrap();
         assert_eq!(output.status.code(), Some(2), "args: {args:?}");
         assert!(text(&output.stdout).is_empty());
-        assert_eq!(
-            text(&output.stderr),
-            "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n"
-        );
+        assert_eq!(text(&output.stderr), USAGE);
     }
 }
 
@@ -169,10 +234,7 @@ fn non_unicode_argument_is_usage_failure_without_panic() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(text(&output.stdout).is_empty());
-    assert_eq!(
-        text(&output.stderr),
-        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n"
-    );
+    assert_eq!(text(&output.stderr), USAGE);
 }
 
 #[test]
@@ -477,10 +539,13 @@ fn check_metadata_failure_is_invocation() {
 
 #[test]
 fn check_rejects_unwired_flags_with_usage() {
-    let usage = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n";
     for args in [
         vec!["check", "--format", "json"],
-        vec!["check", "--base", "abc123"],
+        vec!["check", "--base"],
+        vec!["check", "--base", "HEAD", "extra"],
+        vec!["check", "--base=HEAD"],
+        vec!["check", "--base", "--help"],
+        vec!["check", "--base", ""],
         vec!["check", "extra"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_boxology"))
@@ -489,6 +554,152 @@ fn check_rejects_unwired_flags_with_usage() {
             .unwrap();
         assert_eq!(output.status.code(), Some(2), "args: {args:?}");
         assert!(text(&output.stdout).is_empty());
-        assert_eq!(text(&output.stderr), usage);
+        assert_eq!(text(&output.stderr), USAGE);
     }
+}
+
+#[test]
+fn check_base_reports_real_addition_and_unchanged_baseline_without_failing() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.commit("baseline");
+
+    let unchanged = fixture.run(&["check", "--base", "HEAD"]);
+    assert_eq!(unchanged.status.code(), Some(0));
+    assert!(text(&unchanged.stderr).is_empty());
+    assert!(text(&unchanged.stdout).contains("check contract-classification passed\n"));
+
+    fs::write(
+        fixture.root.join("ping/implementation/src/lib.rs"),
+        CONTRACT_WITH_GREET,
+    )
+    .unwrap();
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let addition = fixture.run(&["check", "--base", "HEAD"]);
+    assert_eq!(addition.status.code(), Some(0));
+    assert!(text(&addition.stderr).is_empty());
+    assert!(text(&addition.stdout).contains("check contract-classification failed\n"));
+    assert!(text(&addition.stdout).contains("BXC0039 ping ping.greet additive\n"));
+    assert!(text(&addition.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_base_git_boundary_uses_the_exact_nonmutating_argv() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fs::copy(
+        fixture.root.join("ping/generated/schema.json"),
+        &fixture.base_blob,
+    )
+    .unwrap();
+    fixture.install_fake_git(0);
+
+    let output = fixture.run(&["check", "--base", "main"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    let oid = "0000000000000000000000000000000000000000";
+    assert_eq!(
+        fs::read_to_string(&fixture.git_log).unwrap(),
+        format!(
+            "rev-parse\n--verify\n--end-of-options\nmain^{{commit}}\n--\n\
+             ls-tree\n--name-only\n-z\n{oid}\n--\nping/generated/schema.json\n--\n\
+             cat-file\n-e\n{oid}:ping/generated/schema.json\n--\n\
+             cat-file\nblob\n{oid}:ping/generated/schema.json\n--\n"
+        )
+    );
+}
+
+#[test]
+fn check_base_cat_file_failure_after_confirmed_presence_is_always_bxw0092() {
+    for status in [1, 17] {
+        let fixture = Fixture::new(false);
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        fixture.install_fake_git(status);
+
+        let output = fixture.run(&["check", "--base", "main"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(text(&output.stdout).is_empty());
+        assert_eq!(
+            text(&output.stderr),
+            "BXW0092 ping/generated/schema.json: a base-revision schema object must be readable as a Git blob\n"
+        );
+    }
+}
+
+#[test]
+fn check_base_git_spawn_failure_is_invocation_exit_two() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+
+    let output = fixture.run_without_git(&["check", "--base", "HEAD"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(text(&output.stdout).is_empty());
+    assert_eq!(text(&output.stderr), "git could not be executed\n");
+}
+
+#[test]
+fn check_base_absent_schema_is_a_valid_none_base() {
+    let fixture = Fixture::new(false);
+    fixture.commit("no generated schema");
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run(&["check", "--base", "HEAD"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains("check contract-classification failed\n"));
+    assert!(text(&output.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_base_reports_malformed_schema_as_bxw0080() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fs::write(fixture.root.join("ping/generated/schema.json"), b"bad").unwrap();
+    fixture.commit("malformed base schema");
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+
+    let output = fixture.run(&["check", "--base", "HEAD"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert!(text(&output.stderr).starts_with("BXW0080 ping base: "));
+}
+
+#[test]
+fn check_base_rejects_invalid_and_noncommit_revisions_without_echoing_them() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.commit("baseline");
+    let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
+    let tree = text(&tree.stdout).trim().to_owned();
+    for revision in ["does-not-exist", tree.as_str()] {
+        let output = fixture.run(&["check", "--base", revision]);
+        assert_eq!(output.status.code(), Some(1), "revision={revision}");
+        assert!(text(&output.stdout).is_empty());
+        assert_eq!(
+            text(&output.stderr),
+            "BXW0091 .git: the explicit base revision must resolve to a Git commit\n"
+        );
+        assert!(!text(&output.stderr).contains(revision));
+    }
+}
+
+#[test]
+fn check_base_reports_a_present_non_blob_schema_as_bxw0092() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let schema_path = fixture.root.join("ping/generated/schema.json");
+    let valid = fs::read(&schema_path).unwrap();
+    fs::remove_file(&schema_path).unwrap();
+    fs::create_dir(&schema_path).unwrap();
+    fs::write(schema_path.join("child"), b"tree at schema path").unwrap();
+    fixture.commit("non-blob schema object");
+    fs::remove_dir_all(&schema_path).unwrap();
+    fs::write(&schema_path, valid).unwrap();
+
+    let output = fixture.run(&["check", "--base", "HEAD"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert_eq!(
+        text(&output.stderr),
+        "BXW0092 ping/generated/schema.json: a base-revision schema object must be readable as a Git blob\n"
+    );
 }

@@ -296,6 +296,10 @@ fn read_base_schema(root: &Path, plan: &GenerationPlan) -> Result<Option<Vec<u8>
     read_optional_file(root, plan.schema_path())
 }
 
+pub(crate) fn missing_schema(root: &Path, plan: &GenerationPlan) -> ExecuteError {
+    ExecuteError::schema(root.join(plan.schema_path().as_str()))
+}
+
 pub(crate) fn read_optional_file(
     root: &Path,
     logical: &RelativePath,

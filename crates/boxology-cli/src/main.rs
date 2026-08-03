@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 use boxology_cli::{
-    CompareDifference, ExecuteError, PlanError, cargo_metadata_command, compare_plans,
-    composition_step, execute, plan, walk,
+    BaseSchemasError, ClassifyStepError, CompareDifference, ExecuteError, PlanError,
+    base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
+    execute, plan, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -25,7 +26,7 @@ const METADATA: Rule = ("BXW0075", METADATA_TEXT, METADATA_SOURCE);
 
 enum Selection {
     Generate(Option<BoxId>),
-    Check,
+    Check(Option<String>),
 }
 
 struct MetadataFailure {
@@ -83,7 +84,7 @@ fn run(args: &[String], root: &Path, stdout: &mut dyn Write, stderr: &mut dyn Wr
     };
     match selection {
         Selection::Generate(package) => run_generate(root, workspace, &package, stdout, stderr),
-        Selection::Check => run_check(root, workspace, stdout, stderr),
+        Selection::Check(base) => run_check(root, workspace, base.as_deref(), stdout, stderr),
     }
 }
 
@@ -126,6 +127,7 @@ fn run_generate(
 fn run_check(
     root: &Path,
     workspace: Workspace,
+    base: Option<&str>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> u8 {
@@ -153,12 +155,23 @@ fn run_check(
             .collect();
         Completion::Failed(Findings::new(entries).expect("differences produce findings"))
     };
+    let contract_classification = match base {
+        None => ContractClassificationCompletion::Skipped(SkipReason::Unimplemented),
+        Some(revision) => {
+            let schemas = match base_package_schemas(root, revision, &plans) {
+                Ok(schemas) => schemas,
+                Err(error) => return report_base_failure(error, stderr),
+            };
+            match classify_step(&schemas) {
+                Ok(completion) => completion,
+                Err(error) => return report_classification_failure(error, stderr),
+            }
+        }
+    };
     let report = CheckReport {
         discovery,
         regeneration,
-        contract_classification: ContractClassificationCompletion::Skipped(
-            SkipReason::Unimplemented,
-        ),
+        contract_classification,
         cargo_graph: not_implemented(),
         fmt: not_implemented(),
         clippy: not_implemented(),
@@ -208,7 +221,15 @@ fn parse(args: &[String]) -> Result<Selection, ()> {
                 .map(|package| Selection::Generate(Some(package)))
                 .map_err(|_| ())
         }
-        [command] if command == "check" => Ok(Selection::Check),
+        [command] if command == "check" => Ok(Selection::Check(None)),
+        [command, flag, revision]
+            if command == "check"
+                && flag == "--base"
+                && !revision.is_empty()
+                && !revision.starts_with('-') =>
+        {
+            Ok(Selection::Check(Some(revision.clone())))
+        }
         _ => Err(()),
     }
 }
@@ -216,7 +237,7 @@ fn parse(args: &[String]) -> Result<Selection, ()> {
 fn usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
-        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check"
+        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>"
     );
 }
 
@@ -253,5 +274,31 @@ fn report_plan_failure(error: PlanError, stderr: &mut dyn Write) -> u8 {
 
 fn report_execute_failure(error: ExecuteError, stderr: &mut dyn Write) -> u8 {
     let _ = writeln!(stderr, "{error}");
+    1
+}
+
+fn report_base_failure(error: BaseSchemasError, stderr: &mut dyn Write) -> u8 {
+    match error {
+        BaseSchemasError::Tool(error) => {
+            let _ = writeln!(stderr, "{error}");
+            return 2;
+        }
+        BaseSchemasError::Git(error) => {
+            let _ = writeln!(stderr, "{error}");
+        }
+        BaseSchemasError::Submitted(error) => {
+            let _ = writeln!(stderr, "{error}");
+        }
+    }
+    1
+}
+
+fn report_classification_failure(error: ClassifyStepError, stderr: &mut dyn Write) -> u8 {
+    match error {
+        ClassifyStepError::Classification(error) => {
+            let _ = writeln!(stderr, "{error}");
+        }
+        ClassifyStepError::Duplicate(_) => {}
+    }
     1
 }
