@@ -1,21 +1,11 @@
 schema = 1
 
-# `spec` and `implement` configure fallback; `repair` inherits `implement`.
-# `review` declares a single candidate with no `fallback_on`, so an unavailable
-# or exhausted reviewer stops the phase and is reported rather than silently
-# substituting one the operator did not choose.
+# `implement` configures fallback; `repair` inherits `implement`.
+# `spec` and `review` each declare one candidate with no `fallback_on`, so an
+# unavailable or exhausted worker stops the phase and is reported rather than
+# silently substituting one the operator did not choose.
 
 [roles.spec]
-fallback_on = ["model_unavailable", "usage_exhausted"]
-
-[[roles.spec.candidates]]
-harness = "kimi"
-model = "kimi-code/k3"
-effort = "high"
-
-# Reached only when Kimi reports the model unavailable or its usage exhausted.
-# A rejected specification, a NO-GO verdict, or a timeout is not a fallback
-# condition and must stop the phase instead.
 [[roles.spec.candidates]]
 harness = "claude"
 model = "claude-fable-5"
