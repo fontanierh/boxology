@@ -387,13 +387,17 @@ fn cargo_manifest(source: &str) -> String {
         text.push_str(&format!("    {},\n", toml_string(member)));
     }
     text.push_str("]\n\n[workspace.package]\nedition = \"2024\"\n\n[workspace.dependencies]\n");
+    for (name, _) in DEPENDENCIES {
+        text.push_str(&format!("{name} = \"=0.0.0\"\n"));
+    }
+    text.push_str(TOKIO_WORKSPACE_DEPENDENCY);
+    text.push_str("\n[patch.crates-io]\n");
     for (name, path) in DEPENDENCIES {
         text.push_str(&format!(
-            "{name} = {{ version = \"=0.0.0\", path = {} }}\n",
+            "{name} = {{ path = {} }}\n",
             toml_string(&format!("{source}/{path}"))
         ));
     }
-    text.push_str(TOKIO_WORKSPACE_DEPENDENCY);
     text
 }
 
@@ -820,9 +824,10 @@ mod tests {
             ]
         );
         for (name, path) in DEPENDENCIES {
-            let expected =
-                format!("{name} = {{ version = \"=0.0.0\", path = \"../boxology/{path}\" }}");
-            assert!(text.lines().any(|line| line == expected), "{expected}");
+            let dependency = format!("{name} = \"=0.0.0\"");
+            let patch = format!("{name} = {{ path = \"../boxology/{path}\" }}");
+            assert!(text.lines().any(|line| line == dependency), "{dependency}");
+            assert!(text.lines().any(|line| line == patch), "{patch}");
         }
         assert!(
             text.lines()
@@ -881,7 +886,12 @@ mod tests {
         assert_eq!(manifest.id().as_str(), "ping-app");
         assert_eq!(manifest.kind(), Kind::Composition);
         assert_eq!(globs(manifest.owned()), ["boxology.toml", "composition/**"]);
-        assert_eq!(manifest.quality_commands(), &["cargo test -p ping-app"]);
+        assert_eq!(
+            manifest.quality_commands(),
+            &[
+                "cargo test -p ping-app tests::assembled_ping_answers_in_process_and_over_real_http -- --exact"
+            ]
+        );
         assert_eq!(manifest.crates().len(), 1);
         let crate_entry = &manifest.crates()[0];
         assert_eq!(crate_entry.cargo_package(), "ping-app");
@@ -964,11 +974,11 @@ mod tests {
         );
         let cargo = std::str::from_utf8(generated(&tree, "Cargo.toml")).unwrap();
         let expected = [
-            r#"boxology = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology" }"#,
-            r#"boxology-contract = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology-contract" }"#,
-            r#"boxology-http = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology-http" }"#,
-            r#"boxology-manifest = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology-manifest" }"#,
-            r#"boxology-runtime = { version = "=0.0.0", path = "../boxology/\"quoted\"\\checkout/crates/boxology-runtime" }"#,
+            r#"boxology = { path = "../boxology/\"quoted\"\\checkout/crates/boxology" }"#,
+            r#"boxology-contract = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-contract" }"#,
+            r#"boxology-http = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-http" }"#,
+            r#"boxology-manifest = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-manifest" }"#,
+            r#"boxology-runtime = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-runtime" }"#,
         ];
         for expected in expected {
             assert_eq!(
