@@ -230,6 +230,7 @@ version = "0.0.0"
 dependencies = [
  "boxology-contract",
  "boxology-manifest",
+ "boxology-schema",
  "serde_json",
  "syn 3.0.0",
 ]

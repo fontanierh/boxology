@@ -26,7 +26,7 @@ const D2_SOURCE: &str = "specs/s5-manifest-and-validation.md D2";
 // BXW0035–BXW0041 its boxes and bindings; BXW0042–BXW0060 belong to workspace discovery and
 // classification; CLI walk owns BXW0061–BXW0063, generation planning BXW0064–BXW0067, BXW0069,
 // and BXW0084–BXW0086, execution BXW0070–BXW0073; BXW0074 is the platform-only `protected`
-// declaration.
+// declaration; workspace composition/schema validation owns BXW0087–BXW0090.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
