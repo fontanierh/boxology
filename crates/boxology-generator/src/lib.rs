@@ -2834,6 +2834,7 @@ macro_rules! __boxology_check_implementation {
     }
 
     #[test]
+    #[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
     fn cargo_proves_generated_boundary_and_stale_failure() {
         use std::{fs, process::Command};
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -3096,6 +3097,7 @@ macro_rules! __boxology_check_implementation {
     }
 
     #[test]
+    #[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
     fn generated_dispatch_handle_compiles_and_routes_typed_calls() {
         use std::{fs, process::Command};
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -3254,6 +3256,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
     fn generated_adapter_registers_and_dispatches_through_stub_transport() {
         use std::{
             fs,
@@ -3390,6 +3393,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
     fn generated_import_adapter_typed_imports_compile_and_fail_unsealed() {
         // The greeter box imports hello; its adapter's typed import surface must type-check against
         // the real crates and behave. The box captures its `HelloImport` out of the `add_box`
@@ -3726,6 +3730,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
     fn generated_multi_capability_adapter_and_implementation_compile_and_route() {
         use std::{
             fs,
@@ -3954,6 +3959,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
     fn generated_numeric_boundary_compiles_and_routes_typed_values() {
         use std::{fs, process::Command};
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

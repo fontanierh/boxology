@@ -546,6 +546,7 @@ fn relative_diagnostic_paths_are_exact() {
 }
 
 #[test]
+#[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
 fn aliases_qualified_paths_and_unrelated_helpers_compile() {
     let root = std::env::temp_dir().join(format!(
         "boxology-impl-positive-{}-{}",
@@ -588,6 +589,7 @@ impl crate::HelloService {
 }
 
 #[test]
+#[ignore = "deep nested-Cargo matrix runs in main-push --no-budget CI"]
 fn structural_and_rust_type_failures_are_independent() {
     let root = std::env::temp_dir().join(format!(
         "boxology-impl-negative-{}-{}",

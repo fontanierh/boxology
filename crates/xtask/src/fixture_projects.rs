@@ -43,7 +43,7 @@ const MIGRATED_ROOT_MEMBERS: &[&str] = &[
 // Fixture projects validate outside the root workspace because stage-2 fixture opacity removes
 // their crates from root membership (specs/s7-skill-acceptance-self-hosting.md D4). The gate is
 // retained xtask scope because `boxology check` subsumes nothing here (the same spec's D5).
-pub(crate) fn run(root: &Path) -> bool {
+pub(crate) fn run(root: &Path, deep: bool) -> bool {
     let mut passed = check_workspace_membership(root);
     for project in FIXTURE_PROJECTS {
         let manifest = root.join(project.root).join("Cargo.toml");
@@ -52,14 +52,16 @@ pub(crate) fn run(root: &Path) -> bool {
                 passed = false;
             }
         }
-        if !run_clippy(root, &manifest, project.root) {
-            passed = false;
-        }
         if !run_test(root, &manifest, project.root) {
             passed = false;
         }
-        if !run_doc(root, &manifest, project.root) {
-            passed = false;
+        if deep {
+            if !run_clippy(root, &manifest, project.root) {
+                passed = false;
+            }
+            if !run_doc(root, &manifest, project.root) {
+                passed = false;
+            }
         }
     }
     passed
