@@ -234,7 +234,7 @@ The Linux evidence and determinism verification target is `aarch64-unknown-linux
 `cargo xtask determinism`, Linux determinism manifests, and the Linux `xtask`
 binary for the cross-platform consumers. Canonical behavioral validation —
 `boxology check` plus fast merge-critical `cargo xtask ci --base` on PRs, the
-deferred deep suite via `cargo xtask ci --no-budget` on main pushes, and macOS
+deferred Clippy/editor/docs/compiler suite via `cargo xtask ci --no-budget` on main pushes, and macOS
 determinism artifact production — runs on
 `[self-hosted, macOS, ARM64, boxology-macos-pr]`, which also hosts the scheduled
 advisory workflow. The x86 audit workflow is intentionally removed for this

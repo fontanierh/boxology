@@ -276,20 +276,6 @@ fn run_ci(base: Option<&str>) -> u8 {
         ),
         ("fmt", timed("fmt", run_fmt)),
         (
-            "clippy",
-            timed("clippy", || {
-                run_cargo(&[
-                    "clippy",
-                    "--workspace",
-                    "--all-targets",
-                    "--all-features",
-                    "--",
-                    "-D",
-                    "warnings",
-                ])
-            }),
-        ),
-        (
             "test",
             timed("test", || {
                 run_cargo(&["test", "--workspace", "--all-features"])
@@ -302,6 +288,20 @@ fn run_ci(base: Option<&str>) -> u8 {
     ];
     if deep {
         checks.extend([
+            (
+                "clippy",
+                timed("clippy", || {
+                    run_cargo(&[
+                        "clippy",
+                        "--workspace",
+                        "--all-targets",
+                        "--all-features",
+                        "--",
+                        "-D",
+                        "warnings",
+                    ])
+                }),
+            ),
             ("editor", timed("editor", run_editor)),
             (
                 "generator-deep-tests",

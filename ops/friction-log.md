@@ -18,4 +18,4 @@ Each entry is, in order: a `## YYYY-MM-DD — #issue` heading, one blank line, o
 
 - Classification: `mechanical`
 - Observation: Eight generator tests each create isolated Cargo targets and repeat deep compile or negative-matrix evidence, while documentation, editor, and fixture lint checks extend every pull request's critical path despite being independently recoverable after merge.
-- Evidence: [#488](https://github.com/fontanierh/boxology/issues/488) moves those checks to explicit main-push `cargo xtask ci --no-budget`; pull requests retain workspace tests and clippy, two positive nested-Cargo generator capstones, fixture formatting and tests, key ordering, generation purity, and determinism.
+- Evidence: [#488](https://github.com/fontanierh/boxology/issues/488) moves those checks plus workspace Clippy to explicit main-push `cargo xtask ci --no-budget`; pull requests retain workspace tests, two positive nested-Cargo generator capstones, fixture formatting and tests, key ordering, generation purity, and determinism. A fresh Mac runner measured the sequential Clippy/test compile profiles beyond ten minutes, while the slim Linux lane completed in 1m22s.
