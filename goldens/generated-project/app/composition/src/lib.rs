@@ -25,13 +25,12 @@ pub fn start() -> Result<
     AssemblyErrors,
 > {
     let descriptor = generated::implementation_descriptor();
-    let capability = descriptor
+    let capabilities = descriptor
         .contract()
         .capabilities()
-        .first()
-        .expect("ping contract has one capability")
-        .id()
-        .clone();
+        .iter()
+        .map(|capability| capability.id().clone())
+        .collect::<Vec<_>>();
     let in_process = Arc::new(boxology_runtime::test_support::StubTransport::new());
     let http = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
         "127.0.0.1:0".parse().expect("loopback address is valid"),
@@ -41,18 +40,21 @@ pub fn start() -> Result<
     builder.add_box(descriptor, |imports| {
         generated::factory(PingService, imports)
     });
-    builder.expose(
-        BoxId::new("ping").expect("fixture box id is valid"),
-        capability.clone(),
-        in_process.clone(),
-        ExposureLevel::CodeOnly,
-    );
-    builder.expose(
-        BoxId::new("ping").expect("fixture box id is valid"),
-        capability,
-        http.clone(),
-        ExposureLevel::External,
-    );
+    let box_id = BoxId::new("ping").expect("fixture box id is valid");
+    for capability in capabilities {
+        builder.expose(
+            box_id.clone(),
+            capability.clone(),
+            in_process.clone(),
+            ExposureLevel::CodeOnly,
+        );
+        builder.expose(
+            box_id.clone(),
+            capability,
+            http.clone(),
+            ExposureLevel::External,
+        );
+    }
 
     let composition = builder.start()?;
     let address = http.local_addr().expect("HTTP binding bound during start");
@@ -70,7 +72,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    use super::start;
+    use super::{generated, start};
 
     const MANIFEST: &str = include_str!("../../boxology.toml");
 
@@ -126,10 +128,10 @@ mod tests {
         );
         assert_eq!(composition.bindings().len(), 2);
         let bindings = composition.bindings();
-        assert_eq!(bindings[0].capability().to_string(), "ping.ping");
+        assert_eq!(bindings[0].capability().to_string(), "ping.*");
         assert_eq!(bindings[0].transport(), Transport::InProcess);
         assert_eq!(bindings[0].exposure(), None);
-        assert_eq!(bindings[1].capability().to_string(), "ping.ping");
+        assert_eq!(bindings[1].capability().to_string(), "ping.*");
         assert_eq!(bindings[1].transport(), Transport::Http);
         assert_eq!(bindings[1].exposure(), Some(Exposure::External));
     }
@@ -138,8 +140,24 @@ mod tests {
     async fn assembled_ping_answers_in_process_and_over_real_http() {
         let (composition, address, in_process) = start().expect("ping composition starts");
         let runtime = in_process.runtime().expect("in-process binding is live");
-        assert_eq!(runtime.exposures().len(), 1);
-        let exposure = &runtime.exposures()[0];
+        assert_eq!(
+            runtime
+                .exposures()
+                .iter()
+                .map(|exposure| exposure.descriptor().id().to_string())
+                .collect::<Vec<_>>(),
+            generated::implementation_descriptor()
+                .contract()
+                .capabilities()
+                .iter()
+                .map(|capability| capability.id().to_string())
+                .collect::<Vec<_>>()
+        );
+        let exposure = runtime
+            .exposures()
+            .iter()
+            .find(|exposure| exposure.descriptor().id().name().as_str() == "ping")
+            .expect("ping is exposed in-process");
 
         let first = exposure
             .dispatch(context(), 17_u64.encode().expect("u64 encodes"))
@@ -167,18 +185,45 @@ mod tests {
 
         for nonce in [31_u64, 7_777_u64] {
             let request = format!("\"{nonce}\"");
-            let response = post(address, request.as_bytes()).await;
+            let response = post(address, "ping", request.as_bytes()).await;
             let expected = format!(r#"{{"result":{{"value":"{nonce}"}}}}"#);
             assert_canonical_response(&response, "HTTP/1.1 200 OK", expected.as_bytes());
             assert_eq!(decode_http_nonce(&response.body), nonce);
         }
 
-        let malformed = post(address, b"not-a-u64").await;
+        let malformed = post(address, "ping", b"not-a-u64").await;
         assert_canonical_response(
             &malformed,
             "HTTP/1.1 400 Bad Request",
             br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#,
         );
+
+        let greet = runtime
+            .exposures()
+            .iter()
+            .find(|exposure| exposure.descriptor().id().name().as_str() == "greet");
+        if std::env::var_os("BOXOLOGY_REQUIRE_GREET").is_some() {
+            assert!(greet.is_some(), "evolved greet is exposed in-process");
+        }
+        if let Some(greet) = greet {
+            let greeting = greet
+                .dispatch(
+                    context(),
+                    "Ada".to_owned().encode().expect("string encodes"),
+                )
+                .await
+                .expect("greet in-process call succeeds");
+            assert_eq!(
+                String::decode(&greeting).expect("greet in-process response decodes"),
+                "Hello, Ada!"
+            );
+            let response = post(address, "greet", br#""Grace""#).await;
+            assert_canonical_response(
+                &response,
+                "HTTP/1.1 200 OK",
+                br#"{"result":{"value":"Hello, Grace!"}}"#,
+            );
+        }
 
         composition
             .shutdown(Duration::from_secs(1))
@@ -193,12 +238,12 @@ mod tests {
         body: Vec<u8>,
     }
 
-    async fn post(address: std::net::SocketAddr, body: &[u8]) -> HttpResponse {
+    async fn post(address: std::net::SocketAddr, capability: &str, body: &[u8]) -> HttpResponse {
         let mut stream = TcpStream::connect(address)
             .await
             .expect("HTTP listener accepts");
         let head = format!(
-            "POST /rpc/ping/ping HTTP/1.1\r\nHost: boxology\r\n\
+            "POST /rpc/ping/{capability} HTTP/1.1\r\nHost: boxology\r\n\
              Content-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );

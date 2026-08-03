@@ -16,11 +16,11 @@ boxes = ["ping"]
 
 [[composition.bindings]]
 box = "ping"
-capability = "ping.ping"
+capability = "ping.*"
 transport = "in-process"
 
 [[composition.bindings]]
 box = "ping"
-capability = "ping.ping"
+capability = "ping.*"
 transport = "http"
 exposure = "external"

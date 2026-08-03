@@ -909,10 +909,10 @@ mod tests {
         );
         assert_eq!(composition.bindings().len(), 2);
         let bindings = composition.bindings();
-        assert_eq!(bindings[0].capability().to_string(), "ping.ping");
+        assert_eq!(bindings[0].capability().to_string(), "ping.*");
         assert_eq!(bindings[0].transport(), Transport::InProcess);
         assert_eq!(bindings[0].exposure(), None);
-        assert_eq!(bindings[1].capability().to_string(), "ping.ping");
+        assert_eq!(bindings[1].capability().to_string(), "ping.*");
         assert_eq!(bindings[1].transport(), Transport::Http);
         assert_eq!(bindings[1].exposure(), Some(Exposure::External));
     }

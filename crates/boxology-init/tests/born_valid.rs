@@ -46,6 +46,16 @@ impl Drop for Fixture {
 }
 
 fn run(deadline: Instant, root: &Path, program: &Path, args: &[&str]) -> String {
+    run_with_env(deadline, root, program, args, &[])
+}
+
+fn run_with_env(
+    deadline: Instant,
+    root: &Path,
+    program: &Path,
+    args: &[&str],
+    environment: &[(&str, &str)],
+) -> String {
     let id = NEXT_LOG.fetch_add(1, Ordering::Relaxed);
     let capture = root.parent().expect("fixture root has a cleanup parent");
     let stdout_path = capture.join(format!("born-valid-{id}.stdout"));
@@ -60,6 +70,7 @@ fn run(deadline: Instant, root: &Path, program: &Path, args: &[&str]) -> String 
         .args(args)
         .current_dir(root)
         .process_group(0)
+        .envs(environment.iter().copied())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     if program.file_name().is_some_and(|name| name == "cargo") {
@@ -277,6 +288,11 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
         generate,
         "generate ping unchanged\ngenerate result unchanged\n"
     );
+    let app_before: BTreeMap<_, _> = initialized
+        .iter()
+        .filter(|(logical, _)| logical.starts_with("app/"))
+        .map(|(logical, bytes)| (logical.clone(), bytes.clone()))
+        .collect();
     for (logical, before) in initialized {
         assert_eq!(
             fs::read(root.join(&logical)).expect("read regenerated file"),
@@ -284,4 +300,77 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
             "regeneration changed initialized bytes for {logical}"
         );
     }
+
+    let implementation_path = root.join("ping/implementation/src/lib.rs");
+    let implementation = fs::read_to_string(&implementation_path).expect("read ping source");
+    let contract_anchor = "    pub async fn ping(nonce: u64) -> Result<u64, HelloError>;\n";
+    assert_eq!(implementation.matches(contract_anchor).count(), 1);
+    let implementation = implementation.replacen(
+        contract_anchor,
+        concat!(
+            "    pub async fn ping(nonce: u64) -> Result<u64, HelloError>;\n\n",
+            "    #[capability(exposure = external)]\n",
+            "    pub async fn greet(name: String) -> Result<String, HelloError>;\n",
+        ),
+        1,
+    );
+    let implementation_anchor = "        Ok(nonce)\n    }\n}";
+    assert_eq!(implementation.matches(implementation_anchor).count(), 1);
+    let implementation = implementation.replacen(
+        implementation_anchor,
+        concat!(
+            "        Ok(nonce)\n",
+            "    }\n\n",
+            "    pub async fn greet(\n",
+            "        &self,\n",
+            "        context: boxology::CallContext,\n",
+            "        name: String,\n",
+            "    ) -> Result<String, HelloError> {\n",
+            "        let _ = context;\n",
+            "        Ok(format!(\"Hello, {name}!\"))\n",
+            "    }\n",
+            "}",
+        ),
+        1,
+    );
+    fs::write(&implementation_path, implementation).expect("write additive ping evolution");
+
+    let evolved = run(
+        deadline,
+        root,
+        Path::new("cargo"),
+        &[
+            "run",
+            "--quiet",
+            "--manifest-path",
+            source_manifest,
+            "-p",
+            "boxology-cli",
+            "--",
+            "generate",
+        ],
+    );
+    assert!(evolved.contains("generate ping written\n"), "{evolved}");
+    assert!(evolved.ends_with("generate result changed\n"), "{evolved}");
+    for (logical, before) in app_before {
+        assert_eq!(
+            fs::read(root.join(&logical)).expect("read app file after ping evolution"),
+            before,
+            "ping-owned additive evolution changed foreign app bytes for {logical}"
+        );
+    }
+    run_with_env(
+        deadline,
+        root,
+        Path::new("cargo"),
+        &[
+            "test",
+            "-p",
+            "ping-app",
+            "tests::assembled_ping_answers_in_process_and_over_real_http",
+            "--",
+            "--exact",
+        ],
+        &[("BOXOLOGY_REQUIRE_GREET", "1")],
+    );
 }
