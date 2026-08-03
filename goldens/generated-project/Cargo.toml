@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
-members = []
+members = [
+    "ping/generated/contract",
+    "ping/implementation",
+]
 
 [workspace.package]
 edition = "2024"
