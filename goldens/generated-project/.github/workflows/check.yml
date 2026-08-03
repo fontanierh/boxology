@@ -1,0 +1,40 @@
+# The repository-owned Boxology validation workflow (S5 D7).
+#
+# This document is Boxology platform data: its content is owned by the
+# platform (specs/s5-manifest-and-validation.md D7) and written verbatim
+# into generated projects by the installer, which owns only its placement
+# (specs/s6-installer-and-generated-project.md D4). It runs the same
+# `boxology check` used by local development; there is no hidden CI-only
+# validation layer (boxology-details/08-rust-build-topology.md).
+#
+# V0 precondition: the Boxology platform is consumed from a source checkout
+# and nothing is published, so the runner must provide the `boxology`
+# binary on PATH and the platform source checkout at the path recorded in
+# this workspace's manifests. The first published release replaces this
+# precondition with a versioned installation step.
+
+name: check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # fetch-depth: 0 guarantees the pull request's base revision is
+      # locally available to `boxology check --base` (S5 D7).
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: boxology check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: boxology check --base "$BASE_SHA"
