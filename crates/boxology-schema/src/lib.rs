@@ -47,9 +47,10 @@
 // codes belong to this slice, while the classifier-reserved range remains outside this reader.
 mod read;
 
+pub use boxology_contract::{ExposureLevel, Idempotency};
 pub use read::{CLASSIFIER_RESERVED_CODES, Diagnostic, Diagnostics};
 
-use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
+use boxology_contract::{BoxId, CapabilityName};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
