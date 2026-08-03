@@ -126,7 +126,7 @@ Fact, verified during review: on the current private-repository plan, branch-pro
 
 ### D10 — Bootstrap-to-canonical handoff
 
-`cargo xtask ci` is **temporary bootstrap orchestration**. When S5 ships `boxology check` and S7 adopts manifests on this repository: platform validation (ownership, edges, regeneration, classification) is delegated to `boxology check` invoked by `xtask ci`; xtask retains only repository-specific checks (links, budget, determinism meta-tests) under clearly separate names; and every bootstrap registry duplicated here — the derived-output exclusion list and the hand-authored formatting package-selection lists (owned and excluded, per D3) — is replaced by manifest-derived data, with the xtask copies deleted. Manifests are authoritative from S7 onward; S0 never becomes a second registry that survives.
+`cargo xtask ci` is **temporary bootstrap orchestration**. S7 adopts manifests and gates repository CI with `boxology check`; immediately after v0, S7-T5/#342 completes the absorption: platform validation (ownership, edges, regeneration, classification) is delegated to `boxology check` invoked by `xtask ci`; xtask retains only repository-specific checks (links, budget, determinism meta-tests) under clearly separate names; and every bootstrap registry duplicated here — the derived-output exclusion list and the hand-authored formatting package-selection lists (owned and excluded, per D3) — is replaced by manifest-derived data, with the xtask copies deleted. Manifests are authoritative for platform policy from S7 onward; the duplicated bootstrap registries are an explicitly bounded transition and do not survive #342.
 
 ### D11 — S0-T8 Mac-hosted ARM64 runner contract
 
@@ -205,3 +205,5 @@ The #17 and #41 reconciliation comments record this spec's narrowings (candidate
 - Exact toolchain version, runner-image versions, and pinned cargo-deny version — resolved at implementation time and recorded in the task PRs.
 - Whether macOS validation later narrows to merge-time only — superseded by the native Mac-hosted lane.
 - Hosted Linux/macOS runner cost now justifies the two Mac-hosted JIT lanes in D11; x86 coverage remains a deferred follow-up.
+
+**Amendment of 2026-08-03** (maintainer acceleration decision): D10's registry absorption moves to S7-T5/#342 as the first task immediately post-v0; S7's root manifests and `boxology check` gate remain in force during the bounded transition.
