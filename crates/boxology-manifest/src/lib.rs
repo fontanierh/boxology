@@ -9,7 +9,9 @@
 mod glob;
 
 pub use glob::GlobPattern;
-pub use parse::{Binding, Composition, CrateEntry, CrateRole, DerivedOutput, Exposure};
+pub use parse::{
+    Binding, CapabilitySelector, Composition, CrateEntry, CrateRole, DerivedOutput, Exposure,
+};
 pub use parse::{Import, Kind, Manifest, Transport};
 
 use std::fmt;

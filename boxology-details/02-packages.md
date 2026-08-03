@@ -112,12 +112,17 @@ transport = "in-process"
 
 [[composition.bindings]]
 box = "hello"
-capability = "hello.greet"
+capability = "hello.*"
 transport = "http"
 exposure = "external"
 ```
 
-Composition validation checks that every selected identity exists, every binding is compatible with the generated contract, and an exposure does not exceed the box's declared maximum.
+The `capability` value is either one exact `<box>.<name>` capability or the selector `<box>.*`.
+The wildcard selects every capability currently declared by that box and automatically includes
+capabilities added to its contract later. Composition validation checks that every selected
+identity exists and expands every selector against the generated contract. An expansion must be
+nonempty, is ordered bytewise by qualified capability id for deterministic output, and checks the
+binding's exposure against every expanded capability's declared maximum.
 
 The initializer creates a logical `platform` package at the workspace root. Its manifest owns root `Cargo.toml`, repository CI, generator configuration, ownership rules, and other non-derived root machinery, and declares `Cargo.lock` as the workspace's global derived artifact. The Hello box and application composition live under their own package roots with their own manifests. The platform package may initially contain no Rust crate.
 
