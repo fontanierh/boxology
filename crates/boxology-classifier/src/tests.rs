@@ -80,41 +80,35 @@ fn variant(name: &str) -> SchemaVariant {
     }
 }
 
-fn assert_exact_report(
-    report: &ClassificationReport,
-    expected: &[(&str, &str, Class, Option<&str>)],
-    verdict: Class,
-) {
+type Expected<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    Class,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+);
+
+macro_rules! e {
+    ($code:literal, $path:literal, $kind:literal, $class:expr, $base:expr, $submitted:expr, $condition:expr) => {
+        ($code, $path, $kind, $class, $base, $submitted, $condition)
+    };
+}
+
+fn assert_exact_report(report: &ClassificationReport, expected: &[Expected<'_>], verdict: Class) {
     assert_eq!(report.findings().len(), expected.len());
     for (finding, expected) in report.findings().iter().zip(expected) {
-        let (code, path, class, condition) = *expected;
+        let (code, path, kind, class, base, submitted, condition) = *expected;
         assert_eq!(finding.code(), code);
         assert_eq!(finding.path(), path);
+        assert_eq!(finding.kind(), kind);
         assert_eq!(finding.class(), class);
+        assert_eq!(finding.base_excerpt(), base);
+        assert_eq!(finding.submitted_excerpt(), submitted);
         assert_eq!(finding.condition(), condition);
     }
     assert_eq!(report.verdict(), verdict);
-}
-
-fn assert_conditional(report: &ClassificationReport, paths: &[&str]) {
-    assert_eq!(report.verdict(), Class::CompatibleWithConditions);
-    assert_eq!(report.findings().len(), paths.len());
-    for (finding, path) in report.findings().iter().zip(paths) {
-        assert_eq!(
-            (
-                finding.code(),
-                finding.path(),
-                finding.class(),
-                finding.condition()
-            ),
-            (
-                "BXC0036",
-                *path,
-                Class::CompatibleWithConditions,
-                Some("unknown-variant tolerance")
-            )
-        );
-    }
 }
 
 fn assert_unclassified_pair(base: SchemaDocument, submitted: SchemaDocument) {
@@ -122,7 +116,15 @@ fn assert_unclassified_pair(base: SchemaDocument, submitted: SchemaDocument) {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0028", "hello", Class::Incompatible, None)],
+        &[(
+            "BXC0028",
+            "hello",
+            "unclassified change",
+            Class::Incompatible,
+            None,
+            None,
+            None,
+        )],
         Class::Incompatible,
     );
 }
@@ -200,35 +202,33 @@ fn pairing_errors_render_exactly() {
 #[test]
 fn introduced_and_removed_are_exact() {
     let introduced = classify(None, Some(&document("hello"))).unwrap();
-    let finding = &introduced.findings()[0];
-    assert_eq!(
-        (
-            finding.code(),
-            finding.path(),
-            finding.class(),
-            finding.condition(),
-            introduced.verdict()
-        ),
-        ("BXC0026", "hello", Class::Additive, None, Class::Additive)
+    assert_exact_report(
+        &introduced,
+        &[(
+            "BXC0026",
+            "hello",
+            "contract introduced",
+            Class::Additive,
+            None,
+            Some("hello"),
+            None,
+        )],
+        Class::Additive,
     );
 
     let removed = classify(Some(&document("hello")), None).unwrap();
-    let finding = &removed.findings()[0];
-    assert_eq!(
-        (
-            finding.code(),
-            finding.path(),
-            finding.class(),
-            finding.condition(),
-            removed.verdict()
-        ),
-        (
+    assert_exact_report(
+        &removed,
+        &[(
             "BXC0027",
             "hello",
+            "contract removed",
             Class::Incompatible,
+            Some("hello"),
             None,
-            Class::Incompatible
-        )
+            None,
+        )],
+        Class::Incompatible,
     );
 }
 
@@ -562,6 +562,7 @@ fn type_changes_treats_type_rename_as_remove_plus_add() {
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn single_referenced_error_variant_addition_is_conditional() {
     let base = document("hello");
@@ -570,9 +571,10 @@ fn single_referenced_error_variant_addition_is_conditional() {
     submitted.revision = OTHER_REVISION.to_owned();
 
     let report = classify(Some(&base), Some(&submitted)).unwrap();
-    assert_conditional(&report, &["hello/type/GreetError/variant/Other"]);
+    assert_exact_report(&report, &[e!("BXC0036", "hello/type/GreetError/variant/Other", "error variant added", Class::CompatibleWithConditions, None, Some("Other"), Some("unknown-variant tolerance"))], Class::CompatibleWithConditions);
 }
 
+#[rustfmt::skip]
 #[test]
 fn multiple_referenced_error_variant_additions_are_sorted() {
     let base = two_error_document();
@@ -582,12 +584,13 @@ fn multiple_referenced_error_variant_additions_are_sorted() {
     submitted.revision = OTHER_REVISION.to_owned();
 
     let report = classify(Some(&base), Some(&submitted)).unwrap();
-    assert_conditional(
+    assert_exact_report(
         &report,
         &[
-            "hello/type/GreetError/variant/GreetOther",
-            "hello/type/WaveError/variant/WaveOther",
+            e!("BXC0036", "hello/type/GreetError/variant/GreetOther", "error variant added", Class::CompatibleWithConditions, None, Some("GreetOther"), Some("unknown-variant tolerance")),
+            e!("BXC0036", "hello/type/WaveError/variant/WaveOther", "error variant added", Class::CompatibleWithConditions, None, Some("WaveOther"), Some("unknown-variant tolerance")),
         ],
+        Class::CompatibleWithConditions,
     );
 }
 
@@ -622,6 +625,7 @@ fn variant_changes_outside_named_addition_fail_closed() {
     });
 }
 
+#[rustfmt::skip]
 #[test]
 fn variant_removed_is_incompatible() {
     let mut base = document("hello");
@@ -630,12 +634,7 @@ fn variant_removed_is_incompatible() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[(
-            "BXC0035",
-            "hello/type/GreetError/variant/Other",
-            Class::Incompatible,
-            None,
-        )],
+        &[e!("BXC0035", "hello/type/GreetError/variant/Other", "variant removed", Class::Incompatible, Some("Other"), None, None)],
         Class::Incompatible,
     );
 }
@@ -651,6 +650,7 @@ fn unreferenced_type_addition_fails_closed() {
     assert_unclassified_pair(base, submitted);
 }
 
+#[rustfmt::skip]
 #[test]
 fn unclassified_beside_named_finding_fails_closed() {
     // Named docs finding beside an unreferenced-type addition: only this shape distinguishes the
@@ -667,18 +667,14 @@ fn unclassified_beside_named_finding_fails_closed() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0028", "hello", Class::Incompatible, None),
-            (
-                "BXC0033",
-                "hello/type/GreetError",
-                Class::Documentation,
-                None,
-            ),
+            e!("BXC0028", "hello", "unclassified change", Class::Incompatible, None, None, None),
+            e!("BXC0033", "hello/type/GreetError", "documentation changed", Class::Documentation, Some("Greet failures."), Some("Greet failures.\nExtra type docs."), None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn variant_payload_kind_change_is_incompatible_at_capability_error() {
     let base = document("hello");
@@ -692,11 +688,12 @@ fn variant_payload_kind_change_is_incompatible_at_capability_error() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0052", "hello.greet/error", Class::Incompatible, None)],
+        &[e!("BXC0052", "hello.greet/error", "error payload changed", Class::Incompatible, Some("unit"), Some("value"), None)],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn type_docs_changed_is_documentation() {
     let base = document("hello");
@@ -706,16 +703,12 @@ fn type_docs_changed_is_documentation() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[(
-            "BXC0033",
-            "hello/type/GreetError",
-            Class::Documentation,
-            None,
-        )],
+        &[e!("BXC0033", "hello/type/GreetError", "documentation changed", Class::Documentation, Some("Greet failures."), Some("Greet failures.\nExtra type docs."), None)],
         Class::Documentation,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn variant_docs_changed_is_documentation() {
     let base = document("hello");
@@ -727,16 +720,12 @@ fn variant_docs_changed_is_documentation() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[(
-            "BXC0033",
-            "hello/type/GreetError/variant/EmptyName",
-            Class::Documentation,
-            None,
-        )],
+        &[e!("BXC0033", "hello/type/GreetError/variant/EmptyName", "documentation changed", Class::Documentation, Some("The name was empty."), Some("The name was empty.\nExtra variant docs."), None)],
         Class::Documentation,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn type_deprecation_changed_is_deprecation() {
     let base = document("hello");
@@ -746,11 +735,12 @@ fn type_deprecation_changed_is_deprecation() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0034", "hello/type/GreetError", Class::Deprecation, None)],
+        &[e!("BXC0034", "hello/type/GreetError", "deprecation changed", Class::Deprecation, None, Some("use another error"), None)],
         Class::Deprecation,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn variant_deprecation_changed_is_deprecation() {
     let base = document("hello");
@@ -760,16 +750,12 @@ fn variant_deprecation_changed_is_deprecation() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[(
-            "BXC0034",
-            "hello/type/GreetError/variant/EmptyName",
-            Class::Deprecation,
-            None,
-        )],
+        &[e!("BXC0034", "hello/type/GreetError/variant/EmptyName", "deprecation changed", Class::Deprecation, None, Some("use another variant"), None)],
         Class::Deprecation,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn type_added_with_referencing_capability_is_additive() {
     let base = document("hello");
@@ -784,13 +770,14 @@ fn type_added_with_referencing_capability_is_additive() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0039", "hello.wave", Class::Additive, None),
-            ("BXC0031", "hello/type/WaveError", Class::Additive, None),
+            e!("BXC0039", "hello.wave", "capability added", Class::Additive, None, Some("wave"), None),
+            e!("BXC0031", "hello/type/WaveError", "type added", Class::Additive, None, Some("WaveError"), None),
         ],
         Class::Additive,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn type_removed_with_referencing_capability_is_incompatible() {
     let base = two_error_document();
@@ -803,13 +790,14 @@ fn type_removed_with_referencing_capability_is_incompatible() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0040", "hello.wave", Class::Incompatible, None),
-            ("BXC0032", "hello/type/WaveError", Class::Incompatible, None),
+            e!("BXC0040", "hello.wave", "capability removed", Class::Incompatible, Some("wave"), None, None),
+            e!("BXC0032", "hello/type/WaveError", "type removed", Class::Incompatible, Some("WaveError"), None, None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn capability_added_is_additive() {
     let base = document("hello");
@@ -822,11 +810,12 @@ fn capability_added_is_additive() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0039", "hello.wave", Class::Additive, None)],
+        &[e!("BXC0039", "hello.wave", "capability added", Class::Additive, None, Some("wave"), None)],
         Class::Additive,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn capability_removed_is_incompatible() {
     let mut base = document("hello");
@@ -838,11 +827,12 @@ fn capability_removed_is_incompatible() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0040", "hello.wave", Class::Incompatible, None)],
+        &[e!("BXC0040", "hello.wave", "capability removed", Class::Incompatible, Some("wave"), None, None)],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn capability_rename_is_remove_plus_add() {
     let base = document("hello");
@@ -856,13 +846,14 @@ fn capability_rename_is_remove_plus_add() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0040", "hello.greet", Class::Incompatible, None),
-            ("BXC0039", "hello.wave", Class::Additive, None),
+            e!("BXC0040", "hello.greet", "capability removed", Class::Incompatible, Some("greet"), None, None),
+            e!("BXC0039", "hello.wave", "capability added", Class::Additive, None, Some("wave"), None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn input_name_changed_is_incompatible() {
     let base = document("hello");
@@ -875,11 +866,12 @@ fn input_name_changed_is_incompatible() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0041", "hello.greet/input", Class::Incompatible, None)],
+        &[e!("BXC0041", "hello.greet/input", "capability input parameter name changed", Class::Incompatible, Some("name"), Some("label"), None)],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn input_leaf_changed_is_incompatible() {
     let base = document("hello");
@@ -892,11 +884,12 @@ fn input_leaf_changed_is_incompatible() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0042", "hello.greet/input", Class::Incompatible, None)],
+        &[e!("BXC0042", "hello.greet/input", "capability input type changed", Class::Incompatible, Some("String"), Some("bool"), None)],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn output_leaf_changed_is_incompatible() {
     let base = document("hello");
@@ -909,11 +902,12 @@ fn output_leaf_changed_is_incompatible() {
     let report = classify(Some(&base), Some(&submitted)).unwrap();
     assert_exact_report(
         &report,
-        &[("BXC0043", "hello.greet/output", Class::Incompatible, None)],
+        &[e!("BXC0043", "hello.greet/output", "capability output type changed", Class::Incompatible, Some("String"), Some("bool"), None)],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn input_name_and_leaf_changes_share_one_path_and_sort_by_code() {
     let base = document("hello");
@@ -928,13 +922,14 @@ fn input_name_and_leaf_changes_share_one_path_and_sort_by_code() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0041", "hello.greet/input", Class::Incompatible, None),
-            ("BXC0042", "hello.greet/input", Class::Incompatible, None),
+            e!("BXC0041", "hello.greet/input", "capability input parameter name changed", Class::Incompatible, Some("name"), Some("label"), None),
+            e!("BXC0042", "hello.greet/input", "capability input type changed", Class::Incompatible, Some("String"), Some("bool"), None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn capability_metadata_rows_are_exact_and_maximum_severity_wins() {
     let base = document("hello");
@@ -949,16 +944,17 @@ fn capability_metadata_rows_are_exact_and_maximum_severity_wins() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0033", "hello.greet", Class::Documentation, None),
-            ("BXC0034", "hello.greet", Class::Deprecation, None),
-            ("BXC0044", "hello.greet/error", Class::Incompatible, None),
-            ("BXC0046", "hello.greet/exposure", Class::Incompatible, None),
-            ("BXC0047", "hello.greet/idempotency", Class::Additive, None),
+            e!("BXC0033", "hello.greet", "documentation changed", Class::Documentation, Some("Greets a caller."), Some("Greets a caller.\nMore docs."), None),
+            e!("BXC0034", "hello.greet", "deprecation changed", Class::Deprecation, None, Some("retired"), None),
+            e!("BXC0044", "hello.greet/error", "capability declared error changed", Class::Incompatible, Some("GreetError"), Some("WaveError"), None),
+            e!("BXC0046", "hello.greet/exposure", "max exposure lowered", Class::Incompatible, Some("external"), Some("internal"), None),
+            e!("BXC0047", "hello.greet/idempotency", "idempotency strengthened", Class::Additive, Some("none"), Some("inherent"), None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn exposure_and_idempotency_directions_have_distinct_codes() {
     let mut low = document("hello");
@@ -970,8 +966,8 @@ fn exposure_and_idempotency_directions_have_distinct_codes() {
     assert_exact_report(
         &classify(Some(&low), Some(&high)).unwrap(),
         &[
-            ("BXC0045", "hello.greet/exposure", Class::Additive, None),
-            ("BXC0047", "hello.greet/idempotency", Class::Additive, None),
+            e!("BXC0045", "hello.greet/exposure", "max exposure raised", Class::Additive, Some("code_only"), Some("external"), None),
+            e!("BXC0047", "hello.greet/idempotency", "idempotency strengthened", Class::Additive, Some("none"), Some("inherent"), None),
         ],
         Class::Additive,
     );
@@ -980,18 +976,14 @@ fn exposure_and_idempotency_directions_have_distinct_codes() {
     assert_exact_report(
         &classify(Some(&high), Some(&low)).unwrap(),
         &[
-            ("BXC0046", "hello.greet/exposure", Class::Incompatible, None),
-            (
-                "BXC0048",
-                "hello.greet/idempotency",
-                Class::Incompatible,
-                None,
-            ),
+            e!("BXC0046", "hello.greet/exposure", "max exposure lowered", Class::Incompatible, Some("external"), Some("code_only"), None),
+            e!("BXC0048", "hello.greet/idempotency", "idempotency weakened", Class::Incompatible, Some("inherent"), Some("none"), None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn mixed_variant_addition_and_type_docs_keeps_conditional_verdict() {
     let base = document("hello");
@@ -1003,23 +995,14 @@ fn mixed_variant_addition_and_type_docs_keeps_conditional_verdict() {
     assert_exact_report(
         &report,
         &[
-            (
-                "BXC0033",
-                "hello/type/GreetError",
-                Class::Documentation,
-                None,
-            ),
-            (
-                "BXC0036",
-                "hello/type/GreetError/variant/Other",
-                Class::CompatibleWithConditions,
-                Some("unknown-variant tolerance"),
-            ),
+            e!("BXC0033", "hello/type/GreetError", "documentation changed", Class::Documentation, Some("Greet failures."), Some("Greet failures.\nExtra type docs."), None),
+            e!("BXC0036", "hello/type/GreetError/variant/Other", "error variant added", Class::CompatibleWithConditions, None, Some("Other"), Some("unknown-variant tolerance")),
         ],
         Class::CompatibleWithConditions,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn mixed_variant_addition_and_capability_docs_keeps_conditional_verdict() {
     let base = document("hello");
@@ -1031,13 +1014,8 @@ fn mixed_variant_addition_and_capability_docs_keeps_conditional_verdict() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0033", "hello.greet", Class::Documentation, None),
-            (
-                "BXC0036",
-                "hello/type/GreetError/variant/Other",
-                Class::CompatibleWithConditions,
-                Some("unknown-variant tolerance"),
-            ),
+            e!("BXC0033", "hello.greet", "documentation changed", Class::Documentation, Some("Greets a caller."), Some("Greets a caller.\nMore docs."), None),
+            e!("BXC0036", "hello/type/GreetError/variant/Other", "error variant added", Class::CompatibleWithConditions, None, Some("Other"), Some("unknown-variant tolerance")),
         ],
         Class::CompatibleWithConditions,
     );
@@ -1064,6 +1042,7 @@ fn revision_only_difference_is_integrity_silence() {
     assert_eq!(diagnostic.to_string(), INTEGRITY_SILENCE);
 }
 
+#[rustfmt::skip]
 #[test]
 fn type_rename_is_remove_plus_unreferenced_add() {
     let base = document("hello");
@@ -1074,18 +1053,14 @@ fn type_rename_is_remove_plus_unreferenced_add() {
     assert_exact_report(
         &report,
         &[
-            ("BXC0028", "hello", Class::Incompatible, None),
-            (
-                "BXC0032",
-                "hello/type/GreetError",
-                Class::Incompatible,
-                None,
-            ),
+            e!("BXC0028", "hello", "unclassified change", Class::Incompatible, None, None, None),
+            e!("BXC0032", "hello/type/GreetError", "type removed", Class::Incompatible, Some("GreetError"), None, None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn variant_rename_is_remove_plus_add() {
     let base = document("hello");
@@ -1096,23 +1071,14 @@ fn variant_rename_is_remove_plus_add() {
     assert_exact_report(
         &report,
         &[
-            (
-                "BXC0035",
-                "hello/type/GreetError/variant/EmptyName",
-                Class::Incompatible,
-                None,
-            ),
-            (
-                "BXC0036",
-                "hello/type/GreetError/variant/Renamed",
-                Class::CompatibleWithConditions,
-                Some("unknown-variant tolerance"),
-            ),
+            e!("BXC0035", "hello/type/GreetError/variant/EmptyName", "variant removed", Class::Incompatible, Some("EmptyName"), None, None),
+            e!("BXC0036", "hello/type/GreetError/variant/Renamed", "error variant added", Class::CompatibleWithConditions, None, Some("Renamed"), Some("unknown-variant tolerance")),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn named_payload_field_rows_are_exact_and_sorted() {
     let base = named_document();
@@ -1133,41 +1099,17 @@ fn named_payload_field_rows_are_exact_and_sorted() {
     assert_exact_report(
         &report,
         &[
-            (
-                "BXC0033",
-                "hello/type/GreetError/variant/EmptyName/field/first",
-                Class::Documentation,
-                None,
-            ),
-            (
-                "BXC0034",
-                "hello/type/GreetError/variant/EmptyName/field/first",
-                Class::Deprecation,
-                None,
-            ),
-            (
-                "BXC0051",
-                "hello/type/GreetError/variant/EmptyName/field/first",
-                Class::Incompatible,
-                None,
-            ),
-            (
-                "BXC0050",
-                "hello/type/GreetError/variant/EmptyName/field/second",
-                Class::Incompatible,
-                None,
-            ),
-            (
-                "BXC0049",
-                "hello/type/GreetError/variant/EmptyName/field/third",
-                Class::Additive,
-                None,
-            ),
+            e!("BXC0033", "hello/type/GreetError/variant/EmptyName/field/first", "documentation changed", Class::Documentation, Some(""), Some("new docs"), None),
+            e!("BXC0034", "hello/type/GreetError/variant/EmptyName/field/first", "deprecation changed", Class::Deprecation, None, Some("retired"), None),
+            e!("BXC0051", "hello/type/GreetError/variant/EmptyName/field/first", "field type changed", Class::Incompatible, Some("String"), Some("bool"), None),
+            e!("BXC0050", "hello/type/GreetError/variant/EmptyName/field/second", "field removed", Class::Incompatible, Some("second"), None, None),
+            e!("BXC0049", "hello/type/GreetError/variant/EmptyName/field/third", "field added", Class::Additive, None, Some("third"), None),
         ],
         Class::Incompatible,
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn payload_value_metadata_and_type_classify_independently() {
     let mut base = document("hello");
@@ -1186,19 +1128,9 @@ fn payload_value_metadata_and_type_classify_independently() {
     assert_exact_report(
         &classify(Some(&base), Some(&submitted)).unwrap(),
         &[
-            ("BXC0052", "hello.greet/error", Class::Incompatible, None),
-            (
-                "BXC0033",
-                "hello/type/GreetError/variant/EmptyName",
-                Class::Documentation,
-                None,
-            ),
-            (
-                "BXC0034",
-                "hello/type/GreetError/variant/EmptyName",
-                Class::Deprecation,
-                None,
-            ),
+            e!("BXC0052", "hello.greet/error", "error payload changed", Class::Incompatible, Some("String"), Some("bool"), None),
+            e!("BXC0033", "hello/type/GreetError/variant/EmptyName", "documentation changed", Class::Documentation, Some(""), Some("new docs"), None),
+            e!("BXC0034", "hello/type/GreetError/variant/EmptyName", "deprecation changed", Class::Deprecation, None, Some("retired"), None),
         ],
         Class::Incompatible,
     );
@@ -1247,13 +1179,19 @@ fn maximum_severity_wins_in_both_finding_orders() {
     let low = Finding {
         code: "BXC0026",
         path: "hello".to_owned(),
+        kind: "contract introduced",
         class: Class::Additive,
+        base_excerpt: None,
+        submitted_excerpt: None,
         condition: None,
     };
     let high = Finding {
         code: "BXC0028",
         path: "hello".to_owned(),
+        kind: "unclassified change",
         class: Class::Incompatible,
+        base_excerpt: None,
+        submitted_excerpt: None,
         condition: None,
     };
     assert_eq!(report(vec![low, high]).verdict, Class::Incompatible);
@@ -1261,13 +1199,19 @@ fn maximum_severity_wins_in_both_finding_orders() {
     let low = Finding {
         code: "BXC0026",
         path: "hello".to_owned(),
+        kind: "contract introduced",
         class: Class::Additive,
+        base_excerpt: None,
+        submitted_excerpt: None,
         condition: None,
     };
     let high = Finding {
         code: "BXC0028",
         path: "hello".to_owned(),
+        kind: "unclassified change",
         class: Class::Incompatible,
+        base_excerpt: None,
+        submitted_excerpt: None,
         condition: None,
     };
     assert_eq!(report(vec![high, low]).verdict, Class::Incompatible);
@@ -1440,7 +1384,10 @@ finding BXC0034 hello/type/GreetError deprecation
         findings: vec![Finding {
             code: "BXC0028",
             path: "hello/\"quoted\\path".to_owned(),
+            kind: "unclassified change",
             class: Class::Incompatible,
+            base_excerpt: Some("base \"quote\\slash".to_owned()),
+            submitted_excerpt: Some("submitted \"quote\\slash".to_owned()),
             condition: None,
         }],
         verdict: Class::Incompatible,
