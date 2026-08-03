@@ -1,8 +1,9 @@
 #![cfg(unix)]
 
+use boxology_contract::BoxId;
 use boxology_init::{InitRequest, initialize};
 use boxology_manifest::{Kind, Manifest, RelativePath};
-use boxology_workspace::{FileEntry, WorkspaceInputs};
+use boxology_workspace::{Entry, FileEntry, SelectedSchema, WorkspaceInputs};
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -56,6 +57,22 @@ fn run_with_env(
     args: &[&str],
     environment: &[(&str, &str)],
 ) -> String {
+    let (status, stdout, stderr) = run_captured(deadline, root, program, args, environment);
+    assert!(
+        status.success(),
+        "{} {args:?} failed with {status}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        program.display()
+    );
+    stdout
+}
+
+fn run_captured(
+    deadline: Instant,
+    root: &Path,
+    program: &Path,
+    args: &[&str],
+    environment: &[(&str, &str)],
+) -> (std::process::ExitStatus, String, String) {
     let id = NEXT_LOG.fetch_add(1, Ordering::Relaxed);
     let capture = root.parent().expect("fixture root has a cleanup parent");
     let stdout_path = capture.join(format!("born-valid-{id}.stdout"));
@@ -97,12 +114,7 @@ fn run_with_env(
     let stderr = fs::read_to_string(&stderr_path).expect("read command stderr");
     fs::remove_file(stdout_path).expect("remove stdout capture");
     fs::remove_file(stderr_path).expect("remove stderr capture");
-    assert!(
-        status.success(),
-        "{} {args:?} failed with {status}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-        program.display()
-    );
-    stdout
+    (status, stdout, stderr)
 }
 
 fn quality_commands(root: &Path, logical: &str) -> Vec<String> {
@@ -293,6 +305,14 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
         .filter(|(logical, _)| logical.starts_with("app/"))
         .map(|(logical, bytes)| (logical.clone(), bytes.clone()))
         .collect();
+    assert_eq!(
+        app_before.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "app/boxology.toml",
+            "app/composition/Cargo.toml",
+            "app/composition/src/lib.rs",
+        ]
+    );
     for (logical, before) in initialized {
         assert_eq!(
             fs::read(root.join(&logical)).expect("read regenerated file"),
@@ -372,5 +392,98 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
             "--exact",
         ],
         &[("BOXOLOGY_REQUIRE_GREET", "1")],
+    );
+
+    let evolved = fs::read_to_string(&implementation_path).expect("read evolved ping source");
+    let external = "    #[capability(exposure = external)]\n    pub async fn greet";
+    assert_eq!(evolved.matches(external).count(), 1);
+    fs::write(
+        &implementation_path,
+        evolved.replacen(
+            external,
+            "    #[capability(exposure = internal)]\n    pub async fn greet",
+            1,
+        ),
+    )
+    .expect("restrict greet exposure");
+    let restricted = run(
+        deadline,
+        root,
+        Path::new("cargo"),
+        &[
+            "run",
+            "--quiet",
+            "--manifest-path",
+            source_manifest,
+            "-p",
+            "boxology-cli",
+            "--",
+            "generate",
+        ],
+    );
+    assert!(
+        restricted.contains("generate ping written\n"),
+        "{restricted}"
+    );
+    let (status, stdout, stderr) = run_captured(
+        deadline,
+        root,
+        Path::new("cargo"),
+        &[
+            "run",
+            "--quiet",
+            "--manifest-path",
+            source_manifest,
+            "-p",
+            "boxology-cli",
+            "--",
+            "check",
+        ],
+        &[],
+    );
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stderr.is_empty(), "{stderr}");
+    let finding = "BXW0090 app/boxology.toml package=ping-app candidates=[capability=ping.greet exposure=external max=internal transport=http selector=ping.*]";
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.contains("BXW0090"))
+            .collect::<Vec<_>>(),
+        [format!("  {finding}")],
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.trim_start().starts_with("BXW"))
+            .count(),
+        1,
+        "{stdout}"
+    );
+    assert!(stdout.ends_with("check result failed\n"), "{stdout}");
+
+    let selected = SelectedSchema::new(
+        BoxId::new("ping").expect("ping id is valid"),
+        RelativePath::new("ping/generated/schema.json").expect("schema path is valid"),
+        Some(fs::read(root.join("ping/generated/schema.json")).expect("read restricted schema")),
+    );
+    let findings = workspace
+        .check_compositions(&[selected])
+        .expect_err("external wildcard exceeds internal greet maximum");
+    let [Entry::Workspace(carried)] = findings.as_slice() else {
+        panic!("expected one workspace finding: {findings}")
+    };
+    assert_eq!(carried.to_string(), finding);
+    assert_eq!(
+        carried.rule(),
+        "binding exposure must not exceed the declared maximum of any matched capability"
+    );
+    assert_eq!(
+        carried.rule_source(),
+        "specs/s5-manifest-and-validation.md D2"
     );
 }
