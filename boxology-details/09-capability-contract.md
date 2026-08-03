@@ -53,13 +53,13 @@ impl HelloService {
 
 The two signatures intentionally repeat. The declaration is the deterministic, language-neutral boundary; the inherent method is executable Rust. Generated assertions make rustc reject any mismatch.
 
-The v0 source model is fixed where listed and fail-closed elsewhere:
+The v0 source model is fixed where listed and fail-closed elsewhere. This section states the canonical **target** grammar; v0's **implementation evidence corpus** is the scalar boundary subset proven by the four fixtures named in [V0 Streams](11-v0-streams.md#the-v0-evidence-corpus). The `name` override, structured/container authoring, named payloads, and `Blob`/`Secret` end-to-end generation/binding coverage are deferred post-v0. `BXG0040` and `BXG0048` remain the coded generation gates for their current unsupported emission paths; partial parser/model handling of other target grammar is not a v0 support claim. Core `ContractValue`, presence, `Blob`, `Secret`, redaction, and codec semantics remain shipped and tested; this scoping does not remove them.
 
 - Every declared type, field, variant, and capability uses an ordinary non-raw Rust identifier. A struct is `pub struct Name { pub field: Type, ... }`; all fields are named and public. An enum is `pub enum Name` with unit, one-value, or named-field variants. `#[error]` has no arguments and marks an enum as an error.
 - A capability is `#[capability(...)] pub async fn name(input: Type) -> Result<Output, ErrorType>;`, has exactly one input, and names an in-block `#[error]` enum directly as `ErrorType`. Multiple logical inputs use a struct.
 - Context is implicit in the contract declaration. Its implementation receives `&self`, `boxology::CallContext`, then exactly the declared input.
 - The public capability name defaults to the Rust function name.
-- Capability arguments are unique, comma-separated, order-independent, and allow a trailing comma: `name = "[a-z][a-z0-9_]*"`, `exposure = code_only | internal | external`, and `idempotency = none | inherent`. No other key or value is admitted. An explicit name preserves the contract when the Rust function is renamed internally.
+- Capability arguments are unique, comma-separated, order-independent, and allow a trailing comma: `name = "[a-z][a-z0-9_]*"`, `exposure = code_only | internal | external`, and `idempotency = none | inherent`. No other key or value is admitted. An explicit name is the target rename-preserving mechanism when the Rust function is renamed internally. In v0 the public capability name is the declared Rust function name; the explicit `name = "..."` override is post-v0 ([#480](https://github.com/fontanierh/boxology/issues/480)), and partial parser/model handling carries no v0 support claim.
 - Exposure defaults to `code_only`; idempotency defaults to `none`.
 - Rust doc comments/direct string `#[doc = "..."]`, `#[deprecated]` or `#[deprecated(note = "...")]`, `#[error]`, and `#[capability(...)]` are the complete attribute set. No derive is admitted.
 - The implementation body and all code behind the boundary remain ordinary Rust and may use imports, aliases, qualified paths, macros, helpers, and private types.

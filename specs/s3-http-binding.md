@@ -75,13 +75,13 @@ Client base URLs are origins only: plaintext `http`, a DNS name, IPv4 address, o
 
 ### D9 — Conformance suite
 
-Packaging corrected: a separate **`boxology-http-conformance`** dev-only crate (unpublished) — a crate cannot be its own reusable dev-dependency. It assembles fixture compositions (hello + kitchen-sink), attaches the server on an ephemeral port, and drives:
+Packaging corrected: a separate **`boxology-http-conformance`** dev-only crate (unpublished) — a crate cannot be its own reusable dev-dependency. That crate currently provides typed `hello` and current-wire conformance and depends only on `hello`; it attaches the server on an ephemeral port and drives (the full-grammar `kitchen-sink` composition is a post-v0 residual, [#100](https://github.com/fontanierh/boxology/issues/100)). The separate S6/S7 `ping`/`ping-app` real-socket and generated-project proof jointly satisfies the [v0 evidence corpus](../boxology-details/11-v0-streams.md#the-v0-evidence-corpus) HTTP obligation for the scalar/unit-error `ping` surface; `boxology-http-conformance` itself does not assemble `ping`/`ping-app`.
 
-1. **Typed-client cases**: S1's presence-grid and round-trip tables replayed over the wire in both roles; envelopes; status mapping; header behaviors incl. rounding; disconnect-cancellation observability (fixture capability with a barrier + cancellation observer, deterministic); deadline cases per D7; no-dedup assertion.
+1. **Typed-client cases**: typed `hello` cases plus synthetic-descriptor expose-time rejections (AC6); envelopes; status mapping; header behaviors incl. rounding; disconnect-cancellation observability (fixture capability with a barrier + cancellation observer, deterministic); deadline cases per D7; no-dedup assertion. S1's presence-grid and round-trip tables remain kernel-level evidence; full-grammar typed wire replay and `Blob`/`Secret` typed end-to-end cases are post-v0 ([#100](https://github.com/fontanierh/boxology/issues/100), [#104](https://github.com/fontanierh/boxology/issues/104)). Canonical scalar/Base64/`Blob` codec unit vectors and every raw protocol case remain gating — E2E corpus narrowing is not codec deletion.
 2. **Raw-socket cases**, table-driven `(request bytes, expected status, expected code)`: malformed/duplicate-key JSON, wrong/duplicate media type, Content-Encoding, oversized body and header block, slow-trickled body vs. budget, invalid/duplicate timeout header, `%`-containing paths, query strings, non-POST/OPTIONS, empty body, trailing bytes, non-canonical integer strings, unknown fields/variants (role-checked), depth bombs.
 3. **Adversarial raw-server cases** (client side): every classification row of D8's table, truncated bodies, oversized responses, redirect/204.
 
-**Traceability is mandatory**: every rule in the normative wire text and every decision in this spec maps to at least one case; the T6 task spec carries the matrix and CI fails on unmapped rules. Same-poll race cases (paused clock), pipeline compound-invalid cases, and the strict-Base64 and float golden vectors are matrix rows like any other.
+**Traceability is mandatory**: every rule in the normative wire text and every decision in this spec maps to at least one case; the T6 task spec carries the matrix and CI fails on unmapped rules ([#115](https://github.com/fontanierh/boxology/issues/115) current-wire zero-unmapped gate). Same-poll race cases (paused clock), pipeline compound-invalid cases, and the strict-Base64 and float golden vectors are matrix rows like any other.
 
 ## Acceptance criteria
 
@@ -108,12 +108,15 @@ T1 → T2 → {T3, T4} → T5 → T6. Depends on S1 (descriptors, roles, assembl
 
 ## Matters left open
 
-*(None load-bearing.)*
+*(None load-bearing for v0.)*
 
 - Default drain and header-read timeouts — set at T3 with measured values, recorded in the task PR.
 - Depth-guard default (128) and response cap (8 MiB) — revisit on evidence.
 - Raw-case table graduating to a cross-binding conformance format — at the second remote binding.
+- Extended `kitchen-sink` / structured-container typed E2E and `Blob`/`Secret` typed E2E suite — [#100](https://github.com/fontanierh/boxology/issues/100), [#104](https://github.com/fontanierh/boxology/issues/104).
 
 ## Tracker notes
 
 This spec decides parts of what #6 listed as open (foundation routing, server lifecycle, transport-boundary deadline enforcement); #6 retains discovery, placement, multi-box topology, and overload. #29's reconciliation notes v0 carries and validates W3C context without export. The axum/hyper/reqwest intake passes S0's deny gates. Normative `03-runtime.md` changes (named code enumeration incl. `405`/`413`/`415`, the no-percent-escape routing rule, HTTP/1.1-only) are **in this PR's diff**. S1's third revision supplies the presence/opacity ABI and transport lifecycle this spec consumes. Issue #85's S3 items (lifecycle API, disconnect strength, complete status/code table, race precedence, header holes, canonical-byte completeness, panic ownership, pipeline order, normative edits) are resolved in this revision.
+
+**Amendment of 2026-08-04** (maintainer corpus-acceleration decision): D9 end-to-end fixture obligation is the scalar/unit-error `hello`/`ping` surface and `ping-app`; phantom `kitchen-sink`/full typed presence-grid wire replay moves to named post-v0 residuals. Raw-socket/raw-server tables, canonical encoder goldens, AC2/AC6, and [#115](https://github.com/fontanierh/boxology/issues/115) current-wire zero-unmapped traceability remain gating. Operator reconciliation updates [#100](https://github.com/fontanierh/boxology/issues/100), [#104](https://github.com/fontanierh/boxology/issues/104), [#115](https://github.com/fontanierh/boxology/issues/115), [#116](https://github.com/fontanierh/boxology/issues/116), and [#343](https://github.com/fontanierh/boxology/issues/343)'s residual ledger.

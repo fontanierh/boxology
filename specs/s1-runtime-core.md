@@ -119,7 +119,7 @@ crates/fixtures/<name>/
 
 The architecture-proof task atomically consolidates the current temporary `authoring/` source fixture into this implementation source and removes the duplicate handwritten method copy. Until that task lands, the repository fixture remains a hand-modeled S1 bootstrap rather than evidence that the final authoring topology already works.
 
-Fixtures: `hello`, `kitchen-sink` (full grammar incl. `f32` — settled in S2), and **`greeter`** — a two-box fixture whose `greeter` box imports `hello` and calls it through a resolved import, proving injection end to end. Golden evolution stays atomic per task PR; provenance normalization per S2's protocol.
+The required S1 v0 fixtures are exactly **`hello`** and **`greeter`**. `hello` proves one generated scalar/unit-error box; `greeter` imports `hello` through a resolved import, proving injection end to end. The S6/S7 `ping` and `ping-app` projects complete the [v0 evidence corpus](../boxology-details/11-v0-streams.md#the-v0-evidence-corpus). The `kitchen-sink` full-grammar fixture is a post-v0 residual ([#100](https://github.com/fontanierh/boxology/issues/100)); S1's presence-grid and sensitivity acceptance evidence lives in the kernel's descriptor-level suites and never depended on that fixture. Golden evolution stays atomic per task PR; provenance normalization per S2's protocol.
 
 ## Acceptance criteria
 
@@ -144,12 +144,14 @@ Fixtures: `hello`, `kitchen-sink` (full grammar incl. `f32` — settled in S2), 
 | T4 | Descriptor types with the outward/implementation split | 1 |
 | T5 | Invocation ABI: context, child, errors, `ErasedTarget` | 2 |
 | T6 | Builder, factories/injection, fallible start, transport lifecycle, tracker, in-process binding | 3 |
-| T7 | Fixtures per D13 (hello, kitchen-sink, greeter) + suites | 3 |
+| T7 | Fixtures per D13 (hello, greeter) + suites | 3 |
 
 ## Matters left open
 
-*(None load-bearing.)* `Caller` shape (auth cluster); hidden calling-surface graduation; token-dependency replacement.
+*(None load-bearing for v0.)* `Caller` shape (auth cluster); hidden calling-surface graduation; token-dependency replacement. Post-v0 residuals recorded with the corpus decision: extended `kitchen-sink` fixture ([#100](https://github.com/fontanierh/boxology/issues/100)); `Blob`/`Secret` end-to-end fixture paths and generated structured/container fixture coverage ([#100](https://github.com/fontanierh/boxology/issues/100), [#104](https://github.com/fontanierh/boxology/issues/104)).
 
 ## Tracker notes
 
 #6 narrowing as previously recorded, now additionally: composition lifecycle/shutdown and transport start hooks are decided here; #6 retains discovery, placement, routing, multi-version topology, overload. Issue #85's remaining S1 items (presence/opacity ABI, descriptor split, injection path, fallible lifecycle, adapter golden, panic ownership) are resolved in this revision.
+
+**Amendment of 2026-08-04** (maintainer corpus-acceleration decision): D13/T7 drop the phantom `kitchen-sink` v0 obligation; required S1 fixtures are `hello` and `greeter`; kernel presence/sensitivity/opacity evidence is unchanged. Operator reconciliation updates [#100](https://github.com/fontanierh/boxology/issues/100) and names it in [#343](https://github.com/fontanierh/boxology/issues/343)'s residual ledger.

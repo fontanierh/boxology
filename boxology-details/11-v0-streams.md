@@ -38,6 +38,29 @@ The deterministic initializer: creating the Cargo workspace, the Hello box (impl
 
 The portable Agent Skills-format skill that teaches a coding agent the box model and names it the lead; the end-to-end acceptance run of the foundation scenario, including the `greet(name)` task; and stage 2 of the [self-hosting ladder](10-strategy-review.md#self-hosting-ladder) — adopting `boxology.toml` manifests and `boxology check` on this product repository itself, including the standing friction log required by the dogfooding pain discriminator. Depends on S0–S6. Spec: [S7 — Skill, Acceptance, and Stage-2 Self-Hosting](../specs/s7-skill-acceptance-self-hosting.md).
 
+## The v0 evidence corpus
+
+V0's required behavioral evidence corpus is exactly these four fixtures, each with a verified role. This narrowing changes proof breadth, not the shipped kernel: already-implemented runtime representations, codec behavior, classifier rows, mutation tests, and determinism subjects remain required and are not deleted or weakened.
+
+- **`hello`** (`crates/fixtures/hello`) — `greet(String)` with `GreetError::EmptyName`; S1's golden-target shape, S2's byte-equality and compile-and-run subject, and S3's typed/raw conformance subject.
+- **`greeter`** (`crates/fixtures/greeter`) — imports `hello` through a resolved import; S1's assembly/injection end-to-end proof.
+- **`ping`** (`crates/fixtures/ping`) — `ping(u64)`; the S6 installer's initial contract, deliberately distinct from `greet` so S7's `greet(name)` addition is purely additive under S4's taxonomy.
+- **`ping-app`** (`crates/fixtures/ping-app`) — composition binding `ping` in-process and over HTTP; S6 born-valid and quality-command evidence.
+
+S1's required fixture inventory is `hello` and `greeter`, with `ping`/`ping-app` consumed from S6/S7. S2 completion proves generation over that exact corpus; parser/model branches beyond it do not create an end-to-end support claim. S3's required end-to-end fixture corpus is the scalar/unit-error `hello`/`ping` surface and `ping-app`, while existing raw protocol and codec tests remain gating. S4 classification remains broader than generator authoring wherever the schema model already represents a change.
+
+## Post-v0 residuals recorded at the corpus decision
+
+These claims were previously written as v0 obligations but are not delivered by the landed corpus. They are durable post-v0 residuals, not silent omissions. Each is named again in [#343](https://github.com/fontanierh/boxology/issues/343)'s S7-COMPLETE residual ledger with this section as its normative basis.
+
+| Residual | Owner | V0 posture |
+| --- | --- | --- |
+| `kitchen-sink` full-grammar fixture (structs, data enums, containers, `Field`/`Secret`/`Blob` authoring corpus) | [#100](https://github.com/fontanierh/boxology/issues/100) | Not built; fail-closed codes and kernel-level suites stand |
+| General structured/container authoring grammar (struct/data-enum declarations, `Option`/`Vec`/`BTreeMap`/`Field`/`Secret` authoring, forward-reference and recursion resolution) | [#102](https://github.com/fontanierh/boxology/issues/102) | No v0 E2E claim; unsupported emission paths retain their coded gates |
+| Named-field payload emission (`BXG0048`) and `Blob`/`Secret` end-to-end generator/binding coverage (`BXG0040`) | [#104](https://github.com/fontanierh/boxology/issues/104) | Fail-closed at generation; `Secret` redaction proven at kernel level only |
+| Capability `name` override (wire-vs-Rust identity split) | [#480](https://github.com/fontanierh/boxology/issues/480) | Partial parser/model handling is not v0 support; wire name = Rust fn name in v0 |
+| Transitive dependency-graph purity / identity-value extraction (`boxology-contract` → `tokio`) | [#358](https://github.com/fontanierh/boxology/issues/358) | [#107](https://github.com/fontanierh/boxology/issues/107) keeps own-source purity, source closure, uncoded-path catalog, deterministic generation, and no-project-code-execution gating; only the transitive graph-hygiene half is deferred |
+
 ## Recorded v0 exclusions
 
 Decided during stream review; recorded so their absence reads as intent rather than oversight:
