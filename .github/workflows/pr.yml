@@ -237,6 +237,8 @@ jobs:
       # additionally run deferred deep compiler, docs, and editor checks.
       - name: boxology check
         run: cargo run -q -p boxology-cli --bin boxology -- check
+      - name: process-reaper fixture suite
+        run: bash ops/process-reaper/tests/run-tests.sh
       - name: cargo xtask ci (pull request)
         if: github.event_name == 'pull_request'
         env:
