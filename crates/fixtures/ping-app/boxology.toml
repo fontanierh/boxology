@@ -4,7 +4,7 @@ kind = "composition"
 owned = ["boxology.toml", "composition/**"]
 
 [quality]
-commands = ["cargo test -p ping-app"]
+commands = ["cargo test -p ping-app tests::assembled_ping_answers_in_process_and_over_real_http -- --exact"]
 
 [[crates]]
 cargo_package = "ping-app"

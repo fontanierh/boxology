@@ -10,9 +10,16 @@ members = [
 edition = "2024"
 
 [workspace.dependencies]
-boxology = { version = "=0.0.0", path = "../boxology/crates/boxology" }
-boxology-contract = { version = "=0.0.0", path = "../boxology/crates/boxology-contract" }
-boxology-http = { version = "=0.0.0", path = "../boxology/crates/boxology-http" }
-boxology-manifest = { version = "=0.0.0", path = "../boxology/crates/boxology-manifest" }
-boxology-runtime = { version = "=0.0.0", path = "../boxology/crates/boxology-runtime" }
+boxology = "=0.0.0"
+boxology-contract = "=0.0.0"
+boxology-http = "=0.0.0"
+boxology-manifest = "=0.0.0"
+boxology-runtime = "=0.0.0"
 tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }
+
+[patch.crates-io]
+boxology = { path = "../boxology/crates/boxology" }
+boxology-contract = { path = "../boxology/crates/boxology-contract" }
+boxology-http = { path = "../boxology/crates/boxology-http" }
+boxology-manifest = { path = "../boxology/crates/boxology-manifest" }
+boxology-runtime = { path = "../boxology/crates/boxology-runtime" }

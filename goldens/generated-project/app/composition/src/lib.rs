@@ -103,7 +103,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["boxology.toml", "composition/**"]
         );
-        assert_eq!(manifest.quality_commands(), &["cargo test -p ping-app"]);
+        assert_eq!(
+            manifest.quality_commands(),
+            &[
+                "cargo test -p ping-app tests::assembled_ping_answers_in_process_and_over_real_http -- --exact"
+            ]
+        );
         assert_eq!(manifest.crates().len(), 1);
         let crate_entry = &manifest.crates()[0];
         assert_eq!(crate_entry.cargo_package(), "ping-app");
