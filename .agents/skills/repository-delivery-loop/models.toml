@@ -19,7 +19,7 @@ effort = "high"
 [[roles.spec.candidates]]
 harness = "claude"
 model = "claude-fable-5"
-effort = "high"
+effort = "medium"
 
 [roles.implement]
 fallback_on = ["model_unavailable", "usage_exhausted"]
