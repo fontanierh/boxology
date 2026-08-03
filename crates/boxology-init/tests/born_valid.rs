@@ -1,7 +1,8 @@
 #![cfg(unix)]
 
 use boxology_init::{InitRequest, initialize};
-use boxology_manifest::{Manifest, RelativePath};
+use boxology_manifest::{Kind, Manifest, RelativePath};
+use boxology_workspace::{FileEntry, WorkspaceInputs};
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -174,6 +175,54 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
     assert!(!root.join("Cargo.lock").exists());
     run(deadline, root, Path::new("cargo"), &["build"]);
     assert!(root.join("Cargo.lock").is_file());
+
+    let metadata = run(
+        deadline,
+        root,
+        Path::new("cargo"),
+        &["metadata", "--format-version", "1", "--no-deps"],
+    );
+    let mut files: Vec<_> = initialized
+        .keys()
+        .map(|logical| {
+            FileEntry::file(RelativePath::new(logical).expect("initialized path is valid"))
+        })
+        .collect();
+    files.push(FileEntry::file(
+        RelativePath::new("Cargo.lock").expect("lockfile path is valid"),
+    ));
+    let manifests = initialized
+        .iter()
+        .filter(|(logical, _)| {
+            logical.as_str() == "boxology.toml" || logical.ends_with("/boxology.toml")
+        })
+        .map(|(logical, bytes)| {
+            (
+                RelativePath::new(logical).expect("manifest path is valid"),
+                bytes.clone(),
+            )
+        })
+        .collect();
+    let workspace = WorkspaceInputs::new(files, manifests, &metadata)
+        .expect("generated listing has unique paths")
+        .check()
+        .expect("generated workspace classifies");
+    let lockfile = workspace
+        .classifications()
+        .iter()
+        .find(|classification| classification.path().as_str() == "Cargo.lock")
+        .expect("materialized lockfile is classified");
+    assert_eq!(lockfile.package().as_str(), "example");
+    assert_eq!(
+        lockfile.derived_output().map(|output| output.as_str()),
+        Some("lockfile")
+    );
+    let platform = workspace
+        .packages()
+        .iter()
+        .find(|package| package.id() == lockfile.package())
+        .expect("lockfile owner is a discovered package");
+    assert_eq!(platform.manifest().kind(), Kind::Platform);
 
     let mut commands = quality_commands(root, "ping/boxology.toml");
     commands.extend(quality_commands(root, "app/boxology.toml"));

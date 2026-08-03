@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn interruption_after_fourth_rename_leaves_no_sentinel() {
+    fn interrupted_partial_tree_is_refused_by_the_cli_as_non_empty() {
         let temp = Temp::new();
         let calls = AtomicUsize::new(0);
         let error = write_tree_with(&temp.0, &SAMPLE, |from, to| {
@@ -171,6 +171,18 @@ mod tests {
         assert!(!listing.iter().any(|n| n == "rust-toolchain.toml"));
         let staging = listing.iter().find(|n| n.starts_with(".boxology-init-staging-")).unwrap();
         assert_eq!(temp.0.join(staging).parent(), Some(temp.0.as_path()));
+
+        let target = temp.0.to_str().unwrap();
+        let args = [
+            "--name", "example", "--dependency-source", "../boxology", "--target", target,
+        ].map(String::from);
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        assert_eq!(crate::run(&args, &mut stdout, &mut stderr), 1);
+        assert_eq!(stdout, b"");
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!("{} entries={listing:?}\n", crate::fixed(1, target))
+        );
     }
 
     #[test]
