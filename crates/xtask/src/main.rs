@@ -102,7 +102,7 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     source: "crates/boxology-init/tests/born_valid.rs",
     default_source: "tests/born_valid.rs",
     tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
-    body_digest: "4a7605cd5c686be0bf3239f0f35d09c2085c41a8c2fddcc3b4e9bd026f0d232b",
+    body_digest: "52cba045d5cd0f9bcf1fbfffaa4c200a8e25596e38793be695e29f64efc6a85f",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("surface-lock", &SURFACE_LOCK_SPEC),
