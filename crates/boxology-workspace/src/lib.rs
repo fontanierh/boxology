@@ -30,9 +30,13 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_contract::BoxId;
-use boxology_manifest::{CrateEntry, CrateRole, DerivedOutput, Diagnostic, GlobPattern};
+use boxology_contract::{BoxId, ExposureLevel};
+use boxology_manifest::{
+    CapabilitySelector, CrateEntry, CrateRole, DerivedOutput, Diagnostic, Exposure, GlobPattern,
+    Transport,
+};
 use boxology_manifest::{Kind, Manifest, RelativePath};
+use boxology_schema::{SchemaCapability, SchemaDocument};
 use serde_json::Value;
 use std::{cmp::Ordering, fmt};
 /// A coded rule: its stable `BXW####` code and the static text of the obligation it states.
@@ -92,6 +96,17 @@ const IMPOSSIBLE: EdgeRule = (("BXW0059", IMPOSSIBLE_TEXT), D4_SOURCE);
 const NON_MEMBER_TEXT: &str =
     "a path dependency onto a non-member is allowed only from a platform crate";
 const NON_MEMBER: EdgeRule = (("BXW0060", NON_MEMBER_TEXT), D4_SOURCE);
+/// The normative source of composition-to-schema validation.
+const COMPOSITION_SOURCE: &str = "specs/s5-manifest-and-validation.md D2";
+const SELECTED_BOX_TEXT: &str = "every composition-selected box must be a discovered box package";
+const SELECTED_SCHEMA_TEXT: &str = "every selected box must carry a readable canonical schema naming that box; regenerate with boxology generate --package <id>";
+const SELECTOR_MATCH_TEXT: &str = "every binding selector must match at least one capability in the selected box's canonical schema";
+const BINDING_EXPOSURE_TEXT: &str =
+    "binding exposure must not exceed the declared maximum of any matched capability";
+const SELECTED_BOX: Rule = ("BXW0087", SELECTED_BOX_TEXT);
+const SELECTED_SCHEMA: Rule = ("BXW0088", SELECTED_SCHEMA_TEXT);
+const SELECTOR_MATCH: Rule = ("BXW0089", SELECTOR_MATCH_TEXT);
+const BINDING_EXPOSURE: Rule = ("BXW0090", BINDING_EXPOSURE_TEXT);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
@@ -110,6 +125,8 @@ const CARGO_MANIFEST: &str = "Cargo.toml";
 // unmatched `[[crates]]` entry, BXW0053 a member two entries claim, BXW0054 an impossible role.
 // T3 then closes densely at BXW0055–BXW0060: contract, foreign implementation, undeclared
 // contract, unselected composition, impossible role/scope, and non-member respectively.
+// Composition cross-document validation continues the workspace-owned range at BXW0087-BXW0090:
+// selected package, selected schema, selector expansion, and exposure respectively.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -884,6 +901,27 @@ pub struct Workspace {
     classifications: Vec<FileClassification>,
     cargo_members: Vec<CargoMember>,
 }
+/// One selected box's canonical schema location and the bytes read there, if the file exists.
+///
+/// This is a pure input: the effectful caller owns reading `path`, while composition validation
+/// owns interpreting the resulting bytes. `None` preserves a missing file as data rather than
+/// collapsing it into an uncoded I/O failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectedSchema {
+    box_id: BoxId,
+    path: RelativePath,
+    bytes: Option<Vec<u8>>,
+}
+impl SelectedSchema {
+    /// Records the selected identity, canonical workspace-relative path, and optional file bytes.
+    pub fn new(box_id: BoxId, path: RelativePath, bytes: Option<Vec<u8>>) -> Self {
+        Self {
+            box_id,
+            path,
+            bytes,
+        }
+    }
+}
 impl Workspace {
     ref_getters! {
         #[doc = "Returns every discovered package, sorted by identity."]
@@ -899,6 +937,185 @@ impl Workspace {
         let render = FileClassification::render;
         let lines: Vec<String> = self.classifications.iter().map(render).collect();
         lines.join("\n")
+    }
+
+    /// Validates every composition against supplied checked-in schemas without performing I/O.
+    ///
+    /// A failed prerequisite suppresses its dependants: a missing/non-box selection produces only
+    /// BXW0087; a missing, unreadable, or mismatched schema produces only BXW0088 for that box; and
+    /// an empty selector expansion produces BXW0089 without an exposure verdict.
+    pub fn check_compositions(&self, schemas: &[SelectedSchema]) -> Result<(), Findings> {
+        let mut defects = Vec::new();
+        for composition in self
+            .packages
+            .iter()
+            .filter(|package| package.manifest.kind() == Kind::Composition)
+        {
+            let Some(declared) = composition.manifest.composition() else {
+                continue;
+            };
+            for selected in declared.boxes() {
+                let target = self
+                    .packages
+                    .iter()
+                    .find(|package| package.id() == selected);
+                let Some(_) = target.filter(|package| package.manifest.kind() == Kind::Box) else {
+                    defects.push(composition_finding(
+                        composition,
+                        SELECTED_BOX,
+                        format!("box={selected}"),
+                    ));
+                    continue;
+                };
+                let mut supplied = schemas
+                    .iter()
+                    .filter(|schema| &schema.box_id == selected)
+                    .collect::<Vec<_>>();
+                supplied.sort_by(|left, right| {
+                    left.path
+                        .cmp(&right.path)
+                        .then_with(|| left.bytes.cmp(&right.bytes))
+                });
+                let [supplied] = supplied.as_slice() else {
+                    let (path, kind) = supplied
+                        .first()
+                        .map_or(("unsupplied", "missing"), |schema| {
+                            (schema.path.as_str(), "ambiguous")
+                        });
+                    defects.push(composition_finding(
+                        composition,
+                        SELECTED_SCHEMA,
+                        format!("box={selected} schema={path} kind={kind}"),
+                    ));
+                    continue;
+                };
+                let Some(bytes) = supplied.bytes.as_deref() else {
+                    defects.push(schema_finding(composition, supplied, "missing"));
+                    continue;
+                };
+                let Ok(schema) = SchemaDocument::parse(bytes) else {
+                    defects.push(schema_finding(composition, supplied, "unreadable"));
+                    continue;
+                };
+                if schema.box_id != *selected {
+                    defects.push(schema_finding(composition, supplied, "mismatched"));
+                    continue;
+                }
+                validate_bindings(composition, selected, &schema, &mut defects);
+            }
+        }
+        Findings::new(defects).map_or(Ok(()), Err)
+    }
+}
+
+fn composition_finding(package: &Package, rule: Rule, payload: String) -> Entry {
+    Entry::Workspace(Finding::about(
+        rule,
+        COMPOSITION_SOURCE,
+        package.manifest_path.clone(),
+        Some(package.id().clone()),
+        payload,
+    ))
+}
+fn schema_finding(package: &Package, schema: &SelectedSchema, kind: &'static str) -> Entry {
+    composition_finding(
+        package,
+        SELECTED_SCHEMA,
+        format!(
+            "box={} schema={} kind={kind}",
+            schema.box_id,
+            schema.path.as_str()
+        ),
+    )
+}
+fn validate_bindings(
+    package: &Package,
+    selected: &BoxId,
+    schema: &SchemaDocument,
+    defects: &mut Vec<Entry>,
+) {
+    let Some(composition) = package.manifest.composition() else {
+        return;
+    };
+    let bindings = composition
+        .bindings()
+        .iter()
+        .filter(|binding| binding.selector().box_id() == selected);
+    for binding in bindings {
+        let matches: Vec<&SchemaCapability> = match binding.selector() {
+            CapabilitySelector::Exact(id) => schema
+                .capabilities
+                .iter()
+                .filter(|capability| capability.name == *id.name())
+                .collect(),
+            CapabilitySelector::All(_) => schema.capabilities.iter().collect(),
+        };
+        if matches.is_empty() {
+            defects.push(composition_finding(
+                package,
+                SELECTOR_MATCH,
+                format!(
+                    "selector={} transport={}",
+                    binding.selector(),
+                    transport_word(binding.transport())
+                ),
+            ));
+            continue;
+        }
+        let exposure = binding.exposure().unwrap_or(Exposure::CodeOnly);
+        // `Findings` sorts equal-code payloads by the rendered report key, so qualified capability
+        // ids — all sharing this selected-box prefix — are bytewise ordered without a local sort.
+        for capability in matches {
+            if exposure_rank(exposure) > maximum_rank(capability.max_exposure) {
+                defects.push(composition_finding(
+                    package,
+                    BINDING_EXPOSURE,
+                    format!(
+                        "capability={}.{} exposure={} max={} transport={} selector={}",
+                        selected,
+                        capability.name,
+                        exposure_word(exposure),
+                        maximum_word(capability.max_exposure),
+                        transport_word(binding.transport()),
+                        binding.selector()
+                    ),
+                ));
+            }
+        }
+    }
+}
+fn transport_word(transport: Transport) -> &'static str {
+    match transport {
+        Transport::InProcess => "in-process",
+        Transport::Http => "http",
+    }
+}
+fn exposure_word(exposure: Exposure) -> &'static str {
+    match exposure {
+        Exposure::CodeOnly => "code_only",
+        Exposure::Internal => "internal",
+        Exposure::External => "external",
+    }
+}
+fn maximum_word(exposure: ExposureLevel) -> &'static str {
+    match exposure {
+        ExposureLevel::CodeOnly => "code_only",
+        ExposureLevel::Internal => "internal",
+        ExposureLevel::External => "external",
+    }
+}
+fn exposure_rank(exposure: Exposure) -> u8 {
+    match exposure {
+        Exposure::CodeOnly => 0,
+        Exposure::Internal => 1,
+        Exposure::External => 2,
+    }
+}
+fn maximum_rank(exposure: ExposureLevel) -> u8 {
+    match exposure {
+        ExposureLevel::CodeOnly => 0,
+        ExposureLevel::Internal => 1,
+        ExposureLevel::External => 2,
     }
 }
 /// One Cargo workspace member the metadata document names, normalized into this repository's own
@@ -2233,16 +2450,14 @@ jobs:
     /// Every code this crate *authors*, ascending. A report may also carry BXW0001-BXW0041 through
     /// [`Entry::Manifest`], which is `boxology_manifest`'s own rendering of its own rule table and
     /// is pinned by that crate's own golden; this list is what this crate is accountable for. The
-    /// corpus and the golden below are both driven from it, so a code that registers nowhere fails
-    /// loudly instead of going unproven.
+    /// discovery/edge corpus and composition corpus together cover it, so an unproven code fails.
     const ALL_CODES: &[&str] = &[
         "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
         "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054", "BXW0055", "BXW0056", "BXW0057",
-        "BXW0058", "BXW0059", "BXW0060",
+        "BXW0058", "BXW0059", "BXW0060", "BXW0087", "BXW0088", "BXW0089", "BXW0090",
     ];
-    /// One minimal workspace per code, ordered as `ALL_CODES` is: each is a shape the suite above
-    /// already exercises, reduced to the least input that provokes its code, so the golden below
-    /// reads every rule off a finding a real check produced rather than off a constant table.
+    /// One minimal workspace for each discovery and edge code through BXW0060, in code order.
+    /// Composition codes have their own cross-document corpus below.
     fn corpus() -> Vec<(&'static str, WorkspaceInputs)> {
         let twin = || document("twin", "box", &[]);
         let platform = |owned: &[&str]| owning("root", "platform", owned, &[]);
@@ -2400,8 +2615,7 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
 ";
     #[test]
     fn rule_text_and_sources_are_locked() {
-        // What each code actually *reports*, not what a table spells: this proves the rule its
-        // constant carries is reached by a real finding, which reading the constants cannot.
+        // What each discovery/edge code through BXW0060 actually reports, not what a table spells.
         let mut rendered = String::new();
         for (code, inputs) in corpus() {
             let Err(report) = inputs.check() else {
@@ -2433,9 +2647,330 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
     fn corpus_covers_every_code() {
         // Comparing the two ordered lists proves both directions at once: no code without a
         // workspace that provokes it, and no workspace for a code this crate does not emit.
-        let covered: Vec<&str> = corpus().iter().map(|(code, _)| *code).collect();
+        let mut covered: Vec<&str> = corpus().iter().map(|(code, _)| *code).collect();
+        for (expected, report) in composition_corpus() {
+            let rule = match expected {
+                "BXW0087" => SELECTED_BOX_TEXT,
+                "BXW0088" => SELECTED_SCHEMA_TEXT,
+                "BXW0089" => SELECTOR_MATCH_TEXT,
+                "BXW0090" => BINDING_EXPOSURE_TEXT,
+                _ => panic!("unexpected composition corpus code"),
+            };
+            let codes = report
+                .as_slice()
+                .iter()
+                .map(|entry| match entry {
+                    Entry::Workspace(finding) => {
+                        assert_eq!(finding.rule(), rule);
+                        assert_eq!(finding.rule_source(), COMPOSITION_SOURCE);
+                        finding.code()
+                    }
+                    Entry::Manifest(_) => panic!("composition corpus returned a manifest defect"),
+                })
+                .collect::<Vec<_>>();
+            assert!(codes.iter().all(|code| *code == expected), "{report}");
+            covered.push(codes[0]);
+        }
         assert_eq!(covered, ALL_CODES);
         assert!(ALL_CODES.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+    fn composition_manifest(
+        boxes: &[&str],
+        bindings: &[(&str, &str, &str, Option<&str>)],
+    ) -> Vec<u8> {
+        let mut text = String::from_utf8(owning("app", "composition", &[MANIFEST], &[])).unwrap();
+        let boxes = boxes
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        text.push_str(&format!("[composition]\nboxes = [{boxes}]\n"));
+        for (box_id, selector, transport, exposure) in bindings {
+            text.push_str(&format!("[[composition.bindings]]\nbox = {box_id:?}\ncapability = {selector:?}\ntransport = {transport:?}\n"));
+            if let Some(exposure) = exposure {
+                text.push_str(&format!("exposure = {exposure:?}\n"));
+            }
+        }
+        text.into_bytes()
+    }
+    fn schema(box_id: &str, capabilities: &[(&str, &str)]) -> Vec<u8> {
+        let capabilities = capabilities.iter().map(|(name, exposure)| format!(r#"{{"deprecation":null,"docs":[],"error":"Fault","id":"{box_id}.{name}","idempotency":"none","input":{{"name":"value","type":"String"}},"max_exposure":"{exposure}","name":"{name}","output":{{"type":"String"}},"shape":"unary"}}"#)).collect::<Vec<_>>().join(",");
+        format!(r#"{{"box_id":"{box_id}","capabilities":[{capabilities}],"provenance":null,"revision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","schema_format":1,"types":[{{"deprecation":null,"docs":[],"kind":"error","name":"Fault","variants":[{{"deprecation":null,"docs":[],"name":"Failed","payload":"unit"}}]}}]}}"#).into_bytes()
+    }
+    fn composition_workspace(box_kind: &str, manifest: Vec<u8>) -> Workspace {
+        workspace(vec![
+            ("app/boxology.toml", manifest),
+            (
+                "ping/boxology.toml",
+                owning("ping", box_kind, &[MANIFEST], &[]),
+            ),
+        ])
+        .check()
+        .expect("valid structural workspace")
+    }
+    fn selected(box_id: &str, bytes: Option<Vec<u8>>) -> SelectedSchema {
+        SelectedSchema::new(
+            id(box_id),
+            path(&format!("{box_id}/generated/schema.json")),
+            bytes,
+        )
+    }
+    fn composition_corpus() -> Vec<(&'static str, Findings)> {
+        let absent = composition_manifest(&["absent"], &[]);
+        let absent = workspace(vec![("app/boxology.toml", absent)])
+            .check()
+            .unwrap();
+        let selected_box = composition_workspace(
+            "box",
+            composition_manifest(&["ping"], &[("ping", "ping.*", "http", Some("external"))]),
+        );
+        vec![
+            ("BXW0087", absent.check_compositions(&[]).unwrap_err()),
+            ("BXW0088", selected_box.check_compositions(&[]).unwrap_err()),
+            (
+                "BXW0089",
+                selected_box
+                    .check_compositions(&[selected("ping", Some(schema("ping", &[])))])
+                    .unwrap_err(),
+            ),
+            (
+                "BXW0090",
+                selected_box
+                    .check_compositions(&[selected(
+                        "ping",
+                        Some(schema("ping", &[("run", "code_only")])),
+                    )])
+                    .unwrap_err(),
+            ),
+        ]
+    }
+    #[test]
+    fn composition_validation_expands_all_and_defaults_to_code_only() {
+        let manifest = composition_manifest(&["ping"], &[("ping", "ping.*", "http", None)]);
+        let checked = composition_workspace("box", manifest);
+        checked
+            .check_compositions(&[selected(
+                "ping",
+                Some(schema(
+                    "ping",
+                    &[("zulu", "code_only"), ("alpha", "external")],
+                )),
+            )])
+            .expect("both capabilities match and code_only is permitted");
+    }
+    #[test]
+    fn composition_validation_reports_bytewise_exposure_and_empty_selectors() {
+        let manifest = composition_manifest(
+            &["ping"],
+            &[
+                ("ping", "ping.*", "http", Some("external")),
+                ("ping", "ping.missing", "in-process", None),
+            ],
+        );
+        let checked = composition_workspace("box", manifest);
+        let report = checked
+            .check_compositions(&[selected(
+                "ping",
+                Some(schema(
+                    "ping",
+                    &[("zulu", "internal"), ("alpha", "external")],
+                )),
+            )])
+            .unwrap_err();
+        assert_eq!(
+            report.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0089 app/boxology.toml package=app candidates=[selector=ping.missing transport=in-process]",
+                "BXW0090 app/boxology.toml package=app candidates=[capability=ping.zulu exposure=external max=internal transport=http selector=ping.*]",
+            ]
+        );
+        let internal = composition_workspace(
+            "box",
+            composition_manifest(&["ping"], &[("ping", "ping.*", "http", Some("internal"))]),
+        )
+        .check_compositions(&[selected(
+            "ping",
+            Some(schema(
+                "ping",
+                &[("zulu", "code_only"), ("alpha", "code_only")],
+            )),
+        )])
+        .unwrap_err();
+        assert_eq!(
+            internal.to_string().lines().collect::<Vec<_>>(),
+            [
+                "BXW0090 app/boxology.toml package=app candidates=[capability=ping.alpha exposure=internal max=code_only transport=http selector=ping.*]",
+                "BXW0090 app/boxology.toml package=app candidates=[capability=ping.zulu exposure=internal max=code_only transport=http selector=ping.*]",
+            ]
+        );
+    }
+    #[test]
+    fn exact_selector_matches_only_its_named_capability() {
+        let bytes = schema("ping", &[("alpha", "external"), ("zulu", "code_only")]);
+        let exact = |name| {
+            composition_workspace(
+                "box",
+                composition_manifest(&["ping"], &[("ping", name, "http", Some("external"))]),
+            )
+        };
+        exact("ping.alpha")
+            .check_compositions(&[selected("ping", Some(bytes.clone()))])
+            .expect("the selected capability permits external exposure");
+        assert_eq!(
+            exact("ping.zulu")
+                .check_compositions(&[selected("ping", Some(bytes))])
+                .unwrap_err()
+                .to_string(),
+            "BXW0090 app/boxology.toml package=app candidates=[capability=ping.zulu exposure=external max=code_only transport=http selector=ping.zulu]"
+        );
+    }
+    #[test]
+    fn composition_reports_preserve_duplicate_bindings_and_package_order() {
+        let binding = ("ping", "ping.run", "http", Some("external"));
+        let duplicated =
+            composition_workspace("box", composition_manifest(&["ping"], &[binding, binding]));
+        let input = selected("ping", Some(schema("ping", &[("run", "code_only")])));
+        let line = "BXW0090 app/boxology.toml package=app candidates=[capability=ping.run exposure=external max=code_only transport=http selector=ping.run]";
+        assert_eq!(
+            duplicated
+                .check_compositions(std::slice::from_ref(&input))
+                .unwrap_err()
+                .to_string()
+                .lines()
+                .collect::<Vec<_>>(),
+            [line, line]
+        );
+        let named = |id: &str| {
+            String::from_utf8(composition_manifest(&["ping"], &[binding]))
+                .unwrap()
+                .replacen("id = \"app\"", &format!("id = {id:?}"), 1)
+                .into_bytes()
+        };
+        let ordered = workspace(vec![
+            ("zulu/boxology.toml", named("zulu")),
+            ("alpha/boxology.toml", named("alpha")),
+            (
+                "ping/boxology.toml",
+                owning("ping", "box", &[MANIFEST], &[]),
+            ),
+        ])
+        .check()
+        .unwrap()
+        .check_compositions(&[input])
+        .unwrap_err();
+        assert_eq!(
+            ordered.to_string().lines().collect::<Vec<_>>(),
+            [
+                line.replacen("app/", "alpha/", 1)
+                    .replacen("package=app", "package=alpha", 1),
+                line.replacen("app/", "zulu/", 1)
+                    .replacen("package=app", "package=zulu", 1),
+            ]
+        );
+    }
+    #[test]
+    fn composition_validation_suppresses_cascades_and_locks_rule_contracts() {
+        let missing = composition_manifest(
+            &["absent"],
+            &[("absent", "absent.*", "http", Some("external"))],
+        );
+        let missing = workspace(vec![("app/boxology.toml", missing)])
+            .check()
+            .unwrap();
+        let first = missing.check_compositions(&[]).unwrap_err();
+        assert_eq!(
+            first.to_string(),
+            "BXW0087 app/boxology.toml package=app candidates=[box=absent]"
+        );
+        let non_box = composition_workspace("platform", composition_manifest(&["ping"], &[]));
+        assert_eq!(
+            non_box.check_compositions(&[]).unwrap_err().to_string(),
+            "BXW0087 app/boxology.toml package=app candidates=[box=ping]"
+        );
+        let manifest =
+            composition_manifest(&["ping"], &[("ping", "ping.*", "http", Some("external"))]);
+        let checked = composition_workspace("box", manifest);
+        assert_eq!(
+            checked.check_compositions(&[]).unwrap_err().to_string(),
+            "BXW0088 app/boxology.toml package=app candidates=[box=ping schema=unsupplied kind=missing]"
+        );
+        for (input, kind) in [
+            (selected("ping", None), "missing"),
+            (selected("ping", Some(b"bad".to_vec())), "unreadable"),
+            (
+                selected("ping", Some(schema("other", &[("run", "external")]))),
+                "mismatched",
+            ),
+        ] {
+            let report = checked.check_compositions(&[input]).unwrap_err();
+            assert_eq!(
+                report.to_string(),
+                format!(
+                    "BXW0088 app/boxology.toml package=app candidates=[box=ping schema=ping/generated/schema.json kind={kind}]"
+                )
+            );
+        }
+        let good = selected("ping", Some(schema("ping", &[("run", "external")])));
+        let bad = SelectedSchema::new(id("ping"), path("zzz/schema.json"), Some(b"bad".to_vec()));
+        for mut pair in [[good.clone(), good.clone()], [good, bad]] {
+            let forward = checked.check_compositions(&pair).unwrap_err().to_string();
+            pair.reverse();
+            assert_eq!(
+                checked.check_compositions(&pair).unwrap_err().to_string(),
+                forward
+            );
+            assert_eq!(
+                forward,
+                "BXW0088 app/boxology.toml package=app candidates=[box=ping schema=ping/generated/schema.json kind=ambiguous]"
+            );
+        }
+        for selector in ["ping.missing", "ping.*"] {
+            let manifest =
+                composition_manifest(&["ping"], &[("ping", selector, "in-process", None)]);
+            let checked = composition_workspace("box", manifest);
+            let report = checked
+                .check_compositions(&[selected("ping", Some(schema("ping", &[])))])
+                .unwrap_err();
+            assert_eq!(
+                report.to_string(),
+                format!(
+                    "BXW0089 app/boxology.toml package=app candidates=[selector={selector} transport=in-process]"
+                )
+            );
+        }
+        let rules = [
+            (SELECTED_BOX, "BXW0087"),
+            (SELECTED_SCHEMA, "BXW0088"),
+            (SELECTOR_MATCH, "BXW0089"),
+            (BINDING_EXPOSURE, "BXW0090"),
+        ];
+        for (rule, code) in rules {
+            let finding = Finding::about(
+                rule,
+                COMPOSITION_SOURCE,
+                path("app/boxology.toml"),
+                Some(id("app")),
+                String::new(),
+            );
+            assert_eq!(finding.code(), code);
+            assert_eq!(finding.rule_source(), COMPOSITION_SOURCE);
+        }
+        assert_eq!(
+            SELECTED_BOX_TEXT,
+            "every composition-selected box must be a discovered box package"
+        );
+        assert_eq!(
+            SELECTED_SCHEMA_TEXT,
+            "every selected box must carry a readable canonical schema naming that box; regenerate with boxology generate --package <id>"
+        );
+        assert_eq!(
+            SELECTOR_MATCH_TEXT,
+            "every binding selector must match at least one capability in the selected box's canonical schema"
+        );
+        assert_eq!(
+            BINDING_EXPOSURE_TEXT,
+            "binding exposure must not exceed the declared maximum of any matched capability"
+        );
     }
     #[test]
     fn all_codes_is_exhaustive() {
