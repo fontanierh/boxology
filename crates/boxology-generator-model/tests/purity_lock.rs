@@ -1,5 +1,5 @@
-//! Own-source directory/manifest/test-tree closure for the generator crates (#107A slice A).
-//! AST/effect scanning is later; transitive purity remains #358.
+//! Own-source directory/manifest/test-tree closure for the generator crates (#107A).
+//! Own-source AST/effect scanning is the next stacked slice; transitive purity remains #358.
 
 use std::{
     collections::BTreeSet,
@@ -384,6 +384,9 @@ fn assert_manifest_closed(
     if package.get("name").and_then(Item::as_str) != Some(package_name) {
         return Err(format!("package_name: expected {package_name}"));
     }
+    if package.get("version").and_then(Item::as_str) != Some("0.0.0") {
+        return Err("package_version: package.version must be exactly \"0.0.0\"".into());
+    }
 
     assert_deps("dependencies", doc.get("dependencies"), deps)?;
     assert_deps("dev-dependencies", doc.get("dev-dependencies"), dev_deps)?;
@@ -536,6 +539,10 @@ fn closure_rules_reject_live_hostile_corpus() {
         (
             "dep_value",
             model_pkg("[dependencies]\nserde_json=\"=9.9.9\"\n"),
+        ),
+        (
+            "package_version",
+            "[package]\nname=\"boxology-generator-model\"\nversion=\"1.2.3\"\nedition=\"2024\"\npublish=false\n[dependencies]\nserde_json=\"=1.0.150\"\n".into(),
         ),
     ];
     for (rule, manifest) in &mans {
