@@ -42,7 +42,7 @@ pub use compare::{
     CompareDifference, CompareStepError, DifferenceKind, compare_plans, compare_step,
     composition_step,
 };
-pub use execute::{ExecuteError, Outcome, execute};
+pub use execute::{ExecuteError, ExecutePlans, Outcome, execute, execute_plans};
 pub use generate::{GenerationPlan, PlanError, ResolvedImport, plan};
 pub use runner::{
     CapturedOutput, CommandRunner, CommandSpec, QualityCommand, SpawnError, ToolStep, clippy_spec,

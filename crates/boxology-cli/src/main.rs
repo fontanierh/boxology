@@ -4,8 +4,8 @@ use boxology_cli::{
     BaseInputsError, BaseSchemasError, ClassifyStepError, CompareDifference, DefaultBase,
     ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError, base_diff_inputs,
     base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
-    execute, plan, resolve_base, resolve_default_base, run_clippy_step, run_command, run_fmt_step,
-    run_lock_step, run_quality_step, run_test_step, walk,
+    execute_plans, plan, resolve_base, resolve_default_base, run_clippy_step, run_command,
+    run_fmt_step, run_lock_step, run_quality_step, run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -113,9 +113,9 @@ fn run_generate(
         Err(error) => return report_plan_failure(error, stderr),
     };
     let mut changed = false;
-    for generation in &plans {
-        let outcome = match execute(root, generation) {
-            Ok(outcome) => outcome,
+    for step in execute_plans(root, &plans) {
+        let (generation, outcome) = match step {
+            Ok(step) => step,
             Err(error) => return report_execute_failure(error, stderr),
         };
         changed |= !outcome.is_unchanged();

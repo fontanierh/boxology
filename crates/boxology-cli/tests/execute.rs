@@ -1,11 +1,12 @@
-use boxology_cli::{GenerationPlan, execute, plan};
-use boxology_generator::{OUTPUTS, generate};
+use boxology_cli::{GenerationPlan, execute, execute_plans, plan};
+use boxology_generator::{GeneratedTree, OUTPUTS, generate};
 use boxology_generator_model::GenerationRequest;
 use boxology_manifest::RelativePath;
 use boxology_workspace::{FileEntry, Workspace, WorkspaceInputs};
 use std::{
+    collections::BTreeMap,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -198,12 +199,15 @@ impl Drop for FixtureProjects {
     }
 }
 
-fn fixture_projects() -> FixtureProjects {
-    let root = std::env::temp_dir().join(format!(
-        "boxology-cli-imports-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+struct TempRoot(PathBuf);
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn materialize_fixture_projects(root: &Path) {
     for package in ["hello", "greeter"] {
         for file in PROJECT_FILES {
             let path = root.join(package).join(file);
@@ -211,12 +215,138 @@ fn fixture_projects() -> FixtureProjects {
             fs::write(path, fixture_bytes(package, file)).unwrap();
         }
     }
+}
+
+fn fixture_projects() -> FixtureProjects {
+    let root = std::env::temp_dir().join(format!(
+        "boxology-cli-imports-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    materialize_fixture_projects(&root);
     let plan = plan(&fixture_workspace(), None)
         .unwrap()
         .into_iter()
         .find(|plan| plan.package_id().as_str() == "greeter")
         .unwrap();
     FixtureProjects { root, plan }
+}
+
+fn one_pass_root() -> TempRoot {
+    TempRoot(std::env::temp_dir().join(format!(
+        "boxology-cli-one-pass-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )))
+}
+
+// Keep hello.greet so greeter still generates, but poison the imported revision so a greeter
+// tree produced from these bytes cannot match the checked-in fixture adapter/schema.
+const STALE_HELLO_SCHEMA: &[u8] = br#"{
+  "box_id": "hello",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "GreetError",
+      "id": "hello.greet",
+      "idempotency": "none",
+      "input": {
+        "name": "name",
+        "type": "String"
+      },
+      "max_exposure": "external",
+      "name": "greet",
+      "output": {
+        "type": "String"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": "@PROVENANCE@",
+  "revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "GreetError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "EmptyName",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}
+"#;
+
+fn plant_stale_hello_schema(root: &Path) {
+    let hello_schema = root.join("hello/generated/schema.json");
+    let checked_in_hello = fixture_bytes("hello", "generated/schema.json");
+    assert_ne!(STALE_HELLO_SCHEMA, checked_in_hello);
+    fs::write(&hello_schema, STALE_HELLO_SCHEMA).unwrap();
+    assert_eq!(fs::read(&hello_schema).unwrap(), STALE_HELLO_SCHEMA);
+}
+
+fn package_dir_for(root: &Path, plan: &GenerationPlan) -> PathBuf {
+    match plan.package_root() {
+        Some(package_root) => root.join(package_root.as_str()),
+        None => root.to_path_buf(),
+    }
+}
+
+fn live_generation_request(
+    root: &Path,
+    plan: &GenerationPlan,
+    import_bytes: &BTreeMap<String, Vec<u8>>,
+) -> GenerationRequest {
+    let package_dir = package_dir_for(root, plan);
+    let mut input_paths = plan.inputs().to_vec();
+    input_paths.sort_unstable();
+    let mut inputs = input_paths
+        .into_iter()
+        .map(|input| {
+            (
+                input.as_str().to_owned(),
+                fs::read(package_dir.join(input.as_str())).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let raw_imports = plan
+        .imports()
+        .iter()
+        .map(|import| {
+            (
+                import.package().clone(),
+                import.schema().as_str().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for import in plan.imports() {
+        let key = import.schema().as_str().to_owned();
+        let bytes = import_bytes
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| fs::read(root.join(&key)).unwrap());
+        inputs.push((key, bytes));
+    }
+    GenerationRequest::new(
+        plan.package_id().clone(),
+        plan.crate_root().as_str().to_owned(),
+        inputs,
+        raw_imports,
+        OUTPUTS.iter().map(|path| (*path).to_owned()).collect(),
+    )
+    .unwrap()
+}
+
+fn write_generated_tree(root: &Path, plan: &GenerationPlan, tree: &GeneratedTree) {
+    boxology_generator_writer::write(&package_dir_for(root, plan), tree, plan.outputs()).unwrap();
 }
 
 fn package_dir(fixture: &Fixture) -> PathBuf {
@@ -237,6 +367,146 @@ fn normalize_adapter(bytes: &[u8]) -> Vec<u8> {
     format!("// Generated by boxology-generator @PROVENANCE@\n{body}").into_bytes()
 }
 
+const PROVENANCE_ANCHOR: &[u8] = b"  \"provenance\": ";
+const PROVENANCE_TOKEN: &[u8] = b"\"@PROVENANCE@\"";
+
+fn occurrence_count(bytes: &[u8], needle: &[u8]) -> usize {
+    bytes
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+fn normalize_live_schema(bytes: &[u8]) -> Vec<u8> {
+    assert_eq!(occurrence_count(bytes, PROVENANCE_ANCHOR), 1);
+    let anchor = bytes
+        .windows(PROVENANCE_ANCHOR.len())
+        .position(|window| window == PROVENANCE_ANCHOR)
+        .expect("schema has one top-level provenance anchor");
+    let value_start = anchor + PROVENANCE_ANCHOR.len();
+    assert_eq!(bytes[value_start], b'{', "live provenance is an object");
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut value_end = None;
+    for (offset, byte) in bytes[value_start..].iter().copied().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    value_end = Some(value_start + offset + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let value_end = value_end.expect("live provenance object is complete");
+    let mut normalized =
+        Vec::with_capacity(bytes.len() - (value_end - value_start) + PROVENANCE_TOKEN.len());
+    normalized.extend_from_slice(&bytes[..value_start]);
+    normalized.extend_from_slice(PROVENANCE_TOKEN);
+    normalized.extend_from_slice(&bytes[value_end..]);
+    normalized
+}
+
+fn generated_tree_matches_checked_in(root: &Path, package: &str) -> bool {
+    [
+        "generated/contract/Cargo.toml",
+        "generated/contract/src/lib.rs",
+        "generated/adapter/adapter.rs",
+        "generated/schema.json",
+    ]
+    .into_iter()
+    .all(|file| {
+        let Ok(actual) = fs::read(root.join(package).join(file)) else {
+            return false;
+        };
+        let expected = fixture_bytes(package, file);
+        match file.rsplit_once('.').map(|(_, extension)| extension) {
+            Some("rs") => normalize_adapter(&actual) == normalize_adapter(expected),
+            Some("json") => normalize_live_schema(&actual) == expected,
+            _ => actual == expected,
+        }
+    })
+}
+
+fn assert_generated_tree_matches_checked_in(root: &Path, package: &str) {
+    assert!(
+        generated_tree_matches_checked_in(root, package),
+        "{package} generated tree must match checked-in fixtures"
+    );
+}
+
+const CHECKED_IN_HELLO_REVISION: &str =
+    "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
+const PLANTED_ZERO_HELLO_REVISION: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Value-positive oracle for stale-import mutants: Hello converges, Greeter keeps contract/
+/// schema bytes, and its adapter embeds the planted zero Hello revision exactly once.
+fn assert_stale_import_mutant_outputs(root: &Path) {
+    assert_generated_tree_matches_checked_in(root, "hello");
+
+    assert_eq!(
+        fs::read(root.join("greeter/generated/contract/Cargo.toml")).unwrap(),
+        fixture_bytes("greeter", "generated/contract/Cargo.toml")
+    );
+    assert_eq!(
+        normalize_adapter(&fs::read(root.join("greeter/generated/contract/src/lib.rs")).unwrap(),),
+        normalize_adapter(fixture_bytes("greeter", "generated/contract/src/lib.rs"))
+    );
+    assert_eq!(
+        normalize_live_schema(&fs::read(root.join("greeter/generated/schema.json")).unwrap()),
+        fixture_bytes("greeter", "generated/schema.json")
+    );
+
+    let actual_adapter =
+        normalize_adapter(&fs::read(root.join("greeter/generated/adapter/adapter.rs")).unwrap());
+    let checked_in_adapter =
+        normalize_adapter(fixture_bytes("greeter", "generated/adapter/adapter.rs"));
+    assert_eq!(
+        occurrence_count(
+            checked_in_adapter.as_slice(),
+            CHECKED_IN_HELLO_REVISION.as_bytes()
+        ),
+        1
+    );
+    let expected_adapter = {
+        let text = String::from_utf8(checked_in_adapter).unwrap();
+        assert_eq!(text.matches(CHECKED_IN_HELLO_REVISION).count(), 1);
+        text.replacen(CHECKED_IN_HELLO_REVISION, PLANTED_ZERO_HELLO_REVISION, 1)
+            .into_bytes()
+    };
+    assert_eq!(
+        occurrence_count(
+            expected_adapter.as_slice(),
+            PLANTED_ZERO_HELLO_REVISION.as_bytes()
+        ),
+        1
+    );
+    assert_eq!(
+        occurrence_count(
+            actual_adapter.as_slice(),
+            PLANTED_ZERO_HELLO_REVISION.as_bytes()
+        ),
+        1
+    );
+    assert_eq!(actual_adapter, expected_adapter);
+}
+
 #[test]
 fn imported_fixture_schema_is_hydrated_into_typed_adapter() {
     let fixture = fixture_projects();
@@ -246,6 +516,106 @@ fn imported_fixture_schema_is_hydrated_into_typed_adapter() {
     assert_eq!(adapter_text.matches("pub hello: HelloImport").count(), 1);
     let checked_in = include_bytes!("../../fixtures/greeter/generated/adapter/adapter.rs");
     assert_eq!(normalize_adapter(&adapter), normalize_adapter(checked_in));
+}
+
+#[test]
+fn one_pass_stale_import_converges_to_checked_in_trees() {
+    let root = one_pass_root();
+    materialize_fixture_projects(&root.0);
+    plant_stale_hello_schema(&root.0);
+    let plans = plan(&fixture_workspace(), None).unwrap();
+    assert_eq!(
+        plans
+            .iter()
+            .map(|plan| plan.package_id().as_str())
+            .collect::<Vec<_>>(),
+        ["hello", "greeter"]
+    );
+
+    for step in execute_plans(&root.0, &plans) {
+        step.expect("canonical sequential generate must accept the fixture workspace");
+    }
+
+    assert_generated_tree_matches_checked_in(&root.0, "hello");
+    assert_generated_tree_matches_checked_in(&root.0, "greeter");
+}
+
+#[test]
+fn plan_time_import_byte_snapshot_mutant_fails_to_converge() {
+    let root = one_pass_root();
+    materialize_fixture_projects(&root.0);
+    plant_stale_hello_schema(&root.0);
+    let plans = plan(&fixture_workspace(), None).unwrap();
+    let mut snapshot = BTreeMap::new();
+    for plan in &plans {
+        for import in plan.imports() {
+            let key = import.schema().as_str().to_owned();
+            snapshot.insert(key.clone(), fs::read(root.0.join(&key)).unwrap());
+        }
+    }
+    assert_eq!(
+        snapshot
+            .get("hello/generated/schema.json")
+            .map(Vec::as_slice),
+        Some(STALE_HELLO_SCHEMA)
+    );
+
+    for plan in &plans {
+        let tree = generate(&live_generation_request(&root.0, plan, &snapshot)).unwrap();
+        write_generated_tree(&root.0, plan, &tree);
+    }
+
+    assert_stale_import_mutant_outputs(&root.0);
+}
+
+#[test]
+fn generate_all_before_write_mutant_fails_to_converge() {
+    let root = one_pass_root();
+    materialize_fixture_projects(&root.0);
+    plant_stale_hello_schema(&root.0);
+    let plans = plan(&fixture_workspace(), None).unwrap();
+    let live = BTreeMap::new();
+    let trees = plans
+        .iter()
+        .map(|plan| generate(&live_generation_request(&root.0, plan, &live)).unwrap())
+        .collect::<Vec<_>>();
+    for (plan, tree) in plans.iter().zip(&trees) {
+        write_generated_tree(&root.0, plan, tree);
+    }
+
+    assert_stale_import_mutant_outputs(&root.0);
+}
+
+#[test]
+fn execute_plans_is_terminal_after_first_error() {
+    let root = one_pass_root();
+    materialize_fixture_projects(&root.0);
+    let plans = plan(&fixture_workspace(), None).unwrap();
+    assert_eq!(
+        plans
+            .iter()
+            .map(|plan| plan.package_id().as_str())
+            .collect::<Vec<_>>(),
+        ["hello", "greeter"]
+    );
+
+    // Fail Hello before any write by removing a declared package input after planning.
+    fs::remove_file(root.0.join("hello/implementation/src/lib.rs")).unwrap();
+
+    const GREETER_SENTINEL: &[u8] = b"greeter-sentinel-must-remain-unchanged\n";
+    let greeter_output = root.0.join("greeter/generated/schema.json");
+    fs::write(&greeter_output, GREETER_SENTINEL).unwrap();
+    assert_eq!(fs::read(&greeter_output).unwrap(), GREETER_SENTINEL);
+
+    let mut steps = execute_plans(&root.0, &plans);
+    let first = steps
+        .next()
+        .expect("first plan must yield a result")
+        .expect_err("hello must fail before writing");
+    assert_eq!(first.code(), "BXW0070");
+    assert!(steps.next().is_none());
+    assert!(steps.next().is_none());
+    assert_eq!(fs::read(&greeter_output).unwrap(), GREETER_SENTINEL);
 }
 
 fn request(fixture: &Fixture) -> GenerationRequest {
