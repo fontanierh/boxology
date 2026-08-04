@@ -381,7 +381,9 @@ fn execute(
         "--",
         "--list",
     ];
-    let run_args = ["test", "-p", spec.package, "--test", spec.target];
+    // Keep multi-test list/run name order exact under libtest parallelism.
+    let mut run_args = list_args;
+    *run_args.last_mut().expect("list args") = "--test-threads=1";
     match (run(&list_args), run(&run_args)) {
         (Some((true, listed)), Some((true, executed))) => {
             exact(names(&listed, "", ": test"), spec.tests)
@@ -581,7 +583,8 @@ mod tests {
             calls,
             vec![
                 "test\0-p\0boxology-workspace\0--test\0surface_lock\0--\0--list".to_owned(),
-                "test\0-p\0boxology-workspace\0--test\0surface_lock".to_owned(),
+                "test\0-p\0boxology-workspace\0--test\0surface_lock\0--\0--test-threads=1"
+                    .to_owned(),
             ]
         );
     }
