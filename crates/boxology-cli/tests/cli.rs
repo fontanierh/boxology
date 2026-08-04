@@ -121,6 +121,7 @@ impl Fixture {
         command.env("BOXOLOGY_MODE", mode);
         command.env("BOXOLOGY_GIT_ARG_LOG", &self.git_log);
         command.env("BOXOLOGY_BASE_BLOB", &self.base_blob);
+        command.env("GIT_CEILING_DIRECTORIES", &self.root);
         if let Some(step) = fail {
             command.env("BOXOLOGY_FAIL", step);
         } else {
@@ -149,6 +150,7 @@ impl Fixture {
             .env("BOXOLOGY_ARG_LOG", &self.log)
             .env("BOXOLOGY_METADATA", &self.metadata)
             .env("BOXOLOGY_MODE", "ok")
+            .env("GIT_CEILING_DIRECTORIES", &self.root)
             .env("PATH", self.cargo.parent().unwrap())
             .output()
             .unwrap()
@@ -182,7 +184,7 @@ impl Fixture {
 
     fn commit(&self, message: &str) {
         if !self.root.join(".git").exists() {
-            assert!(self.git(&["init", "-q"]).status.success());
+            assert!(self.git(&["init", "-q", "-b", "main"]).status.success());
             assert!(
                 self.git(&["config", "user.name", "Boxology Test"])
                     .status
@@ -199,12 +201,38 @@ impl Fixture {
         assert!(output.status.success(), "{}", text(&output.stderr));
     }
 
+    fn init_repository(&self) {
+        assert!(self.git(&["init", "-q", "-b", "main"]).status.success());
+        assert!(
+            self.git(&["config", "user.name", "Boxology Test"])
+                .status
+                .success()
+        );
+        assert!(
+            self.git(&["config", "user.email", "boxology@example.invalid"])
+                .status
+                .success()
+        );
+    }
+
     fn install_fake_git(&self, exists_status: u8) {
         let git = self.cargo.parent().unwrap().join("git");
         fs::write(
             &git,
             format!(
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_GIT_ARG_LOG\"\nprintf '%s\\n' -- >> \"$BOXOLOGY_GIT_ARG_LOG\"\ncase \"$1 $2\" in\n  'rev-parse --verify') printf '%040d\\n' 0;;\n  'ls-tree --name-only') printf '%s\\0' \"$6\";;\n  'cat-file -e') exit {exists_status};;\n  'cat-file blob') /bin/cat \"$BOXOLOGY_BASE_BLOB\";;\n  *) exit 19;;\nesac\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn install_fake_git_default(&self, merge_base: &str, exists_status: u8) {
+        let git = self.cargo.parent().unwrap().join("git");
+        fs::write(
+            &git,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_GIT_ARG_LOG\"\nprintf '%s\\n' -- >> \"$BOXOLOGY_GIT_ARG_LOG\"\ncase \"$1 $2\" in\n  'rev-parse --git-dir') printf '%s\\n' .git;;\n  'merge-base HEAD') printf '%s\\n' '{merge_base}';;\n  'rev-parse --verify')\n    case \"$4\" in\n      '{merge_base}^{{commit}}') printf '%s\\n' '{merge_base}';;\n      *) exit 1;;\n    esac;;\n  'ls-tree --name-only') printf '%s\\0' \"$6\";;\n  'cat-file -e') exit {exists_status};;\n  'cat-file blob') /bin/cat \"$BOXOLOGY_BASE_BLOB\";;\n  *) exit 19;;\nesac\n"
             ),
         )
         .unwrap();
@@ -516,7 +544,7 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
     let expected = "check discovery passed\n\
                     check regeneration passed\n\
                     check contract-classification skipped\n\
-                    \x20 contract classification skipped: base-revision classification is not implemented in this boxology version\n\
+                    \x20 contract classification skipped: no repository is available\n\
                     check cargo-graph passed\n\
                     check fmt passed\n\
                     check clippy passed\n\
@@ -957,4 +985,160 @@ fn check_base_reports_a_present_non_blob_schema_as_bxw0092() {
         text(&output.stderr),
         "BXW0092 ping/generated/schema.json: a base-revision schema object must be readable as a Git blob\n"
     );
+}
+
+#[test]
+fn check_default_base_classifies_against_merge_base_with_main() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.commit("baseline");
+    assert!(
+        fixture
+            .git(&["checkout", "-q", "-b", "work"])
+            .status
+            .success()
+    );
+
+    let unchanged = fixture.run(&["check"]);
+    assert_eq!(unchanged.status.code(), Some(0));
+    assert!(text(&unchanged.stderr).is_empty());
+    assert!(text(&unchanged.stdout).contains("check contract-classification passed\n"));
+    assert!(text(&unchanged.stdout).ends_with("check result passed\n"));
+
+    fs::write(
+        fixture.root.join("ping/implementation/src/lib.rs"),
+        CONTRACT_WITH_GREET,
+    )
+    .unwrap();
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let addition = fixture.run(&["check"]);
+    assert_eq!(addition.status.code(), Some(0));
+    assert!(text(&addition.stderr).is_empty());
+    assert!(text(&addition.stdout).contains("check contract-classification failed\n"));
+    assert!(text(&addition.stdout).contains("BXC0039 ping ping.greet additive\n"));
+    assert!(text(&addition.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_default_base_skips_when_main_is_missing_after_committed_trunk() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.commit("trunk");
+    assert!(
+        fixture
+            .git(&["branch", "-m", "main", "trunk"])
+            .status
+            .success()
+    );
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains(
+        "check contract-classification skipped\n  contract classification skipped: no merge base with main is available\n"
+    ));
+    assert!(text(&output.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_default_base_skips_when_main_is_unborn() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.init_repository();
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains(
+        "check contract-classification skipped\n  contract classification skipped: no merge base with main is available\n"
+    ));
+    assert!(text(&output.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_default_base_skips_when_histories_are_disjoint() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.commit("main lineage");
+    assert!(
+        fixture
+            .git(&["checkout", "--orphan", "orphan"])
+            .status
+            .success()
+    );
+    assert!(fixture.git(&["add", "."]).status.success());
+    let orphan = fixture.git(&["commit", "-q", "-m", "orphan lineage"]);
+    assert!(orphan.status.success(), "{}", text(&orphan.stderr));
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains(
+        "check contract-classification skipped\n  contract classification skipped: no merge base with main is available\n"
+    ));
+    assert!(text(&output.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_default_base_skips_when_no_repository_is_available() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains(
+        "check contract-classification skipped\n  contract classification skipped: no repository is available\n"
+    ));
+    assert!(text(&output.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_default_base_git_spawn_failure_is_invocation_exit_two() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run_without_git(&["check"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(text(&output.stdout).is_empty());
+    assert_eq!(text(&output.stderr), "git could not be executed\n");
+}
+
+#[test]
+fn check_default_base_git_boundary_uses_the_exact_nonmutating_argv() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fs::copy(
+        fixture.root.join("ping/generated/schema.json"),
+        &fixture.base_blob,
+    )
+    .unwrap();
+    let oid = "0000000000000000000000000000000000000000";
+    fixture.install_fake_git_default(oid, 0);
+
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains("check contract-classification passed\n"));
+    assert_eq!(
+        fs::read_to_string(&fixture.git_log).unwrap(),
+        format!(
+            "rev-parse\n--git-dir\n--\n\
+             merge-base\nHEAD\nmain\n--\n\
+             rev-parse\n--verify\n--end-of-options\n{oid}^{{commit}}\n--\n\
+             ls-tree\n--name-only\n-z\n{oid}\n--\nping/generated/schema.json\n--\n\
+             cat-file\n-e\n{oid}:ping/generated/schema.json\n--\n\
+             cat-file\nblob\n{oid}:ping/generated/schema.json\n--\n"
+        )
+    );
+}
+
+#[test]
+fn check_default_base_merge_base_garbage_is_bxw0091() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.install_fake_git_default("not-a-commit", 0);
+    let output = fixture.run(&["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert_eq!(
+        text(&output.stderr),
+        "BXW0091 .git: the explicit base revision must resolve to a Git commit\n"
+    );
+    assert!(!text(&output.stderr).contains("not-a-commit"));
 }

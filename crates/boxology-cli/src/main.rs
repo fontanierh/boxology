@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
 use boxology_cli::{
-    BaseSchemasError, ClassifyStepError, CompareDifference, ExecuteError, PlanError, SpawnError,
-    base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
-    execute, plan, run_clippy_step, run_command, run_fmt_step, run_lock_step, run_test_step, walk,
+    BaseSchemasError, ClassifyStepError, CompareDifference, DefaultBase, ExecuteError,
+    GenerationPlan, PlanError, SpawnError, base_package_schemas, cargo_metadata_command,
+    classify_step, compare_plans, composition_step, execute, plan, resolve_default_base,
+    run_clippy_step, run_command, run_fmt_step, run_lock_step, run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -166,18 +167,24 @@ fn run_check(
             .collect();
         Completion::Failed(Findings::new(entries).expect("differences produce findings"))
     };
-    let contract_classification = match base {
-        None => ContractClassificationCompletion::Skipped(SkipReason::Unimplemented),
-        Some(revision) => {
-            let schemas = match base_package_schemas(root, revision, &plans) {
-                Ok(schemas) => schemas,
-                Err(error) => return report_base_failure(error, stderr),
-            };
-            match classify_step(&schemas) {
-                Ok(completion) => completion,
-                Err(error) => return report_classification_failure(error, stderr),
+    let resolved = match base {
+        None => match resolve_default_base(root) {
+            Ok(DefaultBase::NoRepository) => Err(SkipReason::NoRepository),
+            Ok(DefaultBase::NoMergeBase) => Err(SkipReason::NoMergeBase),
+            Ok(DefaultBase::Commit(oid)) => Ok(oid),
+            Err(error) => {
+                let _ = writeln!(stderr, "{error}");
+                return 2;
             }
-        }
+        },
+        Some(revision) => Ok(revision.to_owned()),
+    };
+    let contract_classification = match resolved {
+        Err(reason) => ContractClassificationCompletion::Skipped(reason),
+        Ok(revision) => match classify_contracts(root, &revision, &plans, stderr) {
+            Ok(completion) => completion,
+            Err(code) => return code,
+        },
     };
     let runner = &run_command;
     let (cargo_graph, cargo_graph_output) = match run_lock_step(runner, root) {
@@ -246,6 +253,22 @@ fn difference_finding(workspace: &Workspace, difference: &CompareDifference) -> 
 
 fn not_implemented() -> Completion {
     Completion::Skipped(StepSkip::NotImplemented)
+}
+
+fn classify_contracts(
+    root: &Path,
+    revision: &str,
+    plans: &[GenerationPlan],
+    stderr: &mut dyn Write,
+) -> Result<ContractClassificationCompletion, u8> {
+    let schemas = match base_package_schemas(root, revision, plans) {
+        Ok(schemas) => schemas,
+        Err(error) => return Err(report_base_failure(error, stderr)),
+    };
+    match classify_step(&schemas) {
+        Ok(completion) => Ok(completion),
+        Err(error) => Err(report_classification_failure(error, stderr)),
+    }
 }
 
 fn parse(args: &[String]) -> Result<Selection, ()> {

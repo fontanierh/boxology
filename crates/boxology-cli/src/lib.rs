@@ -30,7 +30,10 @@ mod execute;
 mod generate;
 mod runner;
 mod walk;
-pub use base::{BaseError, BaseSchemasError, GitToolError, base_package_schemas};
+pub use base::{
+    BaseError, BaseSchemasError, DefaultBase, GitToolError, base_package_schemas,
+    resolve_default_base,
+};
 pub use check::{
     CheckClassificationError, ClassifyStepError, DuplicatePackages, PackageSchemas, classify_step,
 };
