@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 exclude = [
+    "crates/fixtures/generated-style-fmt",
     "crates/fixtures/greeter",
     "crates/fixtures/hello",
     "crates/fixtures/ping",
@@ -25,7 +26,6 @@ members = [
     "crates/boxology-runtime",
     "crates/boxology-telegram",
     "crates/fixtures/fixture-tests",
-    "crates/fixtures/generated-style-fmt",
     "crates/xtask",
 ]
 
