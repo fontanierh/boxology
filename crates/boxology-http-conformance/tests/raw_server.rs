@@ -249,6 +249,27 @@ struct Observation {
     second_connection: bool,
 }
 
+#[test]
+fn evidence_inventory_matches_raw_server_rows() {
+    let ids: Vec<&str> = ROWS.iter().map(|row| row.id).collect();
+    boxology_http_conformance::assert_ordered_case_ids(
+        &ids,
+        boxology_http_conformance::RAW_SERVER_CASE_IDS,
+        "raw_server",
+    );
+}
+
+#[test]
+fn named_evidence_resolves_through_inventory() {
+    boxology_http_conformance::assert_named_evidence_resolution(
+        "raw_server",
+        &[(
+            "raw_server_client_cases_are_canonical",
+            raw_server_client_cases_are_canonical as *const (),
+        )],
+    );
+}
+
 #[tokio::test]
 async fn raw_server_client_cases_are_canonical() {
     traceability_gate(&ROWS);

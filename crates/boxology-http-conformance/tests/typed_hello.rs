@@ -27,6 +27,31 @@ fn context(key: Option<IdempotencyKey>) -> CallContext {
     )
 }
 
+#[test]
+fn named_evidence_resolves_through_inventory() {
+    boxology_http_conformance::assert_named_evidence_resolution(
+        "typed_hello",
+        &[
+            (
+                "typed_hello_round_trips_success_and_domain_error",
+                typed_hello_round_trips_success_and_domain_error as *const (),
+            ),
+            (
+                "assertion_panic_survives_a_forced_shutdown_error",
+                assertion_panic_survives_a_forced_shutdown_error as *const (),
+            ),
+            (
+                "stalled_assertions_are_aborted_before_shutdown",
+                stalled_assertions_are_aborted_before_shutdown as *const (),
+            ),
+            (
+                "typed_hello_preserves_keys_and_executes_each_serial_call",
+                typed_hello_preserves_keys_and_executes_each_serial_call as *const (),
+            ),
+        ],
+    );
+}
+
 #[tokio::test]
 async fn typed_hello_round_trips_success_and_domain_error() {
     let running = RunningHello::start(hello_implementation::HelloService);

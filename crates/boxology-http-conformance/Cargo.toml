@@ -3,9 +3,26 @@ name = "boxology-http-conformance"
 version = "0.0.0"
 edition.workspace = true
 publish = false
+autotests = false
 
 [lib]
 path = "src/lib.rs"
+
+[[test]]
+name = "raw_hello"
+path = "tests/raw_hello.rs"
+
+[[test]]
+name = "raw_server"
+path = "tests/raw_server.rs"
+
+[[test]]
+name = "typed_hello"
+path = "tests/typed_hello.rs"
+
+[[test]]
+name = "workspace_isolation"
+path = "tests/workspace_isolation.rs"
 
 [dev-dependencies]
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
@@ -13,4 +30,5 @@ boxology-http = { version = "=0.0.0", path = "../boxology-http", default-feature
 boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime" }
 hello-contract = { version = "=0.0.0", path = "../fixtures/hello/generated/contract" }
 hello-implementation = { version = "=0.0.0", path = "../fixtures/hello/implementation" }
+serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }
