@@ -2,8 +2,6 @@ name: pr
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -65,7 +63,7 @@ jobs:
           run_generator=false
           if test "$EVENT_NAME" = pull_request; then
             changed="$(git diff --name-only "$BASE_SHA" HEAD)"
-            if test -n "$changed" && ! grep -Evq '^(docs/|records/|specs/|ops/friction-log\.md$|[^/]+\.md$)' <<<"$changed"; then
+            if test -n "$changed" && ! grep -Evq '\.md$' <<<"$changed"; then
               run_rust=false
             fi
             if grep -Eq '^crates/boxology-generator($|[-/])' <<<"$changed"; then
