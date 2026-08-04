@@ -20,6 +20,9 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) source: &'static str,
     pub(crate) default_source: &'static str,
     pub(crate) tests: &'static [&'static str],
+    /// SHA-256 over the exact bytes of the pinned test source file. Checked before
+    /// `body_digest` so enforcement helpers outside the test closure stay pinned.
+    pub(crate) source_digest: &'static str,
     /// SHA-256 over listed `#[test]` bodies plus the transitive file-level `fn` /
     /// `const` / `static` closure each reaches (bare calls/paths + macro token
     /// idents). Refresh from `observed`.
@@ -47,16 +50,31 @@ pub(crate) fn require_external_tests(
     let Ok(manifest) = fs::read_to_string(root.join(spec.manifest)) else {
         return Err(format!("{pkg}: cannot read manifest"));
     };
-    let Ok(source) = fs::read_to_string(root.join(spec.source)) else {
+    let Ok(source_bytes) = fs::read(root.join(spec.source)) else {
         return Err(format!("{pkg}: cannot read source"));
+    };
+    let Ok(source) = std::str::from_utf8(&source_bytes).map(str::to_owned) else {
+        return Err(format!("{pkg}: source is not UTF-8"));
     };
     if !manifest_is_exact(&manifest, spec) {
         return Err(format!("{pkg}: manifest does not match pinned controls"));
     }
+    source_matches_digest(&source_bytes, spec.source_digest)
+        .map_err(|error| format!("{pkg}: {error}"))?;
     bodies_match_digest(&source, spec.tests, spec.body_digest)
         .map_err(|error| format!("{pkg}: {error}"))?;
     if !execute(&mut run, spec) {
         return Err(format!("{pkg}: cargo list/run mismatch or cargo failed"));
+    }
+    Ok(())
+}
+
+fn source_matches_digest(bytes: &[u8], expected: &str) -> Result<(), String> {
+    let observed = format!("{:x}", Sha256::digest(bytes));
+    if observed != expected {
+        return Err(format!(
+            "source digest mismatch: expected {expected}, observed {observed}"
+        ));
     }
     Ok(())
 }
@@ -431,6 +449,10 @@ mod tests {
         "[package]\nname = \"client\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
     /// Digest of `a`/`b` bodies that each contain `assert!(true)`.
     const LIVE_AB_DIGEST: &str = "e6aaeaa844c2d0820ecd01aba8720523fdeb997a9f95de2e3d50d6b314e76a71";
+    const LIVE_AB_SOURCE: &str =
+        "#[test] fn a() { assert!(true); }\n#[test] fn b() { assert!(true); }\n";
+    const LIVE_AB_SOURCE_DIGEST: &str =
+        "d0e1301f6df009789412c4459288fa4be7358d107a5908b848a0e7d0b8359381";
     const SPEC: ExternalTestSpec = ExternalTestSpec {
         package: "client",
         target: "client_lock",
@@ -438,6 +460,7 @@ mod tests {
         source: "tests/client_lock.rs",
         default_source: "tests/client_lock.rs",
         tests: &["a", "b"],
+        source_digest: LIVE_AB_SOURCE_DIGEST,
         body_digest: LIVE_AB_DIGEST,
     };
     const ONE: &[&str] = &["a"];
@@ -458,6 +481,7 @@ mod tests {
     ) -> bool {
         let spec = ExternalTestSpec {
             tests: expected,
+            source_digest: LIVE_AB_SOURCE_DIGEST,
             ..SPEC
         };
         let mut calls = 0;
@@ -630,11 +654,7 @@ mod tests {
         fs::create_dir_all(root.join("real/tests")).unwrap();
         fs::create_dir_all(root.join("tests")).unwrap();
         fs::write(root.join("Cargo.toml"), BASE_MANIFEST).unwrap();
-        fs::write(
-            root.join(SPEC.source),
-            "#[test] fn a() { assert!(true); }\n#[test] fn b() { assert!(true); }\n",
-        )
-        .unwrap();
+        fs::write(root.join(SPEC.source), LIVE_AB_SOURCE).unwrap();
         fs::write(root.join("real/tests/test.rs"), "").unwrap();
         symlink(root.join("real"), root.join("link-dir")).unwrap();
         symlink(root.join("real/tests/test.rs"), root.join("link-file")).unwrap();
@@ -1008,12 +1028,16 @@ mod tests {
             &crate::GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
             &crate::BORN_VALID_SPEC,
         ] {
-            let source = fs::read_to_string(root.join(spec.source)).unwrap();
-            if let Err(error) = bodies_match_digest(&source, spec.tests, spec.body_digest) {
+            let source_bytes = fs::read(root.join(spec.source)).unwrap();
+            if let Err(error) = source_matches_digest(&source_bytes, spec.source_digest) {
+                panic!("anchor: live consumer source {}: {error}", spec.package);
+            }
+            let source = std::str::from_utf8(&source_bytes).unwrap();
+            if let Err(error) = bodies_match_digest(source, spec.tests, spec.body_digest) {
                 panic!("anchor: live consumer {}: {error}", spec.package);
             }
             let wrong = "0".repeat(64);
-            let err = bodies_match_digest(&source, spec.tests, &wrong).unwrap_err();
+            let err = bodies_match_digest(source, spec.tests, &wrong).unwrap_err();
             assert!(
                 err.contains("body digest mismatch")
                     && err.contains(&format!("expected {wrong}"))
@@ -1025,6 +1049,22 @@ mod tests {
     }
 
     #[test]
+    fn source_digest_rejects_one_byte_change() {
+        let digest = format!("{:x}", Sha256::digest(LIVE_AB_SOURCE.as_bytes()));
+        assert_eq!(digest, LIVE_AB_SOURCE_DIGEST);
+        source_matches_digest(LIVE_AB_SOURCE.as_bytes(), &digest).unwrap();
+        let mut mutant = LIVE_AB_SOURCE.as_bytes().to_vec();
+        mutant[0] ^= 0x01;
+        let err = source_matches_digest(&mutant, &digest).unwrap_err();
+        assert!(
+            err.contains("source digest mismatch")
+                && err.contains(&format!("expected {digest}"))
+                && err.contains("observed "),
+            "mutation survived: one-byte source change; err={err}"
+        );
+    }
+
+    #[test]
     fn vacuous_listed_bodies_fail_the_gate_conjunction() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1033,11 +1073,14 @@ mod tests {
         let root = std::env::temp_dir().join(format!("xtask-vacuity-wiring-{unique}"));
         fs::create_dir_all(root.join("tests")).unwrap();
         fs::write(root.join("Cargo.toml"), BASE_MANIFEST).unwrap();
-        fs::write(
-            root.join(SPEC.source),
-            "#[test] fn a() {}\n#[test] fn b() {}\n",
-        )
-        .unwrap();
+        let vacuous = "#[test] fn a() {}\n#[test] fn b() {}\n";
+        fs::write(root.join(SPEC.source), vacuous).unwrap();
+        let source_digest =
+            Box::leak(format!("{:x}", Sha256::digest(vacuous.as_bytes())).into_boxed_str());
+        let spec = ExternalTestSpec {
+            source_digest,
+            ..SPEC
+        };
         let mut calls = 0;
         let passed = require_external_tests(
             &root,
@@ -1050,7 +1093,7 @@ mod tests {
                 };
                 Some((true, output.to_vec()))
             },
-            &SPEC,
+            &spec,
         );
         fs::remove_dir_all(root).unwrap();
         let err = passed.unwrap_err();

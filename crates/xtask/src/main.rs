@@ -66,6 +66,7 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     source: "crates/boxology-workspace/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
+    source_digest: "851bc809ce185a49fb0ef6b6b5758269c2ae559bd7f363ed1288c86883780eea",
     body_digest: "3daaf29c01df87b82990aaeeaa74b8856f85e1ff8a984992910393b3528b60d9",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
@@ -76,9 +77,10 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
+        source_digest: "b633faf32525a7b4883e9f7f07c77a0738f199797927240d71abd32618f59dd3",
         body_digest: "b010c6eb43ce00b40f6dd11c3aa63c1f62ad8c2e3196f8e7e1e4ffd10331e65a",
     };
-// #107A slice A closure lock; PR-required. AST scan later. Transitive purity: #358.
+// #107A generator source-surface closure lock; PR-required. AST scan next. Transitive: #358.
 const GENERATOR_SOURCE_INVENTORY_TESTS: &[&str] = &[
     "closure_rules_reject_live_hostile_corpus",
     "generator_crate_roots_admit_only_manifest_src_and_tests",
@@ -94,7 +96,8 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
         tests: GENERATOR_SOURCE_INVENTORY_TESTS,
-        body_digest: "289448725a8a5efb8a6384ff2d3706221dc40ebd715f751875fdaa9bf2c4959d",
+        source_digest: "261ca5e2e40e009c1b9878d5f7fcb91052d1cb2d3950919a7aed20062988fd5a",
+        body_digest: "cc5d691a8e5643b4814ec1b2cfc3534db9a24e82271781d6bc445059e0eab8ee",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",
@@ -103,6 +106,7 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     source: "crates/boxology-init/tests/born_valid.rs",
     default_source: "tests/born_valid.rs",
     tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
+    source_digest: "0768cf6784ed0ec519b952fc63b4a5f64cfe925aa91eff70e5c468799ca6a5f4",
     body_digest: "1a5399cc443c1636c531208924e739258237fb2fa2121bc3806bce8cd4216deb",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
@@ -894,6 +898,7 @@ mod tests {
                     source: "crates/boxology-workspace/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
+                    source_digest: "851bc809ce185a49fb0ef6b6b5758269c2ae559bd7f363ed1288c86883780eea",
                     body_digest: "3daaf29c01df87b82990aaeeaa74b8856f85e1ff8a984992910393b3528b60d9",
                 },
             ),
@@ -906,6 +911,7 @@ mod tests {
                     source: "crates/boxology-classifier/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
+                    source_digest: "b633faf32525a7b4883e9f7f07c77a0738f199797927240d71abd32618f59dd3",
                     body_digest: "b010c6eb43ce00b40f6dd11c3aa63c1f62ad8c2e3196f8e7e1e4ffd10331e65a",
                 },
             ),
@@ -918,7 +924,8 @@ mod tests {
                     source: "crates/boxology-generator-model/tests/purity_lock.rs",
                     default_source: "tests/purity_lock.rs",
                     tests: GENERATOR_SOURCE_INVENTORY_TESTS,
-                    body_digest: "289448725a8a5efb8a6384ff2d3706221dc40ebd715f751875fdaa9bf2c4959d",
+                    source_digest: "261ca5e2e40e009c1b9878d5f7fcb91052d1cb2d3950919a7aed20062988fd5a",
+                    body_digest: "cc5d691a8e5643b4814ec1b2cfc3534db9a24e82271781d6bc445059e0eab8ee",
                 },
             ),
         ];
