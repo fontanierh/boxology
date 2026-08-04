@@ -1,7 +1,7 @@
 use boxology_manifest::RelativePath;
 use boxology_workspace::{
-    CheckReport, Completion, ContractClassificationCompletion, FileEntry, SkipReason,
-    WorkspaceInputs,
+    CheckReport, Completion, ContractClassificationCompletion, ExternalOutput, FileEntry,
+    SkipReason, WorkspaceInputs,
 };
 use std::{fs, path::Path};
 
@@ -123,6 +123,7 @@ fn check_report() -> Result<String, String> {
         clippy: Completion::Passed,
         tests: Completion::Passed,
         quality: Completion::Passed,
+        external_output: ExternalOutput::empty(),
     };
     Ok(format!("{report}\n"))
 }

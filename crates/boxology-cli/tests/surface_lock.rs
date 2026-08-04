@@ -8,9 +8,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use syn::visit::Visit;
-const NAMES: &str =
-    "lib.rs walk.rs generate.rs execute.rs compare.rs classify.rs check.rs base.rs main.rs";
-const FILES: &str = "Cargo.toml src/base.rs src/check.rs src/classify.rs src/compare.rs src/execute.rs src/generate.rs src/lib.rs src/main.rs src/walk.rs tests/bxw.golden tests/check.rs tests/classify.rs tests/cli.rs tests/compare.rs tests/execute.rs tests/generation_plan.rs tests/surface_lock.rs";
+const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs compare.rs classify.rs check.rs base.rs runner.rs main.rs";
+const FILES: &str = "Cargo.toml src/base.rs src/check.rs src/classify.rs src/compare.rs src/execute.rs src/generate.rs src/lib.rs src/main.rs src/runner.rs src/walk.rs tests/bxw.golden tests/check.rs tests/classify.rs tests/cli.rs tests/compare.rs tests/execute.rs tests/generation_plan.rs tests/runner.rs tests/surface_lock.rs";
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const PACKAGE_HASH: u64 = 4_400_377_577_107_281_090;
 const LIB: &str = include_str!("../src/lib.rs");
@@ -21,6 +20,7 @@ const COMPARE: &str = include_str!("../src/compare.rs");
 const CLASSIFY: &str = include_str!("../src/classify.rs");
 const CHECK: &str = include_str!("../src/check.rs");
 const BASE: &str = include_str!("../src/base.rs");
+const RUNNER: &str = include_str!("../src/runner.rs");
 const MAIN: &str = include_str!("../src/main.rs");
 const SOURCES: &[(&str, &str)] = &[
     ("lib.rs", LIB),
@@ -31,11 +31,12 @@ const SOURCES: &[(&str, &str)] = &[
     ("classify.rs", CLASSIFY),
     ("check.rs", CHECK),
     ("base.rs", BASE),
+    ("runner.rs", RUNNER),
     ("main.rs", MAIN),
 ];
 const GOLDEN: &str = include_str!("bxw.golden");
-const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086 BXW0091 BXW0092";
-const LIB_HASH: u64 = 16_352_466_488_491_114_341;
+const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086 BXW0091 BXW0092 BXW0093 BXW0094 BXW0096";
+const LIB_HASH: u64 = 9_531_184_993_623_015_954;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
 const GENERATE_HASH: u64 = 6_806_705_769_110_740_046;
 const EXECUTE_HASH: u64 = 14_225_782_507_406_617_347;
@@ -43,10 +44,11 @@ const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
 const BASE_HASH: u64 = 8_507_258_918_304_319_224;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nclassify(outcome.base_schema(), outcome.submitted_schema())\nrender_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nfn not_implemented() -> Completion\nSkipReason::Unimplemented\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
+const RUNNER_HASH: u64 = 6_822_545_221_186_204_225;
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nclassify(outcome.base_schema(), outcome.submitted_schema())\nrender_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nrun_fmt_step(runner, root, &workspace)\nrun_clippy_step(runner, root)\nfn not_implemented() -> Completion\nSkipReason::Unimplemented\ncargo_graph: not_implemented()\ntests: not_implemented()\nquality: not_implemented()\nfn report_spawn_failure\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 407_565_433_622_090_130;
-const HASHES: [u64; 9] = [
+const MAIN_HASH: u64 = 15_522_640_223_330_704_418;
+const HASHES: [u64; 10] = [
     LIB_HASH,
     WALK_HASH,
     GENERATE_HASH,
@@ -55,6 +57,7 @@ const HASHES: [u64; 9] = [
     CLASSIFY_HASH,
     CHECK_HASH,
     BASE_HASH,
+    RUNNER_HASH,
     MAIN_HASH,
 ];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
@@ -70,6 +73,8 @@ const CHECK_PUBLIC: &str = "DuplicatePackages PackageSchemas new CheckClassifica
 const BASE_PUBLIC: &str =
     "GitToolError BaseError code location detail BaseSchemasError base_package_schemas";
 const BASE_ANCHORS: &str = "[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n\"ls-tree\"\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(";
+const RUNNER_PUBLIC: &str = "CommandSpec new args render CapturedOutput new success combined SpawnError ToolStep into_parts run_command CommandRunner fmt_packages fmt_spec clippy_spec run_fmt_step run_clippy_step";
+const RUNNER_ANCHORS: &str = "classified.derived_output().is_none()\n\"fmt\".to_owned()\n\"-D\"\nBXW0093\nBXW0096\nformat!(\"command=\\\"{}\\\"\", spec.render())\nCommand::new(&spec.program)";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Drop for Fixture {
@@ -261,18 +266,17 @@ fn source_surface_is_exact_and_mutation_resistant() {
     let mutant = format!("{GENERATE}// hash mutant\n");
     rejects([LIB, WALK, &mutant, EXECUTE, CLASSIFY, CHECK, MAIN], HASHES);
     let mutant = format!("{EXECUTE}\n/// Mutant.\npub fn mutant() {{}}\n");
-    let hashes = [
-        LIB_HASH,
-        WALK_HASH,
-        GENERATE_HASH,
-        hash(&mutant),
-        CLASSIFY_HASH,
-        CHECK_HASH,
-        hash(MAIN),
-    ];
     rejects(
         [LIB, WALK, GENERATE, &mutant, CLASSIFY, CHECK, MAIN],
-        hashes,
+        [
+            LIB_HASH,
+            WALK_HASH,
+            GENERATE_HASH,
+            hash(&mutant),
+            CLASSIFY_HASH,
+            CHECK_HASH,
+            MAIN_HASH,
+        ],
     );
     let mutant = EXECUTE.replace("BXW0070", "BXW9999");
     rejects(
@@ -284,7 +288,7 @@ fn source_surface_is_exact_and_mutation_resistant() {
             hash(&mutant),
             CLASSIFY_HASH,
             CHECK_HASH,
-            hash(MAIN),
+            MAIN_HASH,
         ],
     );
     for (anchor, replacement) in [
@@ -455,10 +459,9 @@ fn rejects<const N: usize, const M: usize>(bodies: [&str; N], hashes: [u64; M]) 
         "execute.rs",
         "classify.rs",
         "check.rs",
-        "base.rs",
         "main.rs",
     ];
-    let mut sources = Vec::with_capacity(N + 1);
+    let mut sources = Vec::with_capacity(N + 3);
     for (index, body) in bodies.iter().enumerate() {
         sources.push((names[index], *body));
         if index == 3 {
@@ -466,15 +469,18 @@ fn rejects<const N: usize, const M: usize>(bodies: [&str; N], hashes: [u64; M]) 
         }
         if index == 5 {
             sources.push(("base.rs", BASE));
+            sources.push(("runner.rs", RUNNER));
         }
     }
     let mut expected = hashes.to_vec();
     if expected.len() == 7 {
         expected.insert(4, COMPARE_HASH);
         expected.insert(7, BASE_HASH);
+        expected.insert(8, RUNNER_HASH);
     }
     assert!(!locked_sources(&sources, expected, GOLDEN));
 }
+
 #[derive(Default)]
 struct Lock {
     codes: Vec<String>,
@@ -603,6 +609,7 @@ fn locked_sources(sources: &[(&str, &str)], hashes: impl AsRef<[u64]>, golden: &
     let mut classify_public = Vec::new();
     let mut check_public = Vec::new();
     let mut base_public = Vec::new();
+    let mut runner_public = Vec::new();
     for &(name, source) in sources.iter().skip(1) {
         lock.public.clear();
         let Ok(file) = syn::parse_file(source) else {
@@ -633,6 +640,9 @@ fn locked_sources(sources: &[(&str, &str)], hashes: impl AsRef<[u64]>, golden: &
         if name == "base.rs" {
             base_public = lock.public.clone();
         }
+        if name == "runner.rs" {
+            runner_public = lock.public.clone();
+        }
     }
     let codes = CODES
         .split_whitespace()
@@ -648,6 +658,7 @@ fn locked_sources(sources: &[(&str, &str)], hashes: impl AsRef<[u64]>, golden: &
         && classify_public.join(" ") == CLASSIFY_PUBLIC
         && check_public.join(" ") == CHECK_PUBLIC
         && base_public.join(" ") == BASE_PUBLIC
+        && runner_public.join(" ") == RUNNER_PUBLIC
         && render(&lock).is_some_and(|rendered| rendered == golden)
         && ANCHORS
             .lines()
@@ -670,9 +681,12 @@ fn locked_sources(sources: &[(&str, &str)], hashes: impl AsRef<[u64]>, golden: &
         && BASE_ANCHORS
             .lines()
             .all(|anchor| sources[7].1.matches(anchor).count() == 1)
-        && MAIN_ANCHORS
+        && RUNNER_ANCHORS
             .lines()
             .all(|anchor| sources[8].1.matches(anchor).count() == 1)
+        && MAIN_ANCHORS
+            .lines()
+            .all(|anchor| sources[9].1.matches(anchor).count() == 1)
         && sources[0].1.matches(ARGV_SHAPE).count() == 1
         && sources[0].1.matches("#![deny(missing_docs)]").count() == 1
         && sources[0].1.matches("#![forbid(unsafe_code)]").count() == 1
@@ -686,6 +700,8 @@ fn locked_sources(sources: &[(&str, &str)], hashes: impl AsRef<[u64]>, golden: &
         && sources[6].1.matches("#![forbid(unsafe_code)]").count() == 1
         && sources[7].1.matches("#![deny(missing_docs)]").count() == 1
         && sources[7].1.matches("#![forbid(unsafe_code)]").count() == 1
+        && sources[8].1.matches("#![deny(missing_docs)]").count() == 1
+        && sources[8].1.matches("#![forbid(unsafe_code)]").count() == 1
 }
 fn render(lock: &Lock) -> Option<String> {
     let mut output = format!("sources={}\n", NAMES.replace(' ', ","));

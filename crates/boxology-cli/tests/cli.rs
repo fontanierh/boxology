@@ -84,7 +84,7 @@ impl Fixture {
         let cargo = cargo_dir.join("cargo");
         fs::write(
             &cargo,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BOXOLOGY_ARG_LOG\"\nif [ \"${BOXOLOGY_MODE:-ok}\" = fail ]; then printf '%s\\n' 'synthetic cargo metadata stderr' >&2; exit 17; fi\nif [ \"${BOXOLOGY_MODE:-ok}\" = nonutf8 ]; then printf '\\377'; exit 0; fi\n/bin/cat \"$BOXOLOGY_METADATA\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_ARG_LOG\"\nif [ \"$1\" = \"metadata\" ]; then\n  if [ \"${BOXOLOGY_MODE:-ok}\" = fail ]; then printf '%s\\n' 'synthetic cargo metadata stderr' >&2; exit 17; fi\n  if [ \"${BOXOLOGY_MODE:-ok}\" = nonutf8 ]; then printf '\\377'; exit 0; fi\n  /bin/cat \"$BOXOLOGY_METADATA\"\n  exit 0\nfi\nif [ \"${BOXOLOGY_FAIL:-}\" = \"$1\" ]; then\n  printf '%s\\n' \"representative $1 failure\"\n  exit 17\nfi\nexit 0\n",
         )
         .unwrap();
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
@@ -109,6 +109,11 @@ impl Fixture {
     }
 
     fn run_with(&self, args: &[&str], mode: &str, fake_cargo: bool) -> Output {
+        self.run_tools(args, mode, fake_cargo, None)
+    }
+
+    fn run_tools(&self, args: &[&str], mode: &str, fake_cargo: bool, fail: Option<&str>) -> Output {
+        let _ = fs::remove_file(&self.log);
         let mut command = Command::new(env!("CARGO_BIN_EXE_boxology"));
         command.args(args).current_dir(&self.root);
         command.env("BOXOLOGY_ARG_LOG", &self.log);
@@ -116,6 +121,11 @@ impl Fixture {
         command.env("BOXOLOGY_MODE", mode);
         command.env("BOXOLOGY_GIT_ARG_LOG", &self.git_log);
         command.env("BOXOLOGY_BASE_BLOB", &self.base_blob);
+        if let Some(step) = fail {
+            command.env("BOXOLOGY_FAIL", step);
+        } else {
+            command.env_remove("BOXOLOGY_FAIL");
+        }
         if fake_cargo {
             let old_path = env::var_os("PATH").unwrap_or_default();
             let path = format!(
@@ -126,6 +136,10 @@ impl Fixture {
             command.env("PATH", path);
         }
         command.output().unwrap()
+    }
+
+    fn argv_log(&self) -> String {
+        fs::read_to_string(&self.log).unwrap_or_default()
     }
 
     fn run_without_git(&self, args: &[&str]) -> Output {
@@ -505,10 +519,8 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
                     \x20 contract classification skipped: base-revision classification is not implemented in this boxology version\n\
                     check cargo-graph skipped\n\
                     \x20 not run: the step is not implemented in this boxology version\n\
-                    check fmt skipped\n\
-                    \x20 not run: the step is not implemented in this boxology version\n\
-                    check clippy skipped\n\
-                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check fmt passed\n\
+                    check clippy passed\n\
                     check tests skipped\n\
                     \x20 not run: the step is not implemented in this boxology version\n\
                     check quality skipped\n\
@@ -517,10 +529,48 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
     assert_eq!(first.status.code(), Some(0));
     assert_eq!(text(&first.stdout), expected);
     assert!(text(&first.stderr).is_empty());
+    let log = fixture.argv_log();
+    assert!(
+        log.contains("fmt\n--check\n-p\nping-implementation\n"),
+        "{log}"
+    );
+    assert!(
+        !log.contains("ping-contract"),
+        "fmt selection must exclude derived crate: {log}"
+    );
+    assert!(
+        log.contains("clippy\n--workspace\n--all-targets\n--all-features\n--\n-D\nwarnings\n"),
+        "{log}"
+    );
+    assert!(
+        !log.contains("\ntest\n"),
+        "deferred tests step must not run cargo test: {log}"
+    );
     let second = fixture.run(&["check"]);
     assert_eq!(second.status.code(), Some(0));
     assert_eq!(second.stdout, first.stdout);
     assert_eq!(second.stderr, first.stderr);
+}
+
+#[test]
+fn check_tool_failure_renders_finding_command_output_and_exit_one() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run_tools(&["check"], "ok", true, Some("clippy"));
+    let stdout = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).is_empty());
+    assert!(stdout.contains(
+        "check fmt passed\n\
+         check clippy failed\n\
+         \x20 BXW0094 Cargo.toml package= candidates=[command=\"cargo clippy --workspace --all-targets --all-features -- -D warnings\"]\n\
+         representative clippy failure\n"
+    ));
+    assert!(stdout.contains(
+        "check tests skipped\n  not run: the step is not implemented in this boxology version\n\
+         check quality skipped\n  not run: the step is not implemented in this boxology version\n"
+    ));
+    assert!(stdout.ends_with("check result failed\n"));
 }
 
 #[test]

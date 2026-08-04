@@ -1283,8 +1283,8 @@ impl Finding {
         found
     }
     /// Constructs a finding for a coded rule owned by an effectful caller. The CLI uses this for
-    /// BXW0083 today and will use it for the later lockfile, formatting, clippy, test, and quality
-    /// steps; the caller owns the stability of `code` and supplies the rule's claimed source.
+    /// regeneration (BXW0083) and the formatting, clippy, and test tool steps; the caller owns the
+    /// stability of `code` and supplies the rule's claimed source.
     pub fn external(
         code: &'static str,
         text: &'static str,
@@ -1659,6 +1659,30 @@ impl fmt::Display for CheckStatus {
         })
     }
 }
+/// Captured external tool text for fmt/clippy/tests/quality; outside determinism claims (S5 D6).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalOutput {
+    /// Captured formatting-tool text, when the fmt step failed.
+    pub fmt: Option<Vec<u8>>,
+    /// Captured Clippy text, when the clippy step failed.
+    pub clippy: Option<Vec<u8>>,
+    /// Captured test-harness text, when the tests step failed.
+    pub tests: Option<Vec<u8>>,
+    /// Captured quality-command text, when the quality step failed.
+    pub quality: Option<Vec<u8>>,
+}
+impl ExternalOutput {
+    /// Returns empty captures for every external step.
+    pub fn empty() -> Self {
+        Self {
+            fmt: None,
+            clippy: None,
+            tests: None,
+            quality: None,
+        }
+    }
+}
+
 /// The pure, complete eight-step `boxology check` report.
 ///
 /// The named field types mirror 08-rust-build-topology.md's baseline rather than a positional
@@ -1666,7 +1690,8 @@ impl fmt::Display for CheckStatus {
 /// may be explicitly skipped while their implementation lands; a skipped step is neither passed
 /// nor failed. Integrity errors never enter a report — they propagate as CLI errors before
 /// composition — and report-only classification findings are excluded from [`CheckReport::status`]
-/// deliberately under S5 D6.
+/// deliberately under S5 D6. Tool captures in [`CheckReport::external_output`] are outside
+/// determinism claims.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckReport {
     /// The discovery/ownership/role validation outcome.
@@ -1685,6 +1710,8 @@ pub struct CheckReport {
     pub tests: Completion,
     /// The manifest-declared quality-command outcome.
     pub quality: Completion,
+    /// Captured tool text for external steps; outside determinism claims.
+    pub external_output: ExternalOutput,
 }
 impl CheckReport {
     /// Returns the final status, ignoring contract-classification findings because S5 D6 makes
@@ -1759,6 +1786,21 @@ impl CheckReport {
         if let Completion::Failed(findings) = completion {
             render_findings(lines, findings);
         }
+        if let Some(output) = self.external_output_for(step) {
+            render_tool_output(lines, output);
+        }
+    }
+    fn external_output_for(&self, step: CheckStep) -> Option<&[u8]> {
+        match step {
+            CheckStep::Fmt => self.external_output.fmt.as_deref(),
+            CheckStep::Clippy => self.external_output.clippy.as_deref(),
+            CheckStep::Tests => self.external_output.tests.as_deref(),
+            CheckStep::Quality => self.external_output.quality.as_deref(),
+            CheckStep::Discovery
+            | CheckStep::Regeneration
+            | CheckStep::ContractClassification
+            | CheckStep::CargoGraph => None,
+        }
     }
     fn contract_status(&self) -> &'static str {
         match &self.contract_classification {
@@ -1775,6 +1817,10 @@ impl fmt::Display for CheckReport {
 }
 fn render_findings(lines: &mut Vec<String>, findings: &Findings) {
     lines.extend(findings.into_iter().map(|entry| format!("  {entry}")));
+}
+fn render_tool_output(lines: &mut Vec<String>, output: &[u8]) {
+    let text = String::from_utf8_lossy(output);
+    lines.extend(text.lines().map(str::to_owned));
 }
 /// The canonical repository-owned validation workflow data from S5 D7.
 ///
@@ -1947,6 +1993,7 @@ jobs:
             clippy: Completion::Passed,
             tests: Completion::Passed,
             quality: Completion::Passed,
+            external_output: ExternalOutput::empty(),
         }
     }
     fn all_skipped_report() -> CheckReport {
@@ -2022,6 +2069,21 @@ jobs:
              check quality passed\n\
              check result failed"
         );
+    }
+    #[test]
+    fn external_tool_output_renders_after_findings_and_is_absent_when_empty() {
+        let mut report = all_pass_report();
+        report.fmt = Completion::Failed(report_findings());
+        report.external_output.fmt = Some(b"tool stdout\ntool stderr\n".to_vec());
+        let rendered = report.render_human();
+        assert!(
+            rendered
+                .find("  BXW0048 a.rs package= candidates=[]")
+                .unwrap()
+                < rendered.find("tool stdout").unwrap()
+        );
+        assert!(rendered.contains("tool stderr"));
+        assert!(!all_pass_report().render_human().contains("tool stdout"));
     }
     #[test]
     fn check_report_renders_all_unimplemented_steps_as_skipped() {

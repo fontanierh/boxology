@@ -5,7 +5,9 @@ use boxology_contract::BoxId;
 use boxology_generator::{OUTPUTS, generate};
 use boxology_generator_model::GenerationRequest;
 use boxology_schema::{SchemaDocument, SchemaPayload, SchemaVariant};
-use boxology_workspace::{CheckReport, CheckStatus, Completion, ContractClassificationCompletion};
+use boxology_workspace::{
+    CheckReport, CheckStatus, Completion, ContractClassificationCompletion, ExternalOutput,
+};
 
 const V1: &str = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; }";
 const V2: &str = "boxology::contract! { #[error] pub enum GreetError { EmptyName, Other } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; }";
@@ -79,6 +81,7 @@ fn report(contract_classification: ContractClassificationCompletion) -> CheckRep
         clippy: Completion::Passed,
         tests: Completion::Passed,
         quality: Completion::Passed,
+        external_output: ExternalOutput::empty(),
     }
 }
 
