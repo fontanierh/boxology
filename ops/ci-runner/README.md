@@ -218,13 +218,12 @@ bash -n ops/ci-runner/supervise.sh ops/ci-runner/supervise-slots.sh
 plutil -lint ops/ci-runner/com.fontanierh.boxology-ci-runner-slots.plist
 ```
 
-The Linux workflow is manual-only and remains the operator's end-to-end health check. Dispatch
-[`self-hosted-runner-smoke.yml`](../../.github/workflows/self-hosted-runner-smoke.yml) after the supervisor is ready; it is read-only, contains no secrets,
-and is safe to remain queued while no runner exists. It checks Linux, ARM64/aarch64, non-root identity,
-image evidence, checkout credential hygiene, and the ARM host branch of the
-determinism fixture. Dispatch [`macos-self-hosted-runner-smoke.yml`](../../.github/workflows/macos-self-hosted-runner-smoke.yml)
-to verify native `macOS`/`ARM64`, `aarch64-apple-darwin`, host evidence, and the
-native determinism fixture.
+Linux provisioning is retained as dormant source material for post-v0 #525, but its launchd
+services must remain disabled and unloaded during v0 delivery. There is no Linux smoke workflow:
+keeping an undispatchable button after retiring its runners would be misleading. Dispatch
+[`macos-self-hosted-runner-smoke.yml`](../../.github/workflows/macos-self-hosted-runner-smoke.yml)
+to verify native `macOS`/`ARM64`, `aarch64-apple-darwin`, host evidence, and the native determinism
+fixture.
 
 ## CI activation
 
@@ -241,17 +240,16 @@ when S5 makes them part of the product check itself. Deep validation is
 same Mac label, running `cargo xtask ci --no-budget` and `boxology check`. Do not
 dispatch deep validation during heavy local delivery on this MacBook.
 
-The Linux ARM64 JIT lane and its labels remain installed but dormant for ordinary
-CI; keep them for manual
-[`self-hosted-runner-smoke.yml`](../../.github/workflows/self-hosted-runner-smoke.yml)
-health checks only. Scheduled advisories remain on the native Mac label. Storage
+The Linux ARM64 JIT launchd services are disabled and unloaded for v0; their dedicated Colima
+profile is stopped and no Linux runner registrations remain. Scheduled advisories remain on the
+native Mac label. Storage
 hygiene remains a cheap, non-compiling GitHub-hosted Ubuntu job
 (`ubuntu-latest`). Continuous Linux/x86/cross-platform validation and
 determinism comparison are owned by
 [#525](https://github.com/fontanierh/boxology/issues/525). No product validation
 or compilation job uses GitHub-hosted runners or minutes. Native Mac slots reuse
-the per-slot Cargo target with four Cargo jobs; dormant Linux containers remain
-capped at one CPU and 2 GiB.
+the per-slot Cargo target with four Cargo jobs. Post-v0 #525 owns any deliberate
+Linux/cross-platform reactivation.
 
 The wall-clock monitor tracks the single required `validation` job's
 cache-hit duration excluding queue time, with **4 minutes** as the alarm
