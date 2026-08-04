@@ -5,13 +5,13 @@ use boxology_cli::{
     ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError, base_diff_inputs,
     base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
     execute, plan, resolve_base, resolve_default_base, run_clippy_step, run_command, run_fmt_step,
-    run_lock_step, run_test_step, walk,
+    run_lock_step, run_quality_step, run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
 use boxology_workspace::{
     CheckReport, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
-    DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, StepSkip, Workspace,
+    DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, Workspace,
     WorkspaceInputs, diff_ownership,
 };
 use std::{
@@ -241,6 +241,10 @@ fn run_check(
         Ok(step) => step.into_parts(),
         Err(error) => return report_spawn_failure(error, stderr),
     };
+    let (quality, quality_output) = match run_quality_step(runner, root, &workspace) {
+        Ok(step) => step.into_parts(),
+        Err(error) => return report_spawn_failure(error, stderr),
+    };
     let report = CheckReport {
         discovery,
         regeneration,
@@ -250,13 +254,13 @@ fn run_check(
         fmt,
         clippy,
         tests,
-        quality: not_implemented(),
+        quality,
         external_output: ExternalOutput {
             cargo_graph: cargo_graph_output,
             fmt: fmt_output,
             clippy: clippy_output,
             tests: tests_output,
-            quality: None,
+            quality: quality_output,
         },
     };
     match format {
@@ -346,10 +350,6 @@ fn difference_finding(workspace: &Workspace, difference: &CompareDifference) -> 
             difference.repair_command()
         ),
     )
-}
-
-fn not_implemented() -> Completion {
-    Completion::Skipped(StepSkip::NotImplemented)
 }
 
 fn classify_contracts(

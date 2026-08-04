@@ -1,7 +1,7 @@
 use boxology_cli::{
     CapturedOutput, CommandRunner, CommandSpec, SpawnError, cargo_metadata_command, clippy_spec,
-    fmt_packages, fmt_spec, lock_spec, run_clippy_step, run_command, run_fmt_step, run_lock_step,
-    run_test_step, test_spec, walk,
+    fmt_packages, fmt_spec, lock_spec, quality_specs, run_clippy_step, run_command, run_fmt_step,
+    run_lock_step, run_quality_step, run_test_step, test_spec, walk,
 };
 use boxology_manifest::RelativePath;
 use boxology_workspace::{Completion, FileEntry, Workspace, WorkspaceInputs};
@@ -9,7 +9,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
 };
 
 fn rel(path: &str) -> RelativePath {
@@ -17,8 +20,16 @@ fn rel(path: &str) -> RelativePath {
 }
 
 fn fixture_workspace() -> Workspace {
-    const ROOT: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n";
-    const PING: &str = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n";
+    fixture_workspace_with_quality("", "")
+}
+
+fn fixture_workspace_with_quality(root_quality: &str, ping_quality: &str) -> Workspace {
+    let root = format!(
+        "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n{root_quality}"
+    );
+    let ping = format!(
+        "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n{ping_quality}"
+    );
     const METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["a","b"],"packages":[{"id":"a","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"b","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}]}"#;
     let files = [
         "Cargo.toml",
@@ -34,14 +45,21 @@ fn fixture_workspace() -> Workspace {
     .map(|path| FileEntry::file(rel(path)))
     .collect();
     let manifests = [
-        (rel("boxology.toml"), ROOT.as_bytes().to_vec()),
-        (rel("ping/boxology.toml"), PING.as_bytes().to_vec()),
+        (rel("boxology.toml"), root.into_bytes()),
+        (rel("ping/boxology.toml"), ping.into_bytes()),
     ]
     .to_vec();
     WorkspaceInputs::new(files, manifests, METADATA)
         .unwrap()
         .check()
         .unwrap()
+}
+
+fn quality_workspace() -> Workspace {
+    fixture_workspace_with_quality(
+        "\n[quality]\ncommands = [\"tool-a one two\", \"tool-b three\"]\n",
+        "\n[quality]\ncommands = [\"ping-cmd --flag value\", \"ping-cmd2 arg\"]\n",
+    )
 }
 
 #[test]
@@ -366,4 +384,185 @@ fn path_only_scratch_lock_step_proves_fresh_stale_and_missing() {
     );
     assert!(!String::from_utf8(missing_out.unwrap()).unwrap().is_empty());
     assert!(!lock_path.exists());
+}
+
+#[test]
+fn quality_specs_follow_package_id_and_declaration_order_with_exact_argv_split() {
+    let workspace = quality_workspace();
+    let specs = quality_specs(&workspace);
+    let rendered: Vec<_> = specs
+        .iter()
+        .map(|command| {
+            (
+                command.package().as_str(),
+                command.manifest_path().as_str(),
+                command.spec().render(),
+                command.spec().args().to_vec(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rendered,
+        [
+            (
+                "ping",
+                "ping/boxology.toml",
+                "ping-cmd --flag value".to_owned(),
+                vec!["--flag".to_owned(), "value".to_owned()],
+            ),
+            (
+                "ping",
+                "ping/boxology.toml",
+                "ping-cmd2 arg".to_owned(),
+                vec!["arg".to_owned()],
+            ),
+            (
+                "platform",
+                "boxology.toml",
+                "tool-a one two".to_owned(),
+                vec!["one".to_owned(), "two".to_owned()],
+            ),
+            (
+                "platform",
+                "boxology.toml",
+                "tool-b three".to_owned(),
+                vec!["three".to_owned()],
+            ),
+        ]
+    );
+}
+
+#[test]
+fn quality_all_success_passes_without_output_in_exact_order() {
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    SEEN.lock().unwrap().clear();
+    let workspace = quality_workspace();
+    let runner: &CommandRunner = &|_root, spec| {
+        SEEN.lock().unwrap().push(spec.render());
+        Ok(CapturedOutput::new(true, b"ok-stdout", b"ok-stderr"))
+    };
+    let (completion, output) = run_quality_step(runner, Path::new("."), &workspace)
+        .unwrap()
+        .into_parts();
+    assert_eq!(completion, Completion::Passed);
+    assert_eq!(output, None);
+    assert_eq!(
+        SEEN.lock().unwrap().as_slice(),
+        [
+            "ping-cmd --flag value",
+            "ping-cmd2 arg",
+            "tool-a one two",
+            "tool-b three",
+        ]
+    );
+}
+
+#[test]
+fn quality_middle_failure_continues_with_bxw0107_and_header_output() {
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    SEEN.lock().unwrap().clear();
+    let workspace = quality_workspace();
+    let runner: &CommandRunner = &|_root, spec| {
+        SEEN.lock().unwrap().push(spec.render());
+        if spec.render() == "ping-cmd2 arg" {
+            Ok(CapturedOutput::new(
+                false,
+                b"failed-stdout\n",
+                b"failed-stderr\n",
+            ))
+        } else {
+            Ok(CapturedOutput::new(true, b"", b""))
+        }
+    };
+    let (completion, output) = run_quality_step(runner, Path::new("."), &workspace)
+        .unwrap()
+        .into_parts();
+    let Completion::Failed(findings) = completion else {
+        panic!("expected quality failure");
+    };
+    assert_eq!(
+        findings.to_string(),
+        "BXW0107 ping/boxology.toml package=ping candidates=[command=\"ping-cmd2 arg\"]"
+    );
+    assert_eq!(
+        String::from_utf8(output.unwrap()).unwrap(),
+        "command=\"ping-cmd2 arg\"\nfailed-stdout\nfailed-stderr\n"
+    );
+    assert_eq!(
+        SEEN.lock().unwrap().as_slice(),
+        [
+            "ping-cmd --flag value",
+            "ping-cmd2 arg",
+            "tool-a one two",
+            "tool-b three",
+        ]
+    );
+}
+
+#[test]
+fn quality_failures_in_two_packages_sort_findings_keep_execution_output_order() {
+    let workspace = quality_workspace();
+    let runner: &CommandRunner = &|_root, spec| {
+        if spec.render() == "ping-cmd --flag value" {
+            // First failure deliberately omits a terminal LF so the next header needs framing.
+            Ok(CapturedOutput::new(
+                false,
+                b"out:ping-cmd --flag value",
+                b"err:ping-cmd --flag value",
+            ))
+        } else if spec.render() == "tool-b three" {
+            Ok(CapturedOutput::new(
+                false,
+                b"out:tool-b three\n",
+                b"err:tool-b three\n",
+            ))
+        } else {
+            Ok(CapturedOutput::new(true, b"", b""))
+        }
+    };
+    let (completion, output) = run_quality_step(runner, Path::new("."), &workspace)
+        .unwrap()
+        .into_parts();
+    let Completion::Failed(findings) = completion else {
+        panic!("expected quality failure");
+    };
+    assert_eq!(
+        findings.to_string(),
+        "BXW0107 ping/boxology.toml package=ping candidates=[command=\"ping-cmd --flag value\"]\n\
+BXW0107 boxology.toml package=platform candidates=[command=\"tool-b three\"]"
+    );
+    assert_eq!(
+        String::from_utf8(output.unwrap()).unwrap(),
+        "command=\"ping-cmd --flag value\"\nout:ping-cmd --flag valueerr:ping-cmd --flag value\
+\ncommand=\"tool-b three\"\nout:tool-b three\nerr:tool-b three\n"
+    );
+}
+
+#[test]
+fn quality_spawn_failure_returns_spawn_error() {
+    let workspace = quality_workspace();
+    let runner: &CommandRunner = &|_root, _spec| Err(SpawnError);
+    assert_eq!(
+        run_quality_step(runner, Path::new("."), &workspace)
+            .unwrap_err()
+            .to_string(),
+        "BXW0096 Cargo.toml: a trusted check command could not be executed"
+    );
+}
+
+#[test]
+fn quality_no_declarations_passes_with_zero_invocations() {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    CALLS.store(0, Ordering::Relaxed);
+    let workspace = fixture_workspace();
+    let runner: &CommandRunner = &|_root, _spec| {
+        CALLS.fetch_add(1, Ordering::Relaxed);
+        Ok(CapturedOutput::new(true, b"", b""))
+    };
+    let (completion, output) = run_quality_step(runner, Path::new("."), &workspace)
+        .unwrap()
+        .into_parts();
+    assert_eq!(completion, Completion::Passed);
+    assert_eq!(output, None);
+    assert_eq!(CALLS.load(Ordering::Relaxed), 0);
 }

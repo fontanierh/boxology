@@ -1,7 +1,8 @@
-//! Trusted command runner for `boxology check` lock, fmt, Clippy, and test steps.
+//! Trusted command runner for `boxology check` lock, fmt, Clippy, test, and quality steps.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
 use boxology_workspace::{Completion, Entry, Finding, Findings, Workspace};
 use std::{fmt, path::Path, process::Command};
@@ -9,16 +10,19 @@ use std::{fmt, path::Path, process::Command};
 type Rule = (&'static str, &'static str, &'static str);
 const TOOL_SOURCE: &str = "boxology-details/08-rust-build-topology.md workspace operations and validation baseline; specs/s5-manifest-and-validation.md D6";
 const LOCK_SOURCE: &str = "boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 4; specs/s5-manifest-and-validation.md D6";
+const QUALITY_SOURCE: &str = "boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 8; specs/s5-manifest-and-validation.md D6";
 const FMT_TEXT: &str = "formatting check failed";
 const CLIPPY_TEXT: &str = "clippy check failed";
 const TESTS_TEXT: &str = "test check failed";
 const LOCK_TEXT: &str = "cargo graph and lockfile freshness check failed";
 const INVOKE_TEXT: &str = "a trusted check command could not be executed";
+const QUALITY_TEXT: &str = "a declared quality command failed";
 const FMT: Rule = ("BXW0093", FMT_TEXT, TOOL_SOURCE);
 const CLIPPY: Rule = ("BXW0094", CLIPPY_TEXT, TOOL_SOURCE);
 const TESTS: Rule = ("BXW0095", TESTS_TEXT, TOOL_SOURCE);
 const INVOKE: Rule = ("BXW0096", INVOKE_TEXT, TOOL_SOURCE);
 const LOCK: Rule = ("BXW0097", LOCK_TEXT, LOCK_SOURCE);
+const QUALITY: Rule = ("BXW0107", QUALITY_TEXT, QUALITY_SOURCE);
 
 /// Injectable trusted command: program name plus argv after the program.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -218,6 +222,111 @@ pub fn run_test_step(runner: &CommandRunner, root: &Path) -> Result<ToolStep, Sp
 /// Runs full locked Cargo resolution through the injectable runner.
 pub fn run_lock_step(runner: &CommandRunner, root: &Path) -> Result<ToolStep, SpawnError> {
     run_tool_step(runner, root, &lock_spec(), LOCK, "Cargo.lock")
+}
+
+/// One declared quality command bound to its package and manifest path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QualityCommand {
+    package: BoxId,
+    manifest_path: RelativePath,
+    spec: CommandSpec,
+}
+
+impl QualityCommand {
+    /// Returns the package that declared the command.
+    pub fn package(&self) -> &BoxId {
+        &self.package
+    }
+
+    /// Returns the package manifest path used for findings.
+    pub fn manifest_path(&self) -> &RelativePath {
+        &self.manifest_path
+    }
+
+    /// Returns the split command specification.
+    pub fn spec(&self) -> &CommandSpec {
+        &self.spec
+    }
+}
+
+/// Flattens declared quality commands in package-id then declaration order.
+pub fn quality_specs(workspace: &Workspace) -> Vec<QualityCommand> {
+    // Surface lock forbids `vec!`; keep an explicit push loop instead.
+    #[allow(clippy::vec_init_then_push)]
+    {
+        let mut commands = Vec::new();
+        for package in workspace.packages() {
+            for command in package.manifest().quality_commands() {
+                let mut tokens = command.split_ascii_whitespace();
+                let program = tokens
+                    .next()
+                    .expect("manifest validation guarantees a nonblank quality command");
+                #[allow(clippy::vec_init_then_push)]
+                let args = {
+                    let mut args = Vec::new();
+                    for token in tokens {
+                        args.push(token.to_owned());
+                    }
+                    args
+                };
+                commands.push(QualityCommand {
+                    package: package.id().clone(),
+                    manifest_path: package.manifest_path().clone(),
+                    spec: CommandSpec::new(program, args),
+                });
+            }
+        }
+        commands
+    }
+}
+
+/// Runs every declared quality command, continuing after nonzero exits.
+pub fn run_quality_step(
+    runner: &CommandRunner,
+    root: &Path,
+    workspace: &Workspace,
+) -> Result<ToolStep, SpawnError> {
+    let commands = quality_specs(workspace);
+    if commands.is_empty() {
+        return Ok(ToolStep {
+            completion: Completion::Passed,
+            output: None,
+        });
+    }
+    #[allow(clippy::vec_init_then_push)]
+    let mut entries = Vec::new();
+    let mut output: Option<Vec<u8>> = None;
+    for command in &commands {
+        let captured = runner(root, command.spec())?;
+        if captured.success() {
+            continue;
+        }
+        let finding = Finding::external(
+            QUALITY.0,
+            QUALITY.1,
+            QUALITY.2,
+            command.manifest_path().clone(),
+            Some(command.package().clone()),
+            format!("command=\"{}\"", command.spec().render()),
+        );
+        entries.push(Entry::Workspace(finding));
+        let buffer = output.get_or_insert_with(Vec::new);
+        if !buffer.is_empty() && buffer.last() != Some(&b'\n') {
+            buffer.push(b'\n');
+        }
+        buffer.extend_from_slice(format!("command=\"{}\"\n", command.spec().render()).as_bytes());
+        buffer.extend_from_slice(&captured.combined());
+    }
+    match Findings::new(entries) {
+        None => Ok(ToolStep {
+            completion: Completion::Passed,
+            output: None,
+        }),
+        Some(findings) => Ok(ToolStep {
+            completion: Completion::Failed(findings),
+            output,
+        }),
+    }
 }
 
 fn run_tool_step(

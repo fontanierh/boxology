@@ -5,7 +5,7 @@
 //! execution delegates its writes to the generator writer. Classification of checked-in versus
 //! regenerated schema bytes is also pure, as is the check-step classification seam over supplied
 //! base-revision and checked-in schema bytes and regeneration comparison over derived artifacts.
-//! Trusted lock/fmt/Clippy/test steps use an injectable runner; tool output is outside determinism claims.
+//! Trusted lock/fmt/Clippy/test/quality steps use an injectable runner; tool output is outside determinism claims.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -45,8 +45,8 @@ pub use compare::{
 pub use execute::{ExecuteError, Outcome, execute};
 pub use generate::{GenerationPlan, PlanError, ResolvedImport, plan};
 pub use runner::{
-    CapturedOutput, CommandRunner, CommandSpec, SpawnError, ToolStep, clippy_spec, fmt_packages,
-    fmt_spec, lock_spec, run_clippy_step, run_command, run_fmt_step, run_lock_step, run_test_step,
-    test_spec,
+    CapturedOutput, CommandRunner, CommandSpec, QualityCommand, SpawnError, ToolStep, clippy_spec,
+    fmt_packages, fmt_spec, lock_spec, quality_specs, run_clippy_step, run_command, run_fmt_step,
+    run_lock_step, run_quality_step, run_test_step, test_spec,
 };
 pub use walk::{WalkError, WalkedWorkspace, walk};
