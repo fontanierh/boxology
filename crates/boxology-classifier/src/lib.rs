@@ -52,7 +52,10 @@ impl Class {
 pub struct Finding {
     code: &'static str,
     path: String,
+    kind: &'static str,
     class: Class,
+    base_excerpt: Option<String>,
+    submitted_excerpt: Option<String>,
     condition: Option<&'static str>,
 }
 
@@ -67,9 +70,24 @@ impl Finding {
         &self.path
     }
 
+    /// Returns the D5 change-kind name for this finding.
+    pub fn kind(&self) -> &'static str {
+        self.kind
+    }
+
     /// Returns the compatibility class of the change.
     pub fn class(&self) -> Class {
         self.class
+    }
+
+    /// Returns the base-side compared-value excerpt, when present.
+    pub fn base_excerpt(&self) -> Option<&str> {
+        self.base_excerpt.as_deref()
+    }
+
+    /// Returns the submitted-side compared-value excerpt, when present.
+    pub fn submitted_excerpt(&self) -> Option<&str> {
+        self.submitted_excerpt.as_deref()
     }
 
     /// Returns the migration condition, when this finding is conditional.
@@ -112,13 +130,19 @@ pub fn classify(
         (None, Some(document)) => Ok(report(Vec::from([Finding {
             code: "BXC0026",
             path: document.box_id.as_str().to_owned(),
+            kind: KIND_CONTRACT_INTRODUCED,
             class: Class::Additive,
+            base_excerpt: None,
+            submitted_excerpt: Some(document.box_id.as_str().to_owned()),
             condition: None,
         }]))),
         (Some(document), None) => Ok(report(Vec::from([Finding {
             code: "BXC0027",
             path: document.box_id.as_str().to_owned(),
+            kind: KIND_CONTRACT_REMOVED,
             class: Class::Incompatible,
+            base_excerpt: Some(document.box_id.as_str().to_owned()),
+            submitted_excerpt: None,
             condition: None,
         }]))),
         (Some(base), Some(submitted)) if base.box_id != submitted.box_id => {
@@ -220,6 +244,30 @@ const CODE_FIELD_TYPE_CHANGED: &str = "BXC0051";
 /// Error payload kind or value type changed (D5 incompatible row).
 const CODE_PAYLOAD_CHANGED: &str = "BXC0052";
 
+const KIND_CONTRACT_INTRODUCED: &str = "contract introduced";
+const KIND_CONTRACT_REMOVED: &str = "contract removed";
+const KIND_UNCLASSIFIED: &str = "unclassified change";
+const KIND_TYPE_ADDED: &str = "type added";
+const KIND_TYPE_REMOVED: &str = "type removed";
+const KIND_DOCS_CHANGED: &str = "documentation changed";
+const KIND_DEPRECATION_CHANGED: &str = "deprecation changed";
+const KIND_VARIANT_REMOVED: &str = "variant removed";
+const KIND_VARIANT_ADDED: &str = "error variant added";
+const KIND_CAPABILITY_ADDED: &str = "capability added";
+const KIND_CAPABILITY_REMOVED: &str = "capability removed";
+const KIND_INPUT_NAME_CHANGED: &str = "capability input parameter name changed";
+const KIND_INPUT_LEAF_CHANGED: &str = "capability input type changed";
+const KIND_OUTPUT_LEAF_CHANGED: &str = "capability output type changed";
+const KIND_ERROR_CHANGED: &str = "capability declared error changed";
+const KIND_EXPOSURE_RAISED: &str = "max exposure raised";
+const KIND_EXPOSURE_LOWERED: &str = "max exposure lowered";
+const KIND_IDEMPOTENCY_STRENGTHENED: &str = "idempotency strengthened";
+const KIND_IDEMPOTENCY_WEAKENED: &str = "idempotency weakened";
+const KIND_FIELD_ADDED: &str = "field added";
+const KIND_FIELD_REMOVED: &str = "field removed";
+const KIND_FIELD_TYPE_CHANGED: &str = "field type changed";
+const KIND_PAYLOAD_CHANGED: &str = "error payload changed";
+
 /// Migration condition for referenced error-enum variant addition.
 const CONDITION_UNKNOWN_VARIANT: &str = "unknown-variant tolerance";
 
@@ -227,22 +275,74 @@ fn fail_closed_finding(base: &SchemaDocument) -> Finding {
     Finding {
         code: CODE_FAIL_CLOSED,
         path: base.box_id.as_str().to_owned(),
+        kind: KIND_UNCLASSIFIED,
         class: Class::Incompatible,
+        base_excerpt: None,
+        submitted_excerpt: None,
         condition: None,
+    }
+}
+
+fn docs_excerpt(docs: &[String]) -> String {
+    docs.join("\n")
+}
+
+fn exposure_excerpt(level: ExposureLevel) -> &'static str {
+    match level {
+        ExposureLevel::CodeOnly => "code_only",
+        ExposureLevel::Internal => "internal",
+        ExposureLevel::External => "external",
+    }
+}
+
+fn idempotency_excerpt(value: Idempotency) -> &'static str {
+    match value {
+        Idempotency::None => "none",
+        Idempotency::Inherent => "inherent",
+    }
+}
+
+fn payload_kind_excerpt(payload: &SchemaPayload) -> &'static str {
+    match payload {
+        SchemaPayload::Unit => "unit",
+        SchemaPayload::Value { .. } => "value",
+        SchemaPayload::Named(_) => "named",
+    }
+}
+
+fn capability_named<'a>(document: &'a SchemaDocument, name: &str) -> Option<&'a SchemaCapability> {
+    document
+        .capabilities
+        .iter()
+        .find(|c| c.name.as_str() == name)
+}
+
+fn type_named<'a>(document: &'a SchemaDocument, name: &str) -> Option<&'a SchemaType> {
+    document.types.iter().find(|t| t.name == name)
+}
+
+fn variant_named<'a>(schema_type: &'a SchemaType, name: &str) -> Option<&'a SchemaVariant> {
+    schema_type.variants.iter().find(|v| v.name == name)
+}
+
+fn field_named<'a>(variant: &'a SchemaVariant, name: &str) -> Option<&'a SchemaField> {
+    match &variant.payload {
+        SchemaPayload::Named(fields) => fields.iter().find(|f| f.name == name),
+        _ => None,
     }
 }
 
 /// Applies the D5 type-graph and structural capability taxonomies, then the fail-closed default.
 ///
-/// Named findings are always emitted individually. Unreferenced *additions* (type or variant) fall
-/// to the fail-closed default per D5's preamble — a declared type reachable from no capability is
-/// not a named additive/conditional row. Documentation, deprecation, and removals classify by their
-/// D5 table row regardless of reachability (D5's preamble tension with those rows is tracked under
-/// #319). Capability additions, removals, input-name changes, input-leaf changes, and output-leaf
-/// changes use their named rows. Capability metadata and named payload fields use their D5 rows;
-/// capability, type, variant, and field reorders remain fail closed at `<box>`. A revision-only
-/// difference (no type or capability delta) yields an empty finding list; `classify` turns that
-/// empty result into the D6 check-B integrity error.
+/// Named findings are always emitted individually. Unreferenced *additions* (type, variant, or
+/// field) fall to the fail-closed default per D5's preamble — a declared type reachable from no
+/// capability is not a named additive/conditional row. Documentation, deprecation, and removal rows
+/// classify by their D5 table wording regardless of reachability; only addition rows are
+/// reachability-gated. Capability additions, removals, input-name changes, input-leaf changes, and
+/// output-leaf changes use their named rows. Capability metadata and named payload fields use their
+/// D5 rows; capability, type, variant, and field reorders remain fail closed at `<box>`. A
+/// revision-only difference (no type or capability delta) yields an empty finding list; `classify`
+/// turns that empty result into the D6 check-B integrity error.
 fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) -> Vec<Finding> {
     let roles = reachability(base, submitted);
     let changes = type_changes(base, submitted, &roles);
@@ -254,7 +354,10 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_TYPE_ADDED,
                     path: type_path(base, name),
+                    kind: KIND_TYPE_ADDED,
                     class: Class::Additive,
+                    base_excerpt: None,
+                    submitted_excerpt: Some(name.clone()),
                     condition: None,
                 });
             }
@@ -262,7 +365,10 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_TYPE_REMOVED,
                     path: type_path(base, name),
+                    kind: KIND_TYPE_REMOVED,
                     class: Class::Incompatible,
+                    base_excerpt: Some(name.clone()),
+                    submitted_excerpt: None,
                     condition: None,
                 });
             }
@@ -270,7 +376,10 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_DOCS_CHANGED,
                     path: type_path(base, name),
+                    kind: KIND_DOCS_CHANGED,
                     class: Class::Documentation,
+                    base_excerpt: type_named(base, name).map(|ty| docs_excerpt(&ty.docs)),
+                    submitted_excerpt: type_named(submitted, name).map(|ty| docs_excerpt(&ty.docs)),
                     condition: None,
                 });
             }
@@ -278,7 +387,11 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_DEPRECATION_CHANGED,
                     path: type_path(base, name),
+                    kind: KIND_DEPRECATION_CHANGED,
                     class: Class::Deprecation,
+                    base_excerpt: type_named(base, name).and_then(|ty| ty.deprecation.clone()),
+                    submitted_excerpt: type_named(submitted, name)
+                        .and_then(|ty| ty.deprecation.clone()),
                     condition: None,
                 });
             }
@@ -290,7 +403,10 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_VARIANT_ADDED,
                     path: variant_path(base, type_name, variant_name),
+                    kind: KIND_VARIANT_ADDED,
                     class: Class::CompatibleWithConditions,
+                    base_excerpt: None,
+                    submitted_excerpt: Some(variant_name.clone()),
                     condition: Some(CONDITION_UNKNOWN_VARIANT),
                 });
             }
@@ -302,7 +418,10 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_VARIANT_REMOVED,
                     path: variant_path(base, type_name, variant_name),
+                    kind: KIND_VARIANT_REMOVED,
                     class: Class::Incompatible,
+                    base_excerpt: Some(variant_name.clone()),
+                    submitted_excerpt: None,
                     condition: None,
                 });
             }
@@ -313,7 +432,14 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_DOCS_CHANGED,
                     path: variant_path(base, type_name, variant_name),
+                    kind: KIND_DOCS_CHANGED,
                     class: Class::Documentation,
+                    base_excerpt: type_named(base, type_name)
+                        .and_then(|ty| variant_named(ty, variant_name))
+                        .map(|v| docs_excerpt(&v.docs)),
+                    submitted_excerpt: type_named(submitted, type_name)
+                        .and_then(|ty| variant_named(ty, variant_name))
+                        .map(|v| docs_excerpt(&v.docs)),
                     condition: None,
                 });
             }
@@ -324,7 +450,14 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 findings.push(Finding {
                     code: CODE_DEPRECATION_CHANGED,
                     path: variant_path(base, type_name, variant_name),
+                    kind: KIND_DEPRECATION_CHANGED,
                     class: Class::Deprecation,
+                    base_excerpt: type_named(base, type_name)
+                        .and_then(|ty| variant_named(ty, variant_name))
+                        .and_then(|v| v.deprecation.clone()),
+                    submitted_excerpt: type_named(submitted, type_name)
+                        .and_then(|ty| variant_named(ty, variant_name))
+                        .and_then(|v| v.deprecation.clone()),
                     condition: None,
                 });
             }
@@ -337,16 +470,41 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 variant_name,
                 field_name: _,
             } => {
-                let path = match change {
-                    TypeChange::FieldDocsChanged { field_name, .. } => {
-                        field_path(base, type_name, variant_name, field_name)
-                    }
-                    _ => variant_path(base, type_name, variant_name),
+                let (path, base_excerpt, submitted_excerpt) = match change {
+                    TypeChange::FieldDocsChanged { field_name, .. } => (
+                        field_path(base, type_name, variant_name, field_name),
+                        type_named(base, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| field_named(v, field_name))
+                            .map(|f| docs_excerpt(&f.docs)),
+                        type_named(submitted, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| field_named(v, field_name))
+                            .map(|f| docs_excerpt(&f.docs)),
+                    ),
+                    _ => (
+                        variant_path(base, type_name, variant_name),
+                        type_named(base, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .map(|v| match &v.payload {
+                                SchemaPayload::Value { docs, .. } => docs_excerpt(docs),
+                                _ => docs_excerpt(&v.docs),
+                            }),
+                        type_named(submitted, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .map(|v| match &v.payload {
+                                SchemaPayload::Value { docs, .. } => docs_excerpt(docs),
+                                _ => docs_excerpt(&v.docs),
+                            }),
+                    ),
                 };
                 findings.push(Finding {
                     code: CODE_DOCS_CHANGED,
                     path,
+                    kind: KIND_DOCS_CHANGED,
                     class: Class::Documentation,
+                    base_excerpt,
+                    submitted_excerpt,
                     condition: None,
                 });
             }
@@ -359,16 +517,41 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 variant_name,
                 field_name: _,
             } => {
-                let path = match change {
-                    TypeChange::FieldDeprecationChanged { field_name, .. } => {
-                        field_path(base, type_name, variant_name, field_name)
-                    }
-                    _ => variant_path(base, type_name, variant_name),
+                let (path, base_excerpt, submitted_excerpt) = match change {
+                    TypeChange::FieldDeprecationChanged { field_name, .. } => (
+                        field_path(base, type_name, variant_name, field_name),
+                        type_named(base, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| field_named(v, field_name))
+                            .and_then(|f| f.deprecation.clone()),
+                        type_named(submitted, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| field_named(v, field_name))
+                            .and_then(|f| f.deprecation.clone()),
+                    ),
+                    _ => (
+                        variant_path(base, type_name, variant_name),
+                        type_named(base, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| match &v.payload {
+                                SchemaPayload::Value { deprecation, .. } => deprecation.clone(),
+                                _ => v.deprecation.clone(),
+                            }),
+                        type_named(submitted, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| match &v.payload {
+                                SchemaPayload::Value { deprecation, .. } => deprecation.clone(),
+                                _ => v.deprecation.clone(),
+                            }),
+                    ),
                 };
                 findings.push(Finding {
                     code: CODE_DEPRECATION_CHANGED,
                     path,
+                    kind: KIND_DEPRECATION_CHANGED,
                     class: Class::Deprecation,
+                    base_excerpt,
+                    submitted_excerpt,
                     condition: None,
                 });
             }
@@ -380,11 +563,14 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
             } if roles.input || roles.output => findings.push(Finding {
                 code: CODE_FIELD_ADDED,
                 path: field_path(base, type_name, variant_name, field_name),
+                kind: KIND_FIELD_ADDED,
                 class: if roles.input {
                     Class::Incompatible
                 } else {
                     Class::Additive
                 },
+                base_excerpt: None,
+                submitted_excerpt: Some(field_name.clone()),
                 condition: None,
             }),
             TypeChange::FieldRemoved {
@@ -395,7 +581,10 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
             } => findings.push(Finding {
                 code: CODE_FIELD_REMOVED,
                 path: field_path(base, type_name, variant_name, field_name),
+                kind: KIND_FIELD_REMOVED,
                 class: Class::Incompatible,
+                base_excerpt: Some(field_name.clone()),
+                submitted_excerpt: None,
                 condition: None,
             }),
             TypeChange::FieldTypeChanged {
@@ -405,7 +594,16 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
             } => findings.push(Finding {
                 code: CODE_FIELD_TYPE_CHANGED,
                 path: field_path(base, type_name, variant_name, field_name),
+                kind: KIND_FIELD_TYPE_CHANGED,
                 class: Class::Incompatible,
+                base_excerpt: type_named(base, type_name)
+                    .and_then(|ty| variant_named(ty, variant_name))
+                    .and_then(|v| field_named(v, field_name))
+                    .map(|f| f.ty.canonical_name().to_owned()),
+                submitted_excerpt: type_named(submitted, type_name)
+                    .and_then(|ty| variant_named(ty, variant_name))
+                    .and_then(|v| field_named(v, field_name))
+                    .map(|f| f.ty.canonical_name().to_owned()),
                 condition: None,
             }),
             TypeChange::VariantPayloadChanged { type_name, .. }
@@ -414,10 +612,42 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 if paths.is_empty() {
                     unclassified = true;
                 }
+                let (base_excerpt, submitted_excerpt) = match change {
+                    TypeChange::VariantPayloadChanged { variant_name, .. } => (
+                        type_named(base, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .map(|v| payload_kind_excerpt(&v.payload).to_owned()),
+                        type_named(submitted, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .map(|v| payload_kind_excerpt(&v.payload).to_owned()),
+                    ),
+                    TypeChange::PayloadTypeChanged { variant_name, .. } => (
+                        type_named(base, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| match &v.payload {
+                                SchemaPayload::Value { ty, .. } => {
+                                    Some(ty.canonical_name().to_owned())
+                                }
+                                _ => None,
+                            }),
+                        type_named(submitted, type_name)
+                            .and_then(|ty| variant_named(ty, variant_name))
+                            .and_then(|v| match &v.payload {
+                                SchemaPayload::Value { ty, .. } => {
+                                    Some(ty.canonical_name().to_owned())
+                                }
+                                _ => None,
+                            }),
+                    ),
+                    _ => (None, None),
+                };
                 findings.extend(paths.into_iter().map(|path| Finding {
                     code: CODE_PAYLOAD_CHANGED,
                     path,
+                    kind: KIND_PAYLOAD_CHANGED,
                     class: Class::Incompatible,
+                    base_excerpt: base_excerpt.clone(),
+                    submitted_excerpt: submitted_excerpt.clone(),
                     condition: None,
                 }));
             }
@@ -439,49 +669,78 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
             CapabilityChange::CapabilityAdded { name } => findings.push(Finding {
                 code: CODE_CAPABILITY_ADDED,
                 path: capability_path(base, name),
+                kind: KIND_CAPABILITY_ADDED,
                 class: Class::Additive,
+                base_excerpt: None,
+                submitted_excerpt: Some(name.clone()),
                 condition: None,
             }),
             CapabilityChange::CapabilityRemoved { name } => findings.push(Finding {
                 code: CODE_CAPABILITY_REMOVED,
                 path: capability_path(base, name),
+                kind: KIND_CAPABILITY_REMOVED,
                 class: Class::Incompatible,
+                base_excerpt: Some(name.clone()),
+                submitted_excerpt: None,
                 condition: None,
             }),
             CapabilityChange::InputNameChanged { name } => findings.push(Finding {
                 code: CODE_INPUT_NAME_CHANGED,
                 path: capability_input_path(base, name),
+                kind: KIND_INPUT_NAME_CHANGED,
                 class: Class::Incompatible,
+                base_excerpt: capability_named(base, name).map(|c| c.input.name.clone()),
+                submitted_excerpt: capability_named(submitted, name).map(|c| c.input.name.clone()),
                 condition: None,
             }),
             CapabilityChange::InputLeafChanged { name } => findings.push(Finding {
                 code: CODE_INPUT_LEAF_CHANGED,
                 path: capability_input_path(base, name),
+                kind: KIND_INPUT_LEAF_CHANGED,
                 class: Class::Incompatible,
+                base_excerpt: capability_named(base, name)
+                    .map(|c| c.input.leaf.canonical_name().to_owned()),
+                submitted_excerpt: capability_named(submitted, name)
+                    .map(|c| c.input.leaf.canonical_name().to_owned()),
                 condition: None,
             }),
             CapabilityChange::OutputLeafChanged { name } => findings.push(Finding {
                 code: CODE_OUTPUT_LEAF_CHANGED,
                 path: capability_output_path(base, name),
+                kind: KIND_OUTPUT_LEAF_CHANGED,
                 class: Class::Incompatible,
+                base_excerpt: capability_named(base, name)
+                    .map(|c| c.output.leaf.canonical_name().to_owned()),
+                submitted_excerpt: capability_named(submitted, name)
+                    .map(|c| c.output.leaf.canonical_name().to_owned()),
                 condition: None,
             }),
             CapabilityChange::CapabilityDocsChanged { name } => findings.push(Finding {
                 code: CODE_DOCS_CHANGED,
                 path: capability_path(base, name),
+                kind: KIND_DOCS_CHANGED,
                 class: Class::Documentation,
+                base_excerpt: capability_named(base, name).map(|c| docs_excerpt(&c.docs)),
+                submitted_excerpt: capability_named(submitted, name).map(|c| docs_excerpt(&c.docs)),
                 condition: None,
             }),
             CapabilityChange::CapabilityDeprecationChanged { name } => findings.push(Finding {
                 code: CODE_DEPRECATION_CHANGED,
                 path: capability_path(base, name),
+                kind: KIND_DEPRECATION_CHANGED,
                 class: Class::Deprecation,
+                base_excerpt: capability_named(base, name).and_then(|c| c.deprecation.clone()),
+                submitted_excerpt: capability_named(submitted, name)
+                    .and_then(|c| c.deprecation.clone()),
                 condition: None,
             }),
             CapabilityChange::CapabilityErrorChanged { name } => findings.push(Finding {
                 code: CODE_ERROR_CHANGED,
                 path: capability_suffix_path(base, name, "error"),
+                kind: KIND_ERROR_CHANGED,
                 class: Class::Incompatible,
+                base_excerpt: capability_named(base, name).map(|c| c.error.clone()),
+                submitted_excerpt: capability_named(submitted, name).map(|c| c.error.clone()),
                 condition: None,
             }),
             CapabilityChange::CapabilityExposureChanged {
@@ -492,7 +751,14 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 Some((code, class)) => findings.push(Finding {
                     code,
                     path: capability_suffix_path(base, name, "exposure"),
+                    kind: if code == CODE_EXPOSURE_RAISED {
+                        KIND_EXPOSURE_RAISED
+                    } else {
+                        KIND_EXPOSURE_LOWERED
+                    },
                     class,
+                    base_excerpt: Some(exposure_excerpt(*base_level).to_owned()),
+                    submitted_excerpt: Some(exposure_excerpt(*submitted_level).to_owned()),
                     condition: None,
                 }),
                 None => unclassified = true,
@@ -505,7 +771,14 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
                 Some((code, class)) => findings.push(Finding {
                     code,
                     path: capability_suffix_path(base, name, "idempotency"),
+                    kind: if code == CODE_IDEMPOTENCY_STRENGTHENED {
+                        KIND_IDEMPOTENCY_STRENGTHENED
+                    } else {
+                        KIND_IDEMPOTENCY_WEAKENED
+                    },
                     class,
+                    base_excerpt: Some(idempotency_excerpt(*base_property).to_owned()),
+                    submitted_excerpt: Some(idempotency_excerpt(*submitted_property).to_owned()),
                     condition: None,
                 }),
                 None => unclassified = true,

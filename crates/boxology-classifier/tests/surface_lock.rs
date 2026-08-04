@@ -8,7 +8,7 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 use syn::visit::{self, Visit};
-use syn::{Item, Meta, Visibility};
+use syn::{ExprStruct, ImplItem, Item, Member, Meta, UseTree, Visibility};
 
 const REVISION: &str = "sha256:29c955e4594137d11300bd0894da461c2a9a9ce9866c4fd9a3f4b5d89cb04176";
 const OTHER_REVISION: &str =
@@ -67,6 +67,157 @@ impl<'ast> Visit<'ast> for ProductionLock {
 
     fn visit_macro(&mut self, _: &'ast syn::Macro) {
         self.bad = true;
+    }
+}
+
+#[derive(Default)]
+struct FindingConstructorLock {
+    count: usize,
+    missing_kind: bool,
+}
+
+impl<'ast> Visit<'ast> for FindingConstructorLock {
+    fn visit_expr_struct(&mut self, expression: &'ast ExprStruct) {
+        if expression
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "Finding")
+        {
+            self.count += 1;
+            self.missing_kind |= !expression
+                .fields
+                .iter()
+                .any(|field| matches!(&field.member, Member::Named(name) if name == "kind"));
+        }
+        visit::visit_expr_struct(self, expression);
+    }
+}
+
+fn public_inventory(source: &str) -> Vec<String> {
+    let file = syn::parse_file(source).expect("public-surface source parses");
+    let mut inventory = Vec::new();
+    for item in file.items {
+        match item {
+            Item::Enum(item) if matches!(item.vis, Visibility::Public(_)) => {
+                inventory.push(format!("enum {}", item.ident));
+            }
+            Item::Fn(item) if matches!(item.vis, Visibility::Public(_)) => {
+                inventory.push(format!("fn {}", item.sig.ident));
+            }
+            Item::Struct(item) if matches!(item.vis, Visibility::Public(_)) => {
+                inventory.push(format!("struct {}", item.ident));
+            }
+            Item::Use(item) if matches!(item.vis, Visibility::Public(_)) => {
+                public_uses(&item.tree, "", &mut inventory);
+            }
+            Item::Impl(item) if item.trait_.is_none() => {
+                let Some(target) = (match item.self_ty.as_ref() {
+                    syn::Type::Path(path) => path
+                        .path
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string()),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                for item in item.items {
+                    if let ImplItem::Fn(method) = item
+                        && matches!(method.vis, Visibility::Public(_))
+                    {
+                        inventory.push(format!("method {target}::{}", method.sig.ident));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    inventory.sort();
+    inventory
+}
+
+fn public_uses(tree: &UseTree, prefix: &str, inventory: &mut Vec<String>) {
+    match tree {
+        UseTree::Path(path) => {
+            public_uses(&path.tree, &format!("{prefix}{}::", path.ident), inventory);
+        }
+        UseTree::Name(name) => inventory.push(format!("use {prefix}{}", name.ident)),
+        UseTree::Rename(rename) => {
+            inventory.push(format!("use {prefix}{} as {}", rename.ident, rename.rename))
+        }
+        UseTree::Group(group) => {
+            for tree in &group.items {
+                public_uses(tree, prefix, inventory);
+            }
+        }
+        UseTree::Glob(_) => inventory.push(format!("use {prefix}*")),
+    }
+}
+
+fn expected_public_inventory() -> Vec<String> {
+    [
+        "enum Class",
+        "fn classify",
+        "method Class::canonical_name",
+        "method ClassificationReport::findings",
+        "method ClassificationReport::verdict",
+        "method Finding::base_excerpt",
+        "method Finding::class",
+        "method Finding::code",
+        "method Finding::condition",
+        "method Finding::kind",
+        "method Finding::path",
+        "method Finding::submitted_excerpt",
+        "struct ClassificationReport",
+        "struct Finding",
+        "use report::render_json",
+        "use report::render_text",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn assert_public_surface(source: &str) {
+    assert_eq!(public_inventory(source), expected_public_inventory());
+}
+
+fn assert_constructor_inventory(source: &str) {
+    let file = syn::parse_file(source).unwrap();
+    let mut lock = FindingConstructorLock::default();
+    lock.visit_file(&file);
+    assert_eq!(lock.count, 27, "exact Finding constructor inventory");
+    assert!(!lock.missing_kind, "every Finding constructor has kind");
+
+    let missing = source.replacen("kind: KIND_CONTRACT_INTRODUCED,", "", 1);
+    let file = syn::parse_file(&missing).unwrap();
+    let mut mutant = FindingConstructorLock::default();
+    mutant.visit_file(&file);
+    assert_eq!(mutant.count, lock.count);
+    assert!(mutant.missing_kind, "missing constructor kind must fail");
+}
+
+fn public_surface_mutants_fail_closed(source: &str) {
+    let expected = expected_public_inventory();
+    for mutant in [
+        source.replacen(
+            "pub fn classify(",
+            "pub struct ClassifierOptions;\npub fn classify(",
+            1,
+        ),
+        source.replacen(
+            "pub fn classify(",
+            "pub fn classify_with_options(\n    _base: Option<&SchemaDocument>,\n    _submitted: Option<&SchemaDocument>,\n) -> Result<ClassificationReport, Diagnostics> {\n    loop {}\n}\n\npub fn classify(",
+            1,
+        ),
+        source.replacen(
+            "pub fn kind(",
+            "pub fn extra_kind(&self) -> &'static str { self.kind }\n\n    pub fn kind(",
+            1,
+        ),
+    ] {
+        assert_ne!(public_inventory(&mutant), expected);
     }
 }
 
@@ -232,9 +383,13 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     }
     assert!(!report_lock.bad);
     assert!(!report_source.contains("\"BXC"));
-    for anchor in ["pub fn render_text(", "pub fn render_json("] {
-        assert_eq!(report_source.matches(anchor).count(), 1, "{anchor} count");
-    }
+    assert_eq!(
+        public_inventory(report_source),
+        vec!["fn render_json".to_owned(), "fn render_text".to_owned()]
+    );
+    assert_public_surface(source);
+    assert_constructor_inventory(source);
+    public_surface_mutants_fail_closed(source);
     let anchors = [
         ("BXC0024", "Diagnostic::classification_requires_document()"),
         ("BXC0025", "Diagnostic::box_id_mismatch()"),
