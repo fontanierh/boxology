@@ -1,4 +1,4 @@
-//! Trusted command runner for `boxology check` fmt and Clippy steps.
+//! Trusted command runner for `boxology check` fmt, Clippy, and test steps.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -10,9 +10,11 @@ type Rule = (&'static str, &'static str, &'static str);
 const TOOL_SOURCE: &str = "boxology-details/08-rust-build-topology.md workspace operations and validation baseline; specs/s5-manifest-and-validation.md D6";
 const FMT_TEXT: &str = "formatting check failed";
 const CLIPPY_TEXT: &str = "clippy check failed";
+const TESTS_TEXT: &str = "test check failed";
 const INVOKE_TEXT: &str = "a trusted check command could not be executed";
 const FMT: Rule = ("BXW0093", FMT_TEXT, TOOL_SOURCE);
 const CLIPPY: Rule = ("BXW0094", CLIPPY_TEXT, TOOL_SOURCE);
+const TESTS: Rule = ("BXW0095", TESTS_TEXT, TOOL_SOURCE);
 const INVOKE: Rule = ("BXW0096", INVOKE_TEXT, TOOL_SOURCE);
 
 /// Injectable trusted command: program name plus argv after the program.
@@ -175,6 +177,11 @@ pub fn clippy_spec() -> CommandSpec {
     )
 }
 
+/// Builds workspace tests matching the 08 baseline.
+pub fn test_spec() -> CommandSpec {
+    CommandSpec::new("cargo", ["test", "--workspace", "--all-features"])
+}
+
 /// Runs formatting, or returns passed when the manifest-derived selection is empty.
 pub fn run_fmt_step(
     runner: &CommandRunner,
@@ -193,6 +200,11 @@ pub fn run_fmt_step(
 /// Runs Clippy through the injectable runner.
 pub fn run_clippy_step(runner: &CommandRunner, root: &Path) -> Result<ToolStep, SpawnError> {
     run_tool_step(runner, root, &clippy_spec(), CLIPPY)
+}
+
+/// Runs workspace tests through the injectable runner.
+pub fn run_test_step(runner: &CommandRunner, root: &Path) -> Result<ToolStep, SpawnError> {
+    run_tool_step(runner, root, &test_spec(), TESTS)
 }
 
 fn run_tool_step(

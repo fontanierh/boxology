@@ -521,8 +521,7 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
                     \x20 not run: the step is not implemented in this boxology version\n\
                     check fmt passed\n\
                     check clippy passed\n\
-                    check tests skipped\n\
-                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check tests passed\n\
                     check quality skipped\n\
                     \x20 not run: the step is not implemented in this boxology version\n\
                     check result passed\n";
@@ -542,10 +541,7 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
         log.contains("clippy\n--workspace\n--all-targets\n--all-features\n--\n-D\nwarnings\n"),
         "{log}"
     );
-    assert!(
-        !log.contains("\ntest\n"),
-        "deferred tests step must not run cargo test: {log}"
-    );
+    assert!(log.contains("test\n--workspace\n--all-features\n"), "{log}");
     let second = fixture.run(&["check"]);
     assert_eq!(second.status.code(), Some(0));
     assert_eq!(second.stdout, first.stdout);
@@ -566,9 +562,30 @@ fn check_tool_failure_renders_finding_command_output_and_exit_one() {
          \x20 BXW0094 Cargo.toml package= candidates=[command=\"cargo clippy --workspace --all-targets --all-features -- -D warnings\"]\n\
          representative clippy failure\n"
     ));
+    assert!(stdout.contains("check tests passed\n"));
     assert!(stdout.contains(
-        "check tests skipped\n  not run: the step is not implemented in this boxology version\n\
-         check quality skipped\n  not run: the step is not implemented in this boxology version\n"
+        "check quality skipped\n  not run: the step is not implemented in this boxology version\n"
+    ));
+    assert!(stdout.ends_with("check result failed\n"));
+}
+
+#[test]
+fn check_test_failure_renders_finding_command_output_and_exit_one() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run_tools(&["check"], "ok", true, Some("test"));
+    let stdout = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).is_empty());
+    assert!(stdout.contains(
+        "check fmt passed\n\
+         check clippy passed\n\
+         check tests failed\n\
+         \x20 BXW0095 Cargo.toml package= candidates=[command=\"cargo test --workspace --all-features\"]\n\
+         representative test failure\n"
+    ));
+    assert!(stdout.contains(
+        "check quality skipped\n  not run: the step is not implemented in this boxology version\n"
     ));
     assert!(stdout.ends_with("check result failed\n"));
 }
