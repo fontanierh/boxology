@@ -1,6 +1,7 @@
 use boxology_cli::{
     CapturedOutput, CommandRunner, CommandSpec, SpawnError, cargo_metadata_command, clippy_spec,
-    fmt_packages, fmt_spec, run_clippy_step, run_command, run_fmt_step, walk,
+    fmt_packages, fmt_spec, run_clippy_step, run_command, run_fmt_step, run_test_step, test_spec,
+    walk,
 };
 use boxology_manifest::RelativePath;
 use boxology_workspace::{Completion, FileEntry, Workspace, WorkspaceInputs};
@@ -39,7 +40,7 @@ fn fixture_workspace() -> Workspace {
 }
 
 #[test]
-fn fmt_and_clippy_command_construction_is_exact() {
+fn fmt_clippy_and_test_command_construction_is_exact() {
     let workspace = fixture_workspace();
     assert_eq!(fmt_packages(&workspace), ["ping-implementation"]);
     let spec = fmt_spec(&workspace).unwrap();
@@ -48,6 +49,10 @@ fn fmt_and_clippy_command_construction_is_exact() {
     assert_eq!(
         clippy_spec().render(),
         "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+    );
+    assert_eq!(
+        test_spec().render(),
+        "cargo test --workspace --all-features"
     );
 }
 
@@ -93,10 +98,13 @@ fn injected_zero_exit_passes_without_captured_output() {
     let (clippy, clippy_out) = run_clippy_step(runner, Path::new("."))
         .unwrap()
         .into_parts();
+    let (tests, tests_out) = run_test_step(runner, Path::new(".")).unwrap().into_parts();
     assert_eq!(fmt, Completion::Passed);
     assert_eq!(clippy, Completion::Passed);
+    assert_eq!(tests, Completion::Passed);
     assert_eq!(fmt_out, None);
     assert_eq!(clippy_out, None);
+    assert_eq!(tests_out, None);
 }
 
 #[test]
@@ -125,10 +133,39 @@ fn nonzero_exit_is_coded_failure_with_command_and_output() {
 }
 
 #[test]
+fn test_nonzero_exit_is_bxw0095_with_command_and_output() {
+    let runner: &CommandRunner = &|_root, spec| {
+        Ok(CapturedOutput::new(
+            false,
+            format!("failed:{}\n", spec.render()),
+            b"stderr-line\n".as_slice(),
+        ))
+    };
+    let (completion, output) = run_test_step(runner, Path::new(".")).unwrap().into_parts();
+    let Completion::Failed(findings) = completion else {
+        panic!("expected failure");
+    };
+    assert_eq!(
+        findings.to_string(),
+        "BXW0095 Cargo.toml package= candidates=[command=\"cargo test --workspace --all-features\"]"
+    );
+    assert_eq!(
+        String::from_utf8(output.unwrap()).unwrap(),
+        "failed:cargo test --workspace --all-features\nstderr-line\n"
+    );
+}
+
+#[test]
 fn spawn_and_missing_program_map_to_invocation_error() {
     let runner: &CommandRunner = &|_root, _spec| Err(SpawnError);
     assert_eq!(
         run_clippy_step(runner, Path::new("."))
+            .unwrap_err()
+            .to_string(),
+        "BXW0096 Cargo.toml: a trusted check command could not be executed"
+    );
+    assert_eq!(
+        run_test_step(runner, Path::new("."))
             .unwrap_err()
             .to_string(),
         "BXW0096 Cargo.toml: a trusted check command could not be executed"
