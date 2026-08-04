@@ -2,9 +2,10 @@
 
 use boxology_cli::{
     BaseSchemasError, ClassifyStepError, CompareDifference, DefaultBase, ExecuteError,
-    GenerationPlan, PlanError, SpawnError, base_package_schemas, cargo_metadata_command,
-    classify_step, compare_plans, composition_step, execute, plan, resolve_default_base,
-    run_clippy_step, run_command, run_fmt_step, run_lock_step, run_test_step, walk,
+    GenerationPlan, PlanError, ResolvedBase, SpawnError, base_package_schemas,
+    cargo_metadata_command, classify_step, compare_plans, composition_step, execute, plan,
+    resolve_base, resolve_default_base, run_clippy_step, run_command, run_fmt_step, run_lock_step,
+    run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -172,17 +173,26 @@ fn run_check(
         None => match resolve_default_base(root) {
             Ok(DefaultBase::NoRepository) => Err(SkipReason::NoRepository),
             Ok(DefaultBase::NoMergeBase) => Err(SkipReason::NoMergeBase),
-            Ok(DefaultBase::Commit(oid)) => Ok(oid),
+            Ok(DefaultBase::Commit(oid)) => match ResolvedBase::from_oid(oid) {
+                Ok(base) => Ok(base),
+                Err(error) => {
+                    let _ = writeln!(stderr, "{error}");
+                    return 1;
+                }
+            },
             Err(error) => {
                 let _ = writeln!(stderr, "{error}");
                 return 2;
             }
         },
-        Some(revision) => Ok(revision.to_owned()),
+        Some(revision) => match resolve_base(root, revision) {
+            Ok(base) => Ok(base),
+            Err(error) => return report_base_failure(error, stderr),
+        },
     };
     let contract_classification = match resolved {
         Err(reason) => ContractClassificationCompletion::Skipped(reason),
-        Ok(revision) => match classify_contracts(root, &revision, &plans, stderr) {
+        Ok(base) => match classify_contracts(root, &base, &plans, stderr) {
             Ok(completion) => completion,
             Err(code) => return code,
         },
@@ -259,11 +269,11 @@ fn not_implemented() -> Completion {
 
 fn classify_contracts(
     root: &Path,
-    revision: &str,
+    base: &ResolvedBase,
     plans: &[GenerationPlan],
     stderr: &mut dyn Write,
 ) -> Result<ContractClassificationCompletion, u8> {
-    let schemas = match base_package_schemas(root, revision, plans) {
+    let schemas = match base_package_schemas(root, base, plans) {
         Ok(schemas) => schemas,
         Err(error) => return Err(report_base_failure(error, stderr)),
     };
