@@ -118,6 +118,17 @@ fn run_generate(
         for path in outcome.removed() {
             let _ = writeln!(stdout, "  removed {path}");
         }
+        if !outcome.is_unchanged() {
+            match boxology_cli::classify(outcome.base_schema(), outcome.submitted_schema()) {
+                Ok(report) => {
+                    let _ = write!(stdout, "{}", boxology_classifier::render_text(&report));
+                }
+                Err(error) => {
+                    let _ = writeln!(stderr, "{error}");
+                    return 1;
+                }
+            }
+        }
     }
     let result = if changed { "changed" } else { "unchanged" };
     let _ = writeln!(stdout, "generate result {result}");

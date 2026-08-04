@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use boxology_schema::SchemaDocument;
 use std::{
     env,
     ffi::OsString,
@@ -277,6 +278,161 @@ fn first_write_then_byte_identical_unchanged_run_uses_exact_argv() {
         fs::read_to_string(&fixture.log).unwrap(),
         "metadata\n--format-version\n1\n--locked\n--no-deps\n"
     );
+}
+
+#[test]
+fn generate_package_ping_attaches_exact_additive_classification() {
+    let fixture = Fixture::new(false);
+    let output = fixture.run(&["generate", "--package", "ping"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+    assert!(text(&output.stderr).is_empty());
+    assert_eq!(
+        text(&output.stdout),
+        "\
+generate ping written
+  written generated/adapter/adapter.rs
+  written generated/contract/Cargo.toml
+  written generated/contract/src/lib.rs
+  written generated/schema.json
+classification additive
+finding BXC0026 path=\"ping\" additive kind=\"contract introduced\" base=- submitted=\"ping\"
+generate result changed
+"
+    );
+}
+
+#[test]
+fn generate_incompatible_classification_still_exits_zero() {
+    let fixture = Fixture::new(false);
+    fs::write(
+        fixture.root.join("ping/implementation/src/lib.rs"),
+        CONTRACT_WITH_GREET,
+    )
+    .unwrap();
+    assert_eq!(
+        fixture
+            .run(&["generate", "--package", "ping"])
+            .status
+            .code(),
+        Some(0)
+    );
+    fs::write(
+        fixture.root.join("ping/implementation/src/lib.rs"),
+        CONTRACT,
+    )
+    .unwrap();
+    let output = fixture.run(&["generate", "--package", "ping"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+    assert!(text(&output.stderr).is_empty());
+    assert_eq!(
+        text(&output.stdout),
+        "\
+generate ping written
+  written generated/adapter/adapter.rs
+  written generated/contract/src/lib.rs
+  written generated/schema.json
+classification incompatible
+finding BXC0040 path=\"ping.greet\" incompatible kind=\"capability removed\" base=\"greet\" submitted=-
+generate result changed
+"
+    );
+}
+
+#[test]
+fn generate_unparseable_base_is_bxw0077_without_result_line() {
+    let fixture = Fixture::new(false);
+    assert_eq!(
+        fixture
+            .run(&["generate", "--package", "ping"])
+            .status
+            .code(),
+        Some(0)
+    );
+    fs::write(fixture.root.join("ping/generated/schema.json"), b"{").unwrap();
+    let output = fixture.run(&["generate", "--package", "ping"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+    assert!(text(&output.stderr).contains("BXW0077 base:"));
+    assert_eq!(
+        text(&output.stdout),
+        "\
+generate ping written
+  written generated/schema.json
+"
+    );
+}
+
+#[test]
+fn generate_updates_provenance_digest_and_revision() {
+    let fixture = Fixture::new(false);
+    assert_eq!(
+        fixture
+            .run(&["generate", "--package", "ping"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let first =
+        SchemaDocument::parse(&fs::read(fixture.root.join("ping/generated/schema.json")).unwrap())
+            .unwrap();
+    let provenance = first.provenance.value();
+    assert_eq!(
+        provenance.get("generator").and_then(|value| value.as_str()),
+        Some("boxology-generator")
+    );
+    assert_eq!(
+        provenance
+            .get("generator_version")
+            .and_then(|value| value.as_str()),
+        Some("0.0.0")
+    );
+    assert_eq!(
+        provenance
+            .get("semantic_digest")
+            .and_then(|value| value.as_str()),
+        Some("sha256:1ae6fa257308b7e30cb09c8005da2f406171abb36a411538c77b464223ae73e3")
+    );
+    fs::write(
+        fixture.root.join("ping/implementation/src/lib.rs"),
+        CONTRACT_WITH_GREET,
+    )
+    .unwrap();
+    assert_eq!(
+        fixture
+            .run(&["generate", "--package", "ping"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let second =
+        SchemaDocument::parse(&fs::read(fixture.root.join("ping/generated/schema.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        second
+            .provenance
+            .value()
+            .get("semantic_digest")
+            .and_then(|value| value.as_str()),
+        Some("sha256:d9e2a6005f4771822df843fa864ba980f4a42d84f533da9fe97184ac7c3415d5")
+    );
+    assert_ne!(first.revision, second.revision);
 }
 
 #[test]
@@ -653,9 +809,10 @@ fn check_base_absent_schema_is_a_valid_none_base() {
 fn check_base_reports_malformed_schema_as_bxw0080() {
     let fixture = Fixture::new(false);
     assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let good = fs::read(fixture.root.join("ping/generated/schema.json")).unwrap();
     fs::write(fixture.root.join("ping/generated/schema.json"), b"bad").unwrap();
     fixture.commit("malformed base schema");
-    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fs::write(fixture.root.join("ping/generated/schema.json"), good).unwrap();
 
     let output = fixture.run(&["check", "--base", "HEAD"]);
     assert_eq!(output.status.code(), Some(1));
