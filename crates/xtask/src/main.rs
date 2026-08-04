@@ -78,8 +78,14 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         tests: &["surface_and_live_evasions_are_locked"],
         body_digest: "b010c6eb43ce00b40f6dd11c3aa63c1f62ad8c2e3196f8e7e1e4ffd10331e65a",
     };
-// This slice pins the generator production source inventory only. Capability purity,
-// source closure, and dependency-graph pins are later #107 slices.
+// #107A slice A closure lock; PR-required. AST scan later. Transitive purity: #358.
+const GENERATOR_SOURCE_INVENTORY_TESTS: &[&str] = &[
+    "closure_rules_reject_live_hostile_corpus",
+    "generator_crate_roots_admit_only_manifest_src_and_tests",
+    "generator_manifests_are_closed_and_pin_exact_dependencies",
+    "generator_test_trees_are_closed_and_inventoried",
+    "production_source_inventory_is_exact",
+];
 const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
         package: "boxology-generator-model",
@@ -87,8 +93,8 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         manifest: "crates/boxology-generator-model/Cargo.toml",
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
-        tests: &["production_source_inventory_is_exact"],
-        body_digest: "d1b3aec44892f2f8c703e248a04c1913aebac6a4358acc27da437a27a75638f1",
+        tests: GENERATOR_SOURCE_INVENTORY_TESTS,
+        body_digest: "289448725a8a5efb8a6384ff2d3706221dc40ebd715f751875fdaa9bf2c4959d",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",
@@ -311,7 +317,14 @@ fn ci_failure_names(tier: CiTier, checks: &[(&'static str, bool)]) -> Vec<&'stat
                 }),
             );
         }
-        CiTier::PullRequest => {}
+        CiTier::PullRequest => {
+            if !checks
+                .iter()
+                .any(|(n, _)| *n == "generator-source-inventory")
+            {
+                failed.push("generator-source-inventory");
+            }
+        }
     }
     failed.extend(checks.iter().filter_map(|(n, ok)| (!*ok).then_some(*n)));
     failed
@@ -334,8 +347,8 @@ fn run_ci(base: Option<&str>) -> u8 {
 
     if !deep {
         println!(
-            "test-tier: PR delegates boxology-init, boxology-generator, \
-             boxology-workspace, xtask, fixture-projects, and external gates to macos-capstone"
+            "test-tier: PR requires generator-source-inventory; delegates boxology-init, \
+             boxology-generator, boxology-workspace, xtask, fixture-projects, and other external gates to macos-capstone"
         );
     }
     let mut checks = vec![
@@ -389,6 +402,20 @@ fn run_ci(base: Option<&str>) -> u8 {
         checks.extend(external_test_checks(&root(), &mut |args| {
             external_test::cargo(&root(), args)
         }));
+    } else {
+        // PR-tier lock survives package autotest disable via external_test controls.
+        checks.push((
+            "generator-source-inventory",
+            timed("generator-source-inventory", || {
+                external_test::run_with_cargo(
+                    &root(),
+                    &GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
+                    |args| external_test::cargo(&root(), args),
+                )
+                .map_err(|error| eprintln!("generator-source-inventory: {error}"))
+                .is_ok()
+            }),
+        ));
     }
     checks.extend([
         ("key-order", timed("key-order", run_key_order)),
@@ -890,8 +917,8 @@ mod tests {
                     manifest: "crates/boxology-generator-model/Cargo.toml",
                     source: "crates/boxology-generator-model/tests/purity_lock.rs",
                     default_source: "tests/purity_lock.rs",
-                    tests: &["production_source_inventory_is_exact"],
-                    body_digest: "d1b3aec44892f2f8c703e248a04c1913aebac6a4358acc27da437a27a75638f1",
+                    tests: GENERATOR_SOURCE_INVENTORY_TESTS,
+                    body_digest: "289448725a8a5efb8a6384ff2d3706221dc40ebd715f751875fdaa9bf2c4959d",
                 },
             ),
         ];
@@ -928,7 +955,7 @@ mod tests {
                 "boxology-workspace" | "boxology-classifier" => {
                     &["surface_and_live_evasions_are_locked"]
                 }
-                "boxology-generator-model" => &["production_source_inventory_is_exact"],
+                "boxology-generator-model" => GENERATOR_SOURCE_INVENTORY_TESTS,
                 other => panic!("unexpected package: {other}"),
             };
             if args.last().copied() == Some("--list") {
@@ -960,7 +987,15 @@ mod tests {
                 "--",
                 "--list",
             ],
-            &["test", "-p", "boxology-workspace", "--test", "surface_lock"],
+            &[
+                "test",
+                "-p",
+                "boxology-workspace",
+                "--test",
+                "surface_lock",
+                "--",
+                "--test-threads=1",
+            ],
             &[
                 "test",
                 "-p",
@@ -976,6 +1011,8 @@ mod tests {
                 "boxology-classifier",
                 "--test",
                 "surface_lock",
+                "--",
+                "--test-threads=1",
             ],
             &[
                 "test",
@@ -992,6 +1029,8 @@ mod tests {
                 "boxology-generator-model",
                 "--test",
                 "purity_lock",
+                "--",
+                "--test-threads=1",
             ],
         ];
         // Two argv vectors per spec: list then run.
@@ -1046,7 +1085,10 @@ mod tests {
         let mut capstone_passed = passed.clone();
         capstone_passed.push(("fixture-projects", true));
         assert!(ci_failure_names(CiTier::Capstone, &capstone_passed).is_empty());
-        assert!(ci_failure_names(CiTier::PullRequest, &[]).is_empty());
+        assert_eq!(
+            ci_failure_names(CiTier::PullRequest, &[]),
+            ["generator-source-inventory"]
+        );
         assert_eq!(
             ci_failure_names(CiTier::Deep, &[]),
             vec![
@@ -1077,7 +1119,7 @@ mod tests {
         assert_eq!(
             ci_failure_names(CiTier::PullRequest, &failed).len(),
             3,
-            "present false verdicts fail even when PR permits delegation"
+            "present false verdicts fail on PR, including the required generator lock"
         );
     }
 
