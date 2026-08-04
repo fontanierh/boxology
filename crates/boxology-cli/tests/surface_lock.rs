@@ -43,9 +43,9 @@ const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
 const BASE_HASH: u64 = 8_507_258_918_304_319_224;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nfn not_implemented() -> Completion\nSkipReason::Unimplemented\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nclassify(outcome.base_schema(), outcome.submitted_schema())\nrender_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nfn not_implemented() -> Completion\nSkipReason::Unimplemented\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 135_925_882_823_051_385;
+const MAIN_HASH: u64 = 407_565_433_622_090_130;
 const HASHES: [u64; 9] = [
     LIB_HASH,
     WALK_HASH,
