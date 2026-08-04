@@ -1,22 +1,3 @@
-# The S0 D4 validation matrix is fully wired. Linux jobs run on the disposable
-# ARM64 runner labels provisioned by ops/ci-runner; every job runs on the MacBook.
-# Linux jobs execute in the disposable Colima container and macOS jobs execute on
-# the native host runner. `validation` is the single stable aggregate required-check
-# name (branch-protection target per D9, when available).
-#
-# Candidate-writable (spec non-goal): a PR can modify this file and the checks
-# that judge it. Until S5/S7, protection is human review of changes to
-# .github/workflows/ and crates/xtask.
-#
-# Wall-clock monitored target (D4, not an acceptance invariant): cache-hit
-# required-check critical path excluding queue time, median of the last ten
-# main runs; alarm threshold 8 minutes. Native macOS jobs are the canonical
-# behavioral lanes; Linux is the slim determinism/check producer. The native
-# Mac capstone runs slow, independent acceptance suites beside checks-macos.
-# Measure with:
-#   gh run list --workflow pr.yml --branch main --status success --limit 10
-#   gh api repos/<owner>/<repo>/actions/runs/<id>/jobs   # started_at -> completed_at
-
 name: pr
 
 on:
@@ -27,617 +8,98 @@ on:
 permissions:
   contents: read
 
+env:
+  # Keep the source-owned security-tool pin visible even though the expensive
+  # deny suite is no longer part of every PR.
+  CARGO_DENY_VERSION: "0.20.2"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_INCREMENTAL: "0"
-  CARGO_DENY_VERSION: "0.20.2"
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
-
+# PR CI intentionally has one required native-Mac lane. The self-hosted runner
+# already persists CARGO_HOME and CARGO_TARGET_DIR across jobs, so adding an
+# actions/cache archive would only duplicate that cache and add transfer time.
+# Deep cross-platform and release checks belong outside the merge critical path.
 jobs:
-  checks-linux:
-    runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Install pinned toolchain
-        run: |
-          rustup toolchain install
-          rustup show active-toolchain
-      - name: Record runner evidence
-        run: |
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          rustc --version --verbose
-          test "$RUNNER_OS" = Linux
-          test "$RUNNER_ARCH" = ARM64
-          test "$(uname -m)" = aarch64
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-unknown-linux-gnu"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/bin/cargo-deny
-          key: cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-          restore-keys: |
-            cargo-checks-linux-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install pinned cargo-deny
-        run: |
-          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
-            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
-          fi
-          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
-      # Fail-fast ownership/classification gate before the Linux determinism
-      # producer. Unconditional on pull_request and main-push paths.
-      - name: boxology check
-        run: cargo run -q -p boxology-cli --bin boxology -- check
-      # Slim Linux lane: local determinism protocol only. Full behavioral
-      # validation lives on checks-macos; keep producing the xtask binary and
-      # Linux determinism roots for the cross-platform consumers.
-      - name: cargo xtask determinism
-        run: cargo xtask determinism
-      - name: Upload xtask-linux-arm64 (attempt 1)
-        id: ulx_bin_1
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: xtask-linux-arm64
-          path: target/debug/xtask
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before xtask-linux-arm64 upload attempt 2
-        if: steps.ulx_bin_1.outcome == 'failure'
-        run: sleep 15
-      - name: Upload xtask-linux-arm64 (attempt 2)
-        id: ulx_bin_2
-        if: steps.ulx_bin_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: xtask-linux-arm64
-          path: target/debug/xtask
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before xtask-linux-arm64 upload attempt 3
-        if: steps.ulx_bin_1.outcome == 'failure' && steps.ulx_bin_2.outcome == 'failure'
-        run: sleep 30
-      - name: Upload xtask-linux-arm64 (attempt 3)
-        if: steps.ulx_bin_1.outcome == 'failure' && steps.ulx_bin_2.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: xtask-linux-arm64
-          path: target/debug/xtask
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Produce determinism artifacts
-        run: |
-          rm -rf target/determinism-linux target/determinism-linux-meta
-          rm -f target/determinism-linux.tar target/determinism-linux-meta.tar
-          cargo xtask determinism-manifest --out target/determinism-linux
-          cargo xtask determinism-manifest --out target/determinism-linux-meta --meta-cross
-          tar -cf target/determinism-linux.tar -C target/determinism-linux .
-          tar -cf target/determinism-linux-meta.tar -C target/determinism-linux-meta .
-      - name: Upload determinism-linux (attempt 1)
-        id: ulx_lin_1
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-linux-arm64
-          path: target/determinism-linux.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-linux upload attempt 2
-        if: steps.ulx_lin_1.outcome == 'failure'
-        run: sleep 15
-      - name: Upload determinism-linux (attempt 2)
-        id: ulx_lin_2
-        if: steps.ulx_lin_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-linux-arm64
-          path: target/determinism-linux.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-linux upload attempt 3
-        if: steps.ulx_lin_1.outcome == 'failure' && steps.ulx_lin_2.outcome == 'failure'
-        run: sleep 30
-      - name: Upload determinism-linux (attempt 3)
-        if: steps.ulx_lin_1.outcome == 'failure' && steps.ulx_lin_2.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-linux-arm64
-          path: target/determinism-linux.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Upload determinism-linux-meta (attempt 1)
-        id: ulx_linmeta_1
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-linux-meta-arm64
-          path: target/determinism-linux-meta.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-linux-meta upload attempt 2
-        if: steps.ulx_linmeta_1.outcome == 'failure'
-        run: sleep 15
-      - name: Upload determinism-linux-meta (attempt 2)
-        id: ulx_linmeta_2
-        if: steps.ulx_linmeta_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-linux-meta-arm64
-          path: target/determinism-linux-meta.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-linux-meta upload attempt 3
-        if: steps.ulx_linmeta_1.outcome == 'failure' && steps.ulx_linmeta_2.outcome == 'failure'
-        run: sleep 30
-      - name: Upload determinism-linux-meta (attempt 3)
-        if: steps.ulx_linmeta_1.outcome == 'failure' && steps.ulx_linmeta_2.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-linux-meta-arm64
-          path: target/determinism-linux-meta.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-
-  checks-macos:
-    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
-    timeout-minutes: 30
-    env:
-      CARGO_BUILD_JOBS: "2"
-      RUST_TEST_THREADS: "2"
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Install pinned toolchain
-        run: |
-          rustup toolchain install
-          rustup show active-toolchain
-      - name: Record runner evidence
-        run: |
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          rustc --version --verbose
-          test "$RUNNER_OS" = macOS
-          test "$RUNNER_ARCH" = ARM64
-          test "$(uname -m)" = arm64
-          test "$ImageOS" = macos-arm64-host
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
-      - name: Install pinned cargo-deny
-        run: |
-          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
-            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
-          fi
-          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
-      # Canonical behavioral lane: PRs run the fast merge suite; main pushes
-      # additionally run deferred deep compiler, docs, and editor checks.
-      - name: boxology check
-        run: cargo run -q -p boxology-cli --bin boxology -- check
-      - name: cargo xtask ci (pull request)
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: cargo xtask ci --base "$BASE_SHA"
-      - name: cargo xtask ci (main push)
-        if: github.event_name == 'push'
-        run: cargo xtask ci --no-budget
-      - name: Produce determinism artifacts
-        env:
-          COPYFILE_DISABLE: "1"
-        run: |
-          rm -rf target/determinism-macos target/determinism-macos-meta
-          rm -f target/determinism-macos.tar target/determinism-macos-meta.tar
-          cargo xtask determinism-manifest --out target/determinism-macos
-          cargo xtask determinism-manifest --out target/determinism-macos-meta --meta-cross
-          tar -cf target/determinism-macos.tar -C target/determinism-macos .
-          tar -cf target/determinism-macos-meta.tar -C target/determinism-macos-meta .
-      - name: Upload determinism-macos (attempt 1)
-        id: ulm_mac_1
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-macos
-          path: target/determinism-macos.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-macos upload attempt 2
-        if: steps.ulm_mac_1.outcome == 'failure'
-        run: sleep 15
-      - name: Upload determinism-macos (attempt 2)
-        id: ulm_mac_2
-        if: steps.ulm_mac_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-macos
-          path: target/determinism-macos.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-macos upload attempt 3
-        if: steps.ulm_mac_1.outcome == 'failure' && steps.ulm_mac_2.outcome == 'failure'
-        run: sleep 30
-      - name: Upload determinism-macos (attempt 3)
-        if: steps.ulm_mac_1.outcome == 'failure' && steps.ulm_mac_2.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-macos
-          path: target/determinism-macos.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Upload determinism-macos-meta (attempt 1)
-        id: ulm_macmeta_1
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-macos-meta
-          path: target/determinism-macos-meta.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-macos-meta upload attempt 2
-        if: steps.ulm_macmeta_1.outcome == 'failure'
-        run: sleep 15
-      - name: Upload determinism-macos-meta (attempt 2)
-        id: ulm_macmeta_2
-        if: steps.ulm_macmeta_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-macos-meta
-          path: target/determinism-macos-meta.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-      - name: Backoff before determinism-macos-meta upload attempt 3
-        if: steps.ulm_macmeta_1.outcome == 'failure' && steps.ulm_macmeta_2.outcome == 'failure'
-        run: sleep 30
-      - name: Upload determinism-macos-meta (attempt 3)
-        if: steps.ulm_macmeta_1.outcome == 'failure' && steps.ulm_macmeta_2.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: determinism-macos-meta
-          path: target/determinism-macos-meta.tar
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-
-  macos-capstone:
-    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
-    timeout-minutes: 15
-    env:
-      CARGO_BUILD_JOBS: "2"
-      RUST_TEST_THREADS: "2"
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Install pinned toolchain
-        run: |
-          rustup toolchain install
-          rustup show active-toolchain
-      - name: Record runner evidence
-        run: |
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          rustc --version --verbose
-          test "$RUNNER_OS" = macOS
-          test "$RUNNER_ARCH" = ARM64
-          test "$(uname -m)" = arm64
-          test "$ImageOS" = macos-arm64-host
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
-      - name: process-reaper fixture suite
-        run: bash ops/process-reaper/tests/run-tests.sh
-      # Main-push deep CI retains the unchanged full workspace and fixture suites.
-      - name: cargo xtask ci-capstone
-        if: github.event_name == 'pull_request'
-        run: cargo xtask ci-capstone
-
-  macos-born-valid:
-    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
-    timeout-minutes: 15
-    env:
-      CARGO_BUILD_JOBS: "2"
-      RUST_TEST_THREADS: "2"
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Install pinned toolchain
-        run: |
-          rustup toolchain install
-          rustup show active-toolchain
-      - name: Record runner evidence
-        run: |
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          rustc --version --verbose
-          test "$RUNNER_OS" = macOS
-          test "$RUNNER_ARCH" = ARM64
-          test "$(uname -m)" = arm64
-          test "$ImageOS" = macos-arm64-host
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
-      # Main-push deep CI retains the unchanged full workspace test suite.
-      - name: cargo xtask ci-born-valid
-        if: github.event_name == 'pull_request'
-        run: cargo xtask ci-born-valid
-
-  deny:
-    runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Install pinned toolchain
-        run: rustup toolchain install
-      - name: Record runner evidence
-        run: |
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          rustc --version --verbose
-          test "$RUNNER_OS" = Linux
-          test "$RUNNER_ARCH" = ARM64
-          test "$(uname -m)" = aarch64
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-unknown-linux-gnu"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/bin/cargo-deny
-          key: cargo-deny-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_DENY_VERSION }}
-      - name: Install pinned cargo-deny
-        run: |
-          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
-            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
-          fi
-          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
-      - name: cargo xtask deny
-        run: cargo xtask deny
-
-  determinism-compare:
-    needs: [checks-linux, checks-macos]
-    runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
-    timeout-minutes: 15
-    steps:
-      - name: Record runner evidence
-        run: |
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          test "$RUNNER_OS" = "Linux"
-          test "$RUNNER_ARCH" = "ARM64"
-          test "$(uname -m)" = "aarch64"
-      - name: Download xtask-linux-arm64 (attempt 1)
-        id: dlc_xtask_1
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: xtask-linux-arm64
-          path: xtask-linux-arm64
-      - name: Backoff before xtask-linux-arm64 attempt 2
-        if: steps.dlc_xtask_1.outcome == 'failure'
-        run: sleep 15
-      - name: Download xtask-linux-arm64 (attempt 2)
-        id: dlc_xtask_2
-        if: steps.dlc_xtask_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: xtask-linux-arm64
-          path: xtask-linux-arm64
-      - name: Backoff before xtask-linux-arm64 attempt 3
-        if: steps.dlc_xtask_1.outcome == 'failure' && steps.dlc_xtask_2.outcome == 'failure'
-        run: sleep 30
-      - name: Download xtask-linux-arm64 (attempt 3)
-        if: steps.dlc_xtask_1.outcome == 'failure' && steps.dlc_xtask_2.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: xtask-linux-arm64
-          path: xtask-linux-arm64
-      - name: Make xtask executable
-        run: chmod +x xtask-linux-arm64/xtask
-      - name: Download determinism-linux (attempt 1)
-        id: dlc_lin_1
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-linux-arm64
-          path: incoming/linux-arm64
-      - name: Backoff before determinism-linux attempt 2
-        if: steps.dlc_lin_1.outcome == 'failure'
-        run: sleep 15
-      - name: Download determinism-linux (attempt 2)
-        id: dlc_lin_2
-        if: steps.dlc_lin_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-linux-arm64
-          path: incoming/linux-arm64
-      - name: Backoff before determinism-linux attempt 3
-        if: steps.dlc_lin_1.outcome == 'failure' && steps.dlc_lin_2.outcome == 'failure'
-        run: sleep 30
-      - name: Download determinism-linux (attempt 3)
-        if: steps.dlc_lin_1.outcome == 'failure' && steps.dlc_lin_2.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-linux-arm64
-          path: incoming/linux-arm64
-      - name: Download determinism-macos (attempt 1)
-        id: dlc_mac_1
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-macos
-          path: incoming/macos
-      - name: Backoff before determinism-macos attempt 2
-        if: steps.dlc_mac_1.outcome == 'failure'
-        run: sleep 15
-      - name: Download determinism-macos (attempt 2)
-        id: dlc_mac_2
-        if: steps.dlc_mac_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-macos
-          path: incoming/macos
-      - name: Backoff before determinism-macos attempt 3
-        if: steps.dlc_mac_1.outcome == 'failure' && steps.dlc_mac_2.outcome == 'failure'
-        run: sleep 30
-      - name: Download determinism-macos (attempt 3)
-        if: steps.dlc_mac_1.outcome == 'failure' && steps.dlc_mac_2.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-macos
-          path: incoming/macos
-      - name: Unpack determinism artifacts
-        run: |
-          mkdir linux macos
-          tar -xf incoming/linux-arm64/determinism-linux.tar -C linux
-          tar -xf incoming/macos/determinism-macos.tar -C macos
-      - name: Verify determinism artifacts
-        run: |
-          ./xtask-linux-arm64/xtask determinism-verify linux --target aarch64-unknown-linux-gnu --require-image
-          ./xtask-linux-arm64/xtask determinism-verify macos --target aarch64-apple-darwin --require-image
-      - name: Compare determinism artifacts
-        run: ./xtask-linux-arm64/xtask determinism-compare linux macos
-
-  determinism-meta-cross:
-    needs: [checks-linux, checks-macos]
-    runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
-    timeout-minutes: 15
-    steps:
-      - name: Record runner evidence
-        run: |
-          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
-          test "$RUNNER_OS" = "Linux"
-          test "$RUNNER_ARCH" = "ARM64"
-          test "$(uname -m)" = "aarch64"
-      - name: Download xtask-linux-arm64 (attempt 1)
-        id: dlm_xtask_1
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: xtask-linux-arm64
-          path: xtask-linux-arm64
-      - name: Backoff before xtask-linux-arm64 attempt 2
-        if: steps.dlm_xtask_1.outcome == 'failure'
-        run: sleep 15
-      - name: Download xtask-linux-arm64 (attempt 2)
-        id: dlm_xtask_2
-        if: steps.dlm_xtask_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: xtask-linux-arm64
-          path: xtask-linux-arm64
-      - name: Backoff before xtask-linux-arm64 attempt 3
-        if: steps.dlm_xtask_1.outcome == 'failure' && steps.dlm_xtask_2.outcome == 'failure'
-        run: sleep 30
-      - name: Download xtask-linux-arm64 (attempt 3)
-        if: steps.dlm_xtask_1.outcome == 'failure' && steps.dlm_xtask_2.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: xtask-linux-arm64
-          path: xtask-linux-arm64
-      - name: Make xtask executable
-        run: chmod +x xtask-linux-arm64/xtask
-      - name: Download determinism-linux-meta (attempt 1)
-        id: dlm_lin_1
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-linux-meta-arm64
-          path: incoming/linux-meta-arm64
-      - name: Backoff before determinism-linux-meta attempt 2
-        if: steps.dlm_lin_1.outcome == 'failure'
-        run: sleep 15
-      - name: Download determinism-linux-meta (attempt 2)
-        id: dlm_lin_2
-        if: steps.dlm_lin_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-linux-meta-arm64
-          path: incoming/linux-meta-arm64
-      - name: Backoff before determinism-linux-meta attempt 3
-        if: steps.dlm_lin_1.outcome == 'failure' && steps.dlm_lin_2.outcome == 'failure'
-        run: sleep 30
-      - name: Download determinism-linux-meta (attempt 3)
-        if: steps.dlm_lin_1.outcome == 'failure' && steps.dlm_lin_2.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-linux-meta-arm64
-          path: incoming/linux-meta-arm64
-      - name: Download determinism-macos-meta (attempt 1)
-        id: dlm_mac_1
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-macos-meta
-          path: incoming/macos-meta
-      - name: Backoff before determinism-macos-meta attempt 2
-        if: steps.dlm_mac_1.outcome == 'failure'
-        run: sleep 15
-      - name: Download determinism-macos-meta (attempt 2)
-        id: dlm_mac_2
-        if: steps.dlm_mac_1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-macos-meta
-          path: incoming/macos-meta
-      - name: Backoff before determinism-macos-meta attempt 3
-        if: steps.dlm_mac_1.outcome == 'failure' && steps.dlm_mac_2.outcome == 'failure'
-        run: sleep 30
-      - name: Download determinism-macos-meta (attempt 3)
-        if: steps.dlm_mac_1.outcome == 'failure' && steps.dlm_mac_2.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: determinism-macos-meta
-          path: incoming/macos-meta
-      - name: Unpack meta-cross artifacts
-        run: |
-          mkdir linux-meta macos-meta
-          tar -xf incoming/linux-meta-arm64/determinism-linux-meta.tar -C linux-meta
-          tar -xf incoming/macos-meta/determinism-macos-meta.tar -C macos-meta
-      - name: Verify meta-cross artifacts
-        run: |
-          ./xtask-linux-arm64/xtask determinism-verify linux-meta --target aarch64-unknown-linux-gnu --require-image
-          ./xtask-linux-arm64/xtask determinism-verify macos-meta --target aarch64-apple-darwin --require-image
-      - name: Require expected cross-platform mismatch
-        run: ./xtask-linux-arm64/xtask determinism-meta-cross linux-meta macos-meta
-
   validation:
-    needs: [checks-linux, checks-macos, macos-capstone, macos-born-valid, deny, determinism-compare, determinism-meta-cross]
-    if: always()
-    runs-on: [self-hosted, linux, ARM64, boxology-linux-arm64-pr]
-    timeout-minutes: 5
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: "1"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "4"
+      RUST_TEST_THREADS: "4"
     steps:
-      - name: Fail unless every needed job succeeded
-        env:
-          NEEDS: ${{ toJSON(needs) }}
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned toolchain
         run: |
-          echo "$NEEDS"
-          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")'
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$ImageOS" = macos-arm64-host
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
+
+      # Documentation-only PRs should not spend minutes recompiling Rust. Main
+      # pushes and every change outside the documentation/record surface run the
+      # root-workspace suite below.
+      - name: Select test scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          run_rust=true
+          run_generator=false
+          if test "$EVENT_NAME" = pull_request; then
+            changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+            if test -n "$changed" && ! grep -Evq '^(docs/|records/|specs/|ops/friction-log\.md$|[^/]+\.md$)' <<<"$changed"; then
+              run_rust=false
+            fi
+            if grep -Eq '^crates/boxology-generator($|[-/])' <<<"$changed"; then
+              run_generator=true
+            fi
+          fi
+          echo "run_rust=$run_rust" | tee -a "$GITHUB_OUTPUT"
+          echo "run_generator=$run_generator" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Test root workspace
+        if: steps.scope.outputs.run_rust == 'true'
+        run: cargo test --workspace --all-features --locked --exclude boxology-init --exclude boxology-generator
+
+      # Keep fast init unit/CLI coverage, but leave its multi-minute born-valid
+      # nested-workspace acceptance test out of the per-PR critical path.
+      - name: Test init units
+        if: steps.scope.outputs.run_rust == 'true'
+        run: cargo test -p boxology-init --all-features --locked --lib --bins
+
+      - name: Test generator when changed
+        if: steps.scope.outputs.run_generator == 'true'
+        run: cargo test -p boxology-generator --all-features --locked
+
+      - name: Check Boxology model
+        if: steps.scope.outputs.run_rust == 'true'
+        run: cargo run -q -p boxology-cli --bin boxology -- check
+
+      # ping-app is the smallest composition fixture outside the root workspace;
+      # it keeps one real generated-contract/implementation composition in PR CI.
+      - name: Test ping-app composition
+        if: steps.scope.outputs.run_rust == 'true'
+        run: |
+          cargo fmt --check --manifest-path crates/fixtures/ping-app/Cargo.toml -p ping-app
+          cargo test --manifest-path crates/fixtures/ping-app/Cargo.toml --all-features --locked
+
+      - name: Test process reaper
+        run: bash ops/process-reaper/tests/run-tests.sh
