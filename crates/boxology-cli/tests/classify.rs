@@ -166,8 +166,8 @@ fn render_contains_every_finding_unmodified() {
     assert_eq!(
         render_text(&report),
         "classification incompatible\n\
-         finding BXC0033 hello/type/GreetError documentation\n\
-         finding BXC0035 hello/type/GreetError/variant/Other incompatible\n"
+finding BXC0033 path=\"hello/type/GreetError\" documentation kind=\"documentation changed\" base=\"\" submitted=\"Extra type docs.\"\n\
+finding BXC0035 path=\"hello/type/GreetError/variant/Other\" incompatible kind=\"variant removed\" base=\"Other\" submitted=-\n"
     );
 }
 
@@ -179,7 +179,7 @@ fn render_contains_conditional_finding_unmodified() {
     assert_eq!(
         render_text(&report),
         "classification compatible_with_conditions\n\
-         finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\"\n"
+finding BXC0036 path=\"hello/type/GreetError/variant/Other\" compatible_with_conditions kind=\"error variant added\" base=- submitted=\"Other\" condition=\"unknown-variant tolerance\"\n"
     );
 }
 

@@ -383,10 +383,124 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
     }
     assert!(!report_lock.bad);
     assert!(!report_source.contains("\"BXC"));
+    assert!(report_source.contains("boxology.classification-report@2"));
+    assert!(!report_source.contains("boxology.classification-report@1"));
     assert_eq!(
         public_inventory(report_source),
         vec!["fn render_json".to_owned(), "fn render_text".to_owned()]
     );
+    for (anchor, count) in [
+        ("fn push_text_excerpt(", 1),
+        ("fn push_json_excerpt(", 1),
+        ("fn push_escaped(", 1),
+        ("fn must_escape(", 1),
+        ("fn is_layout_or_spoofing_format(", 1),
+        ("fn push_unicode_escape(", 1),
+        ("finding.kind()", 2),
+        ("finding.base_excerpt()", 2),
+        ("finding.submitted_excerpt()", 2),
+        ("push_escaped(&mut output, finding.path())", 2),
+        (" path=\\\"", 1),
+        ("'\\u{08}' => output.push_str(\"\\\\b\"),", 1),
+        ("'\\n' => output.push_str(\"\\\\n\"),", 1),
+        ("character.is_control()", 1),
+        ("'\\u{00AD}'", 1),
+        ("'\\u{0600}'..='\\u{0605}'", 1),
+        ("'\\u{061C}'", 1),
+        ("'\\u{06DD}'", 1),
+        ("'\\u{070F}'", 1),
+        ("'\\u{0890}'..='\\u{0891}'", 1),
+        ("'\\u{08E2}'", 1),
+        ("'\\u{180E}'", 1),
+        ("'\\u{200B}'..='\\u{200F}'", 1),
+        ("'\\u{202A}'..='\\u{202E}'", 1),
+        ("'\\u{2060}'..='\\u{2064}'", 1),
+        ("'\\u{2066}'..='\\u{206F}'", 1),
+        ("'\\u{FEFF}'", 1),
+        ("'\\u{FFF9}'..='\\u{FFFB}'", 1),
+        ("'\\u{110BD}'", 1),
+        ("'\\u{110CD}'", 1),
+        ("'\\u{13430}'..='\\u{1343F}'", 1),
+        ("'\\u{1BCA0}'..='\\u{1BCA3}'", 1),
+        ("'\\u{1D173}'..='\\u{1D17A}'", 1),
+        ("'\\u{E0001}'", 1),
+        ("'\\u{E0020}'..='\\u{E007F}'", 1),
+        ("0x1_0000", 2),
+        ("0xD800", 1),
+        ("0xDC00", 1),
+    ] {
+        assert_eq!(
+            report_source.matches(anchor).count(),
+            count,
+            "{anchor} count"
+        );
+    }
+    assert!(!report_source.contains("output.push_str(finding.path())"));
+    let dropped_kind = report_source.replacen("finding.kind()", "finding.code()", 1);
+    assert_eq!(dropped_kind.matches("finding.kind()").count(), 1);
+    let dropped_base = report_source.replacen("finding.base_excerpt()", "None", 1);
+    assert_eq!(dropped_base.matches("finding.base_excerpt()").count(), 1);
+    let dropped_submitted = report_source.replacen("finding.submitted_excerpt()", "None", 1);
+    assert_eq!(
+        dropped_submitted
+            .matches("finding.submitted_excerpt()")
+            .count(),
+        1
+    );
+    let verbatim_newline = report_source.replacen("'\\n' => output.push_str(\"\\\\n\"),", "", 1);
+    assert_eq!(
+        verbatim_newline
+            .matches("'\\n' => output.push_str(\"\\\\n\"),")
+            .count(),
+        0
+    );
+    let raw_human_path = report_source.replacen(
+        "push_escaped(&mut output, finding.path())",
+        "output.push_str(finding.path()); let _ = \"\"",
+        1,
+    );
+    assert_eq!(
+        raw_human_path
+            .matches("push_escaped(&mut output, finding.path())")
+            .count(),
+        1
+    );
+    assert!(raw_human_path.contains("output.push_str(finding.path())"));
+    let dropped_bidi =
+        report_source.replacen("'\\u{202A}'..='\\u{202E}'", "'\\u{202A}'..='\\u{202D}'", 1);
+    assert_eq!(dropped_bidi.matches("'\\u{202A}'..='\\u{202E}'").count(), 0);
+    let dropped_arabic_number =
+        report_source.replacen("'\\u{0600}'..='\\u{0605}'", "'\\u{0600}'..='\\u{0604}'", 1);
+    assert_eq!(
+        dropped_arabic_number
+            .matches("'\\u{0600}'..='\\u{0605}'")
+            .count(),
+        0
+    );
+    let dropped_supplementary = report_source.replacen(
+        "'\\u{1BCA0}'..='\\u{1BCA3}'",
+        "'\\u{1BCA0}'..='\\u{1BCA2}'",
+        1,
+    );
+    assert_eq!(
+        dropped_supplementary
+            .matches("'\\u{1BCA0}'..='\\u{1BCA3}'")
+            .count(),
+        0
+    );
+    let dropped_tag = report_source.replacen(
+        "'\\u{E0020}'..='\\u{E007F}'",
+        "'\\u{E0020}'..='\\u{E007E}'",
+        1,
+    );
+    assert_eq!(
+        dropped_tag.matches("'\\u{E0020}'..='\\u{E007F}'").count(),
+        0
+    );
+    let dropped_surrogate = report_source.replacen("0xD800", "0xD801", 1);
+    assert_eq!(dropped_surrogate.matches("0xD800").count(), 0);
+    let dropped_control = report_source.replacen("character.is_control()", "false", 1);
+    assert_eq!(dropped_control.matches("character.is_control()").count(), 0);
     assert_public_surface(source);
     assert_constructor_inventory(source);
     public_surface_mutants_fail_closed(source);
