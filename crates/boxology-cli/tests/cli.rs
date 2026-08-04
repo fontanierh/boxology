@@ -1163,6 +1163,9 @@ const LISTING: &str =
     "BXW0103 .git: the base revision's Git listings must parse as expected NUL-delimited output";
 const BLOB: &str =
     "BXW0104 boxology.toml: a base-revision workspace object must be readable as a Git blob";
+const CARGO_MSG: &str = "BXW0106 Cargo.toml: a changed candidate Cargo manifest must be a readable regular file when present";
+const CARGO_BASE: &[u8] =
+    b"[package]\nname=\"root\"\nversion=\"0.0.0\"\n\n[dependencies]\nserde = \"1\"\n";
 const TWIN: &str = "schema = 1\nid = \"twin\"\nkind = \"box\"\nowned = [\"boxology.toml\"]\n";
 const PLATFORM_OWN: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\nfixtures = [\"corpus/**\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 const HDR: &str =
@@ -1173,6 +1176,8 @@ mod ingest {
     use super::*;
     use boxology_cli::{BaseError, BaseInputsError, ResolvedBase, base_diff_inputs};
     use boxology_manifest::RelativePath;
+    use boxology_workspace::diff_ownership;
+    use std::os::unix::fs::symlink;
 
     fn oid(c: char) -> String {
         c.to_string().repeat(40)
@@ -1242,6 +1247,17 @@ mod ingest {
     }
     fn inputs(f: &Fixture) -> Result<boxology_cli::BaseDiffInputs, BaseInputsError> {
         with_git(f, || base_diff_inputs(&f.root, &base()))
+    }
+    fn rp(path: &str) -> RelativePath {
+        RelativePath::new(path).unwrap()
+    }
+    fn cargo_err(
+        result: Result<Vec<boxology_workspace::CargoManifestChange>, BaseInputsError>,
+    ) -> String {
+        match result {
+            Err(error) => data(error).to_string(),
+            Ok(_) => panic!("expected cargo error"),
+        }
     }
 
     #[test]
@@ -1399,28 +1415,73 @@ mod ingest {
             o => panic!("{o}"),
         }
 
-        let (held, link) = (oid('4'), oid('5'));
+        let (held, link, cargo) = (oid('4'), oid('5'), oid('6'));
         let mut t = tre("100644", "blob", &m, "boxology.toml");
         t.extend(tre("100644", "blob", &held, "corpus/sample/boxology.toml"));
         t.extend(tre("120000", "blob", &link, "linked/boxology.toml"));
+        t.extend(tre("100644", "blob", &cargo, "Cargo.toml"));
         seed(
             &f,
             &t,
-            b"",
+            b"Cargo.toml\0Cargo.lock\0orphan.rs\0",
             &[
                 (&m, PLATFORM_OWN.as_bytes()),
                 (&held, PACKAGE_MANIFEST.as_bytes()),
                 (&link, b"../boxology.toml"),
+                (&cargo, CARGO_BASE),
             ],
             [0, 0, 0],
         );
-        let got = inputs(&f).unwrap();
-        assert_eq!(
-            got.packages()
-                .iter()
-                .map(|p| p.id().as_str())
-                .collect::<Vec<_>>(),
-            ["platform"]
-        );
+        with_git(&f, || {
+            let got = base_diff_inputs(&f.root, &base()).unwrap();
+            assert_eq!(
+                got.packages()
+                    .iter()
+                    .map(|p| p.id().as_str())
+                    .collect::<Vec<_>>(),
+                ["platform"]
+            );
+            // Candidate boxology.toml cannot authorize paths unowned under base declarations.
+            fs::write(
+                f.root.join("boxology.toml"),
+                "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\", \"orphan.rs\"]\n",
+            )
+            .unwrap();
+            assert_eq!(
+                diff_ownership(got.packages(), &[rp("orphan.rs")])
+                    .findings()
+                    .unwrap()
+                    .to_string(),
+                "BXW0098 orphan.rs package= candidates=[]\nBXW0100 orphan.rs package= candidates=[]"
+            );
+            let own = diff_ownership(got.packages(), &[rp("Cargo.toml"), rp("Cargo.lock")]);
+            fs::write(f.root.join("Cargo.toml"), CARGO_BASE).unwrap();
+            let present = got.manifest_changes(&f.root, &own).unwrap();
+            assert_eq!(present.len(), 1);
+            assert_eq!(present[0].path().as_str(), "Cargo.toml");
+            assert_eq!(
+                own.lockfile_scope(&present).unwrap().unwrap().to_string(),
+                "BXW0102 Cargo.lock package=platform candidates=[Cargo.toml=unchanged]"
+            );
+            fs::remove_file(f.root.join("Cargo.toml")).unwrap();
+            let deleted = got.manifest_changes(&f.root, &own).unwrap();
+            assert_eq!(deleted.len(), 1);
+            assert_eq!(deleted[0].path().as_str(), "Cargo.toml");
+            // Deletion yields candidate None; a missing side is a dependency change.
+            assert!(own.lockfile_scope(&deleted).unwrap().is_none());
+            symlink("x", f.root.join("Cargo.toml")).unwrap();
+            assert_eq!(cargo_err(got.manifest_changes(&f.root, &own)), CARGO_MSG);
+            fs::remove_file(f.root.join("Cargo.toml")).unwrap();
+            fs::create_dir(f.root.join("Cargo.toml")).unwrap();
+            assert_eq!(cargo_err(got.manifest_changes(&f.root, &own)), CARGO_MSG);
+            fs::remove_dir(f.root.join("Cargo.toml")).unwrap();
+            fs::write(f.root.join("Cargo.toml"), CARGO_BASE).unwrap();
+            fs::set_permissions(f.root.join("Cargo.toml"), fs::Permissions::from_mode(0o000))
+                .unwrap();
+            let err = cargo_err(got.manifest_changes(&f.root, &own));
+            let _ =
+                fs::set_permissions(f.root.join("Cargo.toml"), fs::Permissions::from_mode(0o644));
+            assert_eq!(err, CARGO_MSG);
+        });
     }
 }
