@@ -36,7 +36,7 @@ const CONTRACT_WITH_GREET: &[u8] = br#"boxology::contract! {
     pub async fn greet(name: String) -> Result<String, HelloError>;
 }"#;
 const USAGE: &str = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n       boxology check --format human|json\n";
-const CLEAN_CHECK_JSON: &str = "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"skipped\",\n      \"reason\": \"contract classification skipped: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"skipped\",\n      \"reason\": \"not run: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"skipped\",\n      \"reason\": \"not run: the step is not implemented in this boxology version\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"passed\"\n}\n";
+const CLEAN_CHECK_JSON: &str = "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"skipped\",\n      \"reason\": \"contract classification skipped: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"skipped\",\n      \"reason\": \"not run: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"passed\"\n}\n";
 const ROOT_MANIFEST: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 const PACKAGE_MANIFEST: &str = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n";
 const METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
@@ -565,8 +565,7 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
                     check fmt passed\n\
                     check clippy passed\n\
                     check tests passed\n\
-                    check quality skipped\n\
-                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check quality passed\n\
                     check result passed\n";
     assert_eq!(first.status.code(), Some(0));
     assert_eq!(text(&first.stdout), expected);
@@ -609,9 +608,7 @@ fn check_lock_failure_renders_finding_command_output_and_keeps_later_steps() {
     assert!(stdout.contains("check fmt passed\n"));
     assert!(stdout.contains("check clippy passed\n"));
     assert!(stdout.contains("check tests passed\n"));
-    assert!(stdout.contains(
-        "check quality skipped\n  not run: the step is not implemented in this boxology version\n"
-    ));
+    assert!(stdout.contains("check quality passed\n"));
     assert!(stdout.ends_with("check result failed\n"));
     let log = fixture.argv_log();
     assert_eq!(log.matches("metadata\n").count(), 2, "{log}");
@@ -638,9 +635,7 @@ fn check_tool_failure_renders_finding_command_output_and_exit_one() {
          representative clippy failure\n"
     ));
     assert!(stdout.contains("check tests passed\n"));
-    assert!(stdout.contains(
-        "check quality skipped\n  not run: the step is not implemented in this boxology version\n"
-    ));
+    assert!(stdout.contains("check quality passed\n"));
     assert!(stdout.ends_with("check result failed\n"));
 }
 
@@ -659,10 +654,82 @@ fn check_test_failure_renders_finding_command_output_and_exit_one() {
          \x20 BXW0095 Cargo.toml package= candidates=[command=\"cargo test --workspace --all-features\"]\n\
          representative test failure\n"
     ));
+    assert!(stdout.contains("check quality passed\n"));
+    assert!(stdout.ends_with("check result failed\n"));
+}
+
+fn install_quality_commands(fixture: &Fixture) {
+    let root = format!("{ROOT_MANIFEST}\n[quality]\ncommands = [\"cargo quality-platform\"]\n");
+    let ping = format!(
+        "{PACKAGE_MANIFEST}\n[quality]\ncommands = [\"cargo quality-ping\", \"cargo quality-ping-b\"]\n"
+    );
+    fs::write(fixture.root.join("boxology.toml"), root).unwrap();
+    fs::write(fixture.root.join("ping/boxology.toml"), ping).unwrap();
+}
+
+#[test]
+fn check_quality_commands_run_after_tests_in_package_id_order() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    install_quality_commands(&fixture);
+    let human = fixture.run(&["check"]);
+    assert_eq!(human.status.code(), Some(0), "{}", text(&human.stderr));
+    assert!(text(&human.stderr).is_empty());
+    assert!(text(&human.stdout).contains("check tests passed\ncheck quality passed\n"));
+    assert!(text(&human.stdout).ends_with("check result passed\n"));
+    assert!(!text(&human.stdout).contains("not implemented"));
+    let log = fixture.argv_log();
+    let tests_at = log.find("test\n--workspace\n--all-features\n").unwrap();
+    let ping_at = log.find("quality-ping\n").unwrap();
+    let ping_b_at = log.find("quality-ping-b\n").unwrap();
+    let platform_at = log.find("quality-platform\n").unwrap();
+    assert!(tests_at < ping_at, "{log}");
+    assert!(ping_at < ping_b_at, "{log}");
+    assert!(ping_b_at < platform_at, "{log}");
+    let json = fixture.run(&["check", "--format", "json"]);
+    assert_eq!(json.status.code(), Some(0));
+    assert!(text(&json.stdout).contains(
+        "\"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null"
+    ));
+    assert!(text(&json.stdout).contains("\"result\": \"passed\""));
+}
+
+#[test]
+fn check_quality_failure_is_bxw0107_with_captured_output_and_continues() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    install_quality_commands(&fixture);
+    let human = fixture.run_tools(&["check"], "ok", true, Some("quality-ping"));
+    let stdout = text(&human.stdout);
+    assert_eq!(human.status.code(), Some(1));
+    assert!(text(&human.stderr).is_empty());
+    assert!(stdout.contains("check tests passed\n"));
     assert!(stdout.contains(
-        "check quality skipped\n  not run: the step is not implemented in this boxology version\n"
+        "check quality failed\n\
+         \x20 BXW0107 ping/boxology.toml package=ping candidates=[command=\"cargo quality-ping\"]\n\
+command=\"cargo quality-ping\"\n\
+representative quality-ping failure\n"
     ));
     assert!(stdout.ends_with("check result failed\n"));
+    let log = fixture.argv_log();
+    assert!(log.contains("quality-ping\n"), "{log}");
+    assert!(log.contains("quality-ping-b\n"), "{log}");
+    assert!(log.contains("quality-platform\n"), "{log}");
+    let json = fixture.run_tools(
+        &["check", "--format", "json"],
+        "ok",
+        true,
+        Some("quality-ping"),
+    );
+    let json_out = text(&json.stdout);
+    assert_eq!(json.status.code(), Some(1));
+    assert!(json_out.contains(
+        "\"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null"
+    ));
+    assert!(json_out.contains(
+        "\"id\": \"quality\",\n      \"status\": \"failed\",\n      \"findings\": [\n        {\n          \"kind\": \"workspace\",\n          \"code\": \"BXW0107\",\n          \"path\": \"ping/boxology.toml\",\n          \"package\": \"ping\",\n          \"payload\": \"command=\\\"cargo quality-ping\\\"\",\n          \"rule\": \"a declared quality command failed\",\n          \"rule_source\": \"boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 8; specs/s5-manifest-and-validation.md D6\"\n        }\n      ],\n      \"output\": \"command=\\\"cargo quality-ping\\\"\\nrepresentative quality-ping failure\\n\""
+    ));
+    assert!(json_out.ends_with("  \"result\": \"failed\"\n}\n"));
 }
 
 #[test]
@@ -1576,8 +1643,7 @@ mod ownership {
     const SKIP_REPO: &str = "check diff-ownership skipped\n  not run: no repository is available\n";
     const SKIP_MERGE: &str =
         "check diff-ownership skipped\n  not run: no merge base with main is available\n";
-    const QUALITY: &str =
-        "check quality skipped\n  not run: the step is not implemented in this boxology version\n";
+    const QUALITY: &str = "check quality passed\n";
 
     fn ready() -> Fixture {
         let fixture = Fixture::new(false);

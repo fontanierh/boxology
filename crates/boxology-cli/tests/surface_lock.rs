@@ -35,8 +35,8 @@ const SOURCES: &[(&str, &str)] = &[
     ("main.rs", MAIN),
 ];
 const GOLDEN: &str = include_str!("bxw.golden");
-const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086 BXW0091 BXW0092 BXW0093 BXW0094 BXW0095 BXW0096 BXW0097 BXW0103 BXW0104 BXW0105 BXW0106";
-const LIB_HASH: u64 = 16_226_107_341_530_247_147;
+const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086 BXW0091 BXW0092 BXW0093 BXW0094 BXW0095 BXW0096 BXW0097 BXW0103 BXW0104 BXW0105 BXW0106 BXW0107";
+const LIB_HASH: u64 = 258_591_807_966_675_359;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
 const GENERATE_HASH: u64 = 6_806_705_769_110_740_046;
 const EXECUTE_HASH: u64 = 14_225_782_507_406_617_347;
@@ -44,10 +44,10 @@ const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
 const BASE_HASH: u64 = 17_483_050_779_662_147_895;
-const RUNNER_HASH: u64 = 7_283_545_681_929_877_302;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nclassify(outcome.base_schema(), outcome.submitted_schema())\nrender_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nresolve_default_base(root)\nOk(DefaultBase::NoRepository) => Err(SkipReason::NoRepository)\nOk(DefaultBase::NoMergeBase) => Err(SkipReason::NoMergeBase)\nResolvedBase::from_oid(oid)\nresolve_base(root, revision)\nclassify_contracts(root, &base, &plans, stderr)\nbase_diff_inputs(root, base)\ndiff_ownership(inputs.packages(), inputs.changed())\nownership.lockfile_scope(&pairs)\nFindings::into_entries\nDiffOwnershipSkip::NoRepository\nDiffOwnershipSkip::NoMergeBase\nrun_lock_step(runner, root)\nrun_fmt_step(runner, root, &workspace)\nrun_clippy_step(runner, root)\nrun_test_step(runner, root)\nfn not_implemented() -> Completion\nquality: not_implemented()\nfn report_spawn_failure\nreport.render_json()\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
+const RUNNER_HASH: u64 = 14_976_080_536_641_793_496;
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nclassify(outcome.base_schema(), outcome.submitted_schema())\nrender_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nresolve_default_base(root)\nOk(DefaultBase::NoRepository) => Err(SkipReason::NoRepository)\nOk(DefaultBase::NoMergeBase) => Err(SkipReason::NoMergeBase)\nResolvedBase::from_oid(oid)\nresolve_base(root, revision)\nclassify_contracts(root, &base, &plans, stderr)\nbase_diff_inputs(root, base)\ndiff_ownership(inputs.packages(), inputs.changed())\nownership.lockfile_scope(&pairs)\nFindings::into_entries\nDiffOwnershipSkip::NoRepository\nDiffOwnershipSkip::NoMergeBase\nrun_lock_step(runner, root)\nrun_fmt_step(runner, root, &workspace)\nrun_clippy_step(runner, root)\nrun_test_step(runner, root)\nrun_quality_step(runner, root, &workspace)\nquality: quality_output\nfn report_spawn_failure\nreport.render_json()\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 15_989_639_135_748_257_347;
+const MAIN_HASH: u64 = 7_263_869_054_902_311_983;
 const HASHES: [u64; 10] = [
     LIB_HASH,
     WALK_HASH,
@@ -72,8 +72,8 @@ const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED
 const CHECK_PUBLIC: &str = "DuplicatePackages PackageSchemas new CheckClassificationError package code side detail diagnostics ClassifyStepError classify_step";
 const BASE_PUBLIC: &str = "GitToolError BaseError code location detail BaseSchemasError BaseInputsError DefaultBase ResolvedBase as_str from_oid resolve_default_base resolve_base base_package_schemas BaseDiffInputs packages changed manifest_changes base_diff_inputs";
 const BASE_ANCHORS: &str = "[\"rev-parse\", \"--git-dir\"]\n[\"merge-base\", \"HEAD\", \"main\"]\n[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n[\"ls-tree\", \"-r\", \"-z\", \"--full-tree\", base.as_str()]\nplan.schema_path().as_str(),\n\"--no-ext-diff\",\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\n[\"cat-file\", \"blob\", oid]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(\nWorkspaceInputs::new(files, manifests, \"\")\ninputs.discover()";
-const RUNNER_PUBLIC: &str = "CommandSpec new args render CapturedOutput new success combined SpawnError ToolStep into_parts run_command CommandRunner fmt_packages fmt_spec clippy_spec test_spec lock_spec run_fmt_step run_clippy_step run_test_step run_lock_step";
-const RUNNER_ANCHORS: &str = "classified.derived_output().is_none()\n\"fmt\".to_owned()\n\"-D\"\nBXW0093\nBXW0095\nBXW0096\nBXW0097\n[\"metadata\", \"--format-version\", \"1\", \"--locked\"]\nformat!(\"command=\\\"{}\\\"\", spec.render())\nCommand::new(&spec.program)";
+const RUNNER_PUBLIC: &str = "CommandSpec new args render CapturedOutput new success combined SpawnError ToolStep into_parts run_command CommandRunner fmt_packages fmt_spec clippy_spec test_spec lock_spec run_fmt_step run_clippy_step run_test_step run_lock_step QualityCommand package manifest_path spec quality_specs run_quality_step";
+const RUNNER_ANCHORS: &str = "classified.derived_output().is_none()\n\"fmt\".to_owned()\n\"-D\"\nBXW0093\nBXW0095\nBXW0096\nBXW0097\nBXW0107\n[\"metadata\", \"--format-version\", \"1\", \"--locked\"]\nformat!(\"command=\\\"{}\\\"\", spec.render())\nsplit_ascii_whitespace()\nquality_specs(workspace)\nCommand::new(&spec.program)";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Drop for Fixture {
