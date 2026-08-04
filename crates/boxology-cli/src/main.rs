@@ -27,9 +27,17 @@ const METADATA_TEXT: &str =
     "cargo metadata could not be executed or did not return valid workspace metadata";
 const METADATA: Rule = ("BXW0075", METADATA_TEXT, METADATA_SOURCE);
 
+enum CheckFormat {
+    Human,
+    Json,
+}
+
 enum Selection {
     Generate(Option<BoxId>),
-    Check(Option<String>),
+    Check {
+        base: Option<String>,
+        format: CheckFormat,
+    },
 }
 
 struct MetadataFailure {
@@ -87,7 +95,9 @@ fn run(args: &[String], root: &Path, stdout: &mut dyn Write, stderr: &mut dyn Wr
     };
     match selection {
         Selection::Generate(package) => run_generate(root, workspace, &package, stdout, stderr),
-        Selection::Check(base) => run_check(root, workspace, base.as_deref(), stdout, stderr),
+        Selection::Check { base, format } => {
+            run_check(root, workspace, base.as_deref(), format, stdout, stderr)
+        }
     }
 }
 
@@ -142,6 +152,7 @@ fn run_check(
     root: &Path,
     workspace: Workspace,
     base: Option<&str>,
+    format: CheckFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> u8 {
@@ -248,7 +259,14 @@ fn run_check(
             quality: None,
         },
     };
-    let _ = writeln!(stdout, "{}", report.render_human());
+    match format {
+        CheckFormat::Human => {
+            let _ = writeln!(stdout, "{}", report.render_human());
+        }
+        CheckFormat::Json => {
+            let _ = write!(stdout, "{}", report.render_json());
+        }
+    }
     report.exit_code()
 }
 
@@ -358,23 +376,54 @@ fn parse(args: &[String]) -> Result<Selection, ()> {
                 .map(|package| Selection::Generate(Some(package)))
                 .map_err(|_| ())
         }
-        [command] if command == "check" => Ok(Selection::Check(None)),
-        [command, flag, revision]
-            if command == "check"
-                && flag == "--base"
-                && !revision.is_empty()
-                && !revision.starts_with('-') =>
-        {
-            Ok(Selection::Check(Some(revision.clone())))
-        }
+        [command, rest @ ..] if command == "check" => parse_check(rest),
         _ => Err(()),
     }
+}
+
+fn parse_check(args: &[String]) -> Result<Selection, ()> {
+    let mut base = None;
+    let mut format = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--base" => {
+                if base.is_some() {
+                    return Err(());
+                }
+                index += 1;
+                let revision = args.get(index).ok_or(())?;
+                if revision.is_empty() || revision.starts_with('-') {
+                    return Err(());
+                }
+                base = Some(revision.clone());
+            }
+            "--format" => {
+                if format.is_some() {
+                    return Err(());
+                }
+                index += 1;
+                let value = args.get(index).ok_or(())?;
+                format = Some(match value.as_str() {
+                    "human" => CheckFormat::Human,
+                    "json" => CheckFormat::Json,
+                    _ => return Err(()),
+                });
+            }
+            _ => return Err(()),
+        }
+        index += 1;
+    }
+    Ok(Selection::Check {
+        base,
+        format: format.unwrap_or(CheckFormat::Human),
+    })
 }
 
 fn usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
-        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>"
+        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n       boxology check --format human|json"
     );
 }
 

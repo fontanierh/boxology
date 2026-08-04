@@ -2234,6 +2234,121 @@ impl CheckReport {
         lines.push(format!("check result {}", self.status()));
         lines.join("\n")
     }
+    /// Renders the canonical deterministic JSON mirror of the human check report.
+    ///
+    /// Field inventory is fixed as `schema`, `steps`, and `result` at the top level. The nine step
+    /// objects follow human order (eight [`CheckStep::ALL`] identifiers with `diff-ownership`
+    /// after `contract-classification`). Every string value is literalized by `serde_json::to_string`.
+    /// The document ends with exactly one trailing newline. Incompatible inventory changes require
+    /// bumping `boxology.check-report@1`.
+    pub fn render_json(&self) -> String {
+        let mut out = String::from("{\n  \"schema\": ");
+        push_json_str(&mut out, "boxology.check-report@1");
+        out.push_str(",\n  \"steps\": [\n");
+        let mut first = true;
+        for step in CheckStep::ALL {
+            if !first {
+                out.push_str(",\n");
+            }
+            first = false;
+            self.render_json_step(step, &mut out);
+            if matches!(step, CheckStep::ContractClassification) {
+                out.push_str(",\n");
+                self.render_json_diff_ownership(&mut out);
+            }
+        }
+        out.push_str("\n  ],\n  \"result\": ");
+        push_json_str(
+            &mut out,
+            match self.status() {
+                CheckStatus::Passed => "passed",
+                CheckStatus::Failed => "failed",
+            },
+        );
+        out.push_str("\n}\n");
+        out
+    }
+    fn render_json_step(&self, step: CheckStep, out: &mut String) {
+        match step {
+            CheckStep::Discovery => self.render_json_completion(step, &self.discovery, out),
+            CheckStep::Regeneration => self.render_json_completion(step, &self.regeneration, out),
+            CheckStep::ContractClassification => self.render_json_contract(out),
+            CheckStep::CargoGraph => self.render_json_completion(step, &self.cargo_graph, out),
+            CheckStep::Fmt => self.render_json_completion(step, &self.fmt, out),
+            CheckStep::Clippy => self.render_json_completion(step, &self.clippy, out),
+            CheckStep::Tests => self.render_json_completion(step, &self.tests, out),
+            CheckStep::Quality => self.render_json_completion(step, &self.quality, out),
+        }
+    }
+    fn render_json_completion(&self, step: CheckStep, completion: &Completion, out: &mut String) {
+        let (status, reason, findings) = match completion {
+            Completion::Passed => ("passed", None, None),
+            Completion::Failed(findings) => ("failed", None, Some(findings)),
+            Completion::Skipped(reason) => ("skipped", Some(reason.sentence()), None),
+        };
+        let output = match step {
+            CheckStep::CargoGraph
+            | CheckStep::Fmt
+            | CheckStep::Clippy
+            | CheckStep::Tests
+            | CheckStep::Quality => Some(
+                self.external_output_for(step)
+                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+            ),
+            CheckStep::Discovery | CheckStep::Regeneration | CheckStep::ContractClassification => {
+                None
+            }
+        };
+        render_json_step_object(
+            out,
+            step.id(),
+            status,
+            reason,
+            |out| match findings {
+                Some(findings) => render_json_entries(out, findings),
+                None => out.push_str("[]"),
+            },
+            output,
+        );
+    }
+    fn render_json_contract(&self, out: &mut String) {
+        let (status, reason, findings) = match &self.contract_classification {
+            ContractClassificationCompletion::Passed => ("passed", None, None),
+            ContractClassificationCompletion::Failed(findings) => ("failed", None, Some(findings)),
+            ContractClassificationCompletion::Skipped(reason) => {
+                ("skipped", Some(reason.sentence()), None)
+            }
+        };
+        render_json_step_object(
+            out,
+            "contract-classification",
+            status,
+            reason,
+            |out| match findings {
+                Some(findings) => render_json_classification_findings(out, findings),
+                None => out.push_str("[]"),
+            },
+            None,
+        );
+    }
+    fn render_json_diff_ownership(&self, out: &mut String) {
+        let (status, reason, findings) = match &self.diff_ownership {
+            DiffOwnershipCompletion::Passed => ("passed", None, None),
+            DiffOwnershipCompletion::Failed(findings) => ("failed", None, Some(findings)),
+            DiffOwnershipCompletion::Skipped(reason) => ("skipped", Some(reason.sentence()), None),
+        };
+        render_json_step_object(
+            out,
+            "diff-ownership",
+            status,
+            reason,
+            |out| match findings {
+                Some(findings) => render_json_entries(out, findings),
+                None => out.push_str("[]"),
+            },
+            None,
+        );
+    }
     fn render_step(&self, step: CheckStep, lines: &mut Vec<String>) {
         match step {
             CheckStep::Discovery => self.render_completion(step, &self.discovery, lines),
@@ -2319,6 +2434,128 @@ impl fmt::Display for CheckReport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.render_human())
     }
+}
+fn push_json_str(out: &mut String, value: &str) {
+    out.push_str(&serde_json::to_string(value).expect("string JSON serialization is infallible"));
+}
+fn render_json_step_object(
+    out: &mut String,
+    id: &str,
+    status: &str,
+    reason: Option<&str>,
+    findings: impl FnOnce(&mut String),
+    output: Option<Option<String>>,
+) {
+    out.push_str("    {\n      \"id\": ");
+    push_json_str(out, id);
+    out.push_str(",\n      \"status\": ");
+    push_json_str(out, status);
+    if let Some(reason) = reason {
+        out.push_str(",\n      \"reason\": ");
+        push_json_str(out, reason);
+    }
+    out.push_str(",\n      \"findings\": ");
+    findings(out);
+    if let Some(output) = output {
+        out.push_str(",\n      \"output\": ");
+        match output {
+            None => out.push_str("null"),
+            Some(text) => push_json_str(out, &text),
+        }
+    }
+    out.push_str("\n    }");
+}
+fn render_json_entries(out: &mut String, findings: &Findings) {
+    let entries: Vec<&Entry> = findings.into_iter().collect();
+    if entries.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push_str("[\n");
+    for (index, entry) in entries.iter().enumerate() {
+        if index != 0 {
+            out.push_str(",\n");
+        }
+        match entry {
+            Entry::Workspace(finding) => render_json_workspace_finding(out, finding),
+            Entry::Manifest(diagnostic) => render_json_manifest_finding(out, diagnostic),
+        }
+    }
+    out.push_str("\n      ]");
+}
+fn render_json_workspace_finding(out: &mut String, finding: &Finding) {
+    out.push_str("        {\n          \"kind\": ");
+    push_json_str(out, "workspace");
+    out.push_str(",\n          \"code\": ");
+    push_json_str(out, finding.code());
+    out.push_str(",\n          \"path\": ");
+    push_json_str(out, finding.path().as_str());
+    out.push_str(",\n          \"package\": ");
+    match finding.package() {
+        Some(package) => push_json_str(out, package.as_str()),
+        None => out.push_str("null"),
+    }
+    out.push_str(",\n          \"payload\": ");
+    push_json_str(out, &finding.payload);
+    out.push_str(",\n          \"rule\": ");
+    push_json_str(out, finding.rule());
+    out.push_str(",\n          \"rule_source\": ");
+    push_json_str(out, finding.rule_source());
+    out.push_str("\n        }");
+}
+fn render_json_manifest_finding(out: &mut String, diagnostic: &Diagnostic) {
+    let span = diagnostic.span();
+    let start = span.start();
+    let end = span.end();
+    out.push_str("        {\n          \"kind\": ");
+    push_json_str(out, "manifest");
+    out.push_str(",\n          \"code\": ");
+    push_json_str(out, diagnostic.code());
+    out.push_str(",\n          \"path\": ");
+    push_json_str(out, diagnostic.path().as_str());
+    out.push_str(",\n          \"span\": {\n            \"start\": {\n              \"line\": ");
+    out.push_str(&start.line().to_string());
+    out.push_str(",\n              \"column\": ");
+    out.push_str(&start.column().to_string());
+    out.push_str("\n            },\n            \"end\": {\n              \"line\": ");
+    out.push_str(&end.line().to_string());
+    out.push_str(",\n              \"column\": ");
+    out.push_str(&end.column().to_string());
+    out.push_str("\n            }\n          },\n          \"offending\": ");
+    push_json_str(out, diagnostic.offending_construct());
+    out.push_str(",\n          \"rule\": ");
+    push_json_str(out, diagnostic.rule());
+    out.push_str(",\n          \"rule_source\": ");
+    push_json_str(out, diagnostic.rule_source());
+    out.push_str("\n        }");
+}
+fn render_json_classification_findings(out: &mut String, findings: &ClassificationFindings) {
+    let items = findings.as_slice();
+    if items.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push_str("[\n");
+    for (index, finding) in items.iter().enumerate() {
+        if index != 0 {
+            out.push_str(",\n");
+        }
+        out.push_str("        {\n          \"code\": ");
+        push_json_str(out, finding.code());
+        out.push_str(",\n          \"package\": ");
+        push_json_str(out, finding.package().as_str());
+        out.push_str(",\n          \"path\": ");
+        push_json_str(out, finding.path());
+        out.push_str(",\n          \"class\": ");
+        push_json_str(out, finding.class());
+        out.push_str(",\n          \"condition\": ");
+        match finding.condition() {
+            Some(condition) => push_json_str(out, condition),
+            None => out.push_str("null"),
+        }
+        out.push_str("\n        }");
+    }
+    out.push_str("\n      ]");
 }
 fn render_findings(lines: &mut Vec<String>, findings: &Findings) {
     lines.extend(findings.into_iter().map(|entry| format!("  {entry}")));
@@ -2577,6 +2814,16 @@ jobs:
              check quality passed\n\
              check result failed"
         );
+    }
+    #[test]
+    fn check_report_json_rendering_is_an_exact_full_report_golden() {
+        const GOLDEN: &str = "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"failed\",\n      \"findings\": [\n        {\n          \"kind\": \"workspace\",\n          \"code\": \"BXW0048\",\n          \"path\": \"a.rs\",\n          \"package\": null,\n          \"payload\": \"\",\n          \"rule\": \"symlink targets must stay inside the workspace root\",\n          \"rule_source\": \"boxology-details/02-packages.md discovery walk\"\n        },\n        {\n          \"kind\": \"workspace\",\n          \"code\": \"BXW0048\",\n          \"path\": \"z.rs\",\n          \"package\": null,\n          \"payload\": \"\",\n          \"rule\": \"symlink targets must stay inside the workspace root\",\n          \"rule_source\": \"boxology-details/02-packages.md discovery walk\"\n        }\n      ]\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"skipped\",\n      \"reason\": \"contract classification skipped: no merge base with main is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"failed\"\n}\n";
+        let rendered = failed_skipped_report(SkipReason::NoMergeBase).render_json();
+        assert_eq!(
+            rendered,
+            failed_skipped_report(SkipReason::NoMergeBase).render_json()
+        );
+        assert_eq!(rendered, GOLDEN);
     }
     #[test]
     fn external_tool_output_renders_after_findings_and_is_absent_when_empty() {
@@ -2840,6 +3087,11 @@ jobs:
             "  FIND001 alpha alpha/type/T/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\""
         ));
         assert!(rendered.ends_with("check result passed"));
+        // Failed branch, fixed field order, non-null condition; report-only => result passed.
+        assert_eq!(
+            report.render_json(),
+            "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"failed\",\n      \"findings\": [\n        {\n          \"code\": \"FIND001\",\n          \"package\": \"alpha\",\n          \"path\": \"alpha/type/T/variant/Other\",\n          \"class\": \"compatible_with_conditions\",\n          \"condition\": \"unknown-variant tolerance\"\n        }\n      ]\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"passed\"\n}\n"
+        );
     }
     #[test]
     fn diff_ownership_failure_renders_findings_and_fails() {

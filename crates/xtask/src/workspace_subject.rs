@@ -106,8 +106,8 @@ fn report() -> Result<String, String> {
         .ok_or("fixed listing is clean")?;
     Ok(format!("{findings}\n"))
 }
-fn check_report() -> Result<String, String> {
-    let report = CheckReport {
+fn fixed_check_report() -> Result<CheckReport, String> {
+    Ok(CheckReport {
         discovery: Completion::Failed(
             report_inputs()?
                 .check()
@@ -125,13 +125,19 @@ fn check_report() -> Result<String, String> {
         tests: Completion::Passed,
         quality: Completion::Passed,
         external_output: ExternalOutput::empty(),
-    };
-    Ok(format!("{report}\n"))
+    })
+}
+fn check_report() -> Result<String, String> {
+    Ok(format!("{}\n", fixed_check_report()?))
+}
+fn check_report_json() -> Result<String, String> {
+    Ok(fixed_check_report()?.render_json())
 }
 pub(crate) fn run(out: &Path) -> Result<(), String> {
     let written = [
         ("workspace-report.txt", report()?),
         ("workspace-check-report.txt", check_report()?),
+        ("workspace-check-report.json", check_report_json()?),
         ("workspace-classification.txt", classification()?),
     ];
     for (name, body) in written {
@@ -197,5 +203,14 @@ check quality passed
 check result failed
 "#
         );
+    }
+    #[test]
+    fn subject_check_report_json_is_golden_and_repeatable() {
+        const GOLDEN: &str = "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"failed\",\n      \"findings\": [\n        {\n          \"kind\": \"workspace\",\n          \"code\": \"BXW0048\",\n          \"path\": \"a/b/escape\",\n          \"package\": null,\n          \"payload\": \"\",\n          \"rule\": \"symlink targets must stay inside the workspace root\",\n          \"rule_source\": \"boxology-details/02-packages.md discovery walk\"\n        },\n        {\n          \"kind\": \"workspace\",\n          \"code\": \"BXW0048\",\n          \"path\": \"a/escape\",\n          \"package\": null,\n          \"payload\": \"\",\n          \"rule\": \"symlink targets must stay inside the workspace root\",\n          \"rule_source\": \"boxology-details/02-packages.md discovery walk\"\n        },\n        {\n          \"kind\": \"manifest\",\n          \"code\": \"BXW0002\",\n          \"path\": \"b/boxology.toml\",\n          \"span\": {\n            \"start\": {\n              \"line\": 2,\n              \"column\": 5\n            },\n            \"end\": {\n              \"line\": 2,\n              \"column\": 5\n            }\n          },\n          \"offending\": \"manifest document\",\n          \"rule\": \"boxology.toml must be well-formed TOML\",\n          \"rule_source\": \"specs/s5-manifest-and-validation.md D2\"\n        },\n        {\n          \"kind\": \"workspace\",\n          \"code\": \"BXW0048\",\n          \"path\": \"z/escape\",\n          \"package\": null,\n          \"payload\": \"\",\n          \"rule\": \"symlink targets must stay inside the workspace root\",\n          \"rule_source\": \"boxology-details/02-packages.md discovery walk\"\n        }\n      ]\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"skipped\",\n      \"reason\": \"contract classification skipped: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"skipped\",\n      \"reason\": \"not run: the step is not implemented in this boxology version\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"failed\"\n}\n";
+        let again = super::check_report_json();
+        let rendered =
+            super::check_report_json().expect("the fixed listing renders a check report json");
+        assert_eq!(rendered, again.expect("it renders again"));
+        assert_eq!(rendered, GOLDEN);
     }
 }
