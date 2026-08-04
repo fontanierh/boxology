@@ -9,6 +9,7 @@ boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
 boxology-schema = { version = "=0.0.0", path = "../boxology-schema" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+toml_edit = "=0.25.13+spec-1.1.0"
 
 [[test]]
 name = "surface_lock"

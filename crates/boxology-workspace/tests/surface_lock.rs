@@ -6,18 +6,22 @@ use std::process::Command;
 use serde_json::Value;
 use syn::parse::Parser;
 use syn::visit::Visit;
-const EXPECTED: &str = "BXW0042 BXW0043 BXW0044 BXW0045 BXW0046 BXW0047 BXW0048 BXW0049 BXW0050 BXW0051 BXW0052 BXW0053 BXW0054 BXW0055 BXW0056 BXW0057 BXW0058 BXW0059 BXW0060 BXW0087 BXW0088 BXW0089 BXW0090 BXW0098 BXW0099 BXW0100 BXW0101";
+const EXPECTED: &str = "BXW0042 BXW0043 BXW0044 BXW0045 BXW0046 BXW0047 BXW0048 BXW0049 BXW0050 BXW0051 BXW0052 BXW0053 BXW0054 BXW0055 BXW0056 BXW0057 BXW0058 BXW0059 BXW0060 BXW0087 BXW0088 BXW0089 BXW0090 BXW0098 BXW0099 BXW0100 BXW0101 BXW0102";
 const DANGEROUS: &str = "mod include include_str concat stringify cfg cfg_attr test";
 const MACROS: &str =
     "macro_rules ref_getters assert assert_eq assert_ne format matches panic vec write";
 const DERIVES: &str = "Clone Copy Debug Eq Ord PartialEq PartialOrd";
-const RULES: &str = "ESCAPE DUPLICATE SELF_CLAIM UNOWNED OVERLAP RIVALS BOTH LOCK DOCUMENT UNMAPPED UNMATCHED CLAIMED ROLE SELECTED_BOX SELECTED_SCHEMA SELECTOR_MATCH BINDING_EXPOSURE DIFF_UNOWNED DIFF_AMBIGUOUS DIFF_ACCOUNTABLE DIFF_FOREIGN";
+const RULES: &str = "ESCAPE DUPLICATE SELF_CLAIM UNOWNED OVERLAP RIVALS BOTH LOCK DOCUMENT UNMAPPED UNMATCHED CLAIMED ROLE SELECTED_BOX SELECTED_SCHEMA SELECTOR_MATCH BINDING_EXPOSURE DIFF_UNOWNED DIFF_AMBIGUOUS DIFF_ACCOUNTABLE DIFF_FOREIGN DIFF_LOCK_SCOPE";
 const EDGE_RULES: &str = "CONTRACT FOREIGN DECLARED SELECTED IMPOSSIBLE NON_MEMBER";
 const RELATIVE: &str = "pub fn relative(&self, path: &RelativePath) -> Option<RelativePath>";
 const SELECTED_SCHEMA_NEW: &str =
     "pub fn new(box_id: BoxId, path: RelativePath, bytes: Option<Vec<u8>>) -> Self";
 const CHECK_COMPOSITIONS: &str =
     "pub fn check_compositions(&self, schemas: &[SelectedSchema]) -> Result<(), Findings>";
+const LOCKFILE_SCOPE: &str = "pub fn lockfile_scope(\n        &self,\n        manifests: &[CargoManifestChange],\n    ) -> Result<Option<Findings>, InputError>";
+const CARGO_MANIFEST_CHANGE_NEW: &str =
+    "pub fn new(path: RelativePath, base: Option<Vec<u8>>, candidate: Option<Vec<u8>>) -> Self";
+const CARGO_MANIFEST_CHANGE_PATH: &str = "#[doc = \"Returns the changed manifest's workspace-relative path.\"] path: &RelativePath = path;";
 const PROTECTED: &str =
     "Rule EdgeRule derive ref_getters assert assert_eq assert_ne format matches panic vec write";
 const RETAINED_EDGE_ASSERTION: &str = "assert_eq!(\n            source.edges(),\n            &[DeclaredEdge {\n                kind: EdgeKind::Normal,\n                target: EdgeTarget::InRoot(path(target_at)),\n            }]\n        )";
@@ -286,9 +290,14 @@ impl<'ast> Visit<'ast> for Lock {
         } else {
             "doc deny forbid derive test"
         };
+        let rustfmt_skip = !self.collect
+            && attr.path().segments.len() == 2
+            && attr.path().segments[0].ident == "rustfmt"
+            && attr.path().segments[1].ident == "skip";
         let repr = self.collect && Self::repr(attr);
         self.repr += usize::from(repr);
-        self.bad |= !repr && !allowed.split(' ').any(|name| attr.path().is_ident(name));
+        self.bad |=
+            !repr && !rustfmt_skip && !allowed.split(' ').any(|name| attr.path().is_ident(name));
         if self.collect && attr.path().is_ident("derive") {
             let valid = attr.meta.require_list().ok().and_then(|meta| {
                 syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
@@ -496,6 +505,9 @@ fn locked_sources<'a>(sources: impl IntoIterator<Item = &'a Source>) -> bool {
         && lib.text.match_indices(RELATIVE).count() == 1
         && lib.text.match_indices(SELECTED_SCHEMA_NEW).count() == 1
         && lib.text.match_indices(CHECK_COMPOSITIONS).count() == 1
+        && lib.text.match_indices(LOCKFILE_SCOPE).count() == 1
+        && lib.text.match_indices(CARGO_MANIFEST_CHANGE_NEW).count() == 1
+        && lib.text.match_indices(CARGO_MANIFEST_CHANGE_PATH).count() == 1
         && lib.text.match_indices(RETAINED_EDGE_ASSERTION).count() == 1
 }
 fn locked_document(document: &Value, files: &BTreeMap<PathBuf, String>) -> bool {
@@ -572,6 +584,19 @@ fn surface_and_live_evasions_are_locked() {
     rejects("public relative seam", source, RELATIVE, &RELATIVE.replacen("pub ", "", 1));
     rejects("selected schema constructor", source, SELECTED_SCHEMA_NEW, &SELECTED_SCHEMA_NEW.replacen("pub ", "", 1));
     rejects("composition check seam", source, CHECK_COMPOSITIONS, &CHECK_COMPOSITIONS.replacen("pub ", "", 1));
+    rejects("lockfile scope seam", source, LOCKFILE_SCOPE, &LOCKFILE_SCOPE.replacen("pub ", "", 1));
+    rejects(
+        "cargo manifest change constructor",
+        source,
+        CARGO_MANIFEST_CHANGE_NEW,
+        &CARGO_MANIFEST_CHANGE_NEW.replacen("pub ", "", 1),
+    );
+    rejects(
+        "cargo manifest change path",
+        source,
+        CARGO_MANIFEST_CHANGE_PATH,
+        &CARGO_MANIFEST_CHANGE_PATH.replace("path: &RelativePath = path;", "held: &RelativePath = path;"),
+    );
     rejects("post-test registration", source, source, &format!("{source}\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"));
     for (name, anchor, replacement) in [
         ("macro registration", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(", "($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(const X: Rule = (\"BXW9999\", \"x\");"),

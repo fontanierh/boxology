@@ -38,7 +38,9 @@ use boxology_manifest::{
 use boxology_manifest::{Kind, Manifest, RelativePath};
 use boxology_schema::{SchemaCapability, SchemaDocument};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::{cmp::Ordering, fmt};
+use toml_edit::{Document, Item, TableLike, Value as TomlValue};
 /// A coded rule: its stable `BXW####` code and the static text of the obligation it states.
 type Rule = (&'static str, &'static str);
 /// The normative source of the discovery rules this crate enforces.
@@ -120,6 +122,10 @@ const DIFF_ACCOUNTABLE: Rule = ("BXW0100", DIFF_ACCOUNTABLE_TEXT);
 const DIFF_FOREIGN_TEXT: &str =
     "a derived output not attributable to the accountable package is foreign source";
 const DIFF_FOREIGN: Rule = ("BXW0101", DIFF_FOREIGN_TEXT);
+const DIFF_LOCK_SCOPE_TEXT: &str = "a lockfile diff requires a dependency-declaration change in the accountable package's Cargo manifests";
+const DIFF_LOCK_SCOPE: Rule = ("BXW0102", DIFF_LOCK_SCOPE_TEXT);
+const LOCK_SCOPE_SOURCE: &str =
+    "specs/s0-repo-bootstrap.md D6; specs/s5-manifest-and-validation.md D6";
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
@@ -141,8 +147,9 @@ const CARGO_MANIFEST: &str = "Cargo.toml";
 // Composition cross-document validation continues the workspace-owned range at BXW0087-BXW0090:
 // selected package, selected schema, selector expansion, and exposure respectively.
 // Diff-ownership classification (#327 B5b1a) continues at BXW0098–BXW0101: unowned changed path,
-// ambiguous changed path, accountable-owner-set, and foreign derived output. BXW0102 is reserved
-// for the next dependency-declaration / lockfile-scope slice.
+// ambiguous changed path, accountable-owner-set, and foreign derived output. Lockfile-scope
+// judgment (#327 B5b2) lands BXW0102: a Cargo.lock diff without a proven accountable dependency
+// declaration change.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -450,6 +457,278 @@ impl DiffOwnership {
     pub fn into_parts(self) -> (Vec<FileClassification>, Option<BoxId>, Option<Findings>) {
         (self.classifications, self.accountable, self.findings)
     }
+    /// Reports BXW0102 when `Cargo.lock` changed under a sole accountable package and no selected
+    /// accountable `Cargo.toml` proves a semantic dependency-declaration change.
+    ///
+    /// `Ok(None)` without whole-path `Cargo.lock` or an accountable package. `Err` only for duplicate
+    /// `manifests` paths or a missing pair for a selected accountable `Cargo.toml`. Extra pairs for
+    /// unselected paths are ignored.
+    pub fn lockfile_scope(
+        &self,
+        manifests: &[CargoManifestChange],
+    ) -> Result<Option<Findings>, InputError> {
+        let mut by_path = BTreeMap::new();
+        for manifest in manifests {
+            if by_path.insert(manifest.path(), manifest).is_some() {
+                return Err(InputError);
+            }
+        }
+        let Some(lock) = self
+            .classifications
+            .iter()
+            .find(|h| h.path().as_str() == LOCKFILE)
+        else {
+            return Ok(None);
+        };
+        let Some(accountable) = &self.accountable else {
+            return Ok(None);
+        };
+        let selected = self.classifications.iter().filter(|held| {
+            held.package() == accountable
+                && held.path().as_str().rsplit('/').next() == Some(CARGO_MANIFEST)
+        });
+        let mut payload = Vec::new();
+        let mut changed = false;
+        for held in selected {
+            let Some(pair) = by_path.get(held.path()) else {
+                return Err(InputError);
+            };
+            let label = match compare_manifests(
+                held.path(),
+                pair.base.as_deref(),
+                pair.candidate.as_deref(),
+            ) {
+                DepVerdict::Changed => {
+                    changed = true;
+                    None
+                }
+                DepVerdict::Unchanged => Some("unchanged"),
+                DepVerdict::Unreadable => Some("unreadable"),
+            };
+            if let Some(label) = label {
+                payload.push(format!("{}={label}", held.path().as_str()));
+            }
+        }
+        if changed {
+            return Ok(None);
+        }
+        Ok(Findings::new(vec![Entry::Workspace(Finding::about(
+            DIFF_LOCK_SCOPE,
+            LOCK_SCOPE_SOURCE,
+            lock.path().clone(),
+            Some(accountable.clone()),
+            payload.join(","),
+        ))]))
+    }
+}
+/// One changed Cargo manifest's bytes at the base and candidate revisions.
+///
+/// Owned blobs match [`WorkspaceInputs`] so a later Git layer can pass exact revision bytes without
+/// lifetime plumbing. Both sides [`None`] are permitted and compare as empty.
+pub struct CargoManifestChange {
+    path: RelativePath,
+    base: Option<Vec<u8>>,
+    candidate: Option<Vec<u8>>,
+}
+impl CargoManifestChange {
+    /// Records one changed Cargo manifest path with its base and candidate blob bytes.
+    pub fn new(path: RelativePath, base: Option<Vec<u8>>, candidate: Option<Vec<u8>>) -> Self {
+        Self {
+            path,
+            base,
+            candidate,
+        }
+    }
+    ref_getters! {
+        #[doc = "Returns the changed manifest's workspace-relative path."] path: &RelativePath = path;
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DepVerdict {
+    Unchanged,
+    Changed,
+    Unreadable,
+}
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum DepSection {
+    Normal,
+    Dev,
+    Build,
+    Workspace,
+}
+#[derive(Debug, Eq, PartialEq)]
+enum Canonical {
+    String(String),
+    Integer(i64),
+    Boolean(bool),
+    Array(Vec<Canonical>),
+    Table(BTreeMap<String, Canonical>),
+}
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct DepKey {
+    section: DepSection,
+    target: Option<String>,
+    name: String,
+}
+fn compare_manifests(
+    path: &RelativePath,
+    base: Option<&[u8]>,
+    candidate: Option<&[u8]>,
+) -> DepVerdict {
+    match (
+        project_manifest(path, base),
+        project_manifest(path, candidate),
+    ) {
+        (Ok(left), Ok(right)) if left == right => DepVerdict::Unchanged,
+        (Ok(_), Ok(_)) => DepVerdict::Changed,
+        _ => DepVerdict::Unreadable,
+    }
+}
+fn project_manifest(
+    path: &RelativePath,
+    bytes: Option<&[u8]>,
+) -> Result<BTreeMap<DepKey, Canonical>, ()> {
+    let Some(bytes) = bytes else {
+        return Ok(BTreeMap::new());
+    };
+    // Surface lock rejects production `from_utf8` (code-minting). Lossy is Owned iff invalid UTF-8.
+    let text = match String::from_utf8_lossy(bytes) {
+        std::borrow::Cow::Borrowed(text) => text,
+        std::borrow::Cow::Owned(_) => return Err(()),
+    };
+    let document = Document::parse(text).map_err(|_| ())?;
+    let mut map = BTreeMap::new();
+    read_deps(
+        path.as_str() == CARGO_MANIFEST,
+        document.as_table(),
+        &mut map,
+    )?;
+    Ok(map)
+}
+fn read_deps(
+    root_manifest: bool,
+    root: &dyn TableLike,
+    map: &mut BTreeMap<DepKey, Canonical>,
+) -> Result<(), ()> {
+    read_section(root, DepSection::Normal, None, map)?;
+    read_section(root, DepSection::Dev, None, map)?;
+    read_section(root, DepSection::Build, None, map)?;
+    if root_manifest && let Some(item) = root.get("workspace").filter(|item| !item.is_none()) {
+        read_section(
+            item.as_table_like().ok_or(())?,
+            DepSection::Workspace,
+            None,
+            map,
+        )?;
+    }
+    if let Some(item) = root.get("target").filter(|item| !item.is_none()) {
+        let targets = item.as_table_like().ok_or(())?;
+        for (selector, table) in targets.iter() {
+            if table.is_none() {
+                continue;
+            }
+            let table = table.as_table_like().ok_or(())?;
+            read_section(table, DepSection::Normal, Some(selector), map)?;
+            read_section(table, DepSection::Dev, Some(selector), map)?;
+            read_section(table, DepSection::Build, Some(selector), map)?;
+        }
+    }
+    Ok(())
+}
+fn read_section(
+    table: &dyn TableLike,
+    section: DepSection,
+    target: Option<&str>,
+    map: &mut BTreeMap<DepKey, Canonical>,
+) -> Result<(), ()> {
+    let key = match section {
+        DepSection::Normal | DepSection::Workspace => "dependencies",
+        DepSection::Dev => "dev-dependencies",
+        DepSection::Build => "build-dependencies",
+    };
+    let Some(item) = table.get(key).filter(|item| !item.is_none()) else {
+        return Ok(());
+    };
+    for (name, entry) in item.as_table_like().ok_or(())?.iter() {
+        if entry.is_none() {
+            continue;
+        }
+        map.insert(
+            DepKey {
+                section,
+                target: target.map(str::to_owned),
+                name: String::from(name),
+            },
+            project_dep(entry)?,
+        );
+    }
+    Ok(())
+}
+fn project_dep(item: &Item) -> Result<Canonical, ()> {
+    if let Some(text) = item.as_str() {
+        return Ok(Canonical::Table(BTreeMap::from([(
+            String::from("version"),
+            Canonical::String(String::from(text)),
+        )])));
+    }
+    let mut out = BTreeMap::new();
+    for (key, nested) in item.as_table_like().ok_or(())?.iter() {
+        if nested.is_none() {
+            continue;
+        }
+        let value = if key == "features" {
+            project_features(nested)?
+        } else {
+            project_item(nested)?
+        };
+        out.insert(String::from(key), value);
+    }
+    Ok(Canonical::Table(out))
+}
+fn project_features(item: &Item) -> Result<Canonical, ()> {
+    let mut features = item
+        .as_array()
+        .ok_or(())?
+        .iter()
+        .map(|value| value.as_str().map(String::from).ok_or(()))
+        .collect::<Result<Vec<_>, _>>()?;
+    features.sort();
+    features.dedup();
+    Ok(Canonical::Array(
+        features.into_iter().map(Canonical::String).collect(),
+    ))
+}
+fn project_item(item: &Item) -> Result<Canonical, ()> {
+    if let Some(table) = item.as_table_like() {
+        let mut out = BTreeMap::new();
+        for (key, nested) in table.iter() {
+            if !nested.is_none() {
+                out.insert(String::from(key), project_item(nested)?);
+            }
+        }
+        return Ok(Canonical::Table(out));
+    }
+    if let Some(array) = item.as_array() {
+        return Ok(Canonical::Array(
+            array
+                .iter()
+                .map(project_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ));
+    }
+    if let Some(text) = item.as_str() {
+        return Ok(Canonical::String(String::from(text)));
+    }
+    if let Some(number) = item.as_integer() {
+        return Ok(Canonical::Integer(number));
+    }
+    if let Some(flag) = item.as_bool() {
+        return Ok(Canonical::Boolean(flag));
+    }
+    Err(())
+}
+fn project_value(value: &TomlValue) -> Result<Canonical, ()> {
+    project_item(&Item::Value(value.clone()))
 }
 /// Classifies each changed path under `packages` and reports merger-step ownership findings.
 ///
@@ -458,8 +737,8 @@ impl DiffOwnership {
 /// classifications, accountable owner, and findings. Successful attributions reuse
 /// [`attribute_path`]; unowned paths are BXW0098 and rival claims BXW0099. The non-derived owner
 /// set must be exactly one package (BXW0100 otherwise). Under a sole accountable package, a derived
-/// output of any other package is BXW0101, except the workspace `Cargo.lock` path which a later
-/// lockfile-scope slice judges alone.
+/// output of any other package is BXW0101, except the workspace `Cargo.lock` path which
+/// [`DiffOwnership::lockfile_scope`] judges alone.
 pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwnership {
     let mut changed: Vec<RelativePath> = changed.to_vec();
     changed.sort();
@@ -2824,7 +3103,7 @@ jobs:
         "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
         "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054", "BXW0055", "BXW0056", "BXW0057",
         "BXW0058", "BXW0059", "BXW0060", "BXW0087", "BXW0088", "BXW0089", "BXW0090", "BXW0098",
-        "BXW0099", "BXW0100", "BXW0101",
+        "BXW0099", "BXW0100", "BXW0101", "BXW0102",
     ];
     /// One minimal workspace for each discovery and edge code through BXW0060, in code order.
     /// Composition codes have their own cross-document corpus below.
@@ -3047,6 +3326,7 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 "BXW0099" => (DIFF_AMBIGUOUS_TEXT, OWNERSHIP_SOURCE),
                 "BXW0100" => (DIFF_ACCOUNTABLE_TEXT, OWNERSHIP_SOURCE),
                 "BXW0101" => (DIFF_FOREIGN_TEXT, OWNERSHIP_SOURCE),
+                "BXW0102" => (DIFF_LOCK_SCOPE_TEXT, LOCK_SCOPE_SOURCE),
                 _ => panic!("unexpected ownership corpus code"),
             };
             assert_eq!(finding.code(), expected);
@@ -3194,6 +3474,13 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         };
         let derived_only = diff_ownership(&packages, &changed(&[LOCKFILE]));
         let foreign = diff_ownership(&packages, &changed(&["src/lib.rs", "ping/generated.rs"]));
+        let lock_scope = {
+            let ownership = diff_ownership(&packages, &changed(&["src/lib.rs", LOCKFILE]));
+            ownership
+                .lockfile_scope(&[])
+                .expect("no selected manifests")
+                .expect("BXW0102")
+        };
         let pick = |ownership: DiffOwnership, code| {
             ownership
                 .into_parts()
@@ -3210,11 +3497,16 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 })
                 .unwrap_or_else(|| panic!("missing {code}"))
         };
+        let scope_finding = match lock_scope.as_slice() {
+            [Entry::Workspace(finding)] => finding.clone(),
+            other => panic!("expected one BXW0102 entry, got {other:?}"),
+        };
         vec![
             ("BXW0098", pick(unowned, "BXW0098")),
             ("BXW0099", pick(rivalry, "BXW0099")),
             ("BXW0100", pick(derived_only, "BXW0100")),
             ("BXW0101", pick(foreign, "BXW0101")),
+            ("BXW0102", scope_finding),
         ]
     }
     #[test]
@@ -3450,6 +3742,181 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         ])
         .expect_err("duplicate identity");
         assert!(duplicate.to_string().contains("BXW0042"));
+    }
+    fn cargo_bytes(body: &str) -> Vec<u8> {
+        body.as_bytes().to_vec()
+    }
+    fn manifest_change(
+        at: &str,
+        base: Option<&str>,
+        candidate: Option<&str>,
+    ) -> CargoManifestChange {
+        CargoManifestChange::new(path(at), base.map(cargo_bytes), candidate.map(cargo_bytes))
+    }
+    fn lock_ownership(paths: &[&str]) -> DiffOwnership {
+        diff_ownership(&ownership_packages(), &changed(paths))
+    }
+    fn sole_root(owned: &[&str], derived: &[(&str, &[&str])]) -> Vec<Package> {
+        let lock = ("lockfile", &[LOCKFILE][..]);
+        let outs: Vec<_> = std::iter::once(lock)
+            .chain(derived.iter().copied())
+            .collect();
+        ownership_packages_from(vec![(
+            path(MANIFEST),
+            deriving(owning("root", "platform", owned, &[]), &outs),
+        )])
+        .expect("discovers")
+    }
+    fn assert_bxw0102(findings: Option<Findings>, payload: &str) {
+        let findings = findings.expect("BXW0102");
+        let finding = workspace_finding(&findings.as_slice()[0]);
+        assert_eq!(
+            (finding.code(), finding.rule(), finding.rule_source()),
+            ("BXW0102", DIFF_LOCK_SCOPE_TEXT, LOCK_SCOPE_SOURCE)
+        );
+        assert_eq!(finding.path().as_str(), LOCKFILE);
+        assert_eq!(finding.package().map(BoxId::as_str), Some("root"));
+        assert_eq!(finding.candidates(), &[]);
+        assert_eq!(
+            finding.to_string(),
+            format!("BXW0102 Cargo.lock package=root candidates=[{payload}]")
+        );
+    }
+    #[rustfmt::skip]
+    #[test]
+    fn lockfile_scope_reports_bxw0102_for_non_qualifying_manifest_edits() {
+        let ownership = lock_ownership(&["src/lib.rs", LOCKFILE]);
+        assert_bxw0102(ownership.lockfile_scope(&[]).expect("ok"), "");
+        let ownership = lock_ownership(&["src/lib.rs", LOCKFILE, "Cargo.toml"]);
+        let base = "[package]\nname = \"root\"\nversion = \"0.1.0\"\n[dependencies]\n# keep\nfoo = \"1.0\"\nbar = { version = \"2.0\", optional = true }\n";
+        let cases: &[(Option<&str>, Option<&str>, &str)] = &[
+            (Some(base), Some("[package]\nname = \"root\"\nversion = \"0.1.0\"\n[dependencies]\nbar = { optional = true, version = \"2.0\" }\nfoo = \"1.0\" # moved\n"), "Cargo.toml=unchanged"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = { version = \"1.0\" }\n"), "Cargo.toml=unchanged"),
+            (Some("dependencies.foo.version = \"1.0\"\n"), Some("[dependencies]\nfoo = { version = \"1.0\" }\n"), "Cargo.toml=unchanged"),
+            (Some("[dependencies.foo]\nversion = \"1.0\"\nfeatures = [\"b\", \"a\", \"a\"]\n"), Some("[dependencies]\nfoo = { version = \"1.0\", features = [\"a\", \"b\"] }\n"), "Cargo.toml=unchanged"),
+            (Some("[package]\nname = \"root\"\nversion = \"0.1.0\"\n[dependencies]\nfoo = \"1.0\"\n"), Some("[package]\nname = \"root\"\nversion = \"0.2.0\"\n[features]\ndefault = [\"foo\"]\n[lints.rust]\nunsafe_code = \"forbid\"\n[profile.dev]\nopt-level = 1\n[dependencies]\nfoo = \"1.0\"\n"), "Cargo.toml=unchanged"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = \"1.0\"\n[patch.crates-io]\nfoo = { path = \"vendor/foo\" }\n"), "Cargo.toml=unchanged"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = \"1.0\"\n[replace]\n\"foo:1.0.0\" = { path = \"vendor/foo\" }\n"), "Cargo.toml=unchanged"),
+            (None, Some("[dependencies]\n"), "Cargo.toml=unchanged"),
+            (Some("[dependencies]\n"), Some("[dependencies]\n"), "Cargo.toml=unchanged"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = [\n"), "Cargo.toml=unreadable"),
+            (Some("[dependencies]\nfoo = [\n"), Some("[dependencies]\nfoo = \"1.0\"\n"), "Cargo.toml=unreadable"),
+            (Some("[dependencies]\n"), Some("dependencies = []\n"), "Cargo.toml=unreadable"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = []\n"), "Cargo.toml=unreadable"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = { features = \"a\" }\n"), "Cargo.toml=unreadable"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = { features = [1] }\n"), "Cargo.toml=unreadable"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = { version = 1.0 }\n"), "Cargo.toml=unreadable"),
+            (Some("[dependencies]\nfoo = \"1.0\"\n"), Some("[dependencies]\nfoo = { at = 2020-01-01 }\n"), "Cargo.toml=unreadable"),
+        ];
+        assert_bxw0102(
+            ownership.lockfile_scope(&[CargoManifestChange::new(path("Cargo.toml"), Some(cargo_bytes("[dependencies]\nfoo = \"1.0\"\n")), Some(vec![0xff, 0xfe]))]).expect("ok"),
+            "Cargo.toml=unreadable",
+        );
+        for &(base, candidate, payload) in cases {
+            assert_bxw0102(ownership.lockfile_scope(&[manifest_change("Cargo.toml", base, candidate)]).expect("ok"), payload);
+        }
+        let foreign = ownership_packages_from(vec![
+            (path(MANIFEST), deriving(owning("root", "platform", &["boxology.toml", "src/**", "Cargo.toml"], &[]), &[("lockfile", &[LOCKFILE])])),
+            (path("ping/boxology.toml"), deriving(owning("ping", "box", &["boxology.toml", "src/**"], &[]), &[("manifest", &["Cargo.toml"])])),
+        ]).expect("discovers");
+        assert_bxw0102(
+            diff_ownership(&foreign, &changed(&["src/lib.rs", LOCKFILE, "ping/Cargo.toml"]))
+                .lockfile_scope(&[manifest_change("ping/Cargo.toml", Some("[dependencies]\n"), Some("[dependencies]\nfoo = \"1.0\"\n"))]).expect("ok"),
+            "",
+        );
+        let nested = sole_root(&["boxology.toml", "src/**", "member/Cargo.toml"], &[]);
+        assert_bxw0102(
+            diff_ownership(&nested, &changed(&["src/lib.rs", LOCKFILE, "member/Cargo.toml"]))
+                .lockfile_scope(&[manifest_change(
+                    "member/Cargo.toml",
+                    Some("[workspace.dependencies]\nfoo = \"1.0\"\n"),
+                    Some("[workspace.dependencies]\nfoo = \"2.0\"\n"),
+                )]).expect("ok"),
+            "member/Cargo.toml=unchanged",
+        );
+    }
+    #[rustfmt::skip]
+    #[test]
+    fn lockfile_scope_accepts_qualifying_dependency_declaration_changes() {
+        let ownership = lock_ownership(&["src/lib.rs", LOCKFILE, "Cargo.toml"]);
+        let none = |base: Option<&str>, candidate: Option<&str>| {
+            assert!(ownership.lockfile_scope(&[manifest_change("Cargo.toml", base, candidate)]).expect("ok").is_none());
+        };
+        for (base, candidate) in [
+            ("[dependencies]\nfoo = \"1.0\"\n", "[dependencies]\nfoo = \"2.0\"\n"),
+            ("[dependencies]\nfoo = { version = \"1.0\", optional = false }\n", "[dependencies]\nfoo = { version = \"1.0\", optional = true }\n"),
+            ("[dependencies]\nfoo = { version = \"1.0\", default-features = true }\n", "[dependencies]\nfoo = { version = \"1.0\", default-features = false }\n"),
+            ("[dependencies]\nfoo = { version = \"1.0\", features = [\"a\"] }\n", "[dependencies]\nfoo = { version = \"1.0\", features = [\"a\", \"b\"] }\n"),
+            ("[dependencies]\nfoo = { path = \"a\" }\n", "[dependencies]\nfoo = { path = \"b\" }\n"),
+            ("[dependencies]\nfoo = { git = \"https://example.com/foo\", rev = \"aaa\" }\n", "[dependencies]\nfoo = { git = \"https://example.com/foo\", rev = \"bbb\" }\n"),
+            ("[dependencies]\nfoo = { package = \"old\", version = \"1.0\" }\n", "[dependencies]\nfoo = { package = \"new\", version = \"1.0\" }\n"),
+            ("[dependencies]\nfoo = { version = \"1.0\", registry = \"crates-io\" }\n", "[dependencies]\nfoo = { version = \"1.0\", registry = \"alt\" }\n"),
+            ("[dev-dependencies]\nfoo = \"1.0\"\n", "[dev-dependencies]\nfoo = \"2.0\"\n"),
+            ("[build-dependencies]\nfoo = \"1.0\"\n", "[build-dependencies]\nfoo = \"2.0\"\n"),
+            ("[dependencies]\n", "[target.'cfg(unix)'.dependencies]\nfoo = \"1.0\"\n"),
+            ("[target.'cfg(unix)'.dependencies]\nfoo = \"1.0\"\n", "[target.'cfg(unix)'.dependencies]\nfoo = \"2.0\"\n"),
+            ("[workspace.dependencies]\nfoo = \"1.0\"\n", "[workspace.dependencies]\nfoo = \"2.0\"\n"),
+        ] {
+            none(Some(base), Some(candidate));
+        }
+        assert_bxw0102(
+            ownership.lockfile_scope(&[manifest_change(
+                "Cargo.toml",
+                Some("[target.'cfg(unix)'.dependencies]\nfoo = \"1.0\"\n"),
+                Some("[target.\"cfg(unix)\".dependencies]\nfoo = \"1.0\"\n"),
+            )]).expect("ok"),
+            "Cargo.toml=unchanged",
+        );
+        none(None, Some("[dependencies]\nfoo = \"1.0\"\n"));
+        none(Some("[dependencies]\nfoo = \"1.0\"\n"), None);
+        assert!(diff_ownership(
+            &sole_root(&["boxology.toml", "src/**"], &[("manifest", &["generated/Cargo.toml"])]),
+            &changed(&["src/lib.rs", LOCKFILE, "generated/Cargo.toml"]),
+        ).lockfile_scope(&[manifest_change("generated/Cargo.toml", Some("[dependencies]\n"), Some("[dependencies]\nfoo = \"1.0\"\n"))]).expect("ok").is_none());
+        assert!(lock_ownership(&["src/lib.rs"]).lockfile_scope(&[]).expect("ok").is_none());
+        let ownership = lock_ownership(&[LOCKFILE]);
+        assert_eq!(ownership.accountable(), None);
+        assert!(ownership.lockfile_scope(&[]).expect("ok").is_none());
+        let ownership = lock_ownership(&["src/a.rs", "ping/src/b.rs", LOCKFILE]);
+        assert_eq!(ownership.accountable(), None);
+        assert!(ownership.lockfile_scope(&[]).expect("ok").is_none());
+    }
+    #[rustfmt::skip]
+    #[test]
+    fn lockfile_scope_api_is_deterministic_and_rejects_caller_misuse() {
+        let ownership = lock_ownership(&["src/lib.rs", LOCKFILE, "Cargo.toml"]);
+        let unchanged = "[dependencies]\nfoo = \"1.0\"\n";
+        let left = manifest_change("Cargo.toml", Some(unchanged), Some(unchanged));
+        let extra = manifest_change("ping/Cargo.toml", Some(unchanged), Some("[dependencies]\nfoo = \"9.0\"\n"));
+        let a = ownership.lockfile_scope(&[extra, left]).expect("ok");
+        let b = ownership.lockfile_scope(&[
+            manifest_change("Cargo.toml", Some(unchanged), Some(unchanged)),
+            manifest_change("ping/Cargo.toml", Some(unchanged), Some("[dependencies]\nfoo = \"9.0\"\n")),
+        ]).expect("ok");
+        assert_eq!(a, b);
+        assert_bxw0102(a, "Cargo.toml=unchanged");
+        assert_eq!(ownership.lockfile_scope(&[manifest_change("Cargo.toml", None, None), manifest_change("Cargo.toml", None, None)]), Err(InputError));
+        assert_eq!(ownership.lockfile_scope(&[]), Err(InputError));
+        assert_bxw0102(ownership.lockfile_scope(&[manifest_change(CARGO_MANIFEST, None, None)]).expect("ok"), "Cargo.toml=unchanged");
+        let ownership = diff_ownership(
+            &sole_root(&["boxology.toml", "src/**", "Cargo.toml"], &[("manifest", &["generated/Cargo.toml"])]),
+            &changed(&["src/lib.rs", LOCKFILE, "Cargo.toml", "generated/Cargo.toml"]),
+        );
+        assert!(ownership.lockfile_scope(&[
+            manifest_change("Cargo.toml", Some("[dependencies]\nfoo = [\n"), Some("[dependencies]\n")),
+            manifest_change("generated/Cargo.toml", Some("[dependencies]\n"), Some("[dependencies]\nfoo = \"1.0\"\n")),
+        ]).expect("ok").is_none());
+        assert_bxw0102(
+            ownership.lockfile_scope(&[
+                manifest_change("generated/Cargo.toml", Some("[dependencies]\nfoo = [\n"), Some("[dependencies]\n")),
+                manifest_change("Cargo.toml", Some(unchanged), Some(unchanged)),
+            ]).expect("ok"),
+            "Cargo.toml=unchanged,generated/Cargo.toml=unreadable",
+        );
+        let cascade = lock_ownership(&["orphan.rs", "src/lib.rs", LOCKFILE]);
+        assert_eq!(cascade.accountable().map(BoxId::as_str), Some("root"));
+        assert_eq!(finding_lines(cascade.findings()), ["BXW0098 orphan.rs package= candidates=[]".to_owned()]);
+        assert_bxw0102(cascade.lockfile_scope(&[]).expect("ok"), "");
     }
     #[test]
     fn composition_validation_expands_all_and_defaults_to_code_only() {
