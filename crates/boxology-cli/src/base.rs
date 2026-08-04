@@ -4,10 +4,12 @@
 
 use crate::{ExecuteError, GenerationPlan, PackageSchemas, execute::read_optional_file};
 use boxology_manifest::RelativePath;
-use boxology_workspace::{FileEntry, Findings, Package, WorkspaceInputs};
+use boxology_workspace::{
+    CargoManifestChange, DiffOwnership, FileEntry, Findings, Package, WorkspaceInputs,
+};
 use std::{
     collections::BTreeMap,
-    fmt,
+    fmt, fs, io,
     path::Path,
     process::{Command, Output},
 };
@@ -25,9 +27,12 @@ const BASE_LISTING_TEXT: &str =
 const BASE_BLOB_TEXT: &str = "a base-revision workspace object must be readable as a Git blob";
 const BASE_DECLARATIONS_TEXT: &str =
     "the base revision's package declarations must form a discoverable workspace";
+const CANDIDATE_CARGO_TEXT: &str =
+    "a changed candidate Cargo manifest must be a readable regular file when present";
 const BASE_LISTING: Rule = ("BXW0103", BASE_LISTING_TEXT, BASE_GIT_SOURCE);
 const BASE_BLOB: Rule = ("BXW0104", BASE_BLOB_TEXT, BASE_GIT_SOURCE);
 const BASE_DECLARATIONS: Rule = ("BXW0105", BASE_DECLARATIONS_TEXT, BASE_DISCOVERY_SOURCE);
+const CANDIDATE_CARGO: Rule = ("BXW0106", CANDIDATE_CARGO_TEXT, BASE_GIT_SOURCE);
 
 /// The Git executable could not be started for a base check.
 #[derive(Debug, Eq, PartialEq)]
@@ -92,6 +97,9 @@ impl BaseError {
     }
     fn declarations() -> Self {
         Self::at(BASE_DECLARATIONS, ".git")
+    }
+    fn cargo(path: &RelativePath) -> Self {
+        Self::at(CANDIDATE_CARGO, path.as_str())
     }
 }
 
@@ -309,7 +317,6 @@ pub struct BaseDiffInputs {
     packages: Vec<Package>,
     changed: Vec<RelativePath>,
     /// Mode/type class and object id for every validated path, including gitlinks.
-    #[allow(dead_code)] // consumed by the B5b3a2 candidate-manifest pairing slice
     objects: BTreeMap<RelativePath, (TreeKind, String)>,
 }
 impl BaseDiffInputs {
@@ -320,6 +327,46 @@ impl BaseDiffInputs {
     /// Returns the sorted, deduplicated changed-path set.
     pub fn changed(&self) -> &[RelativePath] {
         &self.changed
+    }
+    /// Loads base/candidate bytes for accountable changed `Cargo.toml` paths under `ownership`.
+    ///
+    /// # Errors
+    /// Returns `BXW0104`/`BXW0106` for unreadable base blobs or non-regular candidate paths.
+    pub fn manifest_changes(
+        &self,
+        root: &Path,
+        ownership: &DiffOwnership,
+    ) -> Result<Vec<CargoManifestChange>, BaseInputsError> {
+        let Some(accountable) = ownership.accountable() else {
+            return Ok(Vec::new());
+        };
+        if ownership
+            .classifications()
+            .iter()
+            .all(|held| held.path().as_str() != "Cargo.lock")
+        {
+            return Ok(Vec::new());
+        }
+        ownership
+            .classifications()
+            .iter()
+            .filter(|held| {
+                held.package() == accountable
+                    && held.path().as_str().rsplit('/').next() == Some("Cargo.toml")
+            })
+            .map(|held| {
+                let path = held.path();
+                let base = match self.objects.get(path) {
+                    Some((TreeKind::Gitlink, _)) | None => None,
+                    Some((_, oid)) => Some(read_blob(root, oid, path)?),
+                };
+                Ok(CargoManifestChange::new(
+                    path.clone(),
+                    base,
+                    read_candidate_cargo(root, path)?,
+                ))
+            })
+            .collect()
     }
 }
 
@@ -429,6 +476,19 @@ fn read_blob(root: &Path, oid: &str, path: &RelativePath) -> Result<Vec<u8>, Bas
         .success()
         .then_some(output.stdout)
         .ok_or_else(|| data(BaseError::blob(path)))
+}
+fn read_candidate_cargo(
+    root: &Path,
+    path: &RelativePath,
+) -> Result<Option<Vec<u8>>, BaseInputsError> {
+    let at = root.join(path.as_str());
+    match fs::symlink_metadata(&at) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Ok(meta) if meta.file_type().is_file() => fs::read(&at)
+            .map(Some)
+            .map_err(|_| data(BaseError::cargo(path))),
+        _ => Err(data(BaseError::cargo(path))),
+    }
 }
 fn parse_nul<T>(
     stdout: &[u8],
