@@ -6,7 +6,8 @@ use boxology_generator::{OUTPUTS, generate};
 use boxology_generator_model::GenerationRequest;
 use boxology_schema::{SchemaDocument, SchemaPayload, SchemaVariant};
 use boxology_workspace::{
-    CheckReport, CheckStatus, Completion, ContractClassificationCompletion, ExternalOutput,
+    CheckReport, CheckStatus, Completion, ContractClassificationCompletion,
+    DiffOwnershipCompletion, ExternalOutput,
 };
 
 const V1: &str = "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(name:String)->Result<String,GreetError>; }";
@@ -76,6 +77,7 @@ fn report(contract_classification: ContractClassificationCompletion) -> CheckRep
         discovery: Completion::Passed,
         regeneration: Completion::Passed,
         contract_classification,
+        diff_ownership: DiffOwnershipCompletion::Passed,
         cargo_graph: Completion::Passed,
         fmt: Completion::Passed,
         clippy: Completion::Passed,

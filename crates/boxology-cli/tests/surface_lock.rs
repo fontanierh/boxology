@@ -45,9 +45,9 @@ const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 7_557_947_062_955_709_968;
 const BASE_HASH: u64 = 12_753_952_181_431_579_743;
 const RUNNER_HASH: u64 = 7_283_545_681_929_877_302;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nclassify(outcome.base_schema(), outcome.submitted_schema())\nrender_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nresolve_default_base(root)\nSkipReason::NoRepository\nSkipReason::NoMergeBase\nclassify_contracts(root, &revision, &plans, stderr)\nrun_lock_step(runner, root)\nrun_fmt_step(runner, root, &workspace)\nrun_clippy_step(runner, root)\nrun_test_step(runner, root)\nfn not_implemented() -> Completion\nquality: not_implemented()\nfn report_spawn_failure\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute(root, generation)\nclassify(outcome.base_schema(), outcome.submitted_schema())\nrender_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nresolve_default_base(root)\nSkipReason::NoRepository\nSkipReason::NoMergeBase\nclassify_contracts(root, &revision, &plans, stderr)\ndiff_ownership: DiffOwnershipCompletion::Skipped(DiffOwnershipSkip::NotImplemented)\nrun_lock_step(runner, root)\nrun_fmt_step(runner, root, &workspace)\nrun_clippy_step(runner, root)\nrun_test_step(runner, root)\nfn not_implemented() -> Completion\nquality: not_implemented()\nfn report_spawn_failure\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 16_994_802_291_517_068_403;
+const MAIN_HASH: u64 = 5_123_350_448_215_057_918;
 const HASHES: [u64; 10] = [
     LIB_HASH,
     WALK_HASH,

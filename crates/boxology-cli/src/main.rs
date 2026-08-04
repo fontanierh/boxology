@@ -9,8 +9,9 @@ use boxology_cli::{
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
 use boxology_workspace::{
-    CheckReport, Completion, ContractClassificationCompletion, Entry, ExternalOutput, Finding,
-    Findings, SkipReason, StepSkip, Workspace, WorkspaceInputs,
+    CheckReport, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
+    DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, StepSkip, Workspace,
+    WorkspaceInputs,
 };
 use std::{
     env,
@@ -207,6 +208,7 @@ fn run_check(
         discovery,
         regeneration,
         contract_classification,
+        diff_ownership: DiffOwnershipCompletion::Skipped(DiffOwnershipSkip::NotImplemented),
         cargo_graph,
         fmt,
         clippy,

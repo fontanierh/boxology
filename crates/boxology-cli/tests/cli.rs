@@ -545,6 +545,8 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
                     check regeneration passed\n\
                     check contract-classification skipped\n\
                     \x20 contract classification skipped: no repository is available\n\
+                    check diff-ownership skipped\n\
+                    \x20 not run: the step is not implemented in this boxology version\n\
                     check cargo-graph passed\n\
                     check fmt passed\n\
                     check clippy passed\n\

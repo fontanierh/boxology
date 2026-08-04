@@ -1,7 +1,7 @@
 use boxology_manifest::RelativePath;
 use boxology_workspace::{
-    CheckReport, Completion, ContractClassificationCompletion, ExternalOutput, FileEntry,
-    SkipReason, WorkspaceInputs,
+    CheckReport, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
+    DiffOwnershipSkip, ExternalOutput, FileEntry, SkipReason, WorkspaceInputs,
 };
 use std::{fs, path::Path};
 
@@ -118,6 +118,7 @@ fn check_report() -> Result<String, String> {
         contract_classification: ContractClassificationCompletion::Skipped(
             SkipReason::NoRepository,
         ),
+        diff_ownership: DiffOwnershipCompletion::Skipped(DiffOwnershipSkip::NotImplemented),
         cargo_graph: Completion::Passed,
         fmt: Completion::Passed,
         clippy: Completion::Passed,
@@ -186,6 +187,8 @@ mod tests {
 check regeneration passed
 check contract-classification skipped
   contract classification skipped: no repository is available
+check diff-ownership skipped
+  not run: the step is not implemented in this boxology version
 check cargo-graph passed
 check fmt passed
 check clippy passed
