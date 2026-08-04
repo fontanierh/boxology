@@ -1,10 +1,12 @@
-//! Effectful filesystem inputs for the future `boxology` command.
+//! Effectful filesystem inputs for the `boxology` command.
 //!
 //! The CLI's effectful boundary walks a workspace and executes one validated generation plan, while
 //! pure planning selects and describes contract-generation candidates. Generation remains pure;
 //! execution delegates its writes to the generator writer. Classification of checked-in versus
 //! regenerated schema bytes is also pure, as is the check-step classification seam over supplied
 //! base-revision and checked-in schema bytes and regeneration comparison over derived artifacts.
+//! Trusted fmt/Clippy steps use an injectable runner; tool output is outside determinism claims.
+//! Workspace-test step wiring is a later #327 slice.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -27,6 +29,7 @@ mod classify;
 mod compare;
 mod execute;
 mod generate;
+mod runner;
 mod walk;
 pub use base::{BaseError, BaseSchemasError, GitToolError, base_package_schemas};
 pub use check::{
@@ -39,4 +42,8 @@ pub use compare::{
 };
 pub use execute::{ExecuteError, Outcome, execute};
 pub use generate::{GenerationPlan, PlanError, ResolvedImport, plan};
+pub use runner::{
+    CapturedOutput, CommandRunner, CommandSpec, SpawnError, ToolStep, clippy_spec, fmt_packages,
+    fmt_spec, run_clippy_step, run_command, run_fmt_step,
+};
 pub use walk::{WalkError, WalkedWorkspace, walk};

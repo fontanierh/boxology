@@ -1,15 +1,15 @@
 #![forbid(unsafe_code)]
 
 use boxology_cli::{
-    BaseSchemasError, ClassifyStepError, CompareDifference, ExecuteError, PlanError,
+    BaseSchemasError, ClassifyStepError, CompareDifference, ExecuteError, PlanError, SpawnError,
     base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
-    execute, plan, walk,
+    execute, plan, run_clippy_step, run_command, run_fmt_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
 use boxology_workspace::{
-    CheckReport, Completion, ContractClassificationCompletion, Entry, Finding, Findings,
-    SkipReason, StepSkip, Workspace, WorkspaceInputs,
+    CheckReport, Completion, ContractClassificationCompletion, Entry, ExternalOutput, Finding,
+    Findings, SkipReason, StepSkip, Workspace, WorkspaceInputs,
 };
 use std::{
     env,
@@ -179,15 +179,30 @@ fn run_check(
             }
         }
     };
+    let runner = &run_command;
+    let (fmt, fmt_output) = match run_fmt_step(runner, root, &workspace) {
+        Ok(step) => step.into_parts(),
+        Err(error) => return report_spawn_failure(error, stderr),
+    };
+    let (clippy, clippy_output) = match run_clippy_step(runner, root) {
+        Ok(step) => step.into_parts(),
+        Err(error) => return report_spawn_failure(error, stderr),
+    };
     let report = CheckReport {
         discovery,
         regeneration,
         contract_classification,
         cargo_graph: not_implemented(),
-        fmt: not_implemented(),
-        clippy: not_implemented(),
+        fmt,
+        clippy,
         tests: not_implemented(),
         quality: not_implemented(),
+        external_output: ExternalOutput {
+            fmt: fmt_output,
+            clippy: clippy_output,
+            tests: None,
+            quality: None,
+        },
     };
     let _ = writeln!(stdout, "{}", report.render_human());
     report.exit_code()
@@ -312,4 +327,9 @@ fn report_classification_failure(error: ClassifyStepError, stderr: &mut dyn Writ
         ClassifyStepError::Duplicate(_) => {}
     }
     1
+}
+
+fn report_spawn_failure(error: SpawnError, stderr: &mut dyn Write) -> u8 {
+    let _ = writeln!(stderr, "{error}");
+    2
 }
