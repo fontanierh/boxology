@@ -155,3 +155,5 @@ The required S1 v0 fixtures are exactly **`hello`** and **`greeter`**. `hello` p
 #6 narrowing as previously recorded, now additionally: composition lifecycle/shutdown and transport start hooks are decided here; #6 retains discovery, placement, routing, multi-version topology, overload. Issue #85's remaining S1 items (presence/opacity ABI, descriptor split, injection path, fallible lifecycle, adapter golden, panic ownership) are resolved in this revision.
 
 **Amendment of 2026-08-04** (maintainer corpus-acceleration decision): D13/T7 drop the phantom `kitchen-sink` v0 obligation; required S1 fixtures are `hello` and `greeter`; kernel presence/sensitivity/opacity evidence is unchanged. Operator reconciliation updates [#100](https://github.com/fontanierh/boxology/issues/100) and names it in [#343](https://github.com/fontanierh/boxology/issues/343)'s residual ledger.
+
+**Amendment of 2026-08-04 (#522 reconciliation).** AC10's "both platforms" V0 evidence reads as native macOS ARM64 V0 evidence; cross-platform re-proof is owned by [#525](https://github.com/fontanierh/boxology/issues/525).

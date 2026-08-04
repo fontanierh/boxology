@@ -3,8 +3,9 @@
 This is the authoritative runbook for S0-T8. It provisions eight useful
 GitHub Actions JIT runners on the MacBook: four Linux runners in the native
 ARM64 Colima VM and four macOS runners on the native Apple-silicon host.
-Every enabled workflow uses one of these labels; no enabled workflow targets a
-GitHub-hosted runner.
+Product validation and compilation workflows use these labels. The cheap
+non-compiling storage-hygiene job remains on GitHub-hosted Ubuntu; no product
+validation or compilation job uses GitHub-hosted runners or minutes.
 
 Each label has one base supervisor plus three slot supervisors. A slot owns one
 JIT runner, one disposable workspace, and one cache root, so independent PRs can
@@ -227,27 +228,33 @@ native determinism fixture.
 
 ## CI activation
 
-The activated `pr.yml` Linux lane assigns `checks-linux`, `deny`, both determinism
-consumers, and `validation` to `[self-hosted, linux, ARM64, boxology-linux-arm64-pr]`.
-The Linux evidence and determinism verification target is `aarch64-unknown-linux-gnu`.
-`checks-linux` is the slim producer: fail-fast `boxology check`, local
-`cargo xtask determinism`, Linux determinism manifests, and the Linux `xtask`
-binary for the cross-platform consumers. Canonical behavioral validation —
-`boxology check` plus fast merge-critical `cargo xtask ci --base` on PRs, the
-deferred Clippy/editor/docs/compiler suite via `cargo xtask ci --no-budget` on main pushes, and macOS
-determinism artifact production — runs on
-`[self-hosted, macOS, ARM64, boxology-macos-pr]`, which also hosts the scheduled
-advisory workflow. The x86 audit workflow is intentionally removed for this
-emergency migration; x86 coverage is a deferred follow-up and is not part of the
-active CI contract. Consequently every enabled workflow job runs through this
-MacBook and uses no GitHub-hosted Actions minutes. Native Mac slots reuse the
-per-slot Cargo target with four Cargo jobs; Linux containers remain capped at
-one CPU and 2 GiB and no longer rebuild the full behavioral suite.
+Pull-request CI is one required native Mac job: `pr.yml` `validation` on
+`[self-hosted, macOS, ARM64, boxology-macos-pr]`. It always runs
+`cargo xtask ci-hygiene --base <event base SHA>` and, for non-Markdown diffs, the
+xtask invariant suite, directly changed-crate tests, and
+`boxology check --base <event base SHA>`. Root dependency/toolchain changes also
+compile-check the whole workspace; the process-reaper fixture runs only when its
+own implementation changes. Full-workspace, nested-workspace, composition,
+Clippy, docs, deny, and determinism suites are deep-only. Deep validation is
+`deep-validation.yml`: `workflow_dispatch` only (no schedule, no required check),
+same Mac label, running `cargo xtask ci --no-budget` and `boxology check`. Do not
+dispatch deep validation during heavy local delivery on this MacBook.
 
-The 8-minute target measures required-check critical-path duration, not summed
-job time: for each cache-hit run, take the longest dependency path ending at
-`validation`, excluding queue time, then track the median of the last ten main
-runs. Parallel lanes are deliberately not added together.
+The Linux ARM64 JIT lane and its labels remain installed but dormant for ordinary
+CI; keep them for manual
+[`self-hosted-runner-smoke.yml`](../../.github/workflows/self-hosted-runner-smoke.yml)
+health checks only. Scheduled advisories remain on the native Mac label. Storage
+hygiene remains a cheap, non-compiling GitHub-hosted Ubuntu job
+(`ubuntu-latest`). Continuous Linux/x86/cross-platform validation and
+determinism comparison are owned by
+[#525](https://github.com/fontanierh/boxology/issues/525). No product validation
+or compilation job uses GitHub-hosted runners or minutes. Native Mac slots reuse
+the per-slot Cargo target with four Cargo jobs; dormant Linux containers remain
+capped at one CPU and 2 GiB.
+
+The wall-clock monitor tracks the single required `validation` job's
+cache-hit duration excluding queue time, with **4 minutes** as the alarm
+threshold across recent PR runs.
 
 ## Health, cleanup, and rollback
 

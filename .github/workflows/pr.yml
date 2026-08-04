@@ -50,9 +50,14 @@ jobs:
           test "$ImageOS" = macos-arm64-host
           test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
 
-      # Documentation-only PRs should not spend minutes recompiling Rust. Main
-      # pushes and every change outside the documentation/record surface run the
-      # root-workspace suite below.
+      - name: CI hygiene
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: cargo xtask ci-hygiene --base "$BASE_SHA"
+
+      # Documentation-only PRs should not spend minutes recompiling Rust. For
+      # code changes, the required lane tests only the directly changed crates;
+      # the complete workspace suite belongs to dispatch-only deep validation.
       - name: Select test scope
         id: scope
         env:
@@ -60,44 +65,76 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           run_rust=true
-          run_generator=false
+          run_workspace_check=false
+          run_reaper=false
+          changed_manifests="$RUNNER_TEMP/boxology-changed-manifests"
+          : > "$changed_manifests"
           if test "$EVENT_NAME" = pull_request; then
             changed="$(git diff --name-only "$BASE_SHA" HEAD)"
             if test -n "$changed" && ! grep -Evq '\.md$' <<<"$changed"; then
               run_rust=false
             fi
-            if grep -Eq '^crates/boxology-generator($|[-/])' <<<"$changed"; then
-              run_generator=true
+            if grep -Eq '^ops/process-reaper/' <<<"$changed"; then
+              run_reaper=true
+            fi
+            if test "$run_rust" = true; then
+              if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$' <<<"$changed"; then
+                run_workspace_check=true
+              fi
+              while IFS= read -r changed_path; do
+                dir="$(dirname "$changed_path")"
+                while test "$dir" != . && test "$dir" != /; do
+                  if test -f "$dir/Cargo.toml"; then
+                    printf '%s\n' "$dir/Cargo.toml" >> "$changed_manifests"
+                    break
+                  fi
+                  dir="$(dirname "$dir")"
+                done
+              done <<<"$changed"
+              sort -u -o "$changed_manifests" "$changed_manifests"
             fi
           fi
           echo "run_rust=$run_rust" | tee -a "$GITHUB_OUTPUT"
-          echo "run_generator=$run_generator" | tee -a "$GITHUB_OUTPUT"
+          echo "run_workspace_check=$run_workspace_check" | tee -a "$GITHUB_OUTPUT"
+          echo "run_reaper=$run_reaper" | tee -a "$GITHUB_OUTPUT"
 
-      - name: Test root workspace
+      # This catches repository-policy regressions on every code PR and is much
+      # cheaper than executing every package's integration suite.
+      - name: Test repository invariants
         if: steps.scope.outputs.run_rust == 'true'
-        run: cargo test --workspace --all-features --locked --exclude boxology-init --exclude boxology-generator
+        run: cargo test -p xtask --locked
 
-      # Keep fast init unit/CLI coverage, but leave its multi-minute born-valid
-      # nested-workspace acceptance test out of the per-PR critical path.
-      - name: Test init units
+      - name: Test changed crates
         if: steps.scope.outputs.run_rust == 'true'
-        run: cargo test -p boxology-init --all-features --locked --lib --bins
+        run: |
+          while IFS= read -r manifest; do
+            case "$manifest" in
+              crates/xtask/Cargo.toml)
+                # Already covered by the repository-invariant step.
+                ;;
+              crates/boxology-init/Cargo.toml)
+                # The multi-minute born-valid nested-workspace acceptance test
+                # remains in dispatch-only deep validation.
+                cargo test --manifest-path "$manifest" --all-features --locked --lib --bins
+                ;;
+              *)
+                cargo test --manifest-path "$manifest" --all-features --locked
+                ;;
+            esac
+          done < "$RUNNER_TEMP/boxology-changed-manifests"
 
-      - name: Test generator when changed
-        if: steps.scope.outputs.run_generator == 'true'
-        run: cargo test -p boxology-generator --all-features --locked
+      # Root dependency/toolchain changes can affect every member even when no
+      # individual crate path changed. Compile the whole workspace only then.
+      - name: Check workspace build graph
+        if: steps.scope.outputs.run_workspace_check == 'true'
+        run: cargo check --workspace --all-features --locked
 
       - name: Check Boxology model
         if: steps.scope.outputs.run_rust == 'true'
-        run: cargo run -q -p boxology-cli --bin boxology -- check
-
-      # ping-app is the smallest composition fixture outside the root workspace;
-      # it keeps one real generated-contract/implementation composition in PR CI.
-      - name: Test ping-app composition
-        if: steps.scope.outputs.run_rust == 'true'
-        run: |
-          cargo fmt --check --manifest-path crates/fixtures/ping-app/Cargo.toml -p ping-app
-          cargo test --manifest-path crates/fixtures/ping-app/Cargo.toml --all-features --locked
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: cargo run -q -p boxology-cli --bin boxology -- check --base "$BASE_SHA"
 
       - name: Test process reaper
+        if: steps.scope.outputs.run_reaper == 'true'
         run: bash ops/process-reaper/tests/run-tests.sh
