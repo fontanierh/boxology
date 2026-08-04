@@ -35,7 +35,8 @@ const CONTRACT_WITH_GREET: &[u8] = br#"boxology::contract! {
     #[capability(exposure = external)]
     pub async fn greet(name: String) -> Result<String, HelloError>;
 }"#;
-const USAGE: &str = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n";
+const USAGE: &str = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n       boxology check --format human|json\n";
+const CLEAN_CHECK_JSON: &str = "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"skipped\",\n      \"reason\": \"contract classification skipped: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"skipped\",\n      \"reason\": \"not run: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"skipped\",\n      \"reason\": \"not run: the step is not implemented in this boxology version\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"passed\"\n}\n";
 const ROOT_MANIFEST: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 const PACKAGE_MANIFEST: &str = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n";
 const METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
@@ -837,10 +838,15 @@ fn check_metadata_failure_is_invocation() {
 #[test]
 fn check_rejects_unwired_flags_with_usage() {
     for args in [
-        vec!["check", "--format", "json"],
+        vec!["check", "--format", "yaml"],
+        vec!["check", "--format", "json", "--format", "json"],
+        vec!["check", "--base", "HEAD", "--base", "HEAD"],
+        vec!["check", "--format"],
+        vec!["check", "--format", ""],
         vec!["check", "--base"],
         vec!["check", "--base", "HEAD", "extra"],
         vec!["check", "--base=HEAD"],
+        vec!["check", "--format=json"],
         vec!["check", "--base", "--help"],
         vec!["check", "--base", ""],
         vec!["check", "extra"],
@@ -853,6 +859,73 @@ fn check_rejects_unwired_flags_with_usage() {
         assert!(text(&output.stdout).is_empty());
         assert_eq!(text(&output.stderr), USAGE);
     }
+}
+
+#[test]
+fn check_json_clean_workspace_is_exact_byte_golden() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run(&["check", "--format", "json"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(text(&output.stdout), CLEAN_CHECK_JSON);
+    assert!(text(&output.stderr).is_empty());
+    let again = fixture.run(&["check", "--format", "json"]);
+    assert_eq!(again.stdout, output.stdout);
+    assert_eq!(again.stderr, output.stderr);
+}
+
+#[test]
+fn check_format_human_matches_default_bytes() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let defaulted = fixture.run(&["check"]);
+    let explicit = fixture.run(&["check", "--format", "human"]);
+    assert_eq!(explicit.status.code(), defaulted.status.code());
+    assert_eq!(explicit.stdout, defaulted.stdout);
+    assert_eq!(explicit.stderr, defaulted.stderr);
+    let reversed = fixture.run(&["check", "--format", "human", "--base", "HEAD"]);
+    let ordered = fixture.run(&["check", "--base", "HEAD", "--format", "human"]);
+    // Both forms are accepted; without a repository they fail the same way on base resolution.
+    assert_eq!(reversed.status.code(), ordered.status.code());
+    assert_eq!(reversed.stdout, ordered.stdout);
+    assert_eq!(reversed.stderr, ordered.stderr);
+}
+
+#[test]
+fn check_json_lock_failure_is_structured_failed_with_output() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run_with(&["check", "--format", "json"], "fail-lock", true);
+    let stdout = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).is_empty());
+    assert!(stdout.contains("\"schema\": \"boxology.check-report@1\""));
+    assert!(stdout.contains(
+        "\"id\": \"cargo-graph\",\n      \"status\": \"failed\",\n      \"findings\": [\n        {\n          \"kind\": \"workspace\",\n          \"code\": \"BXW0097\",\n          \"path\": \"Cargo.lock\",\n          \"package\": null,\n          \"payload\": \"command=\\\"cargo metadata --format-version 1 --locked\\\"\",\n          \"rule\": \"cargo graph and lockfile freshness check failed\",\n          \"rule_source\": \"boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 4; specs/s5-manifest-and-validation.md D6\"\n        }\n      ],\n      \"output\": \"representative lock failure\\n\""
+    ));
+    assert!(stdout.ends_with("  \"result\": \"failed\"\n}\n"));
+}
+
+#[test]
+fn check_json_accepts_format_and_base_in_either_order() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    fixture.commit("baseline");
+    let left = fixture.run(&["check", "--format", "json", "--base", "HEAD"]);
+    let right = fixture.run(&["check", "--base", "HEAD", "--format", "json"]);
+    assert_eq!(left.status.code(), Some(0));
+    assert_eq!(right.status.code(), Some(0));
+    assert_eq!(left.stdout, right.stdout);
+    assert!(text(&left.stderr).is_empty());
+    assert!(text(&left.stdout).contains("\"id\": \"contract-classification\""));
+    assert!(text(&left.stdout).contains("\"status\": \"passed\""));
+    assert!(text(&left.stdout).contains("\"result\": \"passed\""));
+
+    let no_repo = Fixture::new(false);
+    assert_eq!(no_repo.run(&["generate"]).status.code(), Some(0));
+    let defaulted = no_repo.run(&["check", "--format", "json"]);
+    assert_eq!(defaulted.status.code(), Some(0));
+    assert_eq!(text(&defaulted.stdout), CLEAN_CHECK_JSON);
 }
 
 #[test]

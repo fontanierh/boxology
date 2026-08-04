@@ -66,7 +66,7 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     source: "crates/boxology-workspace/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
-    body_digest: "90d0740185df819abe1c6464ed4f19a3a3eb3b20966ffb40d010d9130fa6ca41",
+    body_digest: "3daaf29c01df87b82990aaeeaa74b8856f85e1ff8a984992910393b3528b60d9",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
@@ -867,7 +867,7 @@ mod tests {
                     source: "crates/boxology-workspace/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
-                    body_digest: "90d0740185df819abe1c6464ed4f19a3a3eb3b20966ffb40d010d9130fa6ca41",
+                    body_digest: "3daaf29c01df87b82990aaeeaa74b8856f85e1ff8a984992910393b3528b60d9",
                 },
             ),
             (
