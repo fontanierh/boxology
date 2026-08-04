@@ -1,0 +1,58 @@
+name: deep-validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deep-validation
+  cancel-in-progress: false
+
+env:
+  CARGO_DENY_VERSION: "0.20.2"
+
+jobs:
+  deep:
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
+    timeout-minutes: 75
+    env:
+      CARGO_INCREMENTAL: "1"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "4"
+      RUST_TEST_THREADS: "4"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Record runner evidence
+        run: |
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown} (${RUNNER_OS}/${RUNNER_ARCH})"
+          rustc --version --verbose
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$ImageOS" = macos-arm64-host
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "aarch64-apple-darwin"
+
+      - name: Install exact cargo-deny
+        run: |
+          if ! test "$(cargo deny --version 2>/dev/null)" = "cargo-deny ${CARGO_DENY_VERSION}"; then
+            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked --force
+          fi
+          test "$(cargo deny --version)" = "cargo-deny ${CARGO_DENY_VERSION}"
+
+      - name: Deep validation
+        run: cargo xtask ci --no-budget
+
+      - name: Check Boxology model
+        run: cargo run -q -p boxology-cli --bin boxology -- check

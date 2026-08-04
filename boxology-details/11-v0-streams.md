@@ -8,7 +8,7 @@ Streams partition the v0 scope defined by the [product contract](07-product-cont
 
 ## S0 — Product-repo bootstrap and CI
 
-The infrastructure every other stream stands on: the Cargo workspace scaffold for Boxology's own crates, pull-request validation for this repository, the pinned toolchain, and the **cross-platform determinism harness** — the Linux/macOS matrix that byte-compares generator output across platforms so a platform-dependent generator bug fails in this repository's CI rather than in a user's first pull request. Lands first; serves everyone. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
+The infrastructure every other stream stands on: the Cargo workspace scaffold for Boxology's own crates, the pinned toolchain, the determinism harness, and pull-request validation for this repository. V0's merge-critical gate is one native Apple-silicon Mac `validation` job (`ci-hygiene`, repository invariants, directly changed-crate tests, and explicit-base `boxology check`); the full deep aggregate (`cargo xtask ci --no-budget`) runs only as a manual `workflow_dispatch` job off the merge critical path. Continuous Linux/x86/cross-platform validation and determinism comparison are post-V0 residual work. Lands first; serves everyone. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
 
 ## S1 — Runtime core and composition assembly
 
@@ -60,6 +60,7 @@ These claims were previously written as v0 obligations but are not delivered by 
 | Named-field payload emission (`BXG0048`) and `Blob`/`Secret` end-to-end generator/binding coverage (`BXG0040`) | [#104](https://github.com/fontanierh/boxology/issues/104) | Fail-closed at generation; `Secret` redaction proven at kernel level only |
 | Capability `name` override (wire-vs-Rust identity split) | [#480](https://github.com/fontanierh/boxology/issues/480) | Partial parser/model handling is not v0 support; wire name = Rust fn name in v0 |
 | Transitive dependency-graph purity / identity-value extraction (`boxology-contract` → `tokio`) | [#358](https://github.com/fontanierh/boxology/issues/358) | [#107](https://github.com/fontanierh/boxology/issues/107) keeps own-source purity, source closure, uncoded-path catalog, deterministic generation, and no-project-code-execution gating; only the transitive graph-hygiene half is deferred |
+| Continuous Linux/x86/cross-platform validation and determinism comparison (including whether to reactivate, replace, or decommission the dormant Mac-hosted Linux ARM64 JIT lane) | [#525](https://github.com/fontanierh/boxology/issues/525) | V0 gates on native macOS ARM64 only; deep Mac validation is dispatch-only; cross-platform evidence required before the first pinned external release |
 
 ## Recorded v0 exclusions
 

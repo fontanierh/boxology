@@ -248,6 +248,8 @@ The supported foundation execution matrix is Linux for generated CI, with local 
 
 The generator's own conformance suite runs on Linux and macOS and compares derived output across both platforms. Platform-dependent ordering, paths, line endings, timestamps, or other byte differences fail there rather than being delegated to generated projects.
 
+Continuous cross-platform generator conformance is deferred to [#525](https://github.com/fontanierh/boxology/issues/525) for V0's lean native-macOS gate and is required before the first pinned external release.
+
 ## Foundation milestone
 
 The generated Hello World project exercises the complete minimal topology:

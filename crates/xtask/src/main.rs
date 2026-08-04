@@ -126,9 +126,21 @@ const CAPSTONE_PACKAGES: &[&str] = &[
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CiTier {
     PullRequest,
+    Hygiene,
     Deep,
     Capstone,
 }
+
+/// Exact check-name set for `cargo xtask ci-hygiene --base <revision>`.
+const HYGIENE_CHECKS: &[&str] = &[
+    "audit",
+    "fmt",
+    "key-order",
+    "whitespace",
+    "links",
+    "records",
+    "budget",
+];
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -148,6 +160,14 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
                 && !base.starts_with('-') =>
         {
             run_ci(Some(base))
+        }
+        [command, flag, base]
+            if command == "ci-hygiene"
+                && flag == "--base"
+                && !base.is_empty()
+                && !base.starts_with('-') =>
+        {
+            run_ci_hygiene(base)
         }
         [command] if command == "ci-capstone" => run_ci_capstone(),
         [command] if command == "ci-born-valid" => run_ci_born_valid(),
@@ -232,7 +252,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-capstone\n       cargo xtask ci-born-valid\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-hygiene --base <revision>\n       cargo xtask ci-capstone\n       cargo xtask ci-born-valid\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -263,18 +283,40 @@ fn external_test_checks(
         .collect()
 }
 
-/// Missing tier-required external-test names, then false verdicts.
+/// Missing tier-required check names, then false verdicts.
 fn ci_failure_names(tier: CiTier, checks: &[(&'static str, bool)]) -> Vec<&'static str> {
     let mut failed = Vec::new();
-    if tier == CiTier::Capstone && !checks.iter().any(|(name, _)| *name == "fixture-projects") {
-        failed.push("fixture-projects");
-    }
-    if tier != CiTier::PullRequest {
-        failed.extend(
-            EXTERNAL_TEST_SPECS
-                .iter()
-                .filter_map(|(name, _)| (!checks.iter().any(|(n, _)| n == name)).then_some(*name)),
-        );
+    match tier {
+        CiTier::Hygiene => {
+            for &required in HYGIENE_CHECKS {
+                if !checks.iter().any(|(name, _)| *name == required) {
+                    failed.push(required);
+                }
+            }
+            for &(name, _) in checks {
+                if !HYGIENE_CHECKS.contains(&name) {
+                    failed.push(name);
+                }
+            }
+        }
+        CiTier::Capstone => {
+            if !checks.iter().any(|(name, _)| *name == "fixture-projects") {
+                failed.push("fixture-projects");
+            }
+            failed.extend(
+                EXTERNAL_TEST_SPECS.iter().filter_map(|(name, _)| {
+                    (!checks.iter().any(|(n, _)| n == name)).then_some(*name)
+                }),
+            );
+        }
+        CiTier::Deep => {
+            failed.extend(
+                EXTERNAL_TEST_SPECS.iter().filter_map(|(name, _)| {
+                    (!checks.iter().any(|(n, _)| n == name)).then_some(*name)
+                }),
+            );
+        }
+        CiTier::PullRequest => {}
     }
     failed.extend(checks.iter().filter_map(|(n, ok)| (!*ok).then_some(*n)));
     failed
@@ -378,6 +420,30 @@ fn run_ci(base: Option<&str>) -> u8 {
         None => println!("budget: SKIPPED (--no-budget)"),
     }
     summarize_ci(tier, &checks)
+}
+
+fn run_ci_hygiene(base: &str) -> u8 {
+    println!("test-tier: ci-hygiene");
+    let mut checks = vec![
+        (
+            "audit",
+            timed("audit", || registered_ci_skill_audits(&root())),
+        ),
+        ("fmt", timed("fmt", run_fmt)),
+        ("key-order", timed("key-order", run_key_order)),
+        ("whitespace", timed("whitespace", check_tracked_whitespace)),
+        ("links", timed("links", || links::check(&root()))),
+        (
+            "records",
+            timed("records", || records::run(&root(), Some(base)) == 0),
+        ),
+    ];
+    for &(name, passed) in &checks {
+        println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
+    }
+    let code = timed("budget", || budget::run(&root(), base));
+    checks.push(("budget", code == 0));
+    summarize_ci(CiTier::Hygiene, &checks)
 }
 
 fn run_ci_capstone() -> u8 {
@@ -952,7 +1018,7 @@ mod tests {
         );
         assert!(
             production.contains(
-                "tier == CiTier::Capstone && !checks.iter().any(|(name, _)| *name == \
+                "CiTier::Capstone => {\n            if !checks.iter().any(|(name, _)| *name == \
                  \"fixture-projects\")"
             ),
             "capstone must fail closed if fixture-projects is displaced"
@@ -985,6 +1051,11 @@ mod tests {
                 "generator-source-inventory"
             ]
         );
+        // Hygiene is a non-PR tier that must not inherit Deep/Capstone external-test requirements.
+        assert_eq!(
+            ci_failure_names(CiTier::Hygiene, &[]),
+            HYGIENE_CHECKS.to_vec()
+        );
 
         let failed: Vec<_> = EXTERNAL_TEST_SPECS
             .iter()
@@ -994,6 +1065,113 @@ mod tests {
             ci_failure_names(CiTier::PullRequest, &failed).len(),
             3,
             "present false verdicts fail even when PR permits delegation"
+        );
+    }
+
+    #[test]
+    fn hygiene_tier_requires_exact_check_names_and_failed_checks() {
+        assert_eq!(
+            HYGIENE_CHECKS,
+            &[
+                "audit",
+                "fmt",
+                "key-order",
+                "whitespace",
+                "links",
+                "records",
+                "budget"
+            ]
+        );
+        let passed: Vec<_> = HYGIENE_CHECKS.iter().map(|&name| (name, true)).collect();
+        assert!(ci_failure_names(CiTier::Hygiene, &passed).is_empty());
+
+        let mut missing_links = passed.clone();
+        missing_links.retain(|(name, _)| *name != "links");
+        assert_eq!(
+            ci_failure_names(CiTier::Hygiene, &missing_links),
+            vec!["links"]
+        );
+
+        let mut with_extra = passed.clone();
+        with_extra.push(("deny", true));
+        assert_eq!(ci_failure_names(CiTier::Hygiene, &with_extra), vec!["deny"]);
+
+        let mut failed_fmt = passed;
+        failed_fmt[1] = ("fmt", false);
+        assert_eq!(ci_failure_names(CiTier::Hygiene, &failed_fmt), vec!["fmt"]);
+
+        // Present external-test names must not be required merely because Hygiene is non-PR.
+        let hygiene_plus_external: Vec<_> = HYGIENE_CHECKS
+            .iter()
+            .map(|&name| (name, true))
+            .chain(EXTERNAL_TEST_SPECS.iter().map(|(name, _)| (*name, true)))
+            .collect();
+        assert_eq!(
+            ci_failure_names(CiTier::Hygiene, &hygiene_plus_external),
+            EXTERNAL_TEST_SPECS
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn ci_hygiene_dispatch_rejects_missing_empty_and_flag_shaped_bases() {
+        let root = root();
+        for args in [
+            vec!["ci-hygiene".to_owned()],
+            vec!["ci-hygiene".to_owned(), "--base".to_owned()],
+            vec!["ci-hygiene".to_owned(), "--base".to_owned(), String::new()],
+            vec![
+                "ci-hygiene".to_owned(),
+                "--base".to_owned(),
+                "--no-budget".to_owned(),
+            ],
+            vec!["ci-hygiene".to_owned(), "HEAD".to_owned()],
+        ] {
+            assert_eq!(dispatch(&args, &root), 2, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn pr_workflow_selects_changed_crates_only_inside_rust_lane() {
+        let workflow = include_str!("../../../.github/workflows/pr.yml");
+        let scope = workflow
+            .split_once("- name: Select test scope")
+            .expect("Select test scope step")
+            .1
+            .split_once("- name: Test repository invariants")
+            .expect("end of Select test scope")
+            .0;
+        assert!(
+            scope.contains(r"\.md$"),
+            "Markdown-only diffs must clear the Rust/product lane"
+        );
+        assert!(
+            scope.contains("if test \"$run_rust\" = true; then")
+                && scope.contains("changed_manifests=\"$RUNNER_TEMP/boxology-changed-manifests\"")
+                && scope.contains("$dir/Cargo.toml")
+                && scope.contains("sort -u -o \"$changed_manifests\""),
+            "changed-crate selection must be gated on run_rust so Markdown-only \
+             crate paths stay hygiene-only"
+        );
+    }
+
+    #[test]
+    fn pr_workflow_keeps_full_suites_off_the_required_path() {
+        let workflow = include_str!("../../../.github/workflows/pr.yml");
+        assert!(workflow.contains("cargo test -p xtask --locked"));
+        assert!(workflow.contains("- name: Test changed crates"));
+        assert!(workflow.contains("- name: Check workspace build graph"));
+        assert!(workflow.contains("steps.scope.outputs.run_workspace_check == 'true'"));
+        assert!(workflow.contains("steps.scope.outputs.run_reaper == 'true'"));
+        assert!(
+            !workflow.contains("cargo test --workspace"),
+            "the full workspace test sweep belongs to dispatch-only deep validation"
+        );
+        assert!(
+            !workflow.contains("ping-app/Cargo.toml"),
+            "composition acceptance belongs to dispatch-only deep validation"
         );
     }
 
