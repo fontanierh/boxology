@@ -48,6 +48,7 @@ pub const NAMED_CONFORMANCE_EVIDENCE: &[NamedConformanceEvidence] = &[
     NamedConformanceEvidence { module: "raw_hello", name: "default_request_body_limit_boundary_is_one_mib" },
     NamedConformanceEvidence { module: "raw_hello", name: "malformed_request_line_is_bare_http_400" },
     NamedConformanceEvidence { module: "raw_hello", name: "request_head_over_default_16_kib_cap_is_bare_http_431" },
+    NamedConformanceEvidence { module: "raw_hello", name: "overlong_request_target_is_bare_http_414" },
     NamedConformanceEvidence { module: "raw_server", name: "raw_server_client_cases_are_canonical" },
     NamedConformanceEvidence { module: "typed_hello", name: "typed_hello_round_trips_success_and_domain_error" },
     NamedConformanceEvidence { module: "typed_hello", name: "assertion_panic_survives_a_forced_shutdown_error" },

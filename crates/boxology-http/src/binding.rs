@@ -35,7 +35,7 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// are intentionally asymmetric — each matches its own spec; do not re-unify
 /// them on "mirror the client" reasoning.
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
-/// The default complete HTTP/1 request-head cap, including its request line.
+/// The default Hyper HTTP/1 parse-buffer bound.
 const DEFAULT_MAX_REQUEST_HEAD_BYTES: usize = 16 * 1024;
 /// Hyper's minimum accepted `max_buf_size`; lower configured values use this.
 const MIN_MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
@@ -82,9 +82,10 @@ impl HttpServerConfig {
         self
     }
 
-    /// Replaces the complete HTTP/1 request-head cap, including the request
-    /// line and all header fields. Values below Hyper's 8192-byte minimum are
-    /// silently floored to 8192 rather than panicking in Hyper's builder.
+    /// Replaces Hyper's HTTP/1 parse-buffer bound. This is not a universal
+    /// complete-head byte cap: Hyper separately parses and bounds request
+    /// targets. Values below Hyper's 8192-byte minimum are silently floored to
+    /// 8192 rather than panicking in Hyper's builder.
     pub fn with_max_request_head_bytes(mut self, max_request_head_bytes: usize) -> Self {
         self.max_request_head_bytes = max_request_head_bytes.max(MIN_MAX_REQUEST_HEAD_BYTES);
         self
