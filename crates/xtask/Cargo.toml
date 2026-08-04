@@ -13,6 +13,7 @@ boxology-init = { version = "=0.0.0", path = "../boxology-init" }
 boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
 boxology-schema = { version = "=0.0.0", path = "../boxology-schema" }
 boxology-workspace = { version = "=0.0.0", path = "../boxology-workspace" }
+proc-macro2 = "=1.0.107"
 quote = "=1.0.47"
 sha2 = "=0.10.9"
 serde_json = "=1.0.150"

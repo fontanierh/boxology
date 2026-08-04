@@ -1515,6 +1515,7 @@ dependencies = [
  "boxology-manifest",
  "boxology-schema",
  "boxology-workspace",
+ "proc-macro2",
  "quote",
  "serde_json",
  "sha2",
