@@ -18,7 +18,8 @@ concurrency:
 # PR CI intentionally has one required native-Mac lane. The self-hosted runner
 # already persists CARGO_HOME and CARGO_TARGET_DIR across jobs, so adding an
 # actions/cache archive would only duplicate that cache and add transfer time.
-# Deep cross-platform and release checks belong outside the merge critical path.
+# Full product, cross-platform, and release checks belong outside the merge
+# critical path.
 jobs:
   validation:
     runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
@@ -128,12 +129,6 @@ jobs:
       - name: Check workspace build graph
         if: steps.scope.outputs.run_workspace_check == 'true'
         run: cargo check --workspace --all-features --locked
-
-      - name: Check Boxology model
-        if: steps.scope.outputs.run_rust == 'true'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: cargo run -q -p boxology-cli --bin boxology -- check --base "$BASE_SHA"
 
       - name: Test process reaper
         if: steps.scope.outputs.run_reaper == 'true'

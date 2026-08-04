@@ -231,11 +231,12 @@ native determinism fixture.
 Pull-request CI is one required native Mac job: `pr.yml` `validation` on
 `[self-hosted, macOS, ARM64, boxology-macos-pr]`. It always runs
 `cargo xtask ci-hygiene --base <event base SHA>` and, for non-Markdown diffs, the
-xtask invariant suite, directly changed-crate tests, and
-`boxology check --base <event base SHA>`. Root dependency/toolchain changes also
-compile-check the whole workspace; the process-reaper fixture runs only when its
-own implementation changes. Full-workspace, nested-workspace, composition,
-Clippy, docs, deny, and determinism suites are deep-only. Deep validation is
+xtask invariant suite and directly changed-crate tests. Root dependency/toolchain
+changes also compile-check the whole workspace; the process-reaper fixture runs
+only when its own implementation changes. Full-workspace, nested-workspace,
+composition, Clippy, docs, deny, determinism, and complete `boxology check`
+validation are deep-only. This avoids duplicating fmt, Clippy, and workspace tests
+when S5 makes them part of the product check itself. Deep validation is
 `deep-validation.yml`: `workflow_dispatch` only (no schedule, no required check),
 same Mac label, running `cargo xtask ci --no-budget` and `boxology check`. Do not
 dispatch deep validation during heavy local delivery on this MacBook.

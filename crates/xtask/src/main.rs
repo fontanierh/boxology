@@ -1166,6 +1166,10 @@ mod tests {
         assert!(workflow.contains("steps.scope.outputs.run_workspace_check == 'true'"));
         assert!(workflow.contains("steps.scope.outputs.run_reaper == 'true'"));
         assert!(
+            !workflow.contains("--bin boxology -- check"),
+            "the complete product check belongs to dispatch-only deep validation"
+        );
+        assert!(
             !workflow.contains("cargo test --workspace"),
             "the full workspace test sweep belongs to dispatch-only deep validation"
         );
