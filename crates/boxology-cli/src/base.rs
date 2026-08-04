@@ -1,4 +1,4 @@
-//! Git-backed base-revision schema ingestion for `boxology check --base`.
+//! Git-backed base-revision resolution and schema ingestion for `boxology check`.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -12,7 +12,7 @@ const BASE_SCHEMA_TEXT: &str = "a base-revision schema object must be readable a
 const REVISION: Rule = ("BXW0091", BASE_REVISION_TEXT, BASE_GIT_SOURCE);
 const BASE_SCHEMA: Rule = ("BXW0092", BASE_SCHEMA_TEXT, BASE_GIT_SOURCE);
 
-/// The Git executable could not be started for an explicit-base check.
+/// The Git executable could not be started for a base check.
 #[derive(Debug, Eq, PartialEq)]
 pub struct GitToolError;
 
@@ -83,6 +83,41 @@ pub enum BaseSchemasError {
     Git(BaseError),
     /// The current checked-in schema did not satisfy the existing filesystem guard.
     Submitted(ExecuteError),
+}
+
+/// Outcome of resolving the no-flag default base against the fixed v0 branch `main`.
+#[derive(Debug, Eq, PartialEq)]
+pub enum DefaultBase {
+    /// Merge base of `HEAD` and `main`, as a single trimmed Git stdout line.
+    Commit(String),
+    /// `root` is not inside a Git repository.
+    NoRepository,
+    /// No merge base exists between `HEAD` and `main`.
+    NoMergeBase,
+}
+
+/// Resolves the no-flag default base: merge base of `HEAD` with the fixed v0 branch `main`.
+///
+/// # Errors
+/// Returns [`GitToolError`] when the Git executable cannot be started.
+pub fn resolve_default_base(root: &Path) -> Result<DefaultBase, GitToolError> {
+    let git_dir = git(root, &["rev-parse", "--git-dir"])
+        .output()
+        .map_err(|_| GitToolError)?;
+    if !git_dir.status.success() {
+        return Ok(DefaultBase::NoRepository);
+    }
+    let merge = git(root, &["merge-base", "HEAD", "main"])
+        .output()
+        .map_err(|_| GitToolError)?;
+    if !merge.status.success() {
+        return Ok(DefaultBase::NoMergeBase);
+    }
+    let oid = std::str::from_utf8(&merge.stdout)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_owned();
+    Ok(DefaultBase::Commit(oid))
 }
 
 /// Resolves `revision` once and assembles schema pairs for every current generation plan.
