@@ -240,7 +240,8 @@ HTTP/1 request-head framing can fail before the binding service runs. These resp
 | Status | Trigger | Wire response |
 | --- | --- | --- |
 | `400` | Malformed HTTP/1 request line. | Empty body; no `Content-Type`; no call-error envelope. |
-| `431` | Complete HTTP/1 request head (request line plus headers) exceeds the configured cap. | Empty body; no `Content-Type`; no call-error envelope. |
+| `414` | The configured parse buffer admits the request line, but its request target exceeds Hyper's independent target-length bound. | Empty body; no `Content-Type`; no call-error envelope. |
+| `431` | An incomplete HTTP/1 request head exhausts the configured parse-buffer bound. | Empty body; no `Content-Type`; no call-error envelope. |
 
 Cancellation, disconnection, or transport failure that produces no valid HTTP response becomes a client-side `CallError`; it has no invented HTTP status.
 

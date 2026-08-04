@@ -755,6 +755,10 @@ fn named_evidence_resolves_through_inventory() {
                 "request_head_over_default_16_kib_cap_is_bare_http_431",
                 request_head_over_default_16_kib_cap_is_bare_http_431 as *const (),
             ),
+            (
+                "overlong_request_target_is_bare_http_414",
+                overlong_request_target_is_bare_http_414 as *const (),
+            ),
         ],
     );
 }
@@ -954,6 +958,35 @@ async fn request_head_over_default_16_kib_cap_is_bare_http_431() {
             assert_bare_status_response(
                 &raw_exchange(address, &over, Exchange::Whole, Duration::from_secs(5)).await,
                 431,
+            );
+            assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        })
+        .await;
+}
+
+/// Bare framing: over-long request-target → HTTP 414, empty body, no JSON envelope.
+/// Hyper independently bounds request-target length before service dispatch.
+/// Parse buffer is raised only so the target can complete-parse; without that,
+/// the default 16 KiB head cap returns bare 431 first.
+#[tokio::test]
+async fn overlong_request_target_is_bare_http_414() {
+    const OVERLONG_URI_LEN: usize = 65_535;
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let config = HttpServerConfig::new("127.0.0.1:0".parse().expect("loopback address is valid"))
+        .with_max_request_head_bytes(128 * 1024);
+    let running = RunningHello::start_with_config(
+        CountingHello {
+            dispatches: Arc::clone(&dispatches),
+        },
+        config,
+    );
+    let address = running.local_addr();
+    let overlong = long_request_target_head(OVERLONG_URI_LEN);
+    running
+        .assert_then_shutdown(async move {
+            assert_bare_status_response(
+                &raw_exchange(address, &overlong, Exchange::Whole, Duration::from_secs(5)).await,
+                414,
             );
             assert_eq!(dispatches.load(Ordering::SeqCst), 0);
         })
@@ -1304,20 +1337,41 @@ fn empty_body_padded_head(length: usize) -> Vec<u8> {
     head
 }
 
-fn assert_bare_status_response(raw: &[u8], status: u16) {
-    let (head, body) = split_response(raw);
+fn long_request_target_head(uri_len: usize) -> Vec<u8> {
+    // Request-target is exactly `uri_len` bytes. Hyper independently rejects
+    // over-long targets with bare 414 before dispatch.
+    let prefix = b"POST ";
+    let suffix = b" HTTP/1.1\r\nHost: boxology\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    assert!(uri_len >= 1);
+    let mut head = Vec::with_capacity(prefix.len() + uri_len + suffix.len());
+    head.extend_from_slice(prefix);
+    head.push(b'/');
+    head.extend(std::iter::repeat_n(b'x', uri_len - 1));
+    head.extend_from_slice(suffix);
+    head
+}
+
+/// Status code from a raw HTTP response; used by bare-status assertions.
+fn status_code(raw: &[u8]) -> u16 {
+    let (head, _) = split_response(raw);
     let line_end = head.iter().position(|b| *b == b'\n').expect("status line");
     let status_line = head[..line_end]
         .strip_suffix(b"\r")
         .unwrap_or(&head[..line_end]);
-    let code = std::str::from_utf8(status_line)
+    std::str::from_utf8(status_line)
         .expect("utf8")
         .split(' ')
         .nth(1)
         .and_then(|t| t.parse::<u16>().ok())
-        .expect("status code");
-    assert_eq!(code, status);
+        .expect("status code")
+}
+
+/// Bare pre-service framing: exact status, empty body, no Content-Type, no error envelope.
+fn assert_bare_status_response(raw: &[u8], status: u16) {
+    let (head, body) = split_response(raw);
+    assert_eq!(status_code(raw), status);
     assert!(body.is_empty(), "bare body must be empty");
+    let line_end = head.iter().position(|b| *b == b'\n').expect("status line");
     assert_header(&parse_headers(&head[line_end + 1..]), b"content-type", None);
     assert!(
         !raw.windows(8).any(|w| w == b"{\"error\""),
