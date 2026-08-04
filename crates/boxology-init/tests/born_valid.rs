@@ -281,6 +281,8 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
         ],
     );
     assert!(check.contains("check regeneration passed"), "{check}");
+    assert!(check.contains("check quality passed"), "{check}");
+    assert!(check.ends_with("check result passed\n"), "{check}");
     let generate = run(
         deadline,
         root,
@@ -449,12 +451,17 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
     assert!(stderr.is_empty(), "{stderr}");
     let finding = "BXW0090 app/boxology.toml package=ping-app candidates=[capability=ping.greet exposure=external max=internal transport=http selector=ping.*]";
     let tests_finding = "BXW0095 Cargo.toml package= candidates=[command=\"cargo test --workspace --all-features\"]";
+    let quality_finding = "BXW0107 app/boxology.toml package=ping-app candidates=[command=\"cargo test -p ping-app tests::assembled_ping_answers_in_process_and_over_real_http -- --exact\"]";
     assert_eq!(
         stdout
             .lines()
             .filter(|line| line.trim_start().starts_with("BXW"))
             .collect::<Vec<_>>(),
-        [format!("  {finding}"), format!("  {tests_finding}")],
+        [
+            format!("  {finding}"),
+            format!("  {tests_finding}"),
+            format!("  {quality_finding}"),
+        ],
         "{stdout}"
     );
     assert!(stdout.ends_with("check result failed\n"), "{stdout}");

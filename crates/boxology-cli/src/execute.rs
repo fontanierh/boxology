@@ -192,6 +192,60 @@ impl std::error::Error for ExecuteError {
     }
 }
 
+/// Lazy sequential multi-plan execution seam used by `boxology generate`.
+///
+/// Each plan is fully executed — live imports are read, the tree is generated, and declared
+/// outputs are written — before the next plan begins. Callers that need import-before-importer
+/// convergence must supply plans in that dependency order.
+///
+/// The iterator is terminal after its first execution error: once an `Err` is yielded, every later
+/// `next` call returns `None` and no later plan is executed or written.
+#[derive(Debug)]
+pub struct ExecutePlans<'a, I> {
+    root: &'a Path,
+    plans: I,
+    terminal: bool,
+}
+
+impl<'a, I> Iterator for ExecutePlans<'a, I>
+where
+    I: Iterator<Item = &'a GenerationPlan>,
+{
+    type Item = Result<(&'a GenerationPlan, Outcome), ExecuteError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.terminal {
+            return None;
+        }
+        let plan = self.plans.next()?;
+        match execute(self.root, plan) {
+            Ok(outcome) => Some(Ok((plan, outcome))),
+            Err(error) => {
+                self.terminal = true;
+                Some(Err(error))
+            }
+        }
+    }
+}
+
+/// Returns a lazy executor that runs `plans` in iterator order against `root`.
+///
+/// This is the canonical multi-plan sequential seam: each plan observes import bytes left on disk
+/// by earlier writes in the same pass. Production `boxology generate` and one-pass convergence
+/// proofs both drive this iterator so generate-all-before-write refactors cannot slip past them.
+/// After the first execution error the iterator is terminal and yields `None` forever, so later
+/// plans are neither executed nor written.
+pub fn execute_plans<'a, I>(root: &'a Path, plans: I) -> ExecutePlans<'a, I::IntoIter>
+where
+    I: IntoIterator<Item = &'a GenerationPlan>,
+{
+    ExecutePlans {
+        root,
+        plans: plans.into_iter(),
+        terminal: false,
+    }
+}
+
 /// Executes one plan against `root`, reading package inputs, generating its tree, and writing it.
 ///
 /// Inputs are read in sorted logical-path order after refusing symlinks in every input ancestor;
