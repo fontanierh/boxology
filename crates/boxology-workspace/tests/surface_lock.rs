@@ -19,6 +19,7 @@ const SELECTED_SCHEMA_NEW: &str =
 const CHECK_COMPOSITIONS: &str =
     "pub fn check_compositions(&self, schemas: &[SelectedSchema]) -> Result<(), Findings>";
 const LOCKFILE_SCOPE: &str = "pub fn lockfile_scope(\n        &self,\n        manifests: &[CargoManifestChange],\n    ) -> Result<Option<Findings>, InputError>";
+const INTO_ENTRIES: &str = "pub fn into_entries(self) -> Vec<Entry>";
 const CARGO_MANIFEST_CHANGE_NEW: &str =
     "pub fn new(path: RelativePath, base: Option<Vec<u8>>, candidate: Option<Vec<u8>>) -> Self";
 const CARGO_MANIFEST_CHANGE_PATH: &str = "#[doc = \"Returns the changed manifest's workspace-relative path.\"] path: &RelativePath = path;";
@@ -506,6 +507,7 @@ fn locked_sources<'a>(sources: impl IntoIterator<Item = &'a Source>) -> bool {
         && lib.text.match_indices(SELECTED_SCHEMA_NEW).count() == 1
         && lib.text.match_indices(CHECK_COMPOSITIONS).count() == 1
         && lib.text.match_indices(LOCKFILE_SCOPE).count() == 1
+        && lib.text.match_indices(INTO_ENTRIES).count() == 1
         && lib.text.match_indices(CARGO_MANIFEST_CHANGE_NEW).count() == 1
         && lib.text.match_indices(CARGO_MANIFEST_CHANGE_PATH).count() == 1
         && lib.text.match_indices(RETAINED_EDGE_ASSERTION).count() == 1
@@ -585,6 +587,7 @@ fn surface_and_live_evasions_are_locked() {
     rejects("selected schema constructor", source, SELECTED_SCHEMA_NEW, &SELECTED_SCHEMA_NEW.replacen("pub ", "", 1));
     rejects("composition check seam", source, CHECK_COMPOSITIONS, &CHECK_COMPOSITIONS.replacen("pub ", "", 1));
     rejects("lockfile scope seam", source, LOCKFILE_SCOPE, &LOCKFILE_SCOPE.replacen("pub ", "", 1));
+    rejects("into_entries seam", source, INTO_ENTRIES, &INTO_ENTRIES.replacen("pub ", "", 1));
     rejects(
         "cargo manifest change constructor",
         source,

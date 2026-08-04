@@ -1839,6 +1839,10 @@ impl Findings {
         entries.sort();
         (!entries.is_empty()).then_some(Self(entries))
     }
+    /// Consumes this collection into its sorted entries.
+    pub fn into_entries(self) -> Vec<Entry> {
+        self.0
+    }
     ref_getters! {
         #[doc = "Returns the sorted entries."] as_slice: &[Entry] = 0;
     }
