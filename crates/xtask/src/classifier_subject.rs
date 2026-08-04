@@ -200,15 +200,19 @@ mod tests {
         assert_report_golden(
             report_introduced().expect("introduced pair renders"),
             report_introduced().expect("it renders again"),
-            "classification additive\nfinding BXC0026 hello additive\n",
+            "classification additive\n\
+finding BXC0026 path=\"hello\" additive kind=\"contract introduced\" base=- submitted=\"hello\"\n",
             r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "additive",
   "findings": [
     {
       "code": "BXC0026",
       "path": "hello",
-      "class": "additive"
+      "kind": "contract introduced",
+      "class": "additive",
+      "base": null,
+      "submitted": "hello"
     }
   ]
 }
@@ -221,15 +225,19 @@ mod tests {
         assert_report_golden(
             report_removed().expect("removed pair renders"),
             report_removed().expect("it renders again"),
-            "classification incompatible\nfinding BXC0027 hello incompatible\n",
+            "classification incompatible\n\
+finding BXC0027 path=\"hello\" incompatible kind=\"contract removed\" base=\"hello\" submitted=-\n",
             r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "incompatible",
   "findings": [
     {
       "code": "BXC0027",
       "path": "hello",
-      "class": "incompatible"
+      "kind": "contract removed",
+      "class": "incompatible",
+      "base": "hello",
+      "submitted": null
     }
   ]
 }
@@ -246,7 +254,7 @@ mod tests {
             report_unchanged().expect("it renders again"),
             "classification unchanged\n",
             r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "unchanged",
   "findings": []
 }
@@ -269,15 +277,19 @@ mod tests {
         assert_report_golden(
             report_changed().expect("changed pair renders"),
             report_changed().expect("it renders again"),
-            "classification incompatible\nfinding BXC0041 hello.greet/input incompatible\n",
+            "classification incompatible\n\
+finding BXC0041 path=\"hello.greet/input\" incompatible kind=\"capability input parameter name changed\" base=\"name\" submitted=\"label\"\n",
             r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "incompatible",
   "findings": [
     {
       "code": "BXC0041",
       "path": "hello.greet/input",
-      "class": "incompatible"
+      "kind": "capability input parameter name changed",
+      "class": "incompatible",
+      "base": "name",
+      "submitted": "label"
     }
   ]
 }
@@ -350,15 +362,18 @@ classifier disagree\" source=\"specs/s4-contract-change-classification.md D6\"\n
             report_variant_added().expect("variant-added pair renders"),
             report_variant_added().expect("it renders again"),
             "classification compatible_with_conditions\n\
-finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\"\n",
+finding BXC0036 path=\"hello/type/GreetError/variant/Other\" compatible_with_conditions kind=\"error variant added\" base=- submitted=\"Other\" condition=\"unknown-variant tolerance\"\n",
             r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "compatible_with_conditions",
   "findings": [
     {
       "code": "BXC0036",
       "path": "hello/type/GreetError/variant/Other",
+      "kind": "error variant added",
       "class": "compatible_with_conditions",
+      "base": null,
+      "submitted": "Other",
       "condition": "unknown-variant tolerance"
     }
   ]

@@ -1244,6 +1244,24 @@ fn classes_have_exact_order_and_names() {
 fn assert_renderings(report: &ClassificationReport, text: &str, json: &str) {
     assert_eq!(render_text(report), text);
     assert_eq!(render_json(report), json);
+    serde_json::from_str::<serde_json::Value>(json).unwrap();
+}
+
+fn finding_key_inventory(json: &str) -> Vec<Vec<&str>> {
+    let mut inventories = Vec::new();
+    for object in json.split("    {\n").skip(1) {
+        let body = object.split("\n    }").next().unwrap_or("");
+        let mut keys = Vec::new();
+        for line in body.lines() {
+            if let Some(key) = line.trim().strip_prefix('"')
+                && let Some(name) = key.split('"').next()
+            {
+                keys.push(name);
+            }
+        }
+        inventories.push(keys);
+    }
+    inventories
 }
 
 #[test]
@@ -1251,17 +1269,19 @@ fn report_renderings_are_byte_exact() {
     let introduced = classify(None, Some(&document("hello"))).unwrap();
     assert_renderings(
         &introduced,
-        r#"classification additive
-finding BXC0026 hello additive
-"#,
+        "classification additive\n\
+finding BXC0026 path=\"hello\" additive kind=\"contract introduced\" base=- submitted=\"hello\"\n",
         r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "additive",
   "findings": [
     {
       "code": "BXC0026",
       "path": "hello",
-      "class": "additive"
+      "kind": "contract introduced",
+      "class": "additive",
+      "base": null,
+      "submitted": "hello"
     }
   ]
 }
@@ -1271,17 +1291,19 @@ finding BXC0026 hello additive
     let removed = classify(Some(&document("hello")), None).unwrap();
     assert_renderings(
         &removed,
-        r#"classification incompatible
-finding BXC0027 hello incompatible
-"#,
+        "classification incompatible\n\
+finding BXC0027 path=\"hello\" incompatible kind=\"contract removed\" base=\"hello\" submitted=-\n",
         r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "incompatible",
   "findings": [
     {
       "code": "BXC0027",
       "path": "hello",
-      "class": "incompatible"
+      "kind": "contract removed",
+      "class": "incompatible",
+      "base": "hello",
+      "submitted": null
     }
   ]
 }
@@ -1293,7 +1315,7 @@ finding BXC0027 hello incompatible
         &unchanged,
         "classification unchanged\n",
         r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "unchanged",
   "findings": []
 }
@@ -1307,17 +1329,19 @@ finding BXC0027 hello incompatible
     let renamed = classify(Some(&base), Some(&renamed)).unwrap();
     assert_renderings(
         &renamed,
-        r#"classification incompatible
-finding BXC0041 hello.greet/input incompatible
-"#,
+        "classification incompatible\n\
+finding BXC0041 path=\"hello.greet/input\" incompatible kind=\"capability input parameter name changed\" base=\"name\" submitted=\"label\"\n",
         r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "incompatible",
   "findings": [
     {
       "code": "BXC0041",
       "path": "hello.greet/input",
-      "class": "incompatible"
+      "kind": "capability input parameter name changed",
+      "class": "incompatible",
+      "base": "name",
+      "submitted": "label"
     }
   ]
 }
@@ -1331,17 +1355,19 @@ finding BXC0041 hello.greet/input incompatible
     let variant_added = classify(Some(&base), Some(&variant_added)).unwrap();
     assert_renderings(
         &variant_added,
-        r#"classification compatible_with_conditions
-finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions condition="unknown-variant tolerance"
-"#,
+        "classification compatible_with_conditions\n\
+finding BXC0036 path=\"hello/type/GreetError/variant/Other\" compatible_with_conditions kind=\"error variant added\" base=- submitted=\"Other\" condition=\"unknown-variant tolerance\"\n",
         r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "compatible_with_conditions",
   "findings": [
     {
       "code": "BXC0036",
       "path": "hello/type/GreetError/variant/Other",
+      "kind": "error variant added",
       "class": "compatible_with_conditions",
+      "base": null,
+      "submitted": "Other",
       "condition": "unknown-variant tolerance"
     }
   ]
@@ -1357,23 +1383,28 @@ finding BXC0036 hello/type/GreetError/variant/Other compatible_with_conditions c
     let two_findings = classify(Some(&base), Some(&two_findings)).unwrap();
     assert_renderings(
         &two_findings,
-        r#"classification deprecation
-finding BXC0033 hello/type/GreetError documentation
-finding BXC0034 hello/type/GreetError deprecation
-"#,
+        "classification deprecation\n\
+finding BXC0033 path=\"hello/type/GreetError\" documentation kind=\"documentation changed\" base=\"Greet failures.\" submitted=\"Greet failures.\\nExtra docs\"\n\
+finding BXC0034 path=\"hello/type/GreetError\" deprecation kind=\"deprecation changed\" base=- submitted=\"retired\"\n",
         r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "deprecation",
   "findings": [
     {
       "code": "BXC0033",
       "path": "hello/type/GreetError",
-      "class": "documentation"
+      "kind": "documentation changed",
+      "class": "documentation",
+      "base": "Greet failures.",
+      "submitted": "Greet failures.\nExtra docs"
     },
     {
       "code": "BXC0034",
       "path": "hello/type/GreetError",
-      "class": "deprecation"
+      "kind": "deprecation changed",
+      "class": "deprecation",
+      "base": null,
+      "submitted": "retired"
     }
   ]
 }
@@ -1394,20 +1425,262 @@ finding BXC0034 hello/type/GreetError deprecation
     };
     assert_renderings(
         &hostile,
-        "classification incompatible\nfinding BXC0028 hello/\"quoted\\path incompatible\n",
+        "classification incompatible\n\
+finding BXC0028 path=\"hello/\\\"quoted\\\\path\" incompatible kind=\"unclassified change\" base=\"base \\\"quote\\\\slash\" submitted=\"submitted \\\"quote\\\\slash\"\n",
         r#"{
-  "schema": "boxology.classification-report@1",
+  "schema": "boxology.classification-report@2",
   "verdict": "incompatible",
   "findings": [
     {
       "code": "BXC0028",
       "path": "hello/\"quoted\\path",
-      "class": "incompatible"
+      "kind": "unclassified change",
+      "class": "incompatible",
+      "base": "base \"quote\\slash",
+      "submitted": "submitted \"quote\\slash"
     }
   ]
 }
 "#,
     );
+}
+
+#[test]
+fn hostile_controls_render_exactly_in_both_formats() {
+    // Literal expected escape bytes for C0, quote/backslash, DEL/C1, separators, and U+202E.
+    const ESCAPED: &str = "\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\\\"\\\\\\u007f\\u0085\\u009b\\u2028\\u2029\\u202e";
+    let mut excerpt = String::new();
+    for code in 0u8..=0x1f {
+        excerpt.push(code as char);
+    }
+    excerpt.push('"');
+    excerpt.push('\\');
+    excerpt.push('\u{7f}');
+    excerpt.push('\u{85}');
+    excerpt.push('\u{9b}');
+    excerpt.push('\u{2028}');
+    excerpt.push('\u{2029}');
+    excerpt.push('\u{202e}');
+    let report = ClassificationReport {
+        findings: vec![Finding {
+            code: "BXC0028",
+            path: "hello".to_owned(),
+            kind: "unclassified change",
+            class: Class::Incompatible,
+            base_excerpt: Some(excerpt.clone()),
+            submitted_excerpt: Some(excerpt.clone()),
+            condition: None,
+        }],
+        verdict: Class::Incompatible,
+    };
+    let text = format!(
+        "classification incompatible\n\
+finding BXC0028 path=\"hello\" incompatible kind=\"unclassified change\" base=\"{ESCAPED}\" submitted=\"{ESCAPED}\"\n"
+    );
+    let json = format!(
+        "{{\n  \"schema\": \"boxology.classification-report@2\",\n  \"verdict\": \"incompatible\",\n  \"findings\": [\n    {{\n      \"code\": \"BXC0028\",\n      \"path\": \"hello\",\n      \"kind\": \"unclassified change\",\n      \"class\": \"incompatible\",\n      \"base\": \"{ESCAPED}\",\n      \"submitted\": \"{ESCAPED}\"\n    }}\n  ]\n}}\n"
+    );
+    assert_renderings(&report, &text, &json);
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["findings"][0]["base"], excerpt);
+    assert_eq!(parsed["findings"][0]["submitted"], excerpt);
+    assert!(text.contains("\\u007f\\u0085\\u009b\\u2028\\u2029\\u202e"));
+}
+
+#[test]
+fn unicode_format_controls_match_ucd_17_and_emit_surrogate_pairs() {
+    assert_eq!(std::char::UNICODE_VERSION, (17, 0, 0));
+    // Literal expected bytes: previously missed BMP Cf and supplementary Cf as UTF-16 pairs.
+    const ESCAPED: &str =
+        "\\u0600\\u070f\\ud804\\udcbd\\ud82f\\udca0\\ud834\\udd73\\udb40\\udc01\\udb40\\udc7f";
+    let excerpt = [
+        '\u{0600}',
+        '\u{070F}',
+        '\u{110BD}',
+        '\u{1BCA0}',
+        '\u{1D173}',
+        '\u{E0001}',
+        '\u{E007F}',
+    ]
+    .into_iter()
+    .collect::<String>();
+    let report = ClassificationReport {
+        findings: vec![Finding {
+            code: "BXC0028",
+            path: "hello".to_owned(),
+            kind: "unclassified change",
+            class: Class::Incompatible,
+            base_excerpt: Some(excerpt.clone()),
+            submitted_excerpt: Some(excerpt.clone()),
+            condition: None,
+        }],
+        verdict: Class::Incompatible,
+    };
+    let text = format!(
+        "classification incompatible\n\
+finding BXC0028 path=\"hello\" incompatible kind=\"unclassified change\" base=\"{ESCAPED}\" submitted=\"{ESCAPED}\"\n"
+    );
+    let json = format!(
+        "{{\n  \"schema\": \"boxology.classification-report@2\",\n  \"verdict\": \"incompatible\",\n  \"findings\": [\n    {{\n      \"code\": \"BXC0028\",\n      \"path\": \"hello\",\n      \"kind\": \"unclassified change\",\n      \"class\": \"incompatible\",\n      \"base\": \"{ESCAPED}\",\n      \"submitted\": \"{ESCAPED}\"\n    }}\n  ]\n}}\n"
+    );
+    assert_renderings(&report, &text, &json);
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["findings"][0]["base"], excerpt);
+    assert_eq!(parsed["findings"][0]["submitted"], excerpt);
+}
+
+#[test]
+fn hostile_identity_path_is_escaped_end_to_end() {
+    let mut base = document("hello");
+    let hostile_name = "GreetError\nfinding BXC9999 forged incompatible";
+    base.types[0].name = hostile_name.to_owned();
+    base.capabilities[0].error = hostile_name.to_owned();
+    let mut submitted = base.clone();
+    submitted.types[0].docs.push("Extra docs".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    assert_renderings(
+        &report,
+        "classification documentation\n\
+finding BXC0033 path=\"hello/type/GreetError\\nfinding BXC9999 forged incompatible\" documentation kind=\"documentation changed\" base=\"Greet failures.\" submitted=\"Greet failures.\\nExtra docs\"\n",
+        r#"{
+  "schema": "boxology.classification-report@2",
+  "verdict": "documentation",
+  "findings": [
+    {
+      "code": "BXC0033",
+      "path": "hello/type/GreetError\nfinding BXC9999 forged incompatible",
+      "kind": "documentation changed",
+      "class": "documentation",
+      "base": "Greet failures.",
+      "submitted": "Greet failures.\nExtra docs"
+    }
+  ]
+}
+"#,
+    );
+    let text = render_text(&report);
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("finding "))
+            .count(),
+        1
+    );
+    assert!(text.contains("path=\"hello/type/GreetError\\nfinding BXC9999 forged incompatible\""));
+}
+
+#[test]
+fn supplementary_format_control_is_escaped_end_to_end() {
+    assert_eq!(std::char::UNICODE_VERSION, (17, 0, 0));
+    let mut base = document("hello");
+    let cf = '\u{1BCA0}';
+    let hostile_name = format!("GreetError{cf}");
+    base.types[0].name = hostile_name.clone();
+    base.capabilities[0].error = hostile_name;
+    let mut submitted = base.clone();
+    submitted.types[0].docs.push("Extra docs".to_owned());
+    submitted.revision = OTHER_REVISION.to_owned();
+    let report = classify(Some(&base), Some(&submitted)).unwrap();
+    const PAIR: &str = "\\ud82f\\udca0";
+    let text = render_text(&report);
+    let json = render_json(&report);
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("finding "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        text,
+        format!(
+            "classification documentation\n\
+finding BXC0033 path=\"hello/type/GreetError{PAIR}\" documentation kind=\"documentation changed\" base=\"Greet failures.\" submitted=\"Greet failures.\\nExtra docs\"\n"
+        )
+    );
+    assert!(
+        text.as_bytes()
+            .windows(PAIR.len())
+            .any(|w| w == PAIR.as_bytes())
+    );
+    let expected_json = format!(
+        "{{\n  \"schema\": \"boxology.classification-report@2\",\n  \"verdict\": \"documentation\",\n  \"findings\": [\n    {{\n      \"code\": \"BXC0033\",\n      \"path\": \"hello/type/GreetError{PAIR}\",\n      \"kind\": \"documentation changed\",\n      \"class\": \"documentation\",\n      \"base\": \"Greet failures.\",\n      \"submitted\": \"Greet failures.\\nExtra docs\"\n    }}\n  ]\n}}\n"
+    );
+    assert_eq!(json, expected_json);
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        parsed["findings"][0]["path"],
+        format!("hello/type/GreetError{cf}")
+    );
+}
+
+#[test]
+fn report_fields_render_exactly_once_and_inventory_is_fixed() {
+    let with_condition = Finding {
+        code: "BXC0036",
+        path: "path/S1".to_owned(),
+        kind: "kind/S2",
+        class: Class::CompatibleWithConditions,
+        base_excerpt: None,
+        submitted_excerpt: Some("submitted/S3".to_owned()),
+        condition: Some("condition/S4"),
+    };
+    let without_condition = Finding {
+        code: "BXC0041",
+        path: "path/S5".to_owned(),
+        kind: "kind/S6",
+        class: Class::Incompatible,
+        base_excerpt: Some("base/S7".to_owned()),
+        submitted_excerpt: None,
+        condition: None,
+    };
+    let report = ClassificationReport {
+        findings: vec![with_condition, without_condition],
+        verdict: Class::Incompatible,
+    };
+    let text = render_text(&report);
+    let json = render_json(&report);
+    for sentinel in [
+        "BXC0036",
+        "path/S1",
+        "kind/S2",
+        "submitted/S3",
+        "condition/S4",
+        "BXC0041",
+        "path/S5",
+        "kind/S6",
+        "base/S7",
+    ] {
+        assert_eq!(text.matches(sentinel).count(), 1, "text {sentinel}");
+        assert_eq!(json.matches(sentinel).count(), 1, "json {sentinel}");
+    }
+    assert_eq!(text.matches("finding ").count(), report.findings().len());
+    assert_eq!(json.matches("\"code\":").count(), report.findings().len());
+    assert!(text.contains("base=-"));
+    assert!(text.contains("submitted=-"));
+    assert_eq!(json.matches("\"base\": null").count(), 1);
+    assert_eq!(json.matches("\"submitted\": null").count(), 1);
+    assert_eq!(
+        finding_key_inventory(&json),
+        [
+            vec![
+                "code",
+                "path",
+                "kind",
+                "class",
+                "base",
+                "submitted",
+                "condition"
+            ],
+            vec!["code", "path", "kind", "class", "base", "submitted"],
+        ]
+    );
+    let missing_kind = json.replacen("\n      \"kind\": \"kind/S2\",", "", 1);
+    assert_ne!(
+        finding_key_inventory(&missing_kind)[0],
+        finding_key_inventory(&json)[0]
+    );
+    let omitted_base = json.replacen("\n      \"base\": null,", "", 1);
+    assert!(!finding_key_inventory(&omitted_base)[0].contains(&"base"));
 }
 
 #[test]
