@@ -1,12 +1,16 @@
-//! Own-source directory/manifest/test-tree closure for the generator crates (#107A).
-//! Own-source AST/effect scanning is the next stacked slice; transitive purity remains #358.
+//! Own-source directory/manifest/test-tree closure and AST/effect scan for the generator crates
+//! (#107A). Transitive dependency purity remains #358.
+//! (coarse fail-closed pass; #107A closes with the precision PR)
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
+use proc_macro2::{TokenStream, TokenTree};
+use syn::visit::Visit;
+use syn::{Attribute, Meta, UseTree};
 use toml_edit::{DocumentMut, Item};
 
 const SOURCES: &[&str] = &[
@@ -235,10 +239,10 @@ fn tbl_strs(table: &dyn toml_edit::TableLike, key: &str) -> Result<Vec<String>, 
 }
 
 fn assert_dep_value(key: &str, item: &Item, expected: DepValue) -> Result<(), String> {
-    if let Some(table) = item.as_table_like() {
-        if table.get("package").is_some() {
-            return Err(format!("dep_alias: `{key}` must not set package = ..."));
-        }
+    if let Some(table) = item.as_table_like()
+        && table.get("package").is_some()
+    {
+        return Err(format!("dep_alias: `{key}` must not set package = ..."));
     }
     match expected {
         DepValue::Ver(version) => match item.as_str() {
@@ -586,4 +590,583 @@ fn closure_rules_reject_live_hostile_corpus() {
         fs::remove_file(&link).unwrap();
     }
     fs::remove_dir_all(&tests_tmp).unwrap();
+}
+
+// --- Own-source AST / effect scanner (#107A-B; coarse fail-closed, precision PR pending) ---
+#[rustfmt::skip]
+const ROOTS: &[&str] = &["alloc", "boxology_contract", "boxology_contract_syntax", "boxology_generator_model", "boxology_schema", "core", "crate", "imports", "manifest", "prettyplease", "proc_macro2", "rust", "schema", "self", "serde_json", "sha2", "std", "super", "syn", "toml_edit"];
+#[rustfmt::skip]
+const PURE_STD: &[&str] = &["any", "borrow", "boxed", "cell", "char", "clone", "cmp", "convert", "default", "error", "fmt", "future", "iter", "marker", "mem", "ops", "option", "pin", "prelude", "ptr", "rc", "result", "slice", "str", "string", "sync", "vec"];
+const PURE_COLLECTIONS: &[&str] = &["BTreeMap", "BTreeSet", "btree_map", "btree_set"];
+#[rustfmt::skip]
+const EFFECT_STD: &[&str] = &["env", "fs", "io", "net", "os", "process", "random", "thread", "time"];
+#[rustfmt::skip]
+const ALLOW_MACROS: &[&str] = &["Token", "copy_getters", "format", "json", "matches", "model_getters", "ref_getters", "unreachable", "vec", "write"];
+#[rustfmt::skip]
+const DENY_MACROS: &[&str] = &["asm", "concat_bytes", "env", "global_asm", "include", "include_bytes", "include_str", "option_env"];
+const ALLOW_MACRO_DEFS: &[&str] = &["copy_getters", "model_getters", "ref_getters"];
+const ALLOW_ATTRS: &[&str] = &["allow", "deny", "derive", "doc", "forbid", "rustfmt::skip"];
+#[rustfmt::skip]
+const ALLOW_DERIVES: &[&str] = &["Clone", "Copy", "Debug", "Eq", "Ord", "PartialEq", "PartialOrd"];
+#[rustfmt::skip]
+const ALLOW_LINTS: &[&str] = &["clippy::too_many_arguments", "deprecated", "missing_docs", "unsafe_code"];
+#[rustfmt::skip]
+const PRIMITIVES: &[&str] = &["bool", "char", "f32", "f64", "i128", "i16", "i32", "i64", "i8", "isize", "str", "u128", "u16", "u32", "u64", "u8", "usize"];
+
+fn scan_source(src: &str) -> Result<(), String> {
+    let file = syn::parse_file(src).map_err(|e| format!("parse: {e}"))?;
+    let mut sc = Scanner {
+        aliases: BTreeMap::new(),
+        err: None,
+    };
+    file.attrs.iter().for_each(|a| sc.attr(a));
+    file.items.iter().for_each(|i| sc.visit_item(i));
+    sc.err.map_or(Ok(()), Err)
+}
+
+struct Scanner {
+    aliases: BTreeMap<String, Vec<String>>,
+    err: Option<String>,
+}
+
+impl Scanner {
+    fn fail(&mut self, rule: &str, detail: impl std::fmt::Display) {
+        if self.err.is_none() {
+            self.err = Some(format!("{rule}: {detail}"));
+        }
+    }
+    fn attr(&mut self, attr: &Attribute) {
+        if self.err.is_some() {
+            return;
+        }
+        let path = pj(attr.path());
+        match path.as_str() {
+            "cfg" if exact_cfg_test(attr) => {}
+            "cfg" => self.fail("cfg", "non-exact cfg"),
+            "cfg_attr" => self.fail("cfg_attr", "cfg_attr forbidden"),
+            "path" => self.fail("path", "#[path] forbidden"),
+            p if !ALLOW_ATTRS.contains(&p) => self.fail("attr", format!("attribute `{path}`")),
+            "derive" => self.meta_paths(attr, ALLOW_DERIVES, "derive"),
+            "allow" | "deny" | "forbid" => self.meta_paths(attr, ALLOW_LINTS, "lint"),
+            "doc" => {
+                if let Meta::NameValue(nv) = &attr.meta
+                    && !matches!(&nv.value, syn::Expr::Lit(l) if matches!(l.lit, syn::Lit::Str(_)))
+                {
+                    self.fail("attr", "doc must be a string literal");
+                }
+            }
+            _ => {}
+        }
+    }
+    fn meta_paths(&mut self, attr: &Attribute, allow: &[&str], kind: &str) {
+        let Meta::List(list) = &attr.meta else {
+            return self.fail("attr", format!("{kind} form"));
+        };
+        let Ok(args) = list
+            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        else {
+            return self.fail("attr", format!("{kind} parse"));
+        };
+        for meta in args {
+            let Meta::Path(p) = meta else {
+                return self.fail("attr", format!("{kind} entry"));
+            };
+            let name = pj(&p);
+            if !allow.contains(&name.as_str()) {
+                self.fail("attr", format!("{kind} `{name}`"));
+            }
+        }
+    }
+    fn skip_test(&mut self, attrs: &[Attribute]) -> bool {
+        if attrs.iter().any(exact_cfg_test) {
+            return true;
+        }
+        attrs.iter().for_each(|a| self.attr(a));
+        false
+    }
+    fn mac(&mut self, mac: &syn::Macro) {
+        let segs = ps(&mac.path);
+        if let Err(rule) = self.chk_mac(&segs) {
+            return self.fail(rule, segs.join("::"));
+        }
+        self.tokens(mac.tokens.clone());
+    }
+    fn chk_mac(&self, segs: &[String]) -> Result<(), &'static str> {
+        let r = self.resolve(segs);
+        let name = r.last().map(String::as_str).unwrap_or("");
+        if DENY_MACROS.contains(&name) {
+            return Err(match name {
+                "env" | "option_env" => "env",
+                "include" | "include_str" | "include_bytes" => "include",
+                n if n.contains("asm") => "asm",
+                _ => "macro",
+            });
+        }
+        if segs.len() > 1 {
+            self.chk_path(segs).map_err(|_| "macro")?;
+        }
+        ALLOW_MACROS.contains(&name).then_some(()).ok_or("macro")
+    }
+    fn chk_path(&self, segs: &[String]) -> Result<(), &'static str> {
+        if segs.is_empty() {
+            return Ok(());
+        }
+        let r = self.resolve(segs);
+        let head = r[0].as_str();
+        if matches!(head, "std" | "core" | "alloc") {
+            if r.len() >= 2 {
+                let m = r[1].as_str();
+                if let Some(rule) = EFFECT_STD.iter().copied().find(|&e| e == m) {
+                    return Err(rule);
+                }
+                if m == "collections" {
+                    return if r.len() >= 3 && PURE_COLLECTIONS.contains(&r[2].as_str()) {
+                        Ok(())
+                    } else {
+                        Err("random")
+                    };
+                }
+                if !PURE_STD.contains(&m) {
+                    return Err("std");
+                }
+            }
+            return Ok(());
+        }
+        if ROOTS.contains(&head) {
+            return Ok(());
+        }
+        if r.len() >= 2 && crate_style(head) {
+            return Err("root");
+        }
+        Ok(())
+    }
+    fn resolve(&self, segs: &[String]) -> Vec<String> {
+        match self.aliases.get(&segs[0]) {
+            Some(b) => b
+                .iter()
+                .cloned()
+                .chain(segs.iter().skip(1).cloned())
+                .collect(),
+            None => segs.to_vec(),
+        }
+    }
+    fn path(&mut self, path: &syn::Path) {
+        if path.leading_colon.is_some() {
+            return self.fail("root", "leading `::` path");
+        }
+        let segs = ps(path);
+        if (segs.len() >= 2 || ROOTS.contains(&segs[0].as_str()))
+            && let Err(rule) = self.chk_path(&segs)
+        {
+            self.fail(rule, segs.join("::"));
+        }
+    }
+    fn use_tree(&mut self, prefix: &[String], tree: &UseTree) {
+        match tree {
+            UseTree::Path(p) => {
+                let mut n = prefix.to_vec();
+                n.push(p.ident.to_string());
+                self.use_tree(&n, &p.tree);
+            }
+            UseTree::Name(n) => {
+                let mut f = prefix.to_vec();
+                f.push(n.ident.to_string());
+                self.import(&f, n.ident.to_string());
+            }
+            UseTree::Rename(n) => {
+                let mut f = prefix.to_vec();
+                f.push(n.ident.to_string());
+                self.import(&f, n.rename.to_string());
+            }
+            UseTree::Glob(_) => self.fail("use", "glob import"),
+            UseTree::Group(g) => g.items.iter().for_each(|t| self.use_tree(prefix, t)),
+        }
+    }
+    fn import(&mut self, full: &[String], bind: String) {
+        if let Err(rule) = self.chk_path(full) {
+            return self.fail(rule, full.join("::"));
+        }
+        let resolved = self.resolve(full);
+        if ROOTS.contains(&bind.as_str()) {
+            return self.fail("alias", format!("binding shadows root `{bind}`"));
+        }
+        let head = resolved[0].as_str();
+        if resolved.len() == 1 && matches!(head, "std" | "core" | "alloc") {
+            return self.fail("alias", format!("ambient root alias `{bind}`"));
+        }
+        if !ROOTS.contains(&head) && crate_style(head) {
+            return self.fail("root", full.join("::"));
+        }
+        self.aliases.insert(bind, resolved);
+    }
+    fn tokens(&mut self, ts: TokenStream) {
+        if self.err.is_none() {
+            self.toks(&ts.into_iter().collect::<Vec<_>>());
+        }
+    }
+    fn toks(&mut self, t: &[TokenTree]) {
+        let mut i = 0;
+        while i < t.len() && self.err.is_none() {
+            match &t[i] {
+                TokenTree::Group(g) => {
+                    self.tokens(g.stream());
+                    i += 1;
+                }
+                TokenTree::Literal(_) | TokenTree::Punct(_) => i += 1,
+                TokenTree::Ident(id) => {
+                    // Macro bodies are expansion-live but AST-opaque; ban smuggled unsafety.
+                    if *id == "unsafe" {
+                        return self.fail("unsafe", "token");
+                    }
+                    if *id == "extern" {
+                        return self.fail("extern", "token");
+                    }
+                    let (segs, next) = read_path(t, i);
+                    if next < t.len()
+                        && matches!(&t[next], TokenTree::Punct(p) if p.as_char() == '!')
+                    {
+                        if let Err(rule) = self.chk_mac(&segs) {
+                            return self.fail(rule, segs.join("::"));
+                        }
+                        let body = next + 1;
+                        if body < t.len()
+                            && let TokenTree::Group(g) = &t[body]
+                        {
+                            self.tokens(g.stream());
+                            i = body + 1;
+                            continue;
+                        }
+                        i = body;
+                        continue;
+                    }
+                    if (segs.len() >= 2 || ROOTS.contains(&segs[0].as_str()))
+                        && let Err(rule) = self.chk_path(&segs)
+                    {
+                        return self.fail(rule, segs.join("::"));
+                    }
+                    i = next;
+                }
+            }
+        }
+    }
+    fn unsafety(&mut self, s: &syn::Safety, w: &str) {
+        if matches!(s, syn::Safety::Unsafe(_)) {
+            self.fail("unsafe", w);
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Scanner {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if self.err.is_some() || self.skip_test(item_attrs(item)) {
+            return;
+        }
+        match item {
+            syn::Item::ExternCrate(e) => {
+                let name = e.ident.to_string();
+                let bind = e
+                    .rename
+                    .as_ref()
+                    .map(|(_, i)| i.to_string())
+                    .unwrap_or_else(|| name.clone());
+                self.import(&[name], bind);
+            }
+            syn::Item::Use(u) => {
+                if u.leading_colon.is_some() {
+                    return self.fail("root", "leading `::` use");
+                }
+                self.use_tree(&[], &u.tree);
+            }
+            syn::Item::Macro(m) => {
+                if let Some(n) = &m.ident {
+                    let n = n.to_string();
+                    if !ALLOW_MACRO_DEFS.contains(&n.as_str()) {
+                        return self.fail("macro", format!("macro_rules `{n}`"));
+                    }
+                    self.tokens(m.mac.tokens.clone());
+                    return; // Avoid revisiting `macro_rules` as an invocation.
+                }
+            }
+            syn::Item::ForeignMod(_) => self.fail("extern", "foreign block"),
+            syn::Item::Fn(f) => {
+                self.unsafety(&f.sig.safety, "fn");
+                if f.sig.abi.is_some() {
+                    self.fail("extern", "extern fn");
+                }
+            }
+            syn::Item::Static(s) if matches!(s.mutability, syn::StaticMutability::Mut(_)) => {
+                self.fail("unsafe", "static mut");
+            }
+            syn::Item::Impl(i) if i.unsafety.is_some() => self.fail("unsafe", "impl"),
+            syn::Item::Trait(t) if t.unsafety.is_some() => self.fail("unsafe", "trait"),
+            syn::Item::Verbatim(_) => self.fail("parse", "verbatim item"),
+            syn::Item::Mod(m)
+                if m.content.is_none() && !ROOTS.contains(&m.ident.to_string().as_str()) =>
+            {
+                self.fail("root", format!("outline mod `{}`", m.ident));
+            }
+            _ => {}
+        }
+        if self.err.is_none() {
+            syn::visit::visit_item(self, item);
+        }
+    }
+    fn visit_impl_item(&mut self, n: &'ast syn::ImplItem) {
+        if matches!(n, syn::ImplItem::Verbatim(_)) {
+            return self.fail("parse", "verbatim impl item");
+        }
+        if self.err.is_none() {
+            syn::visit::visit_impl_item(self, n);
+        }
+    }
+    fn visit_trait_item(&mut self, n: &'ast syn::TraitItem) {
+        if matches!(n, syn::TraitItem::Verbatim(_)) {
+            return self.fail("parse", "verbatim trait item");
+        }
+        if self.err.is_none() {
+            syn::visit::visit_trait_item(self, n);
+        }
+    }
+    fn visit_impl_item_fn(&mut self, n: &'ast syn::ImplItemFn) {
+        if self.err.is_some() || self.skip_test(&n.attrs) {
+            return;
+        }
+        self.unsafety(&n.sig.safety, "impl fn");
+        if n.sig.abi.is_some() {
+            return self.fail("extern", "extern impl fn");
+        }
+        syn::visit::visit_impl_item_fn(self, n);
+    }
+    fn visit_trait_item_fn(&mut self, n: &'ast syn::TraitItemFn) {
+        if self.err.is_some() || self.skip_test(&n.attrs) {
+            return;
+        }
+        self.unsafety(&n.sig.safety, "trait fn");
+        syn::visit::visit_trait_item_fn(self, n);
+    }
+    fn visit_expr(&mut self, e: &'ast syn::Expr) {
+        if matches!(e, syn::Expr::Verbatim(_)) {
+            return self.fail("parse", "verbatim expr");
+        }
+        if self.err.is_none() {
+            syn::visit::visit_expr(self, e);
+        }
+    }
+    fn visit_expr_unsafe(&mut self, n: &'ast syn::ExprUnsafe) {
+        self.fail("unsafe", "block");
+        syn::visit::visit_expr_unsafe(self, n);
+    }
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        if self.err.is_none() {
+            self.mac(m);
+        }
+    }
+    fn visit_type_fn_ptr(&mut self, n: &'ast syn::TypeFnPtr) {
+        if n.unsafety.is_some() {
+            return self.fail("unsafe", "bare fn type");
+        }
+        if n.abi.is_some() {
+            return self.fail("extern", "bare fn abi");
+        }
+        if self.err.is_none() {
+            syn::visit::visit_type_fn_ptr(self, n);
+        }
+    }
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        if self.err.is_none() {
+            self.path(p);
+            syn::visit::visit_path(self, p);
+        }
+    }
+    fn visit_attribute(&mut self, a: &'ast Attribute) {
+        if self.err.is_none() {
+            self.attr(a);
+        }
+    }
+}
+
+fn item_attrs(i: &syn::Item) -> &[Attribute] {
+    match i {
+        syn::Item::Const(i) => &i.attrs,
+        syn::Item::Enum(i) => &i.attrs,
+        syn::Item::ExternCrate(i) => &i.attrs,
+        syn::Item::Fn(i) => &i.attrs,
+        syn::Item::ForeignMod(i) => &i.attrs,
+        syn::Item::Impl(i) => &i.attrs,
+        syn::Item::Macro(i) => &i.attrs,
+        syn::Item::Mod(i) => &i.attrs,
+        syn::Item::Static(i) => &i.attrs,
+        syn::Item::Struct(i) => &i.attrs,
+        syn::Item::Trait(i) => &i.attrs,
+        syn::Item::TraitAlias(i) => &i.attrs,
+        syn::Item::Type(i) => &i.attrs,
+        syn::Item::Union(i) => &i.attrs,
+        syn::Item::Use(i) => &i.attrs,
+        _ => &[],
+    }
+}
+fn exact_cfg_test(a: &Attribute) -> bool {
+    let Meta::List(l) = &a.meta else {
+        return false;
+    };
+    if !l.path.is_ident("cfg") {
+        return false;
+    }
+    let Ok(args) =
+        l.parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+    else {
+        return false;
+    };
+    matches!(args.iter().collect::<Vec<_>>()[..], [Meta::Path(p)] if p.is_ident("test"))
+}
+fn ps(p: &syn::Path) -> Vec<String> {
+    p.segments.iter().map(|s| s.ident.to_string()).collect()
+}
+fn pj(p: &syn::Path) -> String {
+    ps(p).join("::")
+}
+fn crate_style(n: &str) -> bool {
+    !PRIMITIVES.contains(&n)
+        && matches!(n.chars().next(), Some('a'..='z'))
+        && n.chars()
+            .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+}
+fn dcolon(t: &[TokenTree], i: usize) -> bool {
+    matches!(
+        (t.get(i), t.get(i + 1)),
+        (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)))
+            if a.as_char() == ':' && b.as_char() == ':'
+    )
+}
+fn read_path(t: &[TokenTree], start: usize) -> (Vec<String>, usize) {
+    let mut i = start + if dcolon(t, start) { 2 } else { 0 };
+    let mut segs = Vec::new();
+    while i < t.len() {
+        let TokenTree::Ident(id) = &t[i] else {
+            break;
+        };
+        segs.push(id.to_string());
+        i += 1;
+        if !dcolon(t, i) {
+            break;
+        }
+        i += 2;
+        if matches!(t.get(i), Some(TokenTree::Punct(p)) if p.as_char() == '<') {
+            let mut depth = 0;
+            while i < t.len() {
+                if let TokenTree::Punct(p) = &t[i] {
+                    match p.as_char() {
+                        '<' => depth += 1,
+                        '>' => {
+                            depth -= 1;
+                            i += 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+                i += 1;
+            }
+            if !dcolon(t, i) {
+                break;
+            }
+            i += 2;
+        }
+    }
+    if segs.is_empty() {
+        (vec![String::new()], start + 1)
+    } else {
+        (segs, i)
+    }
+}
+
+#[test]
+fn production_sources_pass_effect_scan() {
+    let root = root();
+    for rel in SOURCES {
+        let src = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        scan_source(&src).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    }
+}
+
+#[test]
+fn effect_scan_rejects_hostile_corpus() {
+    #[rustfmt::skip]
+    let rows = [
+        ("fs", "fn f() { let _ = std::fs::read(\"x\"); }"),
+        ("fs", "use std::fs as x; fn f() { let _ = x::read(\"x\"); }"),
+        ("alias", "extern crate std as s; fn f() { let _ = s::fs::read(\"x\"); }"),
+        ("alias", "use crate as std; fn f() { let _ = ::std::fs::read(\"x\"); }"),
+        ("root", "fn f() { let _ = ::std::mem::size_of::<u8>(); }"),
+        ("alias", "use std as s; fn f() { let _ = crate::s::fs::read(\"x\"); }"),
+        ("fs", "struct S; impl S { model_getters! { self; a: std::fs::File = a; } }"),
+        ("fs", "use serde_json::json as Token; fn f() { let _ = Token!({\"x\": std::fs::read(\"x\")}); }"),
+        ("root", "fn f() { let _ = undeclared_crate::foo(); }"),
+        ("root", "use undeclared_crate;"),
+        ("root", "extern crate undeclared_crate;"),
+        ("env", "fn f() { let _ = env!(\"PATH\"); }"),
+        ("include", "fn f() { let _ = include!(\"x.rs\"); }"),
+        ("env", "fn f() { let _ = option_env!(\"x\"); }"),
+        ("macro", "macro_rules! wrap { () => { env!(\"x\") }; }"),
+        ("path", "#[path = \"x.rs\"] mod m;"),
+        ("cfg", "#[cfg(any(test))] fn f() {}"),
+        ("cfg", "struct S { #[cfg(feature = \"x\")] f: u8 }"),
+        ("cfg_attr", "#[cfg_attr(test, allow(dead_code))] fn f() {}"),
+        ("unsafe", "unsafe fn f() {}"),
+        ("unsafe", "fn f() { unsafe { let _ = 1; } }"),
+        ("unsafe", "type F = unsafe fn();"),
+        ("unsafe", "static mut X: u8 = 0;"),
+        ("unsafe", "macro_rules! model_getters { () => { unsafe {} }; }"),
+        ("extern", "extern \"C\" { fn f(); }"),
+        ("net", "fn f() { let _ = std::net::Ipv4Addr::LOCALHOST; }"),
+        ("process", "fn f() { let _ = std::process::id(); }"),
+        ("time", "fn f() { let _ = std::time::Instant::now(); }"),
+        ("thread", "fn f() { let _ = std::thread::available_parallelism(); }"),
+        ("env", "fn f() { let _ = std::env::var(\"x\"); }"),
+        ("random", "use std::collections::HashMap; fn f() { let _: HashMap<u8, u8> = HashMap::new(); }"),
+        ("random", "fn f() { let _ = std::collections::hash_map::RandomState::default(); }"),
+        ("fs", "fn f() { let _ = format!(\"{}\", std::fs::read(\"x\")); }"),
+    ];
+    for (rule, src) in rows {
+        expect_err(scan_source(src), rule);
+    }
+    scan_source("#[cfg(test)] fn f() { let _ = std::fs::read(\"x\"); }").expect("cfg(test) ok");
+    expect_err(
+        scan_source(
+            "#[cfg(test)] fn t() { let _ = std::fs::read(\"x\"); }\nfn p() { let _ = std::fs::read(\"y\"); }",
+        ),
+        "fs",
+    );
+}
+
+#[test]
+fn effect_scan_allows_positive_controls() {
+    #[rustfmt::skip]
+    let rows = [
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)] struct S;",
+        "#[allow(deprecated)] fn f() {}",
+        "#[doc = \"hi\"] fn f() {}",
+        "#[rustfmt::skip] fn f() {}",
+        "fn f() { let _ = format!(\"{}\", \"std::fs env! include! unsafe\"); }",
+        "fn f() { let _ = b\"std::fs\"; let _ = \"env!\"; let _ = r#\"include!\"#; }",
+        "fn f() { let _ = vec![1, 2]; let _ = matches!(0, 0); let _ = unreachable!(); }",
+        "use std::collections::{BTreeMap, BTreeSet}; fn f() { let _: BTreeMap<u8, u8> = BTreeMap::new(); let _ = BTreeSet::<u8>::new(); }",
+        "use serde_json::json; fn f() { let _ = json!({ \"a\": 1 }); }",
+        "type Comma = syn::Token![,];",
+        "macro_rules! ref_getters { () => {}; }",
+        "macro_rules! copy_getters { () => {}; }",
+        "macro_rules! model_getters { () => {}; }",
+        "struct S; impl S { model_getters! { self; #[doc = \"d\"] a: &'static str = a; } }",
+        "enum BoundaryLeaf { A } fn f() { use BoundaryLeaf as Wire; let _ = Wire::A; }",
+        "use boxology_contract::BoxId; fn f(x: BoxId) { let _ = x; }",
+        "fn f() { let _ = std::str::from_utf8(b\"a\"); }",
+        "mod schema; fn f() {}",
+        "#[cfg(test)] mod tests { fn evil() { let _ = std::fs::read(\"x\"); env!(\"y\"); } }",
+    ];
+    for src in rows {
+        scan_source(src).unwrap_or_else(|e| panic!("should allow `{src}`: {e}"));
+    }
 }
