@@ -1,10 +1,10 @@
 //! The atomic filesystem writer for a [`GeneratedTree`].
 //!
 //! `boxology-generator-model` holds pure request data and `boxology-generator` performs pure
-//! emission; this crate performs the one effect S2 D1 stage 4 assigns to the caller — "the caller
-//! writes the complete generated tree atomically". It is a *sibling* of the generator, not a module
-//! inside it, so that crate's no-filesystem obligation is structural: `std::fs` cannot be reached
-//! from a crate that does not depend on it, and no test has to police the rule.
+//! emission; this crate performs the one effect S2 D1 stage 4 assigns to the caller — per-file
+//! staged commit plus per-file prune of the generated tree. It is a *sibling* of the generator, not
+//! a module inside it, so that crate's no-filesystem obligation is structural: `std::fs` cannot be
+//! reached from a crate that does not depend on it, and no test has to police the rule.
 //!
 //! # What [`write()`] guarantees
 //!
@@ -14,7 +14,14 @@
 //! 1. **No declared path changes until every file is staged.** Bytes go to a temporary sibling in
 //!    the file's own final directory, so the commit is a same-directory rename that cannot cross a
 //!    filesystem and every content failure lands while the destination holds its prior bytes.
-//!    A *staging* failure removes the staged siblings first; empty directories are the only residue.
+//!    Staging allocates an exclusive same-directory name (`create_new`) and never opens an existing
+//!    path, so a planted symlink or leftover sibling cannot be truncated or followed. On a *staging*
+//!    failure, previously completed staged siblings are best-effort discarded and the current partial
+//!    sibling is best-effort removed; the original staging/write error is preserved even when cleanup
+//!    itself is refused. No declared path has changed, but an undeclared `.boxology-write-*` sibling
+//!    may remain if cleanup is refused. Exclusive allocation means a re-run never adopts or truncates
+//!    that residue, and a successful re-run's prune removes matching undeclared residue under a
+//!    declared outputs pattern. Empty directories created for staging may also remain.
 //! 2. **One declared path is replaced atomically**, by one `rename`: a reader sees the complete old
 //!    or the complete new bytes, never a half-rewritten file. Replacement installs a fresh inode,
 //!    so a mode a developer changed returns to the umask and hard links and xattrs do not survive.
@@ -29,9 +36,13 @@
 //!    up by *reading the parent directory*, never by stat-ing the joined path: on APFS a stat for
 //!    `generated/schema.json` is answered by an existing `generated/SCHEMA.JSON`, so bytes would
 //!    land under a name the tree never declared — `Ok` locally, a missing declared output and an
-//!    unowned extra one on Linux CI, with no local signal. A parent listing a rival spelling is
-//!    refused on *every* platform, so the Linux/macOS parity S5 D8 and S2 D11 make normative is a
-//!    property of this crate, not of the filesystem. Rivalry is ASCII-case, so NFD/NFC is residual.
+//!    unowned extra one on Linux CI, with no local signal. Lookup scans the full parent listing and
+//!    refuses on *every* platform when any distinct ASCII-case-equivalent spelling appears — alone
+//!    or beside the exact name — so an exact+rival pair on a case-sensitive filesystem is refused
+//!    rather than written then pruned. A parent-listing, entry, or file-type failure refuses the
+//!    write before staging rather than treating the component as absent. The Linux/macOS parity S5
+//!    D8 and S2 D11 make normative is a property of this crate, not of the filesystem. Rivalry is
+//!    ASCII-case, so NFD/NFC is residual.
 //! 6. **A stale declared output is pruned, and only under a declared pattern.** After the commit
 //!    phase, a file under one of the package's `[[derived]].outputs` patterns that the tree does
 //!    not declare is removed: S5 D6 step 2 promises `boxology generate --package <id>` repairs a
@@ -61,16 +72,19 @@
 //! "could still match under here" predicate would be exactly the second matcher this crate must not
 //! mint; the cost is a listing, never a removal. It descends only into entries a parent lists as
 //! real directories, so it never follows a symlink and terminates on the finite acyclic
-//! real-directory tree, visiting each subtree at most once per pattern.
+//! real-directory tree, visiting each subtree at most once per pattern. A missing prefix directory
+//! is skipped; any other directory-enumeration failure fails closed as [`WriteError::Walk`] and
+//! leaves the committed tree live.
 //!
 //! Removals are ordered and reported by path bytes, never by directory order. A candidate is a
 //! *regular file* whose root-relative name is a valid [`RelativePath`]: a symlink, a directory, and
 //! a name outside that frozen grammar are left in place — the grammar cannot express them, so no
-//! pattern can be asked about them — and an emptied directory is not removed, since empty
-//! directories remain this crate's only residue (guarantee 1). This call's own staged siblings are
-//! all renamed away before the walk starts, so it never deletes them; a *concurrent* writer's are
-//! candidates like any other file, which cleans up after a crashed write and is one more reason
-//! two `write()` calls into one destination are not supported. They never were.
+//! pattern can be asked about them — and an emptied directory is not removed. This call's own staged
+//! siblings are all renamed away before the walk starts when staging and commit succeed, so it never
+//! deletes them; a concurrent or prior writer's leftover `.boxology-write-*` siblings are candidates
+//! like any other undeclared file under a declared pattern, which is how a successful re-run converges
+//! refused staging cleanup (guarantee 1). Two `write()` calls into one destination are not supported.
+//! They never were.
 //!
 //! **There is no traversal guard on the write: confinement rests on `generate` building paths from
 //! literals.** It zips the `OUTPUTS` constants with the emitted bodies, so a tree's paths are those
@@ -90,7 +104,9 @@
 use boxology_generator::{GeneratedFile, GeneratedTree};
 use boxology_manifest::{GlobPattern, RelativePath};
 use std::{
-    fmt, fs, io,
+    fmt, fs,
+    fs::OpenOptions,
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -108,10 +124,14 @@ pub enum WriteError {
     Ancestor(String),
     /// A declared logical path exists as something other than a regular file.
     Occupied(String),
-    /// The filesystem refused an operation on a declared logical path.
+    /// Pre-write parent-listing, entry, or file-type lookup failed for a declared logical path.
+    Inspect(String, io::Error),
+    /// The filesystem refused a stage or rename operation on a declared logical path.
     Io(String, io::Error),
     /// The filesystem refused to remove a stale file under a declared output pattern.
     Remove(String, io::Error),
+    /// Prune candidate discovery could not enumerate a directory under a declared outputs prefix.
+    Walk(String, io::Error),
 }
 
 /// What one [`write()`] changed under the destination root.
@@ -135,36 +155,48 @@ impl fmt::Display for WriteError {
             Self::Aliased(path) => write!(formatter, "spelled another way on disk: {path}"),
             Self::Ancestor(path) => write!(formatter, "a parent is not a directory: {path}"),
             Self::Occupied(path) => write!(formatter, "not a regular file: {path}"),
+            Self::Inspect(path, error) => write!(formatter, "inspect {path}: {error}"),
             Self::Io(path, error) => write!(formatter, "write {path}: {error}"),
             Self::Remove(path, error) => write!(formatter, "remove {path}: {error}"),
+            Self::Walk(path, error) => write!(formatter, "walk {path}: {error}"),
         }
     }
 }
 
 impl std::error::Error for WriteError {}
 
-/// Writes every file `tree` declares under `root`, staging the whole tree before committing it,
-/// then removes files under an `outputs` pattern that `tree` does not declare.
+/// Writes every file `tree` declares under `root`, staging all changed bytes before any declared
+/// path changes, then removes files under an `outputs` pattern that `tree` does not declare.
 ///
 /// `outputs` is the package's declared `[[derived]].outputs` patterns, anchored at `root` like the
 /// manifest that declared them; an empty slice prunes nothing. Pruning runs on every accepted
-/// write, including one that changed no bytes, since a stale file outlives an up-to-date tree. The
-/// crate documentation states the phase order, its reason, and what a failure leaves.
+/// write, including one that changed no bytes, since a stale file outlives an up-to-date tree.
 ///
 /// # Errors
 /// Returns [`WriteError`] when `root` is not an existing directory, an existing entry blocks or
-/// misspells a declared path, or the filesystem refuses an operation.
+/// misspells a declared path, pre-write or prune enumeration fails closed, or the filesystem
+/// refuses an operation.
 pub fn write(
     root: &Path,
     tree: &GeneratedTree,
     outputs: &[GlobPattern],
+) -> Result<Changes, WriteError> {
+    write_with(root, tree, outputs, os_list_dir, os_stage_write)
+}
+
+fn write_with(
+    root: &Path,
+    tree: &GeneratedTree,
+    outputs: &[GlobPattern],
+    list_dir: ListDirFn,
+    stage_write: StageWriteFn,
 ) -> Result<Changes, WriteError> {
     if !fs::metadata(root).is_ok_and(|metadata| metadata.is_dir()) {
         return Err(WriteError::Destination);
     }
     let mut plan = Vec::new();
     for file in tree.files() {
-        let target = resolve(root, file.path())?;
+        let target = resolve(root, file.path(), list_dir)?;
         if fs::read(&target).is_ok_and(|bytes| bytes == file.bytes()) {
             continue;
         }
@@ -172,7 +204,7 @@ pub fn write(
     }
     let mut staged = Vec::new();
     for (path, target, bytes) in &plan {
-        match stage(target, bytes) {
+        match stage(target, bytes, stage_write) {
             Ok(temporary) => staged.push(temporary),
             Err(error) => {
                 discard(&staged);
@@ -188,7 +220,7 @@ pub fn write(
         }
         written.push((*path).to_owned());
     }
-    let removed = prune(root, tree, outputs)?;
+    let removed = prune_with(root, tree, outputs, list_dir)?;
     Ok(Changes { written, removed })
 }
 
@@ -196,14 +228,15 @@ pub fn write(
 ///
 /// Reports the failing path and stops on the first refusal, leaving the committed tree live and
 /// the remaining orphans in place; it never unwinds a removal, which it could not do anyway.
-fn prune(
+fn prune_with(
     root: &Path,
     tree: &GeneratedTree,
     outputs: &[GlobPattern],
+    list_dir: ListDirFn,
 ) -> Result<Vec<String>, WriteError> {
     let declared: Vec<&str> = tree.files().iter().map(GeneratedFile::path).collect();
     let mut removed = Vec::new();
-    for candidate in candidates(root, outputs) {
+    for candidate in candidates(root, outputs, list_dir)? {
         let path = candidate.as_str();
         let matched = |pattern: &GlobPattern| pattern.matches(&candidate);
         if declared.contains(&path) || !outputs.iter().any(matched) {
@@ -217,32 +250,84 @@ fn prune(
     Ok(removed)
 }
 
+/// Directory entry kind as reported by a parent listing without following symlinks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EntryKind {
+    Dir,
+    File,
+    Other,
+}
+
+/// One UTF-8 directory entry name and its unfollowed kind.
+type ListedEntry = (String, EntryKind);
+
+/// Enumerates one directory for pre-write lookup and prune candidate discovery.
+type ListDirFn = fn(&Path) -> io::Result<Vec<ListedEntry>>;
+
+/// Writes staged bytes after exclusive sibling creation.
+type StageWriteFn = fn(&mut fs::File, &[u8]) -> io::Result<()>;
+
+/// Production staged-byte write.
+fn os_stage_write(file: &mut fs::File, bytes: &[u8]) -> io::Result<()> {
+    file.write_all(bytes)
+}
+
+/// Production directory listing: `NotFound` is handled by callers; other errors propagate.
+fn os_list_dir(path: &Path) -> io::Result<Vec<ListedEntry>> {
+    let mut listed = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let kind = entry.file_type()?;
+        let kind = if kind.is_dir() {
+            EntryKind::Dir
+        } else if kind.is_file() {
+            EntryKind::File
+        } else {
+            EntryKind::Other
+        };
+        listed.push((name, kind));
+    }
+    Ok(listed)
+}
+
 /// Every regular file under some pattern's literal prefix, as sorted deduplicated logical paths.
 ///
 /// Deduplicated because overlapping patterns share a subtree, and a path offered twice would be
-/// removed twice — the second attempt failing on a file this call itself deleted.
-fn candidates(root: &Path, outputs: &[GlobPattern]) -> Vec<RelativePath> {
+/// removed twice — the second attempt failing on a file this call itself deleted. A missing prefix
+/// directory is skipped; any other enumeration failure fails closed.
+fn candidates(
+    root: &Path,
+    outputs: &[GlobPattern],
+    list_dir: ListDirFn,
+) -> Result<Vec<RelativePath>, WriteError> {
     let mut pending: Vec<String> = outputs.iter().map(literal_prefix).collect();
     let mut found = Vec::new();
     while let Some(prefix) = pending.pop() {
-        let Ok(entries) = fs::read_dir(root.join(&prefix)) else {
-            continue;
+        let walk_path = if prefix.is_empty() {
+            ".".to_owned()
+        } else {
+            prefix.trim_end_matches('/').to_owned()
         };
-        for entry in entries.flatten() {
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
+        let listed = match list_dir(&root.join(&prefix)) {
+            Ok(listed) => listed,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(WriteError::Walk(walk_path, error)),
+        };
+        for (name, kind) in listed {
             let logical = format!("{prefix}{name}");
-            match entry.file_type() {
-                Ok(kind) if kind.is_dir() => pending.push(format!("{logical}/")),
-                Ok(kind) if kind.is_file() => found.extend(RelativePath::new(logical)),
-                _ => {}
+            match kind {
+                EntryKind::Dir => pending.push(format!("{logical}/")),
+                EntryKind::File => found.extend(RelativePath::new(logical)),
+                EntryKind::Other => {}
             }
         }
     }
     found.sort();
     found.dedup();
-    found
+    Ok(found)
 }
 
 /// The pattern's leading wildcard-free directory segments with a trailing `/`, empty for `root`.
@@ -263,22 +348,26 @@ fn literal_prefix(pattern: &GlobPattern) -> String {
 }
 
 /// Resolves one logical path against `root`, spelling every component exactly (guarantee 5).
-fn resolve(root: &Path, logical: &str) -> Result<PathBuf, WriteError> {
+fn resolve(root: &Path, logical: &str, list_dir: ListDirFn) -> Result<PathBuf, WriteError> {
     let mut path = root.to_path_buf();
     let mut components = logical.split('/').peekable();
     while let Some(component) = components.next() {
         let last = components.peek().is_none();
-        let found = lookup(&path, component);
-        path.push(component);
-        let Ok(found) = found else {
-            return Err(WriteError::Aliased(logical.to_owned()));
+        let found = match lookup(&path, component, list_dir) {
+            Ok(Ok(found)) => found,
+            Ok(Err(())) => return Err(WriteError::Aliased(logical.to_owned())),
+            Err(error) => return Err(WriteError::Inspect(logical.to_owned(), error)),
         };
+        path.push(component);
         let Some(kind) = found else {
             continue;
         };
-        // `DirEntry::file_type` does not follow links, so a symlink is neither a file nor a
-        // directory here and fails the same test an occupied path fails.
-        let ok = if last { kind.is_file() } else { kind.is_dir() };
+        // Listing does not follow links, so a symlink is `Other` and fails the same test an
+        // occupied path fails.
+        let ok = matches!(
+            (last, kind),
+            (true, EntryKind::File) | (false, EntryKind::Dir)
+        );
         if !ok {
             let path = logical.to_owned();
             return Err(if last {
@@ -291,34 +380,95 @@ fn resolve(root: &Path, logical: &str) -> Result<PathBuf, WriteError> {
     Ok(path)
 }
 
-/// The type of the entry `parent` spells exactly `name`; `Err` when it lists only a rival spelling.
-fn lookup(parent: &Path, name: &str) -> Result<Option<fs::FileType>, ()> {
-    let Ok(entries) = fs::read_dir(parent) else {
-        return Ok(None);
-    };
+/// Pure per-listing decision for one path component name.
+///
+/// Scans every entry. `Ok(true)` means the exact spelling is present and no distinct ASCII-case
+/// rival is. `Ok(false)` means the exact spelling is absent and no rival is. `Err(())` means any
+/// distinct ASCII-case-equivalent spelling appeared, whether or not the exact name did too.
+fn lookup_decision<'a, I>(name: &str, entries: I) -> Result<bool, ()>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut exact = false;
     let mut rival = false;
-    for entry in entries.flatten() {
-        let found = entry.file_name();
-        if found == *name {
-            return Ok(entry.file_type().ok());
+    for entry in entries {
+        if entry == name {
+            exact = true;
+        } else if entry.eq_ignore_ascii_case(name) {
+            rival = true;
         }
-        let other = found.to_str();
-        rival |= other.is_some_and(|other| other.eq_ignore_ascii_case(name));
     }
-    if rival { Err(()) } else { Ok(None) }
+    if rival { Err(()) } else { Ok(exact) }
 }
+
+/// The kind of the entry `parent` spells exactly `name`.
+///
+/// `Ok(Ok(kind))` is the scan-complete presence result. `Ok(Err(()))` is a rival spelling.
+/// `Err` is a directory, entry, or file-type failure; a missing parent is presence-`None` so a
+/// greenfield intermediate component can still be created.
+fn lookup(
+    parent: &Path,
+    name: &str,
+    list_dir: ListDirFn,
+) -> Result<Result<Option<EntryKind>, ()>, io::Error> {
+    let listed = match list_dir(parent) {
+        Ok(listed) => listed,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Ok(None)),
+        Err(error) => return Err(error),
+    };
+    match lookup_decision(name, listed.iter().map(|(entry, _)| entry.as_str())) {
+        Ok(true) => {
+            let kind = listed
+                .into_iter()
+                .find_map(|(entry, kind)| (entry == name).then_some(kind));
+            Ok(Ok(kind))
+        }
+        Ok(false) => Ok(Ok(None)),
+        Err(()) => Ok(Err(())),
+    }
+}
+
+/// Upper bound on exclusive staging-name allocation attempts for one file.
+const STAGE_NAME_ATTEMPTS: u32 = 64;
 
 /// Materializes `bytes` as a temporary sibling of `target`, returning the staged path.
-fn stage(target: &Path, bytes: &[u8]) -> Result<PathBuf, io::Error> {
+///
+/// Never opens an existing path: each attempt uses `create_new`, and `AlreadyExists` advances the
+/// counter and retries up to [`STAGE_NAME_ATTEMPTS`]. A write failure after exclusive creation
+/// best-effort removes that sibling and always propagates the original write error; a refused
+/// cleanup never replaces it and may leave an undeclared `.boxology-write-*` residue. Other open
+/// errors propagate immediately.
+fn stage(target: &Path, bytes: &[u8], stage_write: StageWriteFn) -> Result<PathBuf, io::Error> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
-    let unique = NEXT.fetch_add(1, Ordering::Relaxed);
-    let temporary = parent.join(format!(".boxology-write-{}-{unique}", std::process::id()));
-    fs::write(&temporary, bytes)?;
-    Ok(temporary)
+    let pid = std::process::id();
+    for _ in 0..STAGE_NAME_ATTEMPTS {
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent.join(format!(".boxology-write-{pid}-{unique}"));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(mut file) => match stage_write(&mut file, bytes) {
+                Ok(()) => return Ok(temporary),
+                Err(error) => {
+                    drop(file);
+                    let _ = fs::remove_file(&temporary);
+                    return Err(error);
+                }
+            },
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "staging name allocation exhausted",
+    ))
 }
 
-/// Removes staged siblings that will never be committed, reporting the original failure instead.
+/// Best-effort removal of staged siblings that will never be committed; callers keep the original error.
 fn discard(staged: &[PathBuf]) {
     for temporary in staged {
         let _ = fs::remove_file(temporary);
@@ -487,6 +637,61 @@ mod tests {
         assert_eq!(listing(&temp.0), Vec::<String>::new());
     }
 
+    /// Exclusive staging never opens an existing path: a band of upcoming predictable staging
+    /// names planted as symlinks to an external canary is skipped, the write lands on a fresh
+    /// regular sibling, declared outputs are regular files with the tree's bytes, and the canary
+    /// is untouched. The band is re-planted from the live counter so parallel-test drift cannot
+    /// miss the collision window, then the counter is rewound into that band so the retry path
+    /// is actually exercised.
+    #[test]
+    #[cfg(unix)]
+    fn exclusive_staging_skips_planted_symlinks_and_preserves_canary() {
+        let temp = Temp::new();
+        let canary = temp.0.join("canary-outside");
+        fs::write(&canary, b"canary-intact\n").unwrap();
+        let parents = [
+            "generated",
+            "generated/adapter",
+            "generated/contract",
+            "generated/contract/src",
+        ];
+        for parent in parents {
+            fs::create_dir_all(temp.0.join(parent)).unwrap();
+        }
+        let pid = std::process::id();
+        let plant = |base: u64| {
+            for parent in parents {
+                for n in 0..32u64 {
+                    let name = format!(".boxology-write-{pid}-{}", base + n);
+                    let link = temp.0.join(parent).join(name);
+                    let _ = std::os::unix::fs::symlink(&canary, &link);
+                }
+            }
+        };
+        let start = NEXT.load(Ordering::Relaxed);
+        plant(start);
+        // Absorb counter drift from parallel tests in this process, then force the retry path.
+        let now = NEXT.load(Ordering::Relaxed);
+        if now != start {
+            plant(now);
+        }
+        NEXT.store(start, Ordering::Relaxed);
+        let tree = tree();
+        let changes = write(&temp.0, &tree, &globs(&DECLARED)).unwrap();
+        assert_eq!(changes.written, SORTED);
+        for file in tree.files() {
+            let path = temp.0.join(file.path());
+            let meta = fs::symlink_metadata(&path).unwrap();
+            assert!(
+                meta.file_type().is_file(),
+                "{} must be a regular file",
+                file.path()
+            );
+            assert_eq!(fs::read(&path).unwrap(), file.bytes(), "{}", file.path());
+        }
+        assert_eq!(fs::read(&canary).unwrap(), b"canary-intact\n");
+    }
+
     /// Every refusal reachable through the public API, asserting the exact surviving listing —
     /// identical on a case-sensitive and a case-insensitive filesystem. Each blocking seed is
     /// under a declared pattern and undeclared by the tree, so the surviving listing is also what
@@ -527,6 +732,24 @@ mod tests {
             assert_eq!(listing(&temp.0), [seed], "{seed}");
         }
         assert_eq!(fs::read(&secret).unwrap(), b"x");
+    }
+
+    /// Scan-complete rival refusal is order-independent: an exact spelling plus a distinct
+    /// ASCII-case rival is refused in either listing order, and a lone exact or absent name is not.
+    #[test]
+    fn lookup_decision_is_scan_complete_and_order_independent() {
+        assert_eq!(
+            lookup_decision("schema.json", ["schema.json", "SCHEMA.JSON"]),
+            Err(())
+        );
+        assert_eq!(
+            lookup_decision("schema.json", ["SCHEMA.JSON", "schema.json"]),
+            Err(())
+        );
+        assert_eq!(lookup_decision("schema.json", ["SCHEMA.JSON"]), Err(()));
+        assert_eq!(lookup_decision("schema.json", ["schema.json"]), Ok(true));
+        assert_eq!(lookup_decision("schema.json", ["other.json"]), Ok(false));
+        assert_eq!(lookup_decision("schema.json", []), Ok(false));
     }
 
     /// The exact destination listing after pruning, over every stale shape a declared pattern
@@ -601,5 +824,142 @@ mod tests {
         assert_eq!(listing(&temp.0), expected);
         let target = fs::read_to_string(temp.0.join("keep.txt"));
         assert_eq!(target.unwrap(), "keep\n", "the symlink target is intact");
+    }
+
+    /// Injected prune-enumeration failure fails closed as `Walk` after commit: the sealed subtree
+    /// still holds its stale artifact, every declared file is live, and absent prefixes still skip.
+    /// The injectable seam keeps this value-positive on macOS even when root bypasses mode bits.
+    #[test]
+    fn injected_prune_walk_failure_leaves_the_committed_tree_live() {
+        let temp = Temp::new();
+        let tree = tree();
+        fs::create_dir_all(temp.0.join("generated/legacy")).unwrap();
+        fs::write(temp.0.join("generated/legacy/old.rs"), "old\n").unwrap();
+        fn sealed_legacy(path: &Path) -> io::Result<Vec<ListedEntry>> {
+            if path.ends_with("legacy") {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "sealed subtree",
+                ));
+            }
+            os_list_dir(path)
+        }
+        let error = write_with(
+            &temp.0,
+            &tree,
+            &globs(&DECLARED),
+            sealed_legacy,
+            os_stage_write,
+        )
+        .unwrap_err();
+        let blamed = matches!(
+            &error,
+            WriteError::Walk(path, err)
+                if path == "generated/legacy"
+                    && err.kind() == io::ErrorKind::PermissionDenied
+        );
+        assert!(blamed, "{error}");
+        for file in tree.files() {
+            assert_eq!(
+                fs::read(temp.0.join(file.path())).unwrap(),
+                file.bytes(),
+                "{}",
+                file.path()
+            );
+        }
+        assert_eq!(
+            fs::read(temp.0.join("generated/legacy/old.rs")).unwrap(),
+            b"old\n"
+        );
+        // Absent prefix (`docs/**` in DECLARED) still skips under the same seam.
+        let again = candidates(&temp.0, &globs(&["docs/**"]), sealed_legacy).unwrap();
+        assert!(again.is_empty());
+    }
+
+    /// Exclusive create then a forced partial write failure best-effort removes that sibling,
+    /// returns the injected write error unchanged, and leaves every declared destination
+    /// byte-identical.
+    #[test]
+    fn injected_stage_write_failure_removes_sibling_and_keeps_destinations() {
+        let temp = Temp::new();
+        let tree = tree();
+        fs::create_dir_all(temp.0.join("generated")).unwrap();
+        let canary = temp.0.join("generated/schema.json");
+        fs::write(&canary, b"canary-intact\n").unwrap();
+        fn partial_then_fail(file: &mut fs::File, _bytes: &[u8]) -> io::Result<()> {
+            file.write_all(b"partial")?;
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "injected stage write failure",
+            ))
+        }
+        let error = write_with(
+            &temp.0,
+            &tree,
+            &globs(&DECLARED),
+            os_list_dir,
+            partial_then_fail,
+        )
+        .unwrap_err();
+        let blamed = matches!(
+            &error,
+            WriteError::Io(path, err)
+                if path == SORTED[0]
+                    && err.kind() == io::ErrorKind::Interrupted
+                    && err.to_string().contains("injected stage write failure")
+        );
+        assert!(blamed, "{error}");
+        let files = listing(&temp.0);
+        assert!(
+            files.iter().all(|path| !path.contains(".boxology-write-")),
+            "staged sibling remained: {files:?}"
+        );
+        assert_eq!(files, ["generated/schema.json"]);
+        assert_eq!(fs::read(&canary).unwrap(), b"canary-intact\n");
+    }
+
+    /// Pre-write parent listing must be scan-complete: an enumeration error refuses before any
+    /// staging sibling or destination byte changes, rather than treating the component as absent.
+    #[test]
+    fn injected_lookup_enumeration_failure_refuses_before_any_change() {
+        let temp = Temp::new();
+        let tree = tree();
+        fs::create_dir_all(temp.0.join("generated")).unwrap();
+        let canary = temp.0.join("generated/schema.json");
+        fs::write(&canary, b"canary-intact\n").unwrap();
+        fn hidden_rival_scan(path: &Path) -> io::Result<Vec<ListedEntry>> {
+            let _ = path;
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "hidden rival enumeration",
+            ))
+        }
+        let error = write_with(
+            &temp.0,
+            &tree,
+            &globs(&DECLARED),
+            hidden_rival_scan,
+            os_stage_write,
+        )
+        .unwrap_err();
+        let blamed = matches!(
+            &error,
+            WriteError::Inspect(path, err)
+                if path == SORTED[0]
+                    && err.kind() == io::ErrorKind::PermissionDenied
+                    && err.to_string().contains("hidden rival enumeration")
+        );
+        assert!(blamed, "{error}");
+        assert_eq!(
+            error.to_string(),
+            format!("inspect {}: hidden rival enumeration", SORTED[0])
+        );
+        let files = listing(&temp.0);
+        assert!(
+            files.iter().all(|path| !path.contains(".boxology-write-")),
+            "staged sibling remained: {files:?}"
+        );
+        assert_eq!(files, ["generated/schema.json"]);
+        assert_eq!(fs::read(&canary).unwrap(), b"canary-intact\n");
     }
 }
