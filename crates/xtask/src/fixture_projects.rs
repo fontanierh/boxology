@@ -26,10 +26,7 @@ const FIXTURE_PROJECTS: &[FixtureProject] = &[
     },
 ];
 
-const STAYING_ROOT_MEMBERS: &[&str] = &[
-    "crates/fixtures/fixture-tests",
-    "crates/fixtures/generated-style-fmt",
-];
+const STAYING_ROOT_MEMBERS: &[&str] = &["crates/fixtures/fixture-tests"];
 const MIGRATED_ROOT_MEMBERS: &[&str] = &[
     "crates/fixtures/greeter/generated/contract",
     "crates/fixtures/greeter/implementation",
@@ -224,11 +221,12 @@ fn fixture_project_inventory(root: &Path) -> BTreeSet<String> {
             if !path.is_dir() || !manifest_path.is_file() {
                 return None;
             }
-            let is_workspace = manifest(&manifest_path)
+            let has_members = manifest(&manifest_path)
                 .get("workspace")
                 .and_then(Item::as_table)
+                .and_then(|workspace| workspace.get("members"))
                 .is_some();
-            is_workspace.then(|| format!("crates/fixtures/{}", entry.file_name().to_string_lossy()))
+            has_members.then(|| format!("crates/fixtures/{}", entry.file_name().to_string_lossy()))
         })
         .collect()
 }
@@ -275,5 +273,81 @@ mod tests {
     #[test]
     fn workspace_membership_is_exact() {
         assert!(check_workspace_membership(&crate::root()));
+    }
+
+    #[test]
+    fn standalone_style_fmt_fixture_topology_is_exact() {
+        const FIXTURE_ROOT: &str = "crates/fixtures/generated-style-fmt";
+        const FIXTURE_GLOB: &str = "crates/fixtures/generated-style-fmt/**";
+        const PACKAGE: &str = "generated-style-fmt";
+
+        let root = crate::root();
+        let fixture_workspace =
+            manifest(&root.join("crates/fixtures/generated-style-fmt/Cargo.toml"))
+                .get("workspace")
+                .and_then(Item::as_table)
+                .expect("generated-style-fmt declares [workspace]")
+                .clone();
+        assert!(
+            fixture_workspace.is_empty(),
+            "generated-style-fmt workspace table must be empty, got {fixture_workspace:?}"
+        );
+
+        let root_cargo = manifest(&root.join("Cargo.toml"));
+        let root_boxology = manifest(&root.join("boxology.toml"));
+        assert_eq!(
+            string_array_occurrences(&root_cargo, &["workspace", "members"], FIXTURE_ROOT),
+            0,
+            "generated-style-fmt must not be a root workspace member"
+        );
+        assert_eq!(
+            string_array_occurrences(&root_cargo, &["workspace", "exclude"], FIXTURE_ROOT),
+            1,
+            "generated-style-fmt must appear exactly once in root workspace.exclude"
+        );
+        assert_eq!(
+            string_array_occurrences(&root_boxology, &["owned"], FIXTURE_GLOB),
+            0,
+            "generated-style-fmt glob must not appear in root Boxology owned"
+        );
+        assert_eq!(
+            string_array_occurrences(&root_boxology, &["fixtures"], FIXTURE_GLOB),
+            1,
+            "generated-style-fmt glob must appear exactly once in root Boxology fixtures"
+        );
+        assert!(
+            !root_crate_package_names(&root_boxology).contains(PACKAGE),
+            "root [[crates]] must not name cargo package generated-style-fmt"
+        );
+    }
+
+    fn string_array_occurrences(doc: &DocumentMut, path: &[&str], needle: &str) -> usize {
+        let mut item = doc.as_item();
+        for key in path {
+            item = item
+                .get(key)
+                .unwrap_or_else(|| panic!("missing key {key} while resolving {path:?}"));
+        }
+        item.as_array()
+            .unwrap_or_else(|| panic!("{path:?} is not an array"))
+            .iter()
+            .filter_map(|value| value.as_str())
+            .filter(|value| *value == needle)
+            .count()
+    }
+
+    fn root_crate_package_names(doc: &DocumentMut) -> BTreeSet<String> {
+        doc.get("crates")
+            .and_then(Item::as_array_of_tables)
+            .expect("root boxology.toml declares [[crates]]")
+            .iter()
+            .map(|table| {
+                table
+                    .get("cargo_package")
+                    .and_then(Item::as_str)
+                    .expect("[[crates]] entries declare cargo_package")
+                    .to_owned()
+            })
+            .collect()
     }
 }

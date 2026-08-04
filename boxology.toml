@@ -33,7 +33,6 @@ owned = [
     "crates/boxology-workspace/**",
     "crates/boxology/**",
     "crates/fixtures/fixture-tests/**",
-    "crates/fixtures/generated-style-fmt/**",
     "crates/xtask/**",
     "deny.toml",
     "ops/**",
@@ -46,6 +45,7 @@ fixtures = [
     # Gitignored, but the walk prunes only .git and target: a contributor's
     # agent worktree here would otherwise discover as a real package.
     ".agents/worktrees/**",
+    "crates/fixtures/generated-style-fmt/**",
     "crates/fixtures/greeter/**",
     "crates/fixtures/hello/**",
     "crates/fixtures/ping-app/**",
@@ -148,11 +148,6 @@ role = "platform"
 [[crates]]
 cargo_package = "boxology-fixture-tests"
 path = "crates/fixtures/fixture-tests"
-role = "platform"
-
-[[crates]]
-cargo_package = "generated-style-fmt"
-path = "crates/fixtures/generated-style-fmt"
 role = "platform"
 
 [[crates]]

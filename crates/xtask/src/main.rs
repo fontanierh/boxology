@@ -50,12 +50,7 @@ const OWNED_FMT_PACKAGES: &[&str] = &[
     "boxology-telegram",
     "xtask",
 ];
-const FMT_EXCLUDED_PACKAGES: &[&str] = &[
-    "generated-style-fmt",
-    "greeter-contract",
-    "hello-contract",
-    "ping-contract",
-];
+const FMT_EXCLUDED_PACKAGES: &[&str] = &["greeter-contract", "hello-contract", "ping-contract"];
 const EDITOR_FIXTURE: &str = "crates/fixtures/hello/implementation";
 const EDITOR_CHECK_ARGS: &[&str] = &[
     "analysis-stats",
@@ -743,7 +738,25 @@ mod tests {
     #[test]
     fn owned_format_gate_passes_while_generated_fixture_fails_directly() {
         assert!(run_fmt());
-        assert!(!run_cargo(&["fmt", "--check", "-p", "generated-style-fmt"]));
+        let output = Command::new("cargo")
+            .args([
+                "fmt",
+                "--check",
+                "--manifest-path",
+                "crates/fixtures/generated-style-fmt/Cargo.toml",
+            ])
+            .current_dir(root())
+            .output()
+            .expect("run cargo fmt --check on generated-style-fmt");
+        assert!(
+            !output.status.success(),
+            "generated-style-fmt must fail rustfmt --check"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Diff in") && stdout.contains("generated-style-fmt/src/lib.rs"),
+            "expected affirmative rustfmt diff for generated-style-fmt/src/lib.rs, got: {stdout}"
+        );
     }
 
     #[test]

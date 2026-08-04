@@ -1,8 +1,10 @@
 [package]
 name = "generated-style-fmt"
 version = "0.0.0"
-edition.workspace = true
+edition = "2024"
 publish = false
 
 [lib]
 path = "src/lib.rs"
+
+[workspace]

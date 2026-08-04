@@ -434,10 +434,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "generated-style-fmt"
-version = "0.0.0"
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
