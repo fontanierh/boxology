@@ -15,11 +15,11 @@ effort = "medium"
 fallback_on = ["model_unavailable", "usage_exhausted"]
 
 [[roles.implement.candidates]]
-harness = "cursor"
-model = "cursor-grok-4.5-high-fast"
+harness = "pi"
+model = "xai/grok-4.5"
 effort = "high"
 
-# Reached only when Cursor reports the model unavailable or its usage
+# Reached only when Pi/xAI reports the model unavailable or its usage
 # exhausted. A transport failure such as an HTTP 503 is not a fallback
 # condition: retry the first candidate instead.
 [[roles.implement.candidates]]

@@ -41,7 +41,7 @@ Determine which harness hosts the primary agent before launching a worker.
 - Never represent a worker from one harness as a worker from another.
 - Count native and CLI-launched workers equally against the concurrency cap.
 
-For example, a Claude primary launches a Claude candidate as a native Claude sub-agent and a Kimi or Cursor candidate through that harness's CLI. A primary hosted elsewhere does the inverse and launches the Claude candidate through the Claude CLI.
+For example, a Claude primary launches a Claude candidate as a native Claude sub-agent and a Kimi or Pi candidate through that harness's CLI. A primary hosted elsewhere does the inverse and launches the Claude candidate through the Claude CLI.
 
 Use the configured model and effort. If the active harness's native mechanism cannot honor them, do not switch to that same harness's CLI. Treat the candidate as unavailable and follow the selection and fallback rules above. Launch an external worker through the CLI's supported model and effort selection; if its CLI is absent or cannot honor the requested values, treat that candidate as unavailable.
 
@@ -60,14 +60,14 @@ Read [`references/kimi-code.md`](references/kimi-code.md) first.
 
 Do not add `--auto` or `--yolo` to `-p`: prompt mode is already unattended and the current CLI rejects that combination. In every Kimi directive, forbid subagents, schedules, background work, `--add-dir`, and leaving the assigned worktree.
 
-#### `harness = "cursor"`
+#### `harness = "pi"`
 
-Read [`references/cursor-cli.md`](references/cursor-cli.md) first.
+Read [`references/pi-cli.md`](references/pi-cli.md) first.
 
-- environment: `CURSOR_API_KEY=<key>`;
-- argv: `/Users/jim/.local/bin/cursor-agent`, `-p`, `--model`, `<configured model>`, `--force`, `--trust`, `--approve-mcps`, `--sandbox`, `disabled`, `--workspace`, `<exact worktree path>`, `<complete worker directive>`.
+- environment: `XAI_API_KEY=<key>` and `PI_TELEMETRY=0`;
+- argv: `/opt/homebrew/bin/pi`, `-p`, `--no-session`, `--approve`, `--model`, `<configured model>`, `--thinking`, `<configured effort>`, `<complete worker directive>`.
 
-Cursor encodes reasoning effort in the model identifier, so the configured `effort` is honored by selecting the matching effort suffix; `effort = "high"` requires a `-high` identifier. A trailing `-fast` changes only scheduling priority, not the model or its effort. Never satisfy a configured effort with a different effort suffix. In every Cursor directive, forbid `-w`/`--worktree`, `--add-dir`, `--resume`, `--continue`, background work, and leaving the assigned worktree.
+Pi receives reasoning effort separately through `--thinking`, so pass the configured value exactly. `--no-session` makes every worker an independent ephemeral process, and the assigned worktree is fixed by the process working directory rather than an argv workspace flag. Never pass the API key through `--api-key`. In every Pi directive, forbid `--continue`, `--resume`, `--session`, `--fork`, background work, nested agents, and leaving the assigned worktree.
 
 #### `harness = "claude"`
 
