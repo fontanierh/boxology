@@ -1,18 +1,18 @@
 #![forbid(unsafe_code)]
 
 use boxology_cli::{
-    BaseSchemasError, ClassifyStepError, CompareDifference, DefaultBase, ExecuteError,
-    GenerationPlan, PlanError, ResolvedBase, SpawnError, base_package_schemas,
-    cargo_metadata_command, classify_step, compare_plans, composition_step, execute, plan,
-    resolve_base, resolve_default_base, run_clippy_step, run_command, run_fmt_step, run_lock_step,
-    run_test_step, walk,
+    BaseInputsError, BaseSchemasError, ClassifyStepError, CompareDifference, DefaultBase,
+    ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError, base_diff_inputs,
+    base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
+    execute, plan, resolve_base, resolve_default_base, run_clippy_step, run_command, run_fmt_step,
+    run_lock_step, run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
 use boxology_workspace::{
     CheckReport, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
     DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, StepSkip, Workspace,
-    WorkspaceInputs,
+    WorkspaceInputs, diff_ownership,
 };
 use std::{
     env,
@@ -190,12 +190,28 @@ fn run_check(
             Err(error) => return report_base_failure(error, stderr),
         },
     };
-    let contract_classification = match resolved {
-        Err(reason) => ContractClassificationCompletion::Skipped(reason),
-        Ok(base) => match classify_contracts(root, &base, &plans, stderr) {
-            Ok(completion) => completion,
-            Err(code) => return code,
-        },
+    let (contract_classification, diff_ownership) = match resolved {
+        Err(reason) => (
+            ContractClassificationCompletion::Skipped(reason),
+            DiffOwnershipCompletion::Skipped(match reason {
+                SkipReason::NoRepository => DiffOwnershipSkip::NoRepository,
+                // Unimplemented is historical classification vocabulary and is never resolved here.
+                SkipReason::NoMergeBase | SkipReason::Unimplemented => {
+                    DiffOwnershipSkip::NoMergeBase
+                }
+            }),
+        ),
+        Ok(base) => {
+            let classification = match classify_contracts(root, &base, &plans, stderr) {
+                Ok(completion) => completion,
+                Err(code) => return code,
+            };
+            let ownership = match diff_ownership_step(root, &base, stderr) {
+                Ok(completion) => completion,
+                Err(code) => return code,
+            };
+            (classification, ownership)
+        }
     };
     let runner = &run_command;
     let (cargo_graph, cargo_graph_output) = match run_lock_step(runner, root) {
@@ -218,7 +234,7 @@ fn run_check(
         discovery,
         regeneration,
         contract_classification,
-        diff_ownership: DiffOwnershipCompletion::Skipped(DiffOwnershipSkip::NotImplemented),
+        diff_ownership,
         cargo_graph,
         fmt,
         clippy,
@@ -234,6 +250,57 @@ fn run_check(
     };
     let _ = writeln!(stdout, "{}", report.render_human());
     report.exit_code()
+}
+
+fn diff_ownership_step(
+    root: &Path,
+    base: &ResolvedBase,
+    stderr: &mut dyn Write,
+) -> Result<DiffOwnershipCompletion, u8> {
+    let inputs = match base_diff_inputs(root, base) {
+        Ok(inputs) => inputs,
+        Err(error) => return Err(report_base_inputs_failure(error, stderr)),
+    };
+    let ownership = diff_ownership(inputs.packages(), inputs.changed());
+    let pairs = match inputs.manifest_changes(root, &ownership) {
+        Ok(pairs) => pairs,
+        Err(error) => return Err(report_base_inputs_failure(error, stderr)),
+    };
+    let scope = match ownership.lockfile_scope(&pairs) {
+        Ok(scope) => scope,
+        // Impossible by construction after base pairing; keep the BXW0103 data posture.
+        Err(_) => {
+            let _ = writeln!(
+                stderr,
+                "BXW0103 .git: the base revision's Git listings must parse as expected NUL-delimited output"
+            );
+            return Err(1);
+        }
+    };
+    let (_, _, ownership_findings) = ownership.into_parts();
+    let mut entries = ownership_findings
+        .map(Findings::into_entries)
+        .unwrap_or_default();
+    if let Some(scope) = scope {
+        entries.extend(scope.into_entries());
+    }
+    Ok(match Findings::new(entries) {
+        None => DiffOwnershipCompletion::Passed,
+        Some(findings) => DiffOwnershipCompletion::Failed(findings),
+    })
+}
+
+fn report_base_inputs_failure(error: BaseInputsError, stderr: &mut dyn Write) -> u8 {
+    match error {
+        BaseInputsError::Tool(error) => {
+            let _ = writeln!(stderr, "{error}");
+            2
+        }
+        BaseInputsError::Data(_) | BaseInputsError::Declarations { .. } => {
+            let _ = writeln!(stderr, "{error}");
+            1
+        }
+    }
 }
 
 fn difference_finding(workspace: &Workspace, difference: &CompareDifference) -> Finding {
