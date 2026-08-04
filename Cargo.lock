@@ -165,6 +165,7 @@ dependencies = [
  "boxology-runtime",
  "hello-contract",
  "hello-implementation",
+ "serde_json",
  "tokio",
 ]
 

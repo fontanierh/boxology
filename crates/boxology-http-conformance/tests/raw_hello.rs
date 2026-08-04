@@ -51,6 +51,10 @@ const OVERSIZED_CHUNKED_BODY: &[u8] =
     b"43\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\r\n0\r\n\r\n";
 const OVERSIZED_MALFORMED_BODY: &[u8] =
     b"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
+// Hello input is String: pipeline-classification only; shape isolation is semantic.rs.
+const MALFORMED_JSON_BODY: &[u8] = b"{";
+const DUPLICATE_KEY_OBJECT_BODY: &[u8] = br#"{"a":1,"a":1}"#;
+const NONCANONICAL_INTEGER_BODY: &[u8] = b"007";
 
 /// Hang budget for the 1 MiB default-limit boundary exchanges only.
 ///
@@ -62,7 +66,7 @@ const OVERSIZED_MALFORMED_BODY: &[u8] =
 /// "harmonise" this back to 5s.
 const DEFAULT_BODY_LIMIT_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(60);
 
-const ROW_COUNT: usize = 47;
+const ROW_COUNT: usize = 50;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SpecParagraph {
@@ -586,6 +590,14 @@ const RAW_CASES: [RawCase; ROW_COUNT] = [
     // accepts lists. M5 (classify as PayloadTooLarge) → 413. Pins taxonomy +
     // zero dispatch, not the guard.
     RawCase::new("depth-bomb", EXACT_REQUEST, SX, BAD).with_body(DEPTH_BOMB_BODY),
+    // `{` → MalformedJson → 400; pipeline classification for String input.
+    RawCase::new("malformed-json", EXACT_REQUEST, SX, BAD).with_body(MALFORMED_JSON_BODY),
+    // Object vs String → 400; syntax keeps duplicate keys (semantic.rs owns key shape).
+    RawCase::new("duplicate-key-object", EXACT_REQUEST, SX, BAD)
+        .with_body(DUPLICATE_KEY_OBJECT_BODY),
+    // `007` is syntax-malformed leading zeros, not semantic NonCanonicalInteger.
+    RawCase::new("noncanonical-integer", EXACT_REQUEST, SX, BAD)
+        .with_body(NONCANONICAL_INTEGER_BODY),
     // Byte cap defended by three layers (size_hint, accumulation, parse). M4
     // (drop decode PayloadTooLarge arm) stays green — collection rejects first;
     // that arm is only reachable via direct `decode_request_body` unit tests.
@@ -686,6 +698,9 @@ const ORACLE: [OracleRow; ROW_COUNT] = [
     o("bom-prefixed-body", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 8\r\n\r\n\xef\xbb\xbf\"Ada\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
     o("invalid-utf8-body", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 3\r\n\r\n\"\xff\"", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
     o("depth-bomb", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 265\r\n\r\n[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"Ada\"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("malformed-json", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 1\r\n\r\n{", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("duplicate-key-object", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 13\r\n\r\n{\"a\":1,\"a\":1}", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
+    o("noncanonical-integer", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 3\r\n\r\n007", e(b"HTTP/1.1 400 Bad Request", br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#, b"application/json", None, 0)),
     o("oversized-content-length", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 67\r\n\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
     o("oversized-chunked", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n43\r\n\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\r\n0\r\n\r\n", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
     o("oversized-plus-malformed", &[SpecParagraph::S3D3CanonicalResponseEncoding, SpecParagraph::S3D2Codec, SpecParagraph::S3D5StableWireErrorCodes, SpecParagraph::S3D7RequestProcessingPipeline, SpecParagraph::RuntimeInvocationStatusTable, SpecParagraph::RuntimeStableWireCodes], b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 67\r\n\r\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", e(b"HTTP/1.1 413 Payload Too Large", br#"{"error":{"kind":"call","code":"payload_too_large","message":"payload too large"}}"#, b"application/json", None, 0)),
@@ -707,6 +722,41 @@ impl HelloDispatch for CountingHello {
         self.dispatches.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { Ok(format!("Hello, {name}!")) })
     }
+}
+
+#[test]
+fn evidence_inventory_matches_raw_cases() {
+    let ids: Vec<&str> = RAW_CASES.iter().map(|case| case.id).collect();
+    boxology_http_conformance::assert_ordered_case_ids(
+        &ids,
+        boxology_http_conformance::RAW_HELLO_CASE_IDS,
+        "raw_hello",
+    );
+}
+
+#[test]
+fn named_evidence_resolves_through_inventory() {
+    boxology_http_conformance::assert_named_evidence_resolution(
+        "raw_hello",
+        &[
+            (
+                "raw_hello_cases_are_canonical",
+                raw_hello_cases_are_canonical as *const (),
+            ),
+            (
+                "default_request_body_limit_boundary_is_one_mib",
+                default_request_body_limit_boundary_is_one_mib as *const (),
+            ),
+            (
+                "malformed_request_line_is_bare_http_400",
+                malformed_request_line_is_bare_http_400 as *const (),
+            ),
+            (
+                "request_head_over_default_16_kib_cap_is_bare_http_431",
+                request_head_over_default_16_kib_cap_is_bare_http_431 as *const (),
+            ),
+        ],
+    );
 }
 
 #[tokio::test]
@@ -853,6 +903,61 @@ async fn default_request_body_limit_boundary_is_one_mib() {
             )
             .await;
     }
+}
+
+/// Bare framing: malformed request line → HTTP 400, empty body, no JSON envelope.
+/// Status/body only; Date/Connection/Content-Length bytes are not policy.
+#[tokio::test]
+async fn malformed_request_line_is_bare_http_400() {
+    let (running, dispatches) = counting_hello();
+    let address = running.local_addr();
+    let malformed = b"POST /rpc/hello/greet\r\nHost: boxology\r\nConnection: close\r\n\r\n";
+    let well_formed = b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 5\r\n\r\n\"Ada\"";
+    running
+        .assert_then_shutdown(async move {
+            assert_bare_status_response(
+                &raw_exchange(address, malformed, Exchange::Whole, Duration::from_secs(5)).await,
+                400,
+            );
+            // Negative: well-formed request still yields the JSON call envelope.
+            assert_response(
+                &raw_exchange(
+                    address,
+                    well_formed,
+                    Exchange::Whole,
+                    Duration::from_secs(5),
+                )
+                .await,
+                SU,
+            );
+            assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        })
+        .await;
+}
+
+/// Bare framing: head over default 16 KiB cap → HTTP 431, empty body, no JSON envelope.
+/// Empty body + no Content-Type isolate head admission; status/body only are policy.
+#[tokio::test]
+async fn request_head_over_default_16_kib_cap_is_bare_http_431() {
+    const CAP: usize = 16 * 1024;
+    let (running, dispatches) = counting_hello();
+    let address = running.local_addr();
+    let at = empty_body_padded_head(CAP);
+    let over = empty_body_padded_head(CAP + 1);
+    running
+        .assert_then_shutdown(async move {
+            // Negative: at-cap head is admitted; missing Content-Type → JSON 415, not bare 431.
+            assert_response(
+                &raw_exchange(address, &at, Exchange::Whole, Duration::from_secs(5)).await,
+                UMT,
+            );
+            assert_bare_status_response(
+                &raw_exchange(address, &over, Exchange::Whole, Duration::from_secs(5)).await,
+                431,
+            );
+            assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        })
+        .await;
 }
 
 fn json_string_body(total_len: usize) -> Vec<u8> {
@@ -1002,12 +1107,29 @@ fn traceability_semantic_drift_mutants_are_active() {
     assert_traceability_rejects(&body_override_drift, &ORACLE, "body-override drift");
 
     let mut framing_drift = RAW_CASES.to_vec();
-    framing_drift[42].chunked = false;
+    framing_drift[45].chunked = false;
     assert_traceability_rejects(&framing_drift, &ORACLE, "framing drift");
 
     let mut payload_status_drift = RAW_CASES.to_vec();
-    payload_status_drift[41].expected.status_line = BAD_REQUEST_STATUS;
+    payload_status_drift[44].expected.status_line = BAD_REQUEST_STATUS;
     assert_traceability_rejects(&payload_status_drift, &ORACLE, "413 status-line drift");
+
+    for (idx, label) in [
+        (41, "malformed-json body drift"),
+        (42, "duplicate-key-object body drift"),
+        (43, "noncanonical-integer body drift"),
+    ] {
+        let mut body_drift = RAW_CASES.to_vec();
+        body_drift[idx].body = Some(b"\"Ada\"");
+        assert_traceability_rejects(&body_drift, &ORACLE, label);
+    }
+    let mut malformed_json_dispatch_drift = RAW_CASES.to_vec();
+    malformed_json_dispatch_drift[41].expected.dispatches = 1;
+    assert_traceability_rejects(
+        &malformed_json_dispatch_drift,
+        &ORACLE,
+        "malformed-json dispatch drift",
+    );
 }
 
 fn assert_traceability_rejects(cases: &[RawCase], oracle: &[OracleRow], mutant: &str) {
@@ -1153,6 +1275,54 @@ async fn raw_exchange(
     })
     .await
     .expect("timeout")
+}
+
+fn counting_hello() -> (RunningHello, Arc<AtomicUsize>) {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let running = RunningHello::start_with_config(
+        CountingHello {
+            dispatches: Arc::clone(&dispatches),
+        },
+        HttpServerConfig::new("127.0.0.1:0".parse().expect("loopback address is valid")),
+    );
+    (running, dispatches)
+}
+
+fn empty_body_padded_head(length: usize) -> Vec<u8> {
+    // No Content-Type + CL:0: over-cap → bare 431; at-cap → JSON 415 missing media.
+    let prefix = b"POST /rpc/hello/greet HTTP/1.1\r\nHost: boxology\r\nConnection: close\r\nContent-Length: 0\r\nX-Padding: ";
+    let suffix = b"\r\n\r\n";
+    assert!(length >= prefix.len() + suffix.len());
+    let mut head = Vec::with_capacity(length);
+    head.extend_from_slice(prefix);
+    head.extend(std::iter::repeat_n(
+        b'x',
+        length - prefix.len() - suffix.len(),
+    ));
+    head.extend_from_slice(suffix);
+    assert_eq!(head.len(), length);
+    head
+}
+
+fn assert_bare_status_response(raw: &[u8], status: u16) {
+    let (head, body) = split_response(raw);
+    let line_end = head.iter().position(|b| *b == b'\n').expect("status line");
+    let status_line = head[..line_end]
+        .strip_suffix(b"\r")
+        .unwrap_or(&head[..line_end]);
+    let code = std::str::from_utf8(status_line)
+        .expect("utf8")
+        .split(' ')
+        .nth(1)
+        .and_then(|t| t.parse::<u16>().ok())
+        .expect("status code");
+    assert_eq!(code, status);
+    assert!(body.is_empty(), "bare body must be empty");
+    assert_header(&parse_headers(&head[line_end + 1..]), b"content-type", None);
+    assert!(
+        !raw.windows(8).any(|w| w == b"{\"error\""),
+        "bare response must not carry a JSON call envelope"
+    );
 }
 
 fn assert_response(raw: &[u8], expected: ExpectedResponse) {
