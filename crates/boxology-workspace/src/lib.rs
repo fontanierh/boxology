@@ -107,6 +107,19 @@ const SELECTED_BOX: Rule = ("BXW0087", SELECTED_BOX_TEXT);
 const SELECTED_SCHEMA: Rule = ("BXW0088", SELECTED_SCHEMA_TEXT);
 const SELECTOR_MATCH: Rule = ("BXW0089", SELECTOR_MATCH_TEXT);
 const BINDING_EXPOSURE: Rule = ("BXW0090", BINDING_EXPOSURE_TEXT);
+/// The normative source of base-relative diff ownership reporting (02-packages merger steps 1–4 at
+/// S5 D6 reporting strength).
+const OWNERSHIP_SOURCE: &str = "boxology-details/02-packages.md ownership and derived-artifact enforcement; specs/s5-manifest-and-validation.md D6";
+const DIFF_UNOWNED_TEXT: &str = "every changed path must classify under some package";
+const DIFF_UNOWNED: Rule = ("BXW0098", DIFF_UNOWNED_TEXT);
+const DIFF_AMBIGUOUS_TEXT: &str = "every changed path must classify as one non-derived package path or one declared derived output";
+const DIFF_AMBIGUOUS: Rule = ("BXW0099", DIFF_AMBIGUOUS_TEXT);
+const DIFF_ACCOUNTABLE_TEXT: &str =
+    "the set of non-derived owners must contain exactly one accountable package";
+const DIFF_ACCOUNTABLE: Rule = ("BXW0100", DIFF_ACCOUNTABLE_TEXT);
+const DIFF_FOREIGN_TEXT: &str =
+    "a derived output not attributable to the accountable package is foreign source";
+const DIFF_FOREIGN: Rule = ("BXW0101", DIFF_FOREIGN_TEXT);
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
@@ -127,6 +140,9 @@ const CARGO_MANIFEST: &str = "Cargo.toml";
 // contract, unselected composition, impossible role/scope, and non-member respectively.
 // Composition cross-document validation continues the workspace-owned range at BXW0087-BXW0090:
 // selected package, selected schema, selector expansion, and exposure respectively.
+// Diff-ownership classification (#327 B5b1a) continues at BXW0098–BXW0101: unowned changed path,
+// ambiguous changed path, accountable-owner-set, and foreign derived output. BXW0102 is reserved
+// for the next dependency-declaration / lockfile-scope slice.
 macro_rules! ref_getters {
     ($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$(
         #[$meta] pub fn $name(&self) -> $return { &self.$field }
@@ -272,30 +288,12 @@ impl WorkspaceInputs {
         let (mut classified, mut defects) = (Vec::new(), Vec::new());
         for file in &self.files {
             let path = file.path();
-            let owning = |package: &&Package| !package.owns(path).is_empty();
-            let deriving = |package: &&Package| !package.derives(path).is_empty();
-            let claiming = |package: &&Package| owning(package) || deriving(package);
-            let rivals: Vec<&Package> = packages.iter().filter(claiming).collect();
-            let owners: Vec<&Package> = rivals.iter().copied().filter(owning).collect();
-            let mut outputs: Vec<(&Package, &DerivedOutput)> = Vec::new();
-            for package in &rivals {
-                outputs.extend(package.derives(path).into_iter().map(|o| (*package, o)));
-            }
-            let every = || every_claim(&rivals, path);
-            let attributed = match (outputs.as_slice(), owners.as_slice()) {
-                ([(package, output)], []) => Ok((*package, Some(*output))),
-                ([], [package]) => Ok((*package, None)),
-                ([], []) => Err((UNOWNED, Vec::new())),
-                ([], _) => Err((OVERLAP, every())),
-                (_, []) => Err((RIVALS, every())),
-                (_, _) => Err((BOTH, every())),
-            };
-            match attributed {
-                Ok((package, output)) => {
+            match attribute_path(packages, path) {
+                Attribution::Owned(package, output) => {
                     classified.push(FileClassification::new(path, package, output));
                     defects.extend(package.lockfile(path, output));
                 }
-                Err((rule, named)) => {
+                Attribution::Defect(rule, named) => {
                     let found = Finding::new(rule, path.clone(), None, named);
                     defects.push(Entry::Workspace(found));
                 }
@@ -397,6 +395,166 @@ fn every_claim(rivals: &[&Package], path: &RelativePath) -> Vec<Candidate> {
         }
     }
     named
+}
+/// One path's attribution under a package set: the owning package and optional derived output, or
+/// the rivalry code with every typed claim.
+enum Attribution<'a> {
+    Owned(&'a Package, Option<&'a DerivedOutput>),
+    Defect(Rule, Vec<Candidate>),
+}
+/// The single definition of path attribution used by candidate classification and by base-relative
+/// diff ownership. Exactly one derived claim and no non-derived owner, or no derived claim and
+/// exactly one owner, succeeds; every other shape is a coded rivalry carrying every claim.
+fn attribute_path<'a>(packages: &'a [Package], path: &RelativePath) -> Attribution<'a> {
+    let owning = |package: &&Package| !package.owns(path).is_empty();
+    let deriving = |package: &&Package| !package.derives(path).is_empty();
+    let claiming = |package: &&Package| owning(package) || deriving(package);
+    let rivals: Vec<&Package> = packages.iter().filter(claiming).collect();
+    let owners: Vec<&Package> = rivals.iter().copied().filter(owning).collect();
+    let mut outputs: Vec<(&Package, &DerivedOutput)> = Vec::new();
+    for package in &rivals {
+        outputs.extend(package.derives(path).into_iter().map(|o| (*package, o)));
+    }
+    let every = || every_claim(&rivals, path);
+    match (outputs.as_slice(), owners.as_slice()) {
+        ([(package, output)], []) => Attribution::Owned(package, Some(output)),
+        ([], [package]) => Attribution::Owned(package, None),
+        ([], []) => Attribution::Defect(UNOWNED, Vec::new()),
+        ([], _) => Attribution::Defect(OVERLAP, every()),
+        (_, []) => Attribution::Defect(RIVALS, every()),
+        (_, _) => Attribution::Defect(BOTH, every()),
+    }
+}
+/// Base-relative ownership of a changed-path set under the supplied package declarations
+/// (02-packages merger steps 1–4 at S5 D6 reporting strength).
+#[derive(Debug, Eq, PartialEq)]
+pub struct DiffOwnership {
+    classifications: Vec<FileClassification>,
+    accountable: Option<BoxId>,
+    findings: Option<Findings>,
+}
+impl DiffOwnership {
+    ref_getters! {
+        #[doc = "Returns every successfully attributed changed path, in frozen report order."]
+        classifications: &[FileClassification] = classifications;
+    }
+    /// Returns the sole non-derived owner when the changed set has exactly one.
+    pub fn accountable(&self) -> Option<&BoxId> {
+        self.accountable.as_ref()
+    }
+    /// Returns the sorted ownership findings when any defect was proven.
+    pub fn findings(&self) -> Option<&Findings> {
+        self.findings.as_ref()
+    }
+    /// Consumes this result into classifications, the accountable identity, and findings.
+    pub fn into_parts(self) -> (Vec<FileClassification>, Option<BoxId>, Option<Findings>) {
+        (self.classifications, self.accountable, self.findings)
+    }
+}
+/// Classifies each changed path under `packages` and reports merger-step ownership findings.
+///
+/// Empty `changed` passes with no accountable package and no findings. The input is canonicalized
+/// by sorting and deduplicating paths so unsorted or duplicate callers observe exactly the same
+/// classifications, accountable owner, and findings. Successful attributions reuse
+/// [`attribute_path`]; unowned paths are BXW0098 and rival claims BXW0099. The non-derived owner
+/// set must be exactly one package (BXW0100 otherwise). Under a sole accountable package, a derived
+/// output of any other package is BXW0101, except the workspace `Cargo.lock` path which a later
+/// lockfile-scope slice judges alone.
+pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwnership {
+    let mut changed: Vec<RelativePath> = changed.to_vec();
+    changed.sort();
+    changed.dedup();
+    let mut classifications = Vec::new();
+    let mut findings = Vec::new();
+    if changed.is_empty() {
+        return DiffOwnership {
+            classifications,
+            accountable: None,
+            findings: None,
+        };
+    }
+    for path in &changed {
+        match attribute_path(packages, path) {
+            Attribution::Owned(package, output) => {
+                classifications.push(FileClassification::new(path, package, output));
+            }
+            Attribution::Defect(rule, named) => {
+                let owned = rule == UNOWNED;
+                let code = if owned { DIFF_UNOWNED } else { DIFF_AMBIGUOUS };
+                findings.push(Entry::Workspace(ownership_finding(
+                    code,
+                    path.clone(),
+                    None,
+                    named,
+                )));
+            }
+        }
+    }
+    classifications.sort_by(|left, right| left.key().cmp(&right.key()));
+    let mut owners: Vec<BoxId> = classifications
+        .iter()
+        .filter(|held| held.derived_output().is_none())
+        .map(|held| held.package().clone())
+        .collect();
+    owners.sort();
+    owners.dedup();
+    let accountable = match owners.as_slice() {
+        [only] => Some(only.clone()),
+        _ => None,
+    };
+    if owners.len() != 1 {
+        let payload = owners
+            .iter()
+            .map(BoxId::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        if let Some(at) = changed.first() {
+            findings.push(Entry::Workspace(Finding::about(
+                DIFF_ACCOUNTABLE,
+                OWNERSHIP_SOURCE,
+                at.clone(),
+                None,
+                payload,
+            )));
+        }
+    }
+    if let Some(accountable) = &accountable {
+        for held in &classifications {
+            if held.path().as_str() == LOCKFILE {
+                continue;
+            }
+            let Some(output) = held.derived_output() else {
+                continue;
+            };
+            if held.package() == accountable {
+                continue;
+            }
+            findings.push(Entry::Workspace(Finding::about(
+                DIFF_FOREIGN,
+                OWNERSHIP_SOURCE,
+                held.path().clone(),
+                Some(held.package().clone()),
+                String::from(output.as_str()),
+            )));
+        }
+    }
+    DiffOwnership {
+        classifications,
+        accountable,
+        findings: Findings::new(findings),
+    }
+}
+fn ownership_finding(
+    rule: Rule,
+    path: RelativePath,
+    package: Option<BoxId>,
+    named: Vec<Candidate>,
+) -> Finding {
+    let rendered: Vec<String> = named.iter().map(Candidate::render).collect();
+    let payload = rendered.join(",");
+    let mut found = Finding::about(rule, OWNERSHIP_SOURCE, path, package, payload);
+    found.candidates = named;
+    found
 }
 /// Reports whether `entry`, declared by `package`, names `member`.
 ///
@@ -2537,7 +2695,8 @@ jobs:
     const ALL_CODES: &[&str] = &[
         "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
         "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054", "BXW0055", "BXW0056", "BXW0057",
-        "BXW0058", "BXW0059", "BXW0060", "BXW0087", "BXW0088", "BXW0089", "BXW0090",
+        "BXW0058", "BXW0059", "BXW0060", "BXW0087", "BXW0088", "BXW0089", "BXW0090", "BXW0098",
+        "BXW0099", "BXW0100", "BXW0101",
     ];
     /// One minimal workspace for each discovery and edge code through BXW0060, in code order.
     /// Composition codes have their own cross-document corpus below.
@@ -2754,6 +2913,19 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             assert!(codes.iter().all(|code| *code == expected), "{report}");
             covered.push(codes[0]);
         }
+        for (expected, finding) in ownership_corpus() {
+            let (rule, source) = match expected {
+                "BXW0098" => (DIFF_UNOWNED_TEXT, OWNERSHIP_SOURCE),
+                "BXW0099" => (DIFF_AMBIGUOUS_TEXT, OWNERSHIP_SOURCE),
+                "BXW0100" => (DIFF_ACCOUNTABLE_TEXT, OWNERSHIP_SOURCE),
+                "BXW0101" => (DIFF_FOREIGN_TEXT, OWNERSHIP_SOURCE),
+                _ => panic!("unexpected ownership corpus code"),
+            };
+            assert_eq!(finding.code(), expected);
+            assert_eq!(finding.rule(), rule);
+            assert_eq!(finding.rule_source(), source);
+            covered.push(expected);
+        }
         assert_eq!(covered, ALL_CODES);
         assert!(ALL_CODES.windows(2).all(|pair| pair[0] < pair[1]));
     }
@@ -2826,6 +2998,330 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                     .unwrap_err(),
             ),
         ]
+    }
+    fn ownership_manifests() -> Vec<(RelativePath, Vec<u8>)> {
+        let root = deriving(
+            owning(
+                "root",
+                "platform",
+                &["boxology.toml", "src/**", "Cargo.toml"],
+                &["corpus/**"],
+            ),
+            &[("lockfile", &[LOCKFILE]), ("gen", &["gen.rs"])],
+        );
+        let ping = deriving(
+            owning("ping", "box", &["boxology.toml", "src/**"], &[]),
+            &[("out", &["generated.rs"])],
+        );
+        vec![(path(MANIFEST), root), (path("ping/boxology.toml"), ping)]
+    }
+    /// Test-only base-manifest discovery: builds [`WorkspaceInputs`] directly so production stays
+    /// free of a panicking public helper. Callers must supply unique manifest paths.
+    fn ownership_packages_from(
+        manifests: Vec<(RelativePath, Vec<u8>)>,
+    ) -> Result<Vec<Package>, Findings> {
+        let files: Vec<FileEntry> = manifests
+            .iter()
+            .map(|(held, _)| FileEntry::file(held.clone()))
+            .collect();
+        let inputs = WorkspaceInputs::new(files, manifests, "")
+            .expect("test ownership manifests use unique RelativePaths");
+        let (packages, findings) = inputs.discover();
+        match findings {
+            Some(findings) => Err(findings),
+            None => Ok(packages),
+        }
+    }
+    fn ownership_packages() -> Vec<Package> {
+        ownership_packages_from(ownership_manifests()).expect("base declarations discover")
+    }
+    fn changed(paths: &[&str]) -> Vec<RelativePath> {
+        paths.iter().copied().map(path).collect()
+    }
+    fn workspace_finding(entry: &Entry) -> &Finding {
+        match entry {
+            Entry::Workspace(finding) => finding,
+            Entry::Manifest(_) => panic!("expected a workspace finding"),
+        }
+    }
+    fn finding_lines(findings: Option<&Findings>) -> Vec<String> {
+        findings
+            .expect("expected findings")
+            .as_slice()
+            .iter()
+            .map(|entry| workspace_finding(entry).to_string())
+            .collect()
+    }
+    fn ownership_corpus() -> Vec<(&'static str, Finding)> {
+        let packages = ownership_packages();
+        let unowned = diff_ownership(&packages, &changed(&["orphan.rs"]));
+        let rivalry = {
+            let root = deriving(
+                owning("root", "platform", &["boxology.toml", "shared.rs"], &[]),
+                &[("gen", &["shared.rs"])],
+            );
+            let packages =
+                ownership_packages_from(vec![(path(MANIFEST), root)]).expect("discovers");
+            diff_ownership(&packages, &changed(&["shared.rs"]))
+        };
+        let derived_only = diff_ownership(&packages, &changed(&[LOCKFILE]));
+        let foreign = diff_ownership(&packages, &changed(&["src/lib.rs", "ping/generated.rs"]));
+        let pick = |ownership: DiffOwnership, code| {
+            ownership
+                .into_parts()
+                .2
+                .expect("findings")
+                .as_slice()
+                .iter()
+                .find_map(|entry| {
+                    let finding = match entry {
+                        Entry::Workspace(finding) => finding,
+                        Entry::Manifest(_) => return None,
+                    };
+                    (finding.code() == code).then(|| finding.clone())
+                })
+                .unwrap_or_else(|| panic!("missing {code}"))
+        };
+        vec![
+            ("BXW0098", pick(unowned, "BXW0098")),
+            ("BXW0099", pick(rivalry, "BXW0099")),
+            ("BXW0100", pick(derived_only, "BXW0100")),
+            ("BXW0101", pick(foreign, "BXW0101")),
+        ]
+    }
+    #[test]
+    fn diff_ownership_passes_for_single_accountable_and_empty_changes() {
+        let packages = ownership_packages();
+        let empty = diff_ownership(&packages, &[]);
+        assert!(empty.findings().is_none());
+        assert_eq!(empty.accountable(), None);
+        assert!(empty.classifications().is_empty());
+        let (classified, accountable, findings) = empty.into_parts();
+        assert!(findings.is_none());
+        assert_eq!(accountable, None);
+        assert!(classified.is_empty());
+
+        let mixed = diff_ownership(&packages, &changed(&["src/lib.rs", "gen.rs"]));
+        assert_eq!(mixed.accountable().map(BoxId::as_str), Some("root"));
+        assert!(mixed.findings().is_none());
+        assert_eq!(
+            mixed
+                .classifications()
+                .iter()
+                .map(|held| {
+                    (
+                        held.package().as_str(),
+                        held.path().as_str(),
+                        held.derived_output().map(BoxId::as_str),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            [
+                ("root", "gen.rs", Some("gen")),
+                ("root", "src/lib.rs", None),
+            ]
+        );
+        let (_, accountable, findings) = mixed.into_parts();
+        assert!(findings.is_none());
+        assert_eq!(accountable.as_ref().map(BoxId::as_str), Some("root"));
+
+        let fixture = diff_ownership(&packages, &changed(&["corpus/sample.rs"]));
+        assert_eq!(fixture.accountable().map(BoxId::as_str), Some("root"));
+        assert!(fixture.findings().is_none());
+        assert_eq!(fixture.classifications().len(), 1);
+        assert_eq!(fixture.classifications()[0].package().as_str(), "root");
+        assert_eq!(
+            fixture.classifications()[0].path().as_str(),
+            "corpus/sample.rs"
+        );
+        assert_eq!(fixture.classifications()[0].derived_output(), None);
+    }
+    #[test]
+    fn diff_ownership_reports_unowned_ambiguous_accountable_and_foreign_codes() {
+        let packages = ownership_packages();
+        let unowned = diff_ownership(&packages, &changed(&["orphan.rs"]));
+        assert_eq!(
+            finding_lines(unowned.findings()),
+            [
+                "BXW0098 orphan.rs package= candidates=[]".to_owned(),
+                "BXW0100 orphan.rs package= candidates=[]".to_owned(),
+            ]
+        );
+
+        let cascade = diff_ownership(&packages, &changed(&["orphan.rs", "src/lib.rs"]));
+        assert_eq!(cascade.accountable().map(BoxId::as_str), Some("root"));
+        assert_eq!(
+            finding_lines(cascade.findings()),
+            ["BXW0098 orphan.rs package= candidates=[]".to_owned()]
+        );
+
+        let owner_rivalry = {
+            let root = owning("root", "platform", &["boxology.toml", "p/**"], &[]);
+            let nested = owning("nested", "box", &["boxology.toml", "x.rs"], &[]);
+            let packages = ownership_packages_from(vec![
+                (path(MANIFEST), root),
+                (path("p/boxology.toml"), nested),
+            ])
+            .expect("discovers");
+            diff_ownership(&packages, &changed(&["p/x.rs"]))
+        };
+        assert_eq!(
+            finding_lines(owner_rivalry.findings()),
+            [
+                "BXW0099 p/x.rs package= candidates=[root boxology.toml p/**,nested p/boxology.toml x.rs]"
+                    .to_owned(),
+                "BXW0100 p/x.rs package= candidates=[]".to_owned(),
+            ]
+        );
+        let rivalry = workspace_finding(&owner_rivalry.findings().expect("findings").as_slice()[0]);
+        assert_eq!(rivalry.code(), "BXW0099");
+        let named: Vec<_> = rivalry
+            .candidates()
+            .iter()
+            .map(|claim| {
+                (
+                    claim.package().as_str(),
+                    claim.manifest_path().as_str(),
+                    claim.claim().as_str(),
+                    claim.output().map(BoxId::as_str),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("root", "boxology.toml", "p/**", None),
+                ("nested", "p/boxology.toml", "x.rs", None),
+            ]
+        );
+
+        let mixed_rivalry = {
+            let root = deriving(
+                owning("root", "platform", &["boxology.toml", "shared.rs"], &[]),
+                &[("gen", &["shared.rs"])],
+            );
+            let packages =
+                ownership_packages_from(vec![(path(MANIFEST), root)]).expect("discovers");
+            diff_ownership(&packages, &changed(&["shared.rs"]))
+        };
+        let mixed = workspace_finding(
+            mixed_rivalry
+                .findings()
+                .expect("findings")
+                .as_slice()
+                .iter()
+                .find(|entry| workspace_finding(entry).code() == "BXW0099")
+                .expect("ambiguous finding"),
+        );
+        let mixed_named: Vec<_> = mixed
+            .candidates()
+            .iter()
+            .map(|claim| {
+                (
+                    claim.package().as_str(),
+                    claim.claim().as_str(),
+                    claim.output().map(BoxId::as_str),
+                )
+            })
+            .collect();
+        assert_eq!(
+            mixed_named,
+            [
+                ("root", "shared.rs", None),
+                ("root", "shared.rs", Some("gen")),
+            ]
+        );
+
+        let derived_only = diff_ownership(&packages, &changed(&[LOCKFILE]));
+        assert_eq!(derived_only.accountable(), None);
+        assert_eq!(
+            finding_lines(derived_only.findings()),
+            ["BXW0100 Cargo.lock package= candidates=[]".to_owned()]
+        );
+
+        let two_owners = diff_ownership(&packages, &changed(&["src/a.rs", "ping/src/b.rs"]));
+        assert_eq!(two_owners.accountable(), None);
+        assert_eq!(
+            finding_lines(two_owners.findings()),
+            ["BXW0100 ping/src/b.rs package= candidates=[ping,root]".to_owned()]
+        );
+
+        let foreign = diff_ownership(&packages, &changed(&["src/lib.rs", "ping/generated.rs"]));
+        assert_eq!(foreign.accountable().map(BoxId::as_str), Some("root"));
+        assert_eq!(
+            finding_lines(foreign.findings()),
+            ["BXW0101 ping/generated.rs package=ping candidates=[out]".to_owned()]
+        );
+
+        let lock_with_owner = diff_ownership(&packages, &changed(&["src/lib.rs", LOCKFILE]));
+        assert_eq!(
+            lock_with_owner.accountable().map(BoxId::as_str),
+            Some("root")
+        );
+        assert!(lock_with_owner.findings().is_none());
+        assert!(
+            lock_with_owner
+                .classifications()
+                .iter()
+                .any(|held| held.path().as_str() == LOCKFILE && held.derived_output().is_some())
+        );
+    }
+    #[test]
+    fn diff_ownership_canonicalizes_unsorted_and_duplicate_changed_paths() {
+        let packages = ownership_packages();
+        let canonical = changed(&["gen.rs", "src/lib.rs"]);
+        let messy = changed(&["src/lib.rs", "gen.rs", "src/lib.rs", "gen.rs"]);
+        let expected = diff_ownership(&packages, &canonical);
+        let observed = diff_ownership(&packages, &messy);
+        assert_eq!(observed, expected);
+        assert_eq!(observed.accountable().map(BoxId::as_str), Some("root"));
+        assert!(observed.findings().is_none());
+        assert_eq!(
+            observed
+                .classifications()
+                .iter()
+                .map(|held| held.path().as_str())
+                .collect::<Vec<_>>(),
+            ["gen.rs", "src/lib.rs"]
+        );
+
+        let fail_canonical = changed(&["orphan.rs", "src/a.rs", "ping/src/b.rs"]);
+        let fail_messy = changed(&[
+            "ping/src/b.rs",
+            "orphan.rs",
+            "src/a.rs",
+            "orphan.rs",
+            "ping/src/b.rs",
+        ]);
+        let expected = diff_ownership(&packages, &fail_canonical);
+        let observed = diff_ownership(&packages, &fail_messy);
+        assert_eq!(observed, expected);
+        assert_eq!(observed.accountable(), None);
+        assert_eq!(
+            finding_lines(observed.findings()),
+            [
+                "BXW0098 orphan.rs package= candidates=[]".to_owned(),
+                "BXW0100 orphan.rs package= candidates=[ping,root]".to_owned(),
+            ]
+        );
+    }
+    #[test]
+    fn ownership_packages_from_returns_packages_or_discovery_findings() {
+        let packages = ownership_packages_from(ownership_manifests()).expect("clean");
+        let ids: Vec<_> = packages
+            .iter()
+            .map(|package| package.id().as_str())
+            .collect();
+        assert_eq!(ids, ["root", "ping"]);
+        let duplicate = ownership_packages_from(vec![
+            (path(MANIFEST), owning("twin", "platform", &[MANIFEST], &[])),
+            (
+                path("other/boxology.toml"),
+                owning("twin", "box", &[MANIFEST], &[]),
+            ),
+        ])
+        .expect_err("duplicate identity");
+        assert!(duplicate.to_string().contains("BXW0042"));
     }
     #[test]
     fn composition_validation_expands_all_and_defaults_to_code_only() {
