@@ -1283,8 +1283,8 @@ impl Finding {
         found
     }
     /// Constructs a finding for a coded rule owned by an effectful caller. The CLI uses this for
-    /// regeneration (BXW0083) and the formatting, clippy, and test tool steps; the caller owns the
-    /// stability of `code` and supplies the rule's claimed source.
+    /// regeneration (BXW0083) and the lock, formatting, clippy, and test tool steps; the caller owns
+    /// the stability of `code` and supplies the rule's claimed source.
     pub fn external(
         code: &'static str,
         text: &'static str,
@@ -1659,9 +1659,11 @@ impl fmt::Display for CheckStatus {
         })
     }
 }
-/// Captured external tool text for fmt/clippy/tests/quality; outside determinism claims (S5 D6).
+/// Captured external tool text for cargo-graph/fmt/clippy/tests/quality; outside determinism claims (S5 D6).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalOutput {
+    /// Captured cargo-graph / lockfile-freshness text, when that step failed.
+    pub cargo_graph: Option<Vec<u8>>,
     /// Captured formatting-tool text, when the fmt step failed.
     pub fmt: Option<Vec<u8>>,
     /// Captured Clippy text, when the clippy step failed.
@@ -1675,6 +1677,7 @@ impl ExternalOutput {
     /// Returns empty captures for every external step.
     pub fn empty() -> Self {
         Self {
+            cargo_graph: None,
             fmt: None,
             clippy: None,
             tests: None,
@@ -1792,14 +1795,14 @@ impl CheckReport {
     }
     fn external_output_for(&self, step: CheckStep) -> Option<&[u8]> {
         match step {
+            CheckStep::CargoGraph => self.external_output.cargo_graph.as_deref(),
             CheckStep::Fmt => self.external_output.fmt.as_deref(),
             CheckStep::Clippy => self.external_output.clippy.as_deref(),
             CheckStep::Tests => self.external_output.tests.as_deref(),
             CheckStep::Quality => self.external_output.quality.as_deref(),
-            CheckStep::Discovery
-            | CheckStep::Regeneration
-            | CheckStep::ContractClassification
-            | CheckStep::CargoGraph => None,
+            CheckStep::Discovery | CheckStep::Regeneration | CheckStep::ContractClassification => {
+                None
+            }
         }
     }
     fn contract_status(&self) -> &'static str {
@@ -2084,6 +2087,24 @@ jobs:
         );
         assert!(rendered.contains("tool stderr"));
         assert!(!all_pass_report().render_human().contains("tool stdout"));
+    }
+    #[test]
+    fn cargo_graph_failure_renders_finding_before_captured_output_and_fails() {
+        let mut report = all_pass_report();
+        report.cargo_graph = Completion::Failed(report_findings());
+        report.external_output.cargo_graph = Some(b"lock stdout\nlock stderr\n".to_vec());
+        let rendered = report.render_human();
+        assert!(rendered.contains("check cargo-graph failed"));
+        assert!(
+            rendered
+                .find("  BXW0048 a.rs package= candidates=[]")
+                .unwrap()
+                < rendered.find("lock stdout").unwrap()
+        );
+        assert!(rendered.contains("lock stderr"));
+        assert_eq!(report.status(), CheckStatus::Failed);
+        assert_eq!(report.exit_code(), 1);
+        assert!(rendered.ends_with("check result failed"));
     }
     #[test]
     fn check_report_renders_all_unimplemented_steps_as_skipped() {

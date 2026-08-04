@@ -84,7 +84,7 @@ impl Fixture {
         let cargo = cargo_dir.join("cargo");
         fs::write(
             &cargo,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_ARG_LOG\"\nif [ \"$1\" = \"metadata\" ]; then\n  if [ \"${BOXOLOGY_MODE:-ok}\" = fail ]; then printf '%s\\n' 'synthetic cargo metadata stderr' >&2; exit 17; fi\n  if [ \"${BOXOLOGY_MODE:-ok}\" = nonutf8 ]; then printf '\\377'; exit 0; fi\n  /bin/cat \"$BOXOLOGY_METADATA\"\n  exit 0\nfi\nif [ \"${BOXOLOGY_FAIL:-}\" = \"$1\" ]; then\n  printf '%s\\n' \"representative $1 failure\"\n  exit 17\nfi\nexit 0\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_ARG_LOG\"\nif [ \"$1\" = \"metadata\" ]; then\n  if [ \"${BOXOLOGY_MODE:-ok}\" = fail ]; then printf '%s\\n' 'synthetic cargo metadata stderr' >&2; exit 17; fi\n  if [ \"${BOXOLOGY_MODE:-ok}\" = nonutf8 ]; then printf '\\377'; exit 0; fi\n  if [ \"${BOXOLOGY_MODE:-ok}\" = fail-lock ]; then\n    for arg in \"$@\"; do\n      if [ \"$arg\" = \"--no-deps\" ]; then\n        /bin/cat \"$BOXOLOGY_METADATA\"\n        exit 0\n      fi\n    done\n    printf '%s\\n' 'representative lock failure'\n    exit 17\n  fi\n  /bin/cat \"$BOXOLOGY_METADATA\"\n  exit 0\nfi\nif [ \"${BOXOLOGY_FAIL:-}\" = \"$1\" ]; then\n  printf '%s\\n' \"representative $1 failure\"\n  exit 17\nfi\nexit 0\n",
         )
         .unwrap();
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
@@ -517,8 +517,7 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
                     check regeneration passed\n\
                     check contract-classification skipped\n\
                     \x20 contract classification skipped: base-revision classification is not implemented in this boxology version\n\
-                    check cargo-graph skipped\n\
-                    \x20 not run: the step is not implemented in this boxology version\n\
+                    check cargo-graph passed\n\
                     check fmt passed\n\
                     check clippy passed\n\
                     check tests passed\n\
@@ -529,6 +528,8 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
     assert_eq!(text(&first.stdout), expected);
     assert!(text(&first.stderr).is_empty());
     let log = fixture.argv_log();
+    assert_eq!(log.matches("metadata\n").count(), 2, "{log}");
+    assert_eq!(log.matches("--no-deps\n").count(), 1, "{log}");
     assert!(
         log.contains("fmt\n--check\n-p\nping-implementation\n"),
         "{log}"
@@ -546,6 +547,36 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
     assert_eq!(second.status.code(), Some(0));
     assert_eq!(second.stdout, first.stdout);
     assert_eq!(second.stderr, first.stderr);
+}
+
+#[test]
+fn check_lock_failure_renders_finding_command_output_and_keeps_later_steps() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let output = fixture.run_with(&["check"], "fail-lock", true);
+    let stdout = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).is_empty());
+    assert!(stdout.contains(
+        "check cargo-graph failed\n\
+         \x20 BXW0097 Cargo.lock package= candidates=[command=\"cargo metadata --format-version 1 --locked\"]\n\
+         representative lock failure\n"
+    ));
+    assert!(stdout.contains("check fmt passed\n"));
+    assert!(stdout.contains("check clippy passed\n"));
+    assert!(stdout.contains("check tests passed\n"));
+    assert!(stdout.contains(
+        "check quality skipped\n  not run: the step is not implemented in this boxology version\n"
+    ));
+    assert!(stdout.ends_with("check result failed\n"));
+    let log = fixture.argv_log();
+    assert_eq!(log.matches("metadata\n").count(), 2, "{log}");
+    assert_eq!(log.matches("--no-deps\n").count(), 1, "{log}");
+    assert!(
+        log.contains("fmt\n--check\n-p\nping-implementation\n"),
+        "{log}"
+    );
+    assert!(log.contains("test\n--workspace\n--all-features\n"), "{log}");
 }
 
 #[test]

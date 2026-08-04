@@ -29,3 +29,4 @@ BXW0093|formatting check failed|boxology-details/08-rust-build-topology.md works
 BXW0094|clippy check failed|boxology-details/08-rust-build-topology.md workspace operations and validation baseline; specs/s5-manifest-and-validation.md D6
 BXW0095|test check failed|boxology-details/08-rust-build-topology.md workspace operations and validation baseline; specs/s5-manifest-and-validation.md D6
 BXW0096|a trusted check command could not be executed|boxology-details/08-rust-build-topology.md workspace operations and validation baseline; specs/s5-manifest-and-validation.md D6
+BXW0097|cargo graph and lockfile freshness check failed|boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 4; specs/s5-manifest-and-validation.md D6
