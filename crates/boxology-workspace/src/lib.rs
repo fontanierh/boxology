@@ -1784,6 +1784,42 @@ pub enum ContractClassificationCompletion {
     /// The base-relative classification could not run for the named deterministic reason.
     Skipped(SkipReason),
 }
+/// Why the auxiliary S5 D6 base-relative diff-ownership step could not run.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum DiffOwnershipSkip {
+    /// This Boxology version does not implement the step yet.
+    NotImplemented,
+    /// No repository exists from which to obtain a base revision.
+    NoRepository,
+    /// The repository has no merge base with the configured `main` branch.
+    NoMergeBase,
+}
+impl DiffOwnershipSkip {
+    /// Returns the frozen, deterministic human sentence for this skip reason.
+    pub const fn sentence(self) -> &'static str {
+        match self {
+            Self::NotImplemented => "not run: the step is not implemented in this boxology version",
+            Self::NoRepository => "not run: no repository is available",
+            Self::NoMergeBase => "not run: no merge base with main is available",
+        }
+    }
+}
+impl fmt::Display for DiffOwnershipSkip {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.sentence())
+    }
+}
+/// The auxiliary S5 D6 diff-ownership outcome. Unlike contract classification, failed findings
+/// make repository validation fail.
+#[derive(Debug, Eq, PartialEq)]
+pub enum DiffOwnershipCompletion {
+    /// Diff ownership found no validation findings.
+    Passed,
+    /// Diff ownership reported its deterministically ordered findings.
+    Failed(Findings),
+    /// Diff ownership could not run for the named deterministic reason.
+    Skipped(DiffOwnershipSkip),
+}
 /// The public exit vocabulary reserved by `boxology check`.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -1844,15 +1880,17 @@ impl ExternalOutput {
     }
 }
 
-/// The pure, complete eight-step `boxology check` report.
+/// The pure `boxology check` report: eight baseline steps plus the auxiliary S5 D6
+/// diff-ownership block.
 ///
 /// The named field types mirror 08-rust-build-topology.md's baseline rather than a positional
 /// outcome array, so a report cannot omit a step. During #327's remaining stack, ordinary steps
 /// may be explicitly skipped while their implementation lands; a skipped step is neither passed
 /// nor failed. Integrity errors never enter a report — they propagate as CLI errors before
 /// composition — and report-only classification findings are excluded from [`CheckReport::status`]
-/// deliberately under S5 D6. Tool captures in [`CheckReport::external_output`] are outside
-/// determinism claims.
+/// deliberately under S5 D6. Diff-ownership findings participate in validation status. The
+/// auxiliary diff-ownership block is pinned after contract-classification and before cargo-graph.
+/// Tool captures in [`CheckReport::external_output`] are outside determinism claims.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckReport {
     /// The discovery/ownership/role validation outcome.
@@ -1861,6 +1899,8 @@ pub struct CheckReport {
     pub regeneration: Completion,
     /// The base-relative contract-classification outcome.
     pub contract_classification: ContractClassificationCompletion,
+    /// The auxiliary S5 D6 base-relative diff-ownership outcome.
+    pub diff_ownership: DiffOwnershipCompletion,
     /// The Cargo graph and lockfile outcome.
     pub cargo_graph: Completion,
     /// The explicit hand-authored formatting outcome.
@@ -1875,12 +1915,13 @@ pub struct CheckReport {
     pub external_output: ExternalOutput,
 }
 impl CheckReport {
-    /// Returns the final status, ignoring contract-classification findings because S5 D6 makes
-    /// those findings report-only. Integrity errors never reach a report; every other validation
-    /// field participates explicitly.
+    /// Returns the final status. Contract-classification findings stay report-only under S5 D6;
+    /// [`DiffOwnershipCompletion::Failed`] is a validation failure (exit 1). Integrity errors never
+    /// reach a report; every other validation field participates explicitly.
     pub fn status(&self) -> CheckStatus {
         if self.discovery.is_failed()
             || self.regeneration.is_failed()
+            || matches!(self.diff_ownership, DiffOwnershipCompletion::Failed(_))
             || self.cargo_graph.is_failed()
             || self.fmt.is_failed()
             || self.clippy.is_failed()
@@ -1900,7 +1941,8 @@ impl CheckReport {
             CheckStatus::Failed => ExitCode::ValidationFailed.as_u8(),
         }
     }
-    /// Renders the deterministic human report in the frozen eight-step order.
+    /// Renders the deterministic human report: the frozen eight-step baseline with the auxiliary
+    /// S5 D6 diff-ownership block inserted after contract-classification and before cargo-graph.
     pub fn render_human(&self) -> String {
         let mut lines = Vec::new();
         for step in CheckStep::ALL {
@@ -1924,12 +1966,24 @@ impl CheckReport {
                         lines.push(format!("  {reason}"))
                     }
                 }
+                self.render_diff_ownership(lines);
             }
             CheckStep::CargoGraph => self.render_completion(step, &self.cargo_graph, lines),
             CheckStep::Fmt => self.render_completion(step, &self.fmt, lines),
             CheckStep::Clippy => self.render_completion(step, &self.clippy, lines),
             CheckStep::Tests => self.render_completion(step, &self.tests, lines),
             CheckStep::Quality => self.render_completion(step, &self.quality, lines),
+        }
+    }
+    fn render_diff_ownership(&self, lines: &mut Vec<String>) {
+        lines.push(format!(
+            "check diff-ownership {}",
+            self.diff_ownership_status()
+        ));
+        match &self.diff_ownership {
+            DiffOwnershipCompletion::Passed => {}
+            DiffOwnershipCompletion::Failed(findings) => render_findings(lines, findings),
+            DiffOwnershipCompletion::Skipped(reason) => lines.push(format!("  {reason}")),
         }
     }
     fn render_completion(&self, step: CheckStep, completion: &Completion, lines: &mut Vec<String>) {
@@ -1968,6 +2022,13 @@ impl CheckReport {
             ContractClassificationCompletion::Passed => "passed",
             ContractClassificationCompletion::Failed(_) => "failed",
             ContractClassificationCompletion::Skipped(_) => "skipped",
+        }
+    }
+    fn diff_ownership_status(&self) -> &'static str {
+        match &self.diff_ownership {
+            DiffOwnershipCompletion::Passed => "passed",
+            DiffOwnershipCompletion::Failed(_) => "failed",
+            DiffOwnershipCompletion::Skipped(_) => "skipped",
         }
     }
 }
@@ -2149,6 +2210,7 @@ jobs:
             discovery: Completion::Passed,
             regeneration: Completion::Passed,
             contract_classification: ContractClassificationCompletion::Passed,
+            diff_ownership: DiffOwnershipCompletion::Passed,
             cargo_graph: Completion::Passed,
             fmt: Completion::Passed,
             clippy: Completion::Passed,
@@ -2162,6 +2224,7 @@ jobs:
             contract_classification: ContractClassificationCompletion::Skipped(
                 SkipReason::Unimplemented,
             ),
+            diff_ownership: DiffOwnershipCompletion::Skipped(DiffOwnershipSkip::NotImplemented),
             cargo_graph: Completion::Skipped(StepSkip::NotImplemented),
             fmt: Completion::Skipped(StepSkip::NotImplemented),
             clippy: Completion::Skipped(StepSkip::NotImplemented),
@@ -2223,6 +2286,7 @@ jobs:
              check regeneration passed\n\
              check contract-classification skipped\n\
              \x20 contract classification skipped: no merge base with main is available\n\
+             check diff-ownership passed\n\
              check cargo-graph passed\n\
              check fmt passed\n\
              check clippy passed\n\
@@ -2272,6 +2336,8 @@ jobs:
              check regeneration passed\n\
              check contract-classification skipped\n\
              \x20 contract classification skipped: base-revision classification is not implemented in this boxology version\n\
+             check diff-ownership skipped\n\
+             \x20 not run: the step is not implemented in this boxology version\n\
              check cargo-graph skipped\n\
              \x20 not run: the step is not implemented in this boxology version\n\
              check fmt skipped\n\
@@ -2290,8 +2356,20 @@ jobs:
         let rendered = failed_skipped_report(SkipReason::NoRepository).render_human();
         let lines: Vec<&str> = rendered.lines().collect();
         let mut previous = None;
-        for step in CheckStep::ALL {
-            let header = format!("check {} ", step.id());
+        let ids = [
+            "discovery",
+            "regeneration",
+            "contract-classification",
+            "diff-ownership",
+            "cargo-graph",
+            "fmt",
+            "clippy",
+            "tests",
+            "quality",
+        ];
+        assert_eq!(ids[3], "diff-ownership");
+        for id in ids {
+            let header = format!("check {id} ");
             let matches: Vec<usize> = lines
                 .iter()
                 .enumerate()
@@ -2327,6 +2405,28 @@ jobs:
                 1
             );
         }
+        let ownership_skips = [
+            DiffOwnershipSkip::NotImplemented,
+            DiffOwnershipSkip::NoRepository,
+            DiffOwnershipSkip::NoMergeBase,
+        ];
+        for reason in ownership_skips {
+            let sentence = reason.sentence();
+            assert_eq!(passed.matches(sentence).count(), 0);
+            let rendered = CheckReport {
+                diff_ownership: DiffOwnershipCompletion::Skipped(reason),
+                ..all_pass_report()
+            }
+            .render_human();
+            assert_eq!(rendered.matches(sentence).count(), 1);
+            assert_eq!(
+                rendered
+                    .lines()
+                    .filter(|line| *line == format!("  {sentence}"))
+                    .count(),
+                1
+            );
+        }
         let mut ordinary = all_pass_report();
         ordinary.cargo_graph = Completion::Skipped(StepSkip::NotImplemented);
         let rendered = ordinary.render_human();
@@ -2341,6 +2441,13 @@ jobs:
                 .matches("  not run: the step is not implemented in this boxology version")
                 .count(),
             1
+        );
+        assert_eq!(
+            all_skipped_report()
+                .render_human()
+                .matches(DiffOwnershipSkip::NotImplemented.sentence())
+                .count(),
+            6
         );
     }
     #[test]
@@ -2378,6 +2485,13 @@ jobs:
                     contract_classification: ContractClassificationCompletion::Failed(
                         classification_report_findings(),
                     ),
+                    ..all_pass_report()
+                },
+            ),
+            (
+                "diff-ownership",
+                CheckReport {
+                    diff_ownership: DiffOwnershipCompletion::Failed(report_findings()),
                     ..all_pass_report()
                 },
             ),
@@ -2443,6 +2557,20 @@ jobs:
             "  FIND001 alpha alpha/type/T/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\""
         ));
         assert!(rendered.ends_with("check result passed"));
+    }
+    #[test]
+    fn diff_ownership_failure_renders_findings_and_fails() {
+        let report = CheckReport {
+            diff_ownership: DiffOwnershipCompletion::Failed(report_findings()),
+            ..all_pass_report()
+        };
+        assert_eq!(report.status(), CheckStatus::Failed);
+        assert_eq!(report.exit_code(), 1);
+        let rendered = report.render_human();
+        assert!(rendered.contains("check diff-ownership failed"));
+        assert!(rendered.contains("  BXW0048 a.rs package= candidates=[]"));
+        assert!(rendered.contains("  BXW0048 z.rs package= candidates=[]"));
+        assert!(rendered.ends_with("check result failed"));
     }
     #[test]
     fn external_finding_round_trips_rule_and_source() {
