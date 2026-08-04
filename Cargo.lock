@@ -234,6 +234,7 @@ dependencies = [
  "boxology-schema",
  "serde_json",
  "syn 3.0.0",
+ "toml_edit",
 ]
 
 [[package]]
