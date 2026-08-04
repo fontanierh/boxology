@@ -8,7 +8,7 @@ Streams partition the v0 scope defined by the [product contract](07-product-cont
 
 ## S0 — Product-repo bootstrap and CI
 
-The infrastructure every other stream stands on: the Cargo workspace scaffold for Boxology's own crates, the pinned toolchain, the determinism harness, and pull-request validation for this repository. V0's merge-critical gate is one native Apple-silicon Mac `validation` job (`ci-hygiene`, repository invariants, directly changed-crate tests, and explicit-base `boxology check`); the full deep aggregate (`cargo xtask ci --no-budget`) runs only as a manual `workflow_dispatch` job off the merge critical path. Continuous Linux/x86/cross-platform validation and determinism comparison are post-V0 residual work. Lands first; serves everyone. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
+The infrastructure every other stream stands on: the Cargo workspace scaffold for Boxology's own crates, the pinned toolchain, the determinism harness, and pull-request validation for this repository. V0's merge-critical gate is one native Apple-silicon Mac `validation` job (`ci-hygiene`, repository invariants, directly changed-crate tests, conditional root workspace build-graph check, and scoped process-reaper coverage); the complete `boxology check` runs only in the dispatch-only deep aggregate (`cargo xtask ci --no-budget`, then full `boxology check`), and per-PR nonduplicative product enforcement returns at #342. Continuous Linux/x86/cross-platform validation and determinism comparison are post-V0 residual work. Lands first; serves everyone. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
 
 ## S1 — Runtime core and composition assembly
 
