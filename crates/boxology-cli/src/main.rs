@@ -3,7 +3,7 @@
 use boxology_cli::{
     BaseSchemasError, ClassifyStepError, CompareDifference, ExecuteError, PlanError, SpawnError,
     base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
-    execute, plan, run_clippy_step, run_command, run_fmt_step, run_test_step, walk,
+    execute, plan, run_clippy_step, run_command, run_fmt_step, run_lock_step, run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -180,6 +180,10 @@ fn run_check(
         }
     };
     let runner = &run_command;
+    let (cargo_graph, cargo_graph_output) = match run_lock_step(runner, root) {
+        Ok(step) => step.into_parts(),
+        Err(error) => return report_spawn_failure(error, stderr),
+    };
     let (fmt, fmt_output) = match run_fmt_step(runner, root, &workspace) {
         Ok(step) => step.into_parts(),
         Err(error) => return report_spawn_failure(error, stderr),
@@ -196,12 +200,13 @@ fn run_check(
         discovery,
         regeneration,
         contract_classification,
-        cargo_graph: not_implemented(),
+        cargo_graph,
         fmt,
         clippy,
         tests,
         quality: not_implemented(),
         external_output: ExternalOutput {
+            cargo_graph: cargo_graph_output,
             fmt: fmt_output,
             clippy: clippy_output,
             tests: tests_output,

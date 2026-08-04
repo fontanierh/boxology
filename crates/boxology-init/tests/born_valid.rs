@@ -448,20 +448,13 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
     );
     assert!(stderr.is_empty(), "{stderr}");
     let finding = "BXW0090 app/boxology.toml package=ping-app candidates=[capability=ping.greet exposure=external max=internal transport=http selector=ping.*]";
-    assert_eq!(
-        stdout
-            .lines()
-            .filter(|line| line.contains("BXW0090"))
-            .collect::<Vec<_>>(),
-        [format!("  {finding}")],
-        "{stdout}"
-    );
+    let tests_finding = "BXW0095 Cargo.toml package= candidates=[command=\"cargo test --workspace --all-features\"]";
     assert_eq!(
         stdout
             .lines()
             .filter(|line| line.trim_start().starts_with("BXW"))
-            .count(),
-        1,
+            .collect::<Vec<_>>(),
+        [format!("  {finding}"), format!("  {tests_finding}")],
         "{stdout}"
     );
     assert!(stdout.ends_with("check result failed\n"), "{stdout}");
