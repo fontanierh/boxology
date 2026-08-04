@@ -71,7 +71,7 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     source: "crates/boxology-workspace/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
-    body_digest: "56924802fd70c216578d3b21ae29019a3511a1bcd270510f8ec0d420f9914210",
+    body_digest: "d98797269b8fbdfb64eab416b27345a2e84a6dac17acb68e19e2b893a1d4826f",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
@@ -81,7 +81,7 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
-        body_digest: "f6b446469c4610fdeb9f42e4ae4aca815690b3687242d74a870bd315618afac3",
+        body_digest: "9136722638a0c4a311b3f0e75fb04fd96a0d648d787a68b485c077f30f14a902",
     };
 // This slice pins the generator production source inventory only. Capability purity,
 // source closure, and dependency-graph pins are later #107 slices.
@@ -93,7 +93,7 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
         tests: &["production_source_inventory_is_exact"],
-        body_digest: "bf4b0a931f675233c45103a5a1c772b79ffe8622c9d3aa7b9b8023563e82dd72",
+        body_digest: "d1b3aec44892f2f8c703e248a04c1913aebac6a4358acc27da437a27a75638f1",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",
@@ -102,7 +102,7 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     source: "crates/boxology-init/tests/born_valid.rs",
     default_source: "tests/born_valid.rs",
     tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
-    body_digest: "52cba045d5cd0f9bcf1fbfffaa4c200a8e25596e38793be695e29f64efc6a85f",
+    body_digest: "9e7be9441cf84ba2caa95e9cf3f3cacd8f59ba237c4c707ce9b5cfe0f8792cc5",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("surface-lock", &SURFACE_LOCK_SPEC),
@@ -788,7 +788,7 @@ mod tests {
                     source: "crates/boxology-workspace/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
-                    body_digest: "56924802fd70c216578d3b21ae29019a3511a1bcd270510f8ec0d420f9914210",
+                    body_digest: "d98797269b8fbdfb64eab416b27345a2e84a6dac17acb68e19e2b893a1d4826f",
                 },
             ),
             (
@@ -800,7 +800,7 @@ mod tests {
                     source: "crates/boxology-classifier/tests/surface_lock.rs",
                     default_source: "tests/surface_lock.rs",
                     tests: &["surface_and_live_evasions_are_locked"],
-                    body_digest: "f6b446469c4610fdeb9f42e4ae4aca815690b3687242d74a870bd315618afac3",
+                    body_digest: "9136722638a0c4a311b3f0e75fb04fd96a0d648d787a68b485c077f30f14a902",
                 },
             ),
             (
@@ -812,7 +812,7 @@ mod tests {
                     source: "crates/boxology-generator-model/tests/purity_lock.rs",
                     default_source: "tests/purity_lock.rs",
                     tests: &["production_source_inventory_is_exact"],
-                    body_digest: "bf4b0a931f675233c45103a5a1c772b79ffe8622c9d3aa7b9b8023563e82dd72",
+                    body_digest: "d1b3aec44892f2f8c703e248a04c1913aebac6a4358acc27da437a27a75638f1",
                 },
             ),
         ];

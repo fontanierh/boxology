@@ -5,10 +5,11 @@ use std::{
     process::Command,
 };
 
+use proc_macro2::TokenTree;
 use quote::ToTokens;
 use sha2::{Digest, Sha256};
 use syn::visit::Visit;
-use syn::{Expr, ExprCall, ItemFn};
+use syn::{Expr, ExprCall, ExprPath, ItemConst, ItemFn, ItemStatic, Macro};
 use toml_edit::{DocumentMut, Item, Table};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,8 +20,9 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) source: &'static str,
     pub(crate) default_source: &'static str,
     pub(crate) tests: &'static [&'static str],
-    /// SHA-256 of listed `#[test]` bodies + one-level bare-name helpers (`syn::visit`;
-    /// not macros, not transitive, not `const`/`static`). Refresh from `observed`.
+    /// SHA-256 over listed `#[test]` bodies plus the transitive file-level `fn` /
+    /// `const` / `static` closure each reaches (bare calls/paths + macro token
+    /// idents). Refresh from `observed`.
     pub(crate) body_digest: &'static str,
 }
 
@@ -59,8 +61,8 @@ pub(crate) fn require_external_tests(
     Ok(())
 }
 
-/// Digest listed `#[test]` blocks plus one-level bare-name helpers via `syn::visit`
-/// (not macros/`const`/`static`/transitive). Refresh pins by copying `observed`.
+/// Digest listed `#[test]` blocks plus each test's transitive file-level closure.
+/// Refresh pins by copying `observed`.
 fn bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(), String> {
     let observed = body_digest(source, tests)?;
     if observed != expected {
@@ -72,42 +74,45 @@ fn bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(
 }
 
 fn body_digest(source: &str, tests: &[&str]) -> Result<String, String> {
+    if tests.is_empty() {
+        return Err("empty tests list".to_string());
+    }
     let file = syn::parse_file(source).map_err(|_| "source parse failed".to_string())?;
-    let mut indexer = FnIndexer::default();
-    indexer.visit_file(&file);
+    let index = index_file_level_defs(&file);
     let mut hasher = Sha256::new();
     for name in tests {
-        let Some(defs) = indexer.by_name.get(*name) else {
+        let Some(defs) = index.get(*name) else {
             return Err(format!("missing listed test `{name}`"));
         };
-        if defs.len() != 1 || !is_bare_test(defs[0]) {
-            return Err(format!("listed name `{name}` is not a unique #[test]"));
-        }
-        let item = defs[0];
-        hasher.update(name.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(item.block.to_token_stream().to_string().as_bytes());
-        hasher.update(b"\0");
-        let mut calls = CallCollector::default();
-        calls.visit_block(&item.block);
-        let mut counted = HashSet::new();
-        for callee in &calls.callees {
-            if !counted.insert(callee.as_str()) {
-                continue;
+        let item = match defs.as_slice() {
+            [FileDef::Fn(item)] if is_bare_test(item) => *item,
+            _ => {
+                return Err(format!("listed name `{name}` is not a unique #[test]"));
             }
-            let Some(defs) = indexer.by_name.get(callee) else {
-                continue;
-            };
-            if defs.len() != 1 {
-                return Err(format!("ambiguous helper `{callee}`"));
-            }
-            hasher.update(callee.as_bytes());
-            hasher.update(b"\0");
-            hasher.update(defs[0].block.to_token_stream().to_string().as_bytes());
-            hasher.update(b"\0");
+        };
+        hash_part(
+            &mut hasher,
+            "test",
+            name,
+            &item.block.to_token_stream().to_string(),
+        );
+        let mut closure = transitive_closure(&index, &item.block)?;
+        closure.sort_unstable_by_key(|def| (def.kind_tag(), def.name()));
+        for def in closure {
+            let name = def.name();
+            hash_part(&mut hasher, def.kind_tag(), &name, &def.tokens());
         }
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_part(hasher: &mut Sha256, kind: &str, name: &str, tokens: &str) {
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(name.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(tokens.as_bytes());
+    hasher.update(b"\0");
 }
 
 fn is_bare_test(item: &ItemFn) -> bool {
@@ -116,10 +121,14 @@ fn is_bare_test(item: &ItemFn) -> bool {
         .any(|attribute| attribute.path().is_ident("test"))
 }
 
-fn bare_path_ident(call: &ExprCall) -> Option<String> {
+fn bare_call_ident(call: &ExprCall) -> Option<String> {
     let Expr::Path(path) = call.func.as_ref() else {
         return None;
     };
+    bare_path_name(path)
+}
+
+fn bare_path_name(path: &ExprPath) -> Option<String> {
     if path.qself.is_none() && path.path.segments.len() == 1 {
         Some(path.path.segments[0].ident.to_string())
     } else {
@@ -127,32 +136,117 @@ fn bare_path_ident(call: &ExprCall) -> Option<String> {
     }
 }
 
-#[derive(Default)]
-struct FnIndexer<'ast> {
-    by_name: HashMap<String, Vec<&'ast ItemFn>>,
+fn index_file_level_defs(file: &syn::File) -> HashMap<String, Vec<FileDef<'_>>> {
+    let mut by_name = HashMap::<String, Vec<FileDef<'_>>>::new();
+    for item in &file.items {
+        let (name, def) = match item {
+            syn::Item::Fn(item) => (item.sig.ident.to_string(), FileDef::Fn(item)),
+            syn::Item::Const(item) => (item.ident.to_string(), FileDef::Const(item)),
+            syn::Item::Static(item) => (item.ident.to_string(), FileDef::Static(item)),
+            _ => continue,
+        };
+        by_name.entry(name).or_default().push(def);
+    }
+    by_name
 }
 
-impl<'ast> Visit<'ast> for FnIndexer<'ast> {
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        self.by_name
-            .entry(item.sig.ident.to_string())
-            .or_default()
-            .push(item);
-        syn::visit::visit_item_fn(self, item);
+fn transitive_closure<'ast>(
+    index: &HashMap<String, Vec<FileDef<'ast>>>,
+    seed: &'ast syn::Block,
+) -> Result<Vec<FileDef<'ast>>, String> {
+    let mut refs = RefCollector::default();
+    refs.visit_block(seed);
+    let mut worklist = refs.names;
+    let mut visited = HashSet::new();
+    let mut closure = Vec::new();
+    while let Some(name) = worklist.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let Some(defs) = index.get(&name) else {
+            continue;
+        };
+        if defs.len() != 1 {
+            return Err(format!("ambiguous referenced definition `{name}`"));
+        }
+        let def = defs[0];
+        let mut next = RefCollector::default();
+        match def {
+            FileDef::Fn(item) => next.visit_block(&item.block),
+            FileDef::Const(item) => next.visit_expr(&item.expr),
+            FileDef::Static(item) => next.visit_expr(&item.expr),
+        }
+        worklist.extend(next.names);
+        closure.push(def);
+    }
+    Ok(closure)
+}
+
+fn collect_idents_from_tokens(tokens: proc_macro2::TokenStream, out: &mut Vec<String>) {
+    for tree in tokens {
+        match tree {
+            TokenTree::Ident(ident) => out.push(ident.to_string()),
+            TokenTree::Group(group) => collect_idents_from_tokens(group.stream(), out),
+            TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FileDef<'ast> {
+    Fn(&'ast ItemFn),
+    Const(&'ast ItemConst),
+    Static(&'ast ItemStatic),
+}
+
+impl<'ast> FileDef<'ast> {
+    fn kind_tag(self) -> &'static str {
+        match self {
+            Self::Fn(_) => "fn",
+            Self::Const(_) => "const",
+            Self::Static(_) => "static",
+        }
+    }
+
+    fn name(self) -> String {
+        match self {
+            Self::Fn(item) => item.sig.ident.to_string(),
+            Self::Const(item) => item.ident.to_string(),
+            Self::Static(item) => item.ident.to_string(),
+        }
+    }
+
+    fn tokens(self) -> String {
+        match self {
+            Self::Fn(item) => item.block.to_token_stream().to_string(),
+            Self::Const(item) => item.expr.to_token_stream().to_string(),
+            Self::Static(item) => item.expr.to_token_stream().to_string(),
+        }
     }
 }
 
 #[derive(Default)]
-struct CallCollector {
-    callees: Vec<String>,
+struct RefCollector {
+    names: Vec<String>,
 }
 
-impl<'ast> Visit<'ast> for CallCollector {
+impl<'ast> Visit<'ast> for RefCollector {
     fn visit_expr_call(&mut self, node: &'ast ExprCall) {
-        if let Some(ident) = bare_path_ident(node) {
-            self.callees.push(ident);
+        if let Some(ident) = bare_call_ident(node) {
+            self.names.push(ident);
         }
         syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &'ast ExprPath) {
+        if let Some(ident) = bare_path_name(node) {
+            self.names.push(ident);
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast Macro) {
+        collect_idents_from_tokens(mac.tokens.clone(), &mut self.names);
     }
 }
 
@@ -334,7 +428,7 @@ mod tests {
     const BASE_MANIFEST: &str =
         "[package]\nname = \"client\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
     /// Digest of `a`/`b` bodies that each contain `assert!(true)`.
-    const LIVE_AB_DIGEST: &str = "7b04fed7fcf43f6a77acc0c465186673bc29bc073013b481afce984ee4d06ef1";
+    const LIVE_AB_DIGEST: &str = "e6aaeaa844c2d0820ecd01aba8720523fdeb997a9f95de2e3d50d6b314e76a71";
     const SPEC: ExternalTestSpec = ExternalTestSpec {
         package: "client",
         target: "client_lock",
@@ -614,11 +708,11 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(
-            production.match_indices("Command::new(\"cargo\")").count(),
-            1,
-            "anchor: production cargo() text contains Command::new(\"cargo\") once"
+        let result = cargo(
+            &crate::root(),
+            &["boxology-441-deliberately-invalid-subcommand"],
         );
+        assert!(matches!(result, Some((false, _))));
     }
 
     #[test]
@@ -659,34 +753,193 @@ mod tests {
     }
 
     #[test]
-    fn body_digest_includes_direct_helpers_only() {
-        let with_helper = concat!(
-            "#[test] fn subject() { helper(); }\n",
-            "fn helper() { assert!(true); }\n",
+    fn body_digest_includes_macro_token_helpers() {
+        let source = concat!(
+            "#[test] fn subject() { assert!(helper()); assert_eq!(helper(), true); }\n",
+            "fn helper() { true }\n",
         );
-        let expected = body_digest(with_helper, &["subject"]).unwrap();
-        assert!(bodies_match_digest(with_helper, &["subject"], &expected).is_ok());
+        let expected = body_digest(source, &["subject"]).unwrap();
+        assert!(bodies_match_digest(source, &["subject"], &expected).is_ok());
+        let err = bodies_match_digest(
+            concat!(
+                "#[test] fn subject() { assert!(helper()); assert_eq!(helper(), true); }\n",
+                "fn helper() { false }\n",
+            ),
+            &["subject"],
+            &expected,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("body digest mismatch"),
+            "mutation survived: helper only referenced in assert!/assert_eq! tokens; err={err}"
+        );
+    }
+
+    #[test]
+    fn body_digest_includes_transitive_helpers() {
+        let source = concat!(
+            "#[test] fn subject() { helper(); }\n",
+            "fn helper() { deeper(); }\n",
+            "fn deeper() { assert!(true); }\n",
+        );
+        let expected = body_digest(source, &["subject"]).unwrap();
+        assert!(bodies_match_digest(source, &["subject"], &expected).is_ok());
         assert!(
             bodies_match_digest(
                 concat!(
                     "#[test] fn subject() { helper(); }\n",
                     "fn helper() { deeper(); }\n",
-                    "fn deeper() { assert!(true); }\n",
+                    "fn deeper() { assert!(false); }\n",
                 ),
                 &["subject"],
                 &expected
             )
             .is_err(),
-            "mutation survived: changing a direct helper's body text must change the digest"
+            "mutation survived: deeper helper body must change the digest"
         );
         assert!(
             bodies_match_digest(
-                "#[test] fn subject() { helper(); }\nfn helper() {}\n",
+                concat!(
+                    "#[test] fn subject() { helper(); }\n",
+                    "fn helper() { deeper(); }\n",
+                    "fn deeper() {}\n",
+                ),
                 &["subject"],
                 &expected
             )
             .is_err(),
-            "mutation survived: helper body is pinned"
+            "mutation survived: emptying deeper helper must change the digest"
+        );
+    }
+
+    #[test]
+    fn body_digest_terminates_reference_cycles() {
+        let source = concat!(
+            "#[test] fn subject() { a(); }\n",
+            "fn a() { b(); }\n",
+            "fn b() { a(); }\n",
+        );
+        let expected = body_digest(source, &["subject"]).unwrap();
+        assert!(bodies_match_digest(source, &["subject"], &expected).is_ok());
+        assert_eq!(body_digest(source, &["subject"]).unwrap(), expected);
+        assert!(
+            bodies_match_digest(
+                concat!(
+                    "#[test] fn subject() { a(); }\n",
+                    "fn a() { b(); }\n",
+                    "fn b() { a(); assert!(true); }\n",
+                ),
+                &["subject"],
+                &expected
+            )
+            .is_err(),
+            "mutation survived: cycle member body must remain hashed"
+        );
+    }
+
+    #[test]
+    fn body_digest_includes_referenced_const_chains() {
+        let source = concat!(
+            "const A: i32 = B;\n",
+            "const B: i32 = 1;\n",
+            "fn helper() { let _ = A; }\n",
+            "#[test] fn subject() { helper(); }\n",
+        );
+        let expected = body_digest(source, &["subject"]).unwrap();
+        assert!(bodies_match_digest(source, &["subject"], &expected).is_ok());
+        for (mutant, label) in [
+            (
+                concat!(
+                    "const A: i32 = B;\n",
+                    "const B: i32 = 2;\n",
+                    "fn helper() { let _ = A; }\n",
+                    "#[test] fn subject() { helper(); }\n",
+                ),
+                "leaf const",
+            ),
+            (
+                concat!(
+                    "const A: i32 = 1;\n",
+                    "const B: i32 = 1;\n",
+                    "fn helper() { let _ = A; }\n",
+                    "#[test] fn subject() { helper(); }\n",
+                ),
+                "const chain edge",
+            ),
+            (
+                concat!(
+                    "const A: i32 = B;\n",
+                    "const B: i32 = 1;\n",
+                    "fn helper() { let _ = B; }\n",
+                    "#[test] fn subject() { helper(); }\n",
+                ),
+                "helper body",
+            ),
+        ] {
+            let err = bodies_match_digest(mutant, &["subject"], &expected).unwrap_err();
+            assert!(
+                err.contains("body digest mismatch"),
+                "mutation survived: {label}; err={err}"
+            );
+        }
+    }
+
+    #[test]
+    fn body_digest_includes_referenced_static_initializers() {
+        let source = concat!(
+            "static S: i32 = 1;\n",
+            "#[test] fn subject() { assert_eq!(S, 1); }\n",
+        );
+        let expected = body_digest(source, &["subject"]).unwrap();
+        assert!(bodies_match_digest(source, &["subject"], &expected).is_ok());
+        let err = bodies_match_digest(
+            concat!(
+                "static S: i32 = 2;\n",
+                "#[test] fn subject() { assert_eq!(S, 1); }\n",
+            ),
+            &["subject"],
+            &expected,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("body digest mismatch"),
+            "mutation survived: static initializer; err={err}"
+        );
+    }
+
+    #[test]
+    fn body_digest_ignores_unreferenced_file_level_consts() {
+        let source = concat!(
+            "const USED: i32 = 1;\n",
+            "const UNUSED: i32 = 2;\n",
+            "#[test] fn subject() { assert_eq!(USED, 1); }\n",
+        );
+        let expected = body_digest(source, &["subject"]).unwrap();
+        assert!(
+            bodies_match_digest(
+                concat!(
+                    "const USED: i32 = 1;\n",
+                    "const UNUSED: i32 = 99;\n",
+                    "#[test] fn subject() { assert_eq!(USED, 1); }\n",
+                ),
+                &["subject"],
+                &expected
+            )
+            .is_ok(),
+            "mutation survived: unused const must not affect digest"
+        );
+        assert!(
+            bodies_match_digest(
+                concat!(
+                    "const USED: i32 = 3;\n",
+                    "const UNUSED: i32 = 2;\n",
+                    "#[test] fn subject() { assert_eq!(USED, 1); }\n",
+                ),
+                &["subject"],
+                &expected
+            )
+            .is_err(),
+            "mutation survived: referenced const must affect digest"
         );
     }
 
@@ -699,6 +952,11 @@ mod tests {
         .is_err());
         assert!(body_digest("fn subject() { assert!(true); }\n", &["subject"]).is_err());
         assert!(body_digest("not rust", &["subject"]).is_err());
+        let empty = body_digest("not rust", &[]).unwrap_err();
+        assert!(
+            empty.contains("empty tests list"),
+            "empty tests must fail before parse; err={empty}"
+        );
         assert!(body_digest("#[test] fn other() { assert!(true); }\n", &["subject"]).is_err());
         assert!(
             body_digest(
@@ -721,7 +979,20 @@ mod tests {
                 ),
                 &["subject"],
             )
-            .is_err()
+            .is_err(),
+            "mutation survived: ambiguous referenced fn must fail closed"
+        );
+        assert!(
+            body_digest(
+                concat!(
+                    "const helper: i32 = 1;\n",
+                    "fn helper() { assert!(true); }\n",
+                    "#[test] fn subject() { helper(); }\n",
+                ),
+                &["subject"],
+            )
+            .is_err(),
+            "mutation survived: ambiguous fn/const definition must fail closed"
         );
     }
 
@@ -732,6 +1003,7 @@ mod tests {
             &crate::SURFACE_LOCK_SPEC,
             &crate::CLASSIFIER_SURFACE_LOCK_SPEC,
             &crate::GENERATOR_SOURCE_INVENTORY_LOCK_SPEC,
+            &crate::BORN_VALID_SPEC,
         ] {
             let source = fs::read_to_string(root.join(spec.source)).unwrap();
             if let Err(error) = bodies_match_digest(&source, spec.tests, spec.body_digest) {
