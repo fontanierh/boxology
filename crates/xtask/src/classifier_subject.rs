@@ -348,6 +348,13 @@ fn report_unclassified() -> Result<ClassificationReport, String> {
     report_pair(unclassified())
 }
 
+fn both_absent_error() -> Result<String, String> {
+    let error = classify(None, None)
+        .err()
+        .ok_or("both-absent pair classified")?;
+    Ok(format!("{error}\n"))
+}
+
 fn pairing_error() -> Result<String, String> {
     let error = classify(Some(&hello()?), Some(&ping()?))
         .err()
@@ -388,6 +395,7 @@ pub(crate) fn run(out: &Path) -> Result<(), String> {
             .map_err(|error| format!("write {name}.json: {error}"))?;
     }
     for (name, body) in [
+        ("pairing-both-absent.txt", both_absent_error()?),
         ("report-capability-only.txt", report_capability_only()?),
         ("report-types-only.txt", report_types_only()?),
         ("report-revision-only.txt", report_revision_only()?),
@@ -642,6 +650,17 @@ finding BXC0036 path=\"hello/type/GreetError/variant/Other\" compatible_with_con
         );
     }
 
+    #[test]
+    fn subject_both_absent_pairing_error_is_golden_and_repeatable() {
+        let rendered = both_absent_error().expect("both-absent error renders");
+        assert_eq!(rendered, both_absent_error().expect("it renders again"));
+        assert_eq!(
+            rendered,
+            "BXC0024 at=\"\" rule=\"classification requires a base or a submitted document\" \
+             source=\"specs/s4-contract-change-classification.md D2\"\n"
+        );
+    }
+
     #[rustfmt::skip]
     mod golden_closure {
         use super::*;
@@ -880,11 +899,11 @@ finding BXC0036 path=\"hello/type/GreetError/variant/Other\" compatible_with_con
                 expected.insert(format!("{name}.json"));
                 expected.insert(format!("{name}.txt"));
             }
-            for name in ["pairing-error.txt", "report-capability-only.txt", "report-revision-only.txt", "report-types-only.txt"] {
+            for name in ["pairing-both-absent.txt", "pairing-error.txt", "report-capability-only.txt", "report-revision-only.txt", "report-types-only.txt"] {
                 expected.insert(String::from(name));
             }
             assert_eq!(names, expected);
-            assert_eq!(names.len(), 38);
+            assert_eq!(names.len(), 39);
         }
     }
 }
