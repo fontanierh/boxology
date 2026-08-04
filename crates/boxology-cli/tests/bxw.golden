@@ -30,3 +30,6 @@ BXW0094|clippy check failed|boxology-details/08-rust-build-topology.md workspace
 BXW0095|test check failed|boxology-details/08-rust-build-topology.md workspace operations and validation baseline; specs/s5-manifest-and-validation.md D6
 BXW0096|a trusted check command could not be executed|boxology-details/08-rust-build-topology.md workspace operations and validation baseline; specs/s5-manifest-and-validation.md D6
 BXW0097|cargo graph and lockfile freshness check failed|boxology-details/08-rust-build-topology.md workspace operations and validation baseline step 4; specs/s5-manifest-and-validation.md D6
+BXW0103|the base revision's Git listings must parse as expected NUL-delimited output|specs/s5-manifest-and-validation.md D6
+BXW0104|a base-revision workspace object must be readable as a Git blob|specs/s5-manifest-and-validation.md D6
+BXW0105|the base revision's package declarations must form a discoverable workspace|boxology-details/02-packages.md discovery walk; specs/s5-manifest-and-validation.md D6

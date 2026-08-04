@@ -31,8 +31,8 @@ mod generate;
 mod runner;
 mod walk;
 pub use base::{
-    BaseError, BaseSchemasError, DefaultBase, GitToolError, base_package_schemas,
-    resolve_default_base,
+    BaseDiffInputs, BaseError, BaseInputsError, BaseSchemasError, DefaultBase, GitToolError,
+    ResolvedBase, base_diff_inputs, base_package_schemas, resolve_base, resolve_default_base,
 };
 pub use check::{
     CheckClassificationError, ClassifyStepError, DuplicatePackages, PackageSchemas, classify_step,
