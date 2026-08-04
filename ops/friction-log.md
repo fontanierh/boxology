@@ -57,3 +57,9 @@ Each entry is, in order: a `## YYYY-MM-DD — #issue` heading, one blank line, o
 - Evidence: [#503](https://github.com/fontanierh/boxology/issues/503) splits those suites into a required parallel native Mac capstone. Run 30828942886 measured `checks-macos` at 11m04s versus `checks-linux` at 4m22s; main-push deep CI retains the unchanged full-workspace test.
 - Status (2026-08-03): Round two also delegates the generator, workspace, and xtask package tests, shallow fixture-project checks, and external-test integrity gates; both native Mac jobs drop Actions cache traffic, the workflow globally drops debuginfo, and main-push deep coverage remains unchanged.
 - Status (2026-08-03): Round three isolates the born-valid integration test in a third required native Mac lane; the original capstone retains every other delegated test and main-push deep coverage remains unchanged.
+
+## 2026-08-04 — #343
+
+- Classification: `semantic`
+- Observation: V0's required evidence corpus is fixed to the four landed fixtures (`hello`, `greeter`, `ping`, `ping-app`); the full-grammar authoring evidence — `kitchen-sink`, structured/container grammar, named payloads, Blob/Secret end-to-end coverage, and the capability name override — is deferred to named post-v0 residuals, narrowing what v0 proves about the box boundary model itself without weakening runtime behavior, classification taxonomy, determinism, born-valid, or clean-run evidence.
+- Evidence: [V0 Streams residual section](../boxology-details/11-v0-streams.md#post-v0-residuals-recorded-at-the-corpus-decision); residual owners [#100](https://github.com/fontanierh/boxology/issues/100), [#102](https://github.com/fontanierh/boxology/issues/102), [#104](https://github.com/fontanierh/boxology/issues/104), [#480](https://github.com/fontanierh/boxology/issues/480), [#358](https://github.com/fontanierh/boxology/issues/358); ledger [#343](https://github.com/fontanierh/boxology/issues/343).
