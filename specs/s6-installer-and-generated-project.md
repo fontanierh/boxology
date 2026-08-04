@@ -21,12 +21,12 @@ The generated project is the platform's first user-facing artifact and its accep
 ### D1 — A pure library and a thin CLI, mirroring S2
 
 - **`boxology-init`** (library) is pure: `initialize(InitRequest) -> Result<GeneratedTree, Diagnostics>` — the complete project file tree as relative-path/byte pairs, with no filesystem, environment, network, clock, or execution access. It embeds S2's pure generation to emit the Hello box's contract crate, `schema.json`, and adapter, so the project is born with valid derived artifacts rather than a "run generate first" instruction.
-- The **CLI** (a `boxology-init` binary in the same crate) owns the effects: request assembly from flags, fail-closed target validation, and atomic write of the complete tree through the same write discipline S2's orchestration uses (#107). It is a **separate binary from S5's `boxology`**: the release bundle names the installer as its own deliverable, the strategy review's stage 3 plans it as a standalone composition, and S5's command surface stays exactly `generate`/`check`.
+- The **CLI** (a `boxology-init` binary in the same crate) owns the effects: request assembly from flags, fail-closed target validation, and sentinel-gated staged write through D2's own staged-directory-plus-sentinel mechanism. It is a **separate binary from S5's `boxology`**: the release bundle names the installer as its own deliverable, the strategy review's stage 3 plans it as a standalone composition, and S5's command surface stays exactly `generate`/`check`.
 - Diagnostics carry stable codes in a **`BXI####`** namespace, disjoint from `BXG`/`BXC`/`BXW`; there is no uncoded failure path.
 
 `InitRequest` is minimal: the project name, the **platform dependency source**, and the workspace parameters the task specs prove necessary — every addition needs a use in the milestone scenario. The dependency source is the v0 answer to an unavoidable question: nothing is published, so the generated workspace keeps exact `=0.0.0` dependency declarations and redirects those packages to the platform source checkout through root `[patch.crates-io]` path overrides. The request carries that checkout path explicitly. This preserves same-checkout builds without making generated member crates declare external path edges that `boxology check` must reject. The source is recorded verbatim into the generated manifests and into provenance; determinism (D5) is defined over identical requests, and the determinism subject and goldens pin a canonical placeholder source path. Published registry versions replace the overrides with the first published release, post-v0. The installer records its own version in the generated provenance.
 
-### D2 — Fail-closed target, atomic write
+### D2 — Fail-closed target, sentinel-gated staged write
 
 The installer writes into the target root directly — the greenfield repository root becomes the workspace root; the project name names the workspace and packages, not a created subdirectory. The CLI refuses a target that is not empty (VCS metadata `.git/` alone is permitted — the developer's greenfield repository may already be initialized, per milestone step 1), and the diagnostic names every offending entry; ensuring the target is actually empty is the onboarding flow's job, owned by S7's skill. It never overwrites, merges into, or repairs an existing tree; re-running against a generated project is a coded error, not an idempotent no-op.
 
@@ -72,10 +72,10 @@ The complete end-to-end proof is one S6-owned integration test run natively on m
 | --- | --- | --- |
 | T1 | `boxology-init` pure library: `InitRequest`, tree assembly, embedded S2 generation, determinism subject | 2 |
 | T2 | Generated project content: workspace, three packages, initial contract shape, composition wiring, README, quality commands, CI placement | 2–3 |
-| T3 | CLI binary: flags, fail-closed target validation, atomic write, provenance/version | 1 |
+| T3 | CLI binary: flags, fail-closed target validation, sentinel-gated staged write, provenance/version | 1 |
 | T4 | Born-valid closure: one native-macOS integration proof (install, build, both invocations, check), goldens, cross-platform byte-determinism coverage | 2 |
 
-T1 and T2 interleave as one stack (content is assembled by the library); T3 follows; T4 remains last, followed by the S6-COMPLETE check against this spec. The stream depends on S1–S5 artifacts: T1 consumes S2's generation and write orchestration (#107); T2 consumes S1 assembly, S3's server binding (#112), S5's workflow document (#327), and coordinates with the fixture corpus (#100); T4 consumes S5's `check` (#327). S7-T3/#340 consumes S4's classifier for the real additive-change proof.
+T1 and T2 interleave as one stack (content is assembled by the library); T3 follows; T4 remains last, followed by the S6-COMPLETE check against this spec. The stream depends on S1–S5 artifacts: T1 consumes S2's generation (#107); T2 consumes S1 assembly, S3's server binding (#112), S5's workflow document (#327), and coordinates with the fixture corpus (#100); T4 consumes S5's `check` (#327). S7-T3/#340 consumes S4's classifier for the real additive-change proof.
 
 ## Matters left open
 
