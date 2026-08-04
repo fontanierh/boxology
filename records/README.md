@@ -12,6 +12,7 @@ The strategy review of 2026-07-18 predates this directory and remains at [`boxol
 
 ## Index
 
+- [2026-08-04 — Full-transcript V0 situation report](2026-08-04-full-transcript-v0-sitrep.md)
 - [2026-08-04 — Fable V0 advancement and course-correction advisory](2026-08-04-fable-v0-advisory.md)
 - [2026-08-03 — Full-session progress and V0 course correction](2026-08-03-full-session-progress-and-v0-course-correction.md)
 - [2026-08-03 — Clean foundation acceptance](2026-08-03-foundation-acceptance-clean.md)
