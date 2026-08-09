@@ -1,6 +1,5 @@
-//! Own-source directory/manifest/test-tree closure and AST/effect scan for the generator crates
-//! (#107A). Transitive dependency purity remains #358.
-//! (coarse fail-closed pass; #107A closes with the precision PR)
+//! Closed own-source directory, manifest, test-tree, and AST/effect authority for the generator
+//! crates (#107A). Transitive dependency purity remains post-V0 under #358.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -592,7 +591,7 @@ fn closure_rules_reject_live_hostile_corpus() {
     fs::remove_dir_all(&tests_tmp).unwrap();
 }
 
-// --- Own-source AST / effect scanner (#107A-B; coarse fail-closed, precision PR pending) ---
+// --- Closed own-source AST / effect scanner (#107A). Transitive purity remains #358. ---
 #[rustfmt::skip]
 const ROOTS: &[&str] = &["alloc", "boxology_contract", "boxology_contract_syntax", "boxology_generator_model", "boxology_schema", "core", "crate", "imports", "manifest", "prettyplease", "proc_macro2", "rust", "schema", "self", "serde_json", "sha2", "std", "super", "syn", "toml_edit"];
 #[rustfmt::skip]
@@ -601,10 +600,15 @@ const PURE_COLLECTIONS: &[&str] = &["BTreeMap", "BTreeSet", "btree_map", "btree_
 #[rustfmt::skip]
 const EFFECT_STD: &[&str] = &["env", "fs", "io", "net", "os", "process", "random", "thread", "time"];
 #[rustfmt::skip]
-const ALLOW_MACROS: &[&str] = &["Token", "copy_getters", "format", "json", "matches", "model_getters", "ref_getters", "unreachable", "vec", "write"];
+const ALLOW_MACROS: &[&str] = &["copy_getters", "format", "json", "matches", "model_getters", "ref_getters", "unreachable", "vec", "write"];
 #[rustfmt::skip]
 const DENY_MACROS: &[&str] = &["asm", "concat_bytes", "env", "global_asm", "include", "include_bytes", "include_str", "option_env"];
-const ALLOW_MACRO_DEFS: &[&str] = &["copy_getters", "model_getters", "ref_getters"];
+#[rustfmt::skip]
+const MACRO_DEFS: &[(&str, &str)] = &[
+    ("ref_getters", r#"($(#[$meta:meta] $name:ident: $return:ty = $field:tt;)*) => {$ ( #[$meta] pub fn $name(&self) -> $return { &self.$field } )*};"#),
+    ("copy_getters", r#"($(#[$meta:meta] $name:ident: $return:ty = $field:ident;)*) => {$ ( #[$meta] pub fn $name(&self) -> $return { self.$field } )*};"#),
+    ("model_getters", r#"($this:ident; $(#[$meta:meta] $name:ident: $return:ty = $body:expr;)*) => {$ ( #[$meta] pub fn $name(&$this) -> $return { $body } )*};"#),
+];
 const ALLOW_ATTRS: &[&str] = &["allow", "deny", "derive", "doc", "forbid", "rustfmt::skip"];
 #[rustfmt::skip]
 const ALLOW_DERIVES: &[&str] = &["Clone", "Copy", "Debug", "Eq", "Ord", "PartialEq", "PartialOrd"];
@@ -636,20 +640,23 @@ impl Scanner {
         }
     }
     fn attr(&mut self, attr: &Attribute) {
+        self.meta(&attr.meta);
+    }
+    fn meta(&mut self, meta: &Meta) {
         if self.err.is_some() {
             return;
         }
-        let path = pj(attr.path());
+        let path = pj(meta.path());
         match path.as_str() {
-            "cfg" if exact_cfg_test(attr) => {}
+            "cfg" if exact_cfg_test_meta(meta) => {}
             "cfg" => self.fail("cfg", "non-exact cfg"),
             "cfg_attr" => self.fail("cfg_attr", "cfg_attr forbidden"),
             "path" => self.fail("path", "#[path] forbidden"),
             p if !ALLOW_ATTRS.contains(&p) => self.fail("attr", format!("attribute `{path}`")),
-            "derive" => self.meta_paths(attr, ALLOW_DERIVES, "derive"),
-            "allow" | "deny" | "forbid" => self.meta_paths(attr, ALLOW_LINTS, "lint"),
+            "derive" => self.meta_paths(meta, ALLOW_DERIVES, "derive"),
+            "allow" | "deny" | "forbid" => self.meta_paths(meta, ALLOW_LINTS, "lint"),
             "doc" => {
-                if let Meta::NameValue(nv) = &attr.meta
+                if let Meta::NameValue(nv) = meta
                     && !matches!(&nv.value, syn::Expr::Lit(l) if matches!(l.lit, syn::Lit::Str(_)))
                 {
                     self.fail("attr", "doc must be a string literal");
@@ -658,8 +665,15 @@ impl Scanner {
             _ => {}
         }
     }
-    fn meta_paths(&mut self, attr: &Attribute, allow: &[&str], kind: &str) {
-        let Meta::List(list) = &attr.meta else {
+    fn macro_meta(&mut self, meta: &Meta) {
+        match pj(meta.path()).as_str() {
+            "cfg" => self.fail("cfg", "cfg forbidden in macro invocation"),
+            "cfg_attr" => self.fail("cfg_attr", "cfg_attr forbidden in macro invocation"),
+            _ => self.meta(meta),
+        }
+    }
+    fn meta_paths(&mut self, meta: &Meta, allow: &[&str], kind: &str) {
+        let Meta::List(list) = meta else {
             return self.fail("attr", format!("{kind} form"));
         };
         let Ok(args) = list
@@ -685,11 +699,29 @@ impl Scanner {
         false
     }
     fn mac(&mut self, mac: &syn::Macro) {
+        if mac.path.leading_colon.is_some() {
+            return self.fail("macro", format!("leading `::` macro `{}`", pj(&mac.path)));
+        }
         let segs = ps(&mac.path);
         if let Err(rule) = self.chk_mac(&segs) {
             return self.fail(rule, segs.join("::"));
         }
         self.tokens(mac.tokens.clone());
+    }
+    fn macro_def(&mut self, name: &str, tokens: &TokenStream) {
+        let Some((_, expected)) = MACRO_DEFS.iter().find(|(n, _)| *n == name) else {
+            return self.fail("macro", format!("macro_rules `{name}`"));
+        };
+        self.token_stream(tokens.clone(), true);
+        if self.err.is_some() {
+            return;
+        }
+        let expected = expected
+            .parse::<TokenStream>()
+            .expect("trusted macro definition parses");
+        if tokens.to_string() != expected.to_string() {
+            self.fail("macro", format!("macro_rules `{name}` shape"));
+        }
     }
     fn chk_mac(&self, segs: &[String]) -> Result<(), &'static str> {
         let r = self.resolve(segs);
@@ -701,6 +733,11 @@ impl Scanner {
                 n if n.contains("asm") => "asm",
                 _ => "macro",
             });
+        }
+        // `Token!` is syntax supplied by syn, not an open macro allowlist entry. Requiring its
+        // canonical path prevents a renamed macro from borrowing this trusted spelling.
+        if name == "Token" {
+            return (segs == ["syn", "Token"]).then_some(()).ok_or("macro");
         }
         if segs.len() > 1 {
             self.chk_path(segs).map_err(|_| "macro")?;
@@ -765,18 +802,18 @@ impl Scanner {
         match tree {
             UseTree::Path(p) => {
                 let mut n = prefix.to_vec();
-                n.push(p.ident.to_string());
+                n.push(ident(&p.ident));
                 self.use_tree(&n, &p.tree);
             }
             UseTree::Name(n) => {
                 let mut f = prefix.to_vec();
-                f.push(n.ident.to_string());
-                self.import(&f, n.ident.to_string());
+                f.push(ident(&n.ident));
+                self.import(&f, ident(&n.ident));
             }
             UseTree::Rename(n) => {
                 let mut f = prefix.to_vec();
-                f.push(n.ident.to_string());
-                self.import(&f, n.rename.to_string());
+                f.push(ident(&n.ident));
+                self.import(&f, ident(&n.rename));
             }
             UseTree::Glob(_) => self.fail("use", "glob import"),
             UseTree::Group(g) => g.items.iter().for_each(|t| self.use_tree(prefix, t)),
@@ -800,16 +837,62 @@ impl Scanner {
         self.aliases.insert(bind, resolved);
     }
     fn tokens(&mut self, ts: TokenStream) {
+        self.token_stream(ts, false);
+    }
+    fn token_stream(&mut self, ts: TokenStream, macro_definition: bool) {
         if self.err.is_none() {
-            self.toks(&ts.into_iter().collect::<Vec<_>>());
+            self.toks(&ts.into_iter().collect::<Vec<_>>(), macro_definition);
         }
     }
-    fn toks(&mut self, t: &[TokenTree]) {
+    fn toks(&mut self, t: &[TokenTree], macro_definition: bool) {
         let mut i = 0;
         while i < t.len() && self.err.is_none() {
+            let attribute = match (t.get(i + 1), t.get(i + 2)) {
+                (Some(TokenTree::Group(group)), _) => Some((group, 2)),
+                (Some(TokenTree::Punct(bang)), Some(TokenTree::Group(group)))
+                    if bang.as_char() == '!' =>
+                {
+                    Some((group, 3))
+                }
+                _ => None,
+            };
+            if matches!(&t[i], TokenTree::Punct(p) if p.as_char() == '#')
+                && let Some((g, width)) = attribute
+                && g.delimiter() == proc_macro2::Delimiter::Bracket
+            {
+                let attr_tokens = g.stream();
+                let attr_parts = attr_tokens.clone().into_iter().collect::<Vec<_>>();
+                let is_meta_var = macro_definition
+                    && match attr_parts.as_slice() {
+                        [TokenTree::Punct(p), TokenTree::Ident(_)] => p.as_char() == '$',
+                        [
+                            TokenTree::Punct(dollar),
+                            TokenTree::Ident(_),
+                            TokenTree::Punct(colon),
+                            TokenTree::Ident(kind),
+                        ] => dollar.as_char() == '$' && colon.as_char() == ':' && *kind == "meta",
+                        _ => false,
+                    };
+                if is_meta_var {
+                    self.token_stream(attr_tokens, true);
+                } else if let Ok(meta) = syn::parse2::<Meta>(attr_tokens) {
+                    self.macro_meta(&meta);
+                } else {
+                    self.fail("attr", "attribute token parse");
+                }
+                i += width;
+                continue;
+            }
+            if dcolon(t, i) {
+                let (segs, next) = read_path(t, i);
+                if next < t.len() && matches!(&t[next], TokenTree::Punct(p) if p.as_char() == '!') {
+                    return self.fail("macro", format!("leading `::` macro `{}`", segs.join("::")));
+                }
+                return self.fail("root", "leading `::` token path");
+            }
             match &t[i] {
                 TokenTree::Group(g) => {
-                    self.tokens(g.stream());
+                    self.token_stream(g.stream(), macro_definition);
                     i += 1;
                 }
                 TokenTree::Literal(_) | TokenTree::Punct(_) => i += 1,
@@ -832,7 +915,7 @@ impl Scanner {
                         if body < t.len()
                             && let TokenTree::Group(g) = &t[body]
                         {
-                            self.tokens(g.stream());
+                            self.token_stream(g.stream(), macro_definition);
                             i = body + 1;
                             continue;
                         }
@@ -863,11 +946,11 @@ impl<'ast> Visit<'ast> for Scanner {
         }
         match item {
             syn::Item::ExternCrate(e) => {
-                let name = e.ident.to_string();
+                let name = ident(&e.ident);
                 let bind = e
                     .rename
                     .as_ref()
-                    .map(|(_, i)| i.to_string())
+                    .map(|(_, i)| ident(i))
                     .unwrap_or_else(|| name.clone());
                 self.import(&[name], bind);
             }
@@ -879,11 +962,7 @@ impl<'ast> Visit<'ast> for Scanner {
             }
             syn::Item::Macro(m) => {
                 if let Some(n) = &m.ident {
-                    let n = n.to_string();
-                    if !ALLOW_MACRO_DEFS.contains(&n.as_str()) {
-                        return self.fail("macro", format!("macro_rules `{n}`"));
-                    }
-                    self.tokens(m.mac.tokens.clone());
+                    self.macro_def(&ident(n), &m.mac.tokens);
                     return; // Avoid revisiting `macro_rules` as an invocation.
                 }
             }
@@ -901,7 +980,7 @@ impl<'ast> Visit<'ast> for Scanner {
             syn::Item::Trait(t) if t.unsafety.is_some() => self.fail("unsafe", "trait"),
             syn::Item::Verbatim(_) => self.fail("parse", "verbatim item"),
             syn::Item::Mod(m)
-                if m.content.is_none() && !ROOTS.contains(&m.ident.to_string().as_str()) =>
+                if m.content.is_none() && !ROOTS.contains(&ident(&m.ident).as_str()) =>
             {
                 self.fail("root", format!("outline mod `{}`", m.ident));
             }
@@ -912,6 +991,9 @@ impl<'ast> Visit<'ast> for Scanner {
         }
     }
     fn visit_impl_item(&mut self, n: &'ast syn::ImplItem) {
+        if self.err.is_some() || self.skip_test(impl_item_attrs(n)) {
+            return;
+        }
         if matches!(n, syn::ImplItem::Verbatim(_)) {
             return self.fail("parse", "verbatim impl item");
         }
@@ -920,6 +1002,9 @@ impl<'ast> Visit<'ast> for Scanner {
         }
     }
     fn visit_trait_item(&mut self, n: &'ast syn::TraitItem) {
+        if self.err.is_some() || self.skip_test(trait_item_attrs(n)) {
+            return;
+        }
         if matches!(n, syn::TraitItem::Verbatim(_)) {
             return self.fail("parse", "verbatim trait item");
         }
@@ -942,6 +1027,9 @@ impl<'ast> Visit<'ast> for Scanner {
             return;
         }
         self.unsafety(&n.sig.safety, "trait fn");
+        if n.sig.abi.is_some() {
+            return self.fail("extern", "extern trait fn");
+        }
         syn::visit::visit_trait_item_fn(self, n);
     }
     fn visit_expr(&mut self, e: &'ast syn::Expr) {
@@ -1005,8 +1093,31 @@ fn item_attrs(i: &syn::Item) -> &[Attribute] {
         _ => &[],
     }
 }
+fn impl_item_attrs(i: &syn::ImplItem) -> &[Attribute] {
+    match i {
+        syn::ImplItem::Const(i) => &i.attrs,
+        syn::ImplItem::Fn(i) => &i.attrs,
+        syn::ImplItem::Type(i) => &i.attrs,
+        syn::ImplItem::Macro(i) => &i.attrs,
+        syn::ImplItem::Verbatim(_) => &[],
+        _ => &[],
+    }
+}
+fn trait_item_attrs(i: &syn::TraitItem) -> &[Attribute] {
+    match i {
+        syn::TraitItem::Const(i) => &i.attrs,
+        syn::TraitItem::Fn(i) => &i.attrs,
+        syn::TraitItem::Type(i) => &i.attrs,
+        syn::TraitItem::Macro(i) => &i.attrs,
+        syn::TraitItem::Verbatim(_) => &[],
+        _ => &[],
+    }
+}
 fn exact_cfg_test(a: &Attribute) -> bool {
-    let Meta::List(l) = &a.meta else {
+    exact_cfg_test_meta(&a.meta)
+}
+fn exact_cfg_test_meta(meta: &Meta) -> bool {
+    let Meta::List(l) = meta else {
         return false;
     };
     if !l.path.is_ident("cfg") {
@@ -1020,7 +1131,7 @@ fn exact_cfg_test(a: &Attribute) -> bool {
     matches!(args.iter().collect::<Vec<_>>()[..], [Meta::Path(p)] if p.is_ident("test"))
 }
 fn ps(p: &syn::Path) -> Vec<String> {
-    p.segments.iter().map(|s| s.ident.to_string()).collect()
+    p.segments.iter().map(|s| ident(&s.ident)).collect()
 }
 fn pj(p: &syn::Path) -> String {
     ps(p).join("::")
@@ -1030,6 +1141,10 @@ fn crate_style(n: &str) -> bool {
         && matches!(n.chars().next(), Some('a'..='z'))
         && n.chars()
             .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+}
+fn ident(i: &proc_macro2::Ident) -> String {
+    let spelling = i.to_string();
+    spelling.strip_prefix("r#").unwrap_or(&spelling).to_owned()
 }
 fn dcolon(t: &[TokenTree], i: usize) -> bool {
     matches!(
@@ -1045,7 +1160,7 @@ fn read_path(t: &[TokenTree], start: usize) -> (Vec<String>, usize) {
         let TokenTree::Ident(id) = &t[i] else {
             break;
         };
-        segs.push(id.to_string());
+        segs.push(ident(id));
         i += 1;
         if !dcolon(t, i) {
             break;
@@ -1098,6 +1213,7 @@ fn effect_scan_rejects_hostile_corpus() {
     let rows = [
         ("fs", "fn f() { let _ = std::fs::read(\"x\"); }"),
         ("fs", "use std::fs as x; fn f() { let _ = x::read(\"x\"); }"),
+        ("fs", "fn f() { let _ = r#std::fs::read(\"x\"); }"),
         ("alias", "extern crate std as s; fn f() { let _ = s::fs::read(\"x\"); }"),
         ("alias", "use crate as std; fn f() { let _ = ::std::fs::read(\"x\"); }"),
         ("root", "fn f() { let _ = ::std::mem::size_of::<u8>(); }"),
@@ -1109,31 +1225,63 @@ fn effect_scan_rejects_hostile_corpus() {
         ("root", "extern crate undeclared_crate;"),
         ("env", "fn f() { let _ = env!(\"PATH\"); }"),
         ("include", "fn f() { let _ = include!(\"x.rs\"); }"),
+        ("include", "fn f() { let _ = include_str!(\"x.txt\"); }"),
+        ("include", "fn f() { let _ = include_bytes!(\"x.bin\"); }"),
+        ("macro", "fn f() { let _ = concat_bytes!(b\"x\"); }"),
         ("env", "fn f() { let _ = option_env!(\"x\"); }"),
         ("macro", "macro_rules! wrap { () => { env!(\"x\") }; }"),
+        ("macro", "macro_rules! model_getters { ($a:ident, $b:ident, $c:ident) => { fn f() { let _ = $a::$b::$c(\"x\"); } }; } model_getters!(std, fs, read);"),
+        ("include", "fn f() { let _ = format!(\"{}\", json!({\"x\": include_str!(\"x\")})); }"),
+        ("asm", "fn f() { asm!(\"\"); }"),
+        ("asm", "global_asm!(\"\");"),
         ("path", "#[path = \"x.rs\"] mod m;"),
         ("cfg", "#[cfg(any(test))] fn f() {}"),
         ("cfg", "struct S { #[cfg(feature = \"x\")] f: u8 }"),
         ("cfg_attr", "#[cfg_attr(test, allow(dead_code))] fn f() {}"),
+        ("cfg", "struct S; impl S { model_getters! { self; #[cfg(feature = \"hostile\")] a: usize = 0; } }"),
+        ("cfg", "struct S; impl S { model_getters! { self; #[cfg(test)] a: usize = 0; } }"),
+        ("cfg", "struct S; impl S { model_getters! { self; #[doc = \"x\"] a: () = { #![cfg(test)] () }; } }"),
+        ("cfg_attr", "struct S; impl S { model_getters! { self; #[doc = \"x\"] a: () = { #![cfg_attr(test, allow(dead_code))] () }; } }"),
+        ("cfg_attr", "struct S; impl S { model_getters! { self; #[cfg_attr(test, doc = \"hostile\")] a: usize = 0; } }"),
+        ("attr", "struct S; impl S { model_getters! { self; #[hostile] a: usize = 0; } }"),
+        ("cfg_attr", "struct S; impl S { #[cfg_attr(test, allow(deprecated))] fn f() {} }"),
+        ("cfg_attr", "trait T { #[cfg_attr(test, allow(deprecated))] fn f(); }"),
+        ("cfg_attr", "struct S { #[cfg_attr(test, allow(deprecated))] f: u8 }"),
+        ("cfg_attr", "enum E { #[cfg_attr(test, allow(deprecated))] V }"),
+        ("fs", "struct S { #[cfg(test)] f: std::fs::File }"),
+        ("fs", "enum E { V(#[cfg(test)] std::fs::File) }"),
         ("unsafe", "unsafe fn f() {}"),
         ("unsafe", "fn f() { unsafe { let _ = 1; } }"),
         ("unsafe", "type F = unsafe fn();"),
         ("unsafe", "static mut X: u8 = 0;"),
         ("unsafe", "macro_rules! model_getters { () => { unsafe {} }; }"),
+        ("unsafe", "macro_rules! model_getters { () => { format!(\"{}\", { unsafe {} }) }; }"),
         ("extern", "extern \"C\" { fn f(); }"),
+        ("extern", "type F = extern \"C\" fn();"),
+        ("extern", "macro_rules! model_getters { () => { type F = extern \"C\" fn(); }; }"),
         ("net", "fn f() { let _ = std::net::Ipv4Addr::LOCALHOST; }"),
         ("process", "fn f() { let _ = std::process::id(); }"),
         ("time", "fn f() { let _ = std::time::Instant::now(); }"),
         ("thread", "fn f() { let _ = std::thread::available_parallelism(); }"),
+        ("io", "fn f() { let _ = std::io::empty(); }"),
+        ("os", "fn f(_: &dyn std::os::unix::ffi::OsStrExt) {}"),
         ("env", "fn f() { let _ = std::env::var(\"x\"); }"),
+        ("random", "fn f() { let _ = std::random::random::<u8>(); }"),
         ("random", "use std::collections::HashMap; fn f() { let _: HashMap<u8, u8> = HashMap::new(); }"),
         ("random", "fn f() { let _ = std::collections::hash_map::RandomState::default(); }"),
         ("fs", "fn f() { let _ = format!(\"{}\", std::fs::read(\"x\")); }"),
+        ("macro", "use syn::Token as T; type Comma = T![,];"),
+        ("macro", "use syn::Token; type Comma = Token![,];"),
+        ("macro", "type Comma = ::syn::Token![,];"),
+        ("macro", "fn f() { let _ = ::serde_json::json!({\"x\": 1}); }"),
+        ("macro", "fn f() { let _ = format!(\"{}\", ::serde_json::json!({\"x\": 1})); }"),
     ];
     for (rule, src) in rows {
         expect_err(scan_source(src), rule);
     }
     scan_source("#[cfg(test)] fn f() { let _ = std::fs::read(\"x\"); }").expect("cfg(test) ok");
+    scan_source("struct S; impl S { #[cfg(test)] model_getters! { self; a: std::fs::File = a; } }")
+        .expect("cfg(test) associated item subtree is excluded");
     expect_err(
         scan_source(
             "#[cfg(test)] fn t() { let _ = std::fs::read(\"x\"); }\nfn p() { let _ = std::fs::read(\"y\"); }",
@@ -1153,16 +1301,21 @@ fn effect_scan_allows_positive_controls() {
         "fn f() { let _ = format!(\"{}\", \"std::fs env! include! unsafe\"); }",
         "fn f() { let _ = b\"std::fs\"; let _ = \"env!\"; let _ = r#\"include!\"#; }",
         "fn f() { let _ = vec![1, 2]; let _ = matches!(0, 0); let _ = unreachable!(); }",
+        "fn f() { let _ = format!(\"{}\", format!(\"{}\", 1)); }",
         "use std::collections::{BTreeMap, BTreeSet}; fn f() { let _: BTreeMap<u8, u8> = BTreeMap::new(); let _ = BTreeSet::<u8>::new(); }",
         "use serde_json::json; fn f() { let _ = json!({ \"a\": 1 }); }",
-        "type Comma = syn::Token![,];",
-        "macro_rules! ref_getters { () => {}; }",
-        "macro_rules! copy_getters { () => {}; }",
-        "macro_rules! model_getters { () => {}; }",
+        "use serde_json::{Value, json}; fn f() { let _: Value = json!({ \"a\": [1] }); }",
+        "type Metas = syn::punctuated::Punctuated<syn::Meta, syn::Token![,]>;",
+        "use syn::parse::Parser as _;",
         "struct S; impl S { model_getters! { self; #[doc = \"d\"] a: &'static str = a; } }",
+        "struct S; impl S { ref_getters! { self; a: &'static str = a; } copy_getters! { self; n: usize = n; } }",
+        "struct S { #[cfg(test)] f: u8 } enum E { #[doc = \"v\"] V } trait T { #[doc = \"t\"] fn f(); }",
         "enum BoundaryLeaf { A } fn f() { use BoundaryLeaf as Wire; let _ = Wire::A; }",
+        "use std::sync as sync_one; use sync_one as sync_two; fn f() { let _ = sync_two::atomic::AtomicUsize::new(0); }",
+        "use std::sync::atomic::{AtomicUsize, Ordering}; fn f() { let a = AtomicUsize::new(0); let _ = a.load(Ordering::Relaxed); }",
         "use boxology_contract::BoxId; fn f(x: BoxId) { let _ = x; }",
         "fn f() { let _ = std::str::from_utf8(b\"a\"); }",
+        "fn f() { let _ = r#std::str::from_utf8(b\"a\"); }",
         "mod schema; fn f() {}",
         "#[cfg(test)] mod tests { fn evil() { let _ = std::fs::read(\"x\"); env!(\"y\"); } }",
     ];
