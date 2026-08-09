@@ -281,7 +281,7 @@ rt/anonymous-context-untrusted-identity :: runtime :: v1 does not trust caller-s
 rt/conformance-must-exercise-surface :: runtime :: Binding conformance tests must exercise routing :: wire n:raw_hello/raw_hello_cases_are_canonical n:raw_server/raw_server_client_cases_are_canonical n:typed_hello/typed_hello_round_trips_success_and_domain_error n:traceability/normative_registry_gate_is_complete n:traceability/registry_mutants_fail_closed f:crates/boxology-http/src/replay_tests.rs#presence_bytes_replay_top_fields_children_and_nested_wrappers f:crates/boxology-http/src/replay_tests.rs#scalar_bytes_replay_every_width_boundary_and_string_form
 "#;
 
-pub const RUNTIME_AUTHORITY_DIGEST: u64 = 0x068564f1efd5430f;
+pub const RUNTIME_AUTHORITY_DIGEST: u64 = 0x26c3dfeebfe05084;
 pub const SPEC_AUTHORITY_DIGEST: u64 = 0x0086f955afbe142a;
 const MAX_ANCHOR_BYTES: usize = 80;
 
