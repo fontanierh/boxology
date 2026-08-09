@@ -51,8 +51,6 @@ Determine which harness hosts the primary agent before launching a worker.
 - Never represent a worker from one harness as a worker from another.
 - Count native and CLI-launched workers equally against the concurrency cap.
 
-For example, a Claude primary launches a Claude candidate as a native Claude sub-agent and a Kimi or Pi candidate through that harness's CLI. A primary hosted elsewhere does the inverse and launches the Claude candidate through the Claude CLI.
-
 Use the configured model and effort. If the active harness's native mechanism cannot honor them, do not switch to that same harness's CLI. Treat the candidate as unavailable and follow the selection and fallback rules above. Launch an external worker through the CLI's supported model and effort selection; if its CLI is absent or cannot honor the requested values, treat that candidate as unavailable.
 
 External CLI workers do not inherit the primary agent's conversation, repository instructions, worktree, or prior worker output. Give them the complete directive and exact worktree path explicitly. Use any process-management mechanism required by applicable repository instructions.
@@ -62,28 +60,6 @@ For implementation and repair, launch every external worker through the reposito
 A configured model may also be served by an unrelated harness. Never take that shortcut: route each candidate through the harness its configuration names, so the worker, its account, and its evidence stay attributable.
 
 Pass configuration to every external CLI as direct process environment and argv values, never by shell-constructing configuration values. Launch each with the exact assigned worktree as its working directory and capture both stdout and stderr. Worker API keys live in `/Users/jim/.config/boxology-delivery-loop/credentials.env` (mode `600`, outside the repository); load them into the process environment and keep them out of argv, prompts, and logs.
-
-#### `harness = "kimi"`
-
-Read [`references/kimi-code.md`](references/kimi-code.md) first.
-
-- environment: `KIMI_CODE_NO_AUTO_UPDATE=1`, `KIMI_DISABLE_CRON=1`, and `KIMI_MODEL_THINKING_EFFORT=<configured effort>`;
-- argv: `/Users/jim/.kimi-code/bin/kimi`, `-m`, `kimi-code/k3`, `-p`, `<complete worker directive>`.
-
-Do not add `--auto` or `--yolo` to `-p`: prompt mode is already unattended and the current CLI rejects that combination. In every Kimi directive, forbid subagents, schedules, background work, `--add-dir`, and leaving the assigned worktree.
-
-#### `harness = "pi"`
-
-Read [`references/pi-cli.md`](references/pi-cli.md) first.
-
-- environment: `XAI_API_KEY=<key>` and `PI_TELEMETRY=0`;
-- argv: `/opt/homebrew/bin/pi`, `-p`, `--no-session`, `--approve`, `--model`, `<configured model>`, `--thinking`, `<configured effort>`, `<complete worker directive>`.
-
-Pi receives reasoning effort separately through `--thinking`, so pass the configured value exactly. `--no-session` makes every worker an independent ephemeral process, and the assigned worktree is fixed by the process working directory rather than an argv workspace flag. Never pass the API key through `--api-key`. In every Pi directive, forbid `--continue`, `--resume`, `--session`, `--fork`, background work, nested agents, and leaving the assigned worktree.
-
-#### `harness = "claude"`
-
-A Claude primary launches this candidate as a native Claude sub-agent, which inherits the session's model and effort. Confirm the session actually runs the configured model and effort before relying on it; if it does not, treat the candidate as unavailable rather than reaching for the CLI. A non-Claude primary launches it as a CLI process: `claude`, `-p`, `--model`, `<configured model>`, `--effort`, `<configured effort>`, with the worktree as the working directory.
 
 #### Every advisory role
 
