@@ -69,6 +69,7 @@ jobs:
           run_workspace_check=false
           run_reaper=false
           run_fixtures=false
+          run_delivery_worker=false
           changed_manifests="$RUNNER_TEMP/boxology-changed-manifests"
           : > "$changed_manifests"
           if test "$EVENT_NAME" = pull_request; then
@@ -81,6 +82,9 @@ jobs:
             fi
             if grep -Eq '^(crates/fixtures/|goldens/generated-project/)' <<<"$changed"; then
               run_fixtures=true
+            fi
+            if grep -Eq '^ops/delivery-worker/' <<<"$changed"; then
+              run_delivery_worker=true
             fi
             if test "$run_rust" = true; then
               if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$' <<<"$changed"; then
@@ -107,6 +111,7 @@ jobs:
           echo "run_workspace_check=$run_workspace_check" | tee -a "$GITHUB_OUTPUT"
           echo "run_reaper=$run_reaper" | tee -a "$GITHUB_OUTPUT"
           echo "run_fixtures=$run_fixtures" | tee -a "$GITHUB_OUTPUT"
+          echo "run_delivery_worker=$run_delivery_worker" | tee -a "$GITHUB_OUTPUT"
 
       # This catches repository-policy regressions on every code PR and is much
       # cheaper than executing every package's integration suite.
@@ -146,3 +151,7 @@ jobs:
       - name: Test process reaper
         if: steps.scope.outputs.run_reaper == 'true'
         run: bash ops/process-reaper/tests/run-tests.sh
+
+      - name: Test delivery worker ownership
+        if: steps.scope.outputs.run_delivery_worker == 'true'
+        run: bash ops/delivery-worker/tests/run-tests.sh

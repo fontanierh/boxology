@@ -48,8 +48,20 @@ new; /bin/bash "$S" run --run-id dry --phase implement --harness codex --worktre
 track_pid "$SUP"; wait_record dry || exit 1; PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/dry.record"); track_group "$PID"; /bin/kill -TERM "$SUP"; wait "$SUP" 2>/dev/null
 BEFORE=$(/sbin/md5 -q "$DW_STATE_DIR/dry.record"); OUT=$(/bin/bash "$S" reap --run-id dry --dry-run); RC=$?; AFTER=$(/sbin/md5 -q "$DW_STATE_DIR/dry.record")
 PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/dry.record"); /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
-ok '[[ $RC -eq 0 && $BEFORE == "$AFTER" && $LIVE -eq 0 && "$OUT" == *"action=would-term reason=verified"* ]]' 'dry-run has zero signal and state advance'
+ok '[[ $RC -eq 0 && $BEFORE == "$AFTER" && $LIVE -eq 0 && "$OUT" == "run=dry phase=implement harness=codex pid=$PID pgid=$PID action=would-term reason=verified owned_lock=not_observed" ]]' 'dry-run has exact sanitized telemetry, zero signal, and zero state advance'
 /bin/bash "$S" reap --run-id dry >/dev/null
+
+# A failed TERM retains resumable term_prepared state and exact private lock identity.
+new; LOCK="$B/.cargo-lock"; : >"$LOCK"; printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >>"$DW_KILL_LOG"' 'exit 1' >"$B/fail-kill"; /bin/chmod 700 "$B/fail-kill"; export DW_KILL_LOG="$B/kill.log"
+/bin/bash "$S" run --run-id lock --phase repair --harness codex --worktree "$WT" --cwd "$WT" -- /bin/bash -c 'exec 4<>"$1"; exec /bin/sleep 300' fixture "$LOCK" >"$B/run.out" 2>&1 & SUP=$!
+track_pid "$SUP"; wait_record lock || exit 1; PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/lock.record"); track_group "$PID"; /bin/kill -TERM "$SUP"; wait "$SUP" 2>/dev/null
+OUT=$(DW_KILL="$B/fail-kill" /bin/bash "$S" reap --run-id lock 2>&1); RC=$?; STAGE=$(/usr/bin/awk -F= '/^stage=/{print $2}' "$DW_STATE_DIR/lock.record"); LOCK_ROW=$(/usr/bin/awk -F= '/^owned_lock=/{print $2}' "$DW_STATE_DIR/lock.record"); LOCK_ID=$(/usr/bin/stat -f '%d:%i' "$LOCK"); LOCK_PID=${LOCK_ROW%%|*}
+ok '[[ $RC -eq 71 && "$OUT" == *"action=retain reason=term_failed owned_lock=unknown"* && "$STAGE" == term_prepared && "$LOCK_ROW" == "$LOCK_PID|$LOCK_ID|u|-|$LOCK" && "$LOCK_PID" =~ ^[1-9][0-9]*$ && "$(<"$B/kill.log")" == "-TERM -$PID" ]] && /usr/bin/grep -Eq "^member=$LOCK_PID:[a-f0-9]{64}$" "$DW_STATE_DIR/lock.record"' 'TERM failure retains the exact member and private lock observation'
+cp "$DW_STATE_DIR/lock.record" "$B/lock.saved"; SAVE=$(/sbin/md5 -q "$B/lock.saved"); /usr/bin/awk -F: '/^member=/{print $1 ":0000000000000000000000000000000000000000000000000000000000000000"; next}{print}' "$B/lock.saved" >"$DW_STATE_DIR/lock.record"
+OUT=$(/bin/bash "$S" reap --run-id lock 2>&1); RC=$?; /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
+ok '[[ $RC -eq 70 && $LIVE -eq 0 && "$OUT" == *"reason=changed_after_prepare"* ]]' 'changed prepared fingerprint fails closed'
+cp "$B/lock.saved" "$DW_STATE_DIR/lock.record"; OUT=$(/bin/bash "$S" reap --run-id lock); RC=$?
+ok '[[ $RC -eq 0 && "$SAVE" == "$(/sbin/md5 -q "$B/lock.saved")" && "$OUT" == "run=lock phase=repair harness=codex pid=$PID pgid=$PID action=clear reason=term owned_lock=released" && ! -e "$DW_STATE_DIR/lock.record" ]]' 'term_prepared resumes and proves the owned Cargo lock released'
 
 # Empty-group dry-run reports the pending clear without changing the record.
 new; /bin/bash "$S" run --run-id empty --phase implement --harness codex --worktree "$WT" --cwd "$WT" -- /usr/bin/false >"$B/run.out" 2>&1
