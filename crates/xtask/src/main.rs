@@ -5,6 +5,7 @@ use std::process::{Command, ExitCode};
 use std::time::Instant;
 
 mod advisories;
+mod authority_digests;
 mod budget;
 mod classifier_subject;
 mod deny;
@@ -115,6 +116,7 @@ const HYGIENE_CHECKS: &[&str] = &[
     "audit",
     "fmt",
     "key-order",
+    "authority-digests",
     "whitespace",
     "links",
     "records",
@@ -418,6 +420,10 @@ fn run_ci_hygiene(base: &str) -> u8 {
         ),
         ("fmt", timed("fmt", run_root_fmt)),
         ("key-order", timed("key-order", run_key_order)),
+        (
+            "authority-digests",
+            timed("authority-digests", || authority_digests::check(&root())),
+        ),
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
         ("links", timed("links", || links::check(&root()))),
         (
