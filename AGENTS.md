@@ -24,14 +24,21 @@ Every issue declares its deliverable kind at creation. Issues resolved by modify
 
 ## V0 execution methodology
 
-V0 implementation proceeds through four levels, each specified before the next begins:
+V0 is complete; its [evidence record](records/2026-08-09-v0-completion-evidence.md) is the
+milestone boundary. The methodology that delivered it remains the repository's post-V0
+development discipline:
 
-1. **Streams.** The high-level v0 workstreams are defined in [V0 Streams](boxology-details/11-v0-streams.md). Streams partition the v0 scope; every task belongs to exactly one stream.
-2. **Stream specs and task lists.** Each stream receives a spec in `specs/`, reviewed and merged before its implementation starts. The spec produces the stream's task list as tracker issues referencing the stream.
+1. **Streams.** The delivered v0 workstreams are defined in [V0 Streams](boxology-details/11-v0-streams.md). Post-V0 work uses explicit epics and dependency-ordered slices.
+2. **Specs and task lists.** Accepted files in `specs/` are live normative baselines, consolidated in place as the product changes. New work is specified in an issue or focused design document before implementation.
 3. **Task specs.** Each task is specified — in the issue or an accompanying document — before its implementation starts. A task spec states scope, interfaces touched, and its acceptance checks.
 4. **PR stacks.** Each task is implemented as a stack of pull requests, based sequentially and merged in order. **Every pull request adds at most 600 hand-authored lines, including tests.** Checked-in derived artifacts (generated contract crates, schemas, `Cargo.lock`) are excluded from the count but must satisfy the reproducibility rules; the budget measures what a human must review, and derived output is verified mechanically instead.
 
 Each pull request keeps a single accountable owner under the ownership rules, passes the repository's validation, and goes through the tracker reconciliation above. Tests assert what a value **is**, not what it is not — an absence check passes vacuously whenever the value had no path there, and a fixture that already satisfies the property under test proves nothing about the code that enforces it. A change that cannot fit the budget is split further or its task re-scoped; the budget is a review-attention ceiling, not a stylistic preference.
+
+Specs describe current normative truth rather than accumulating superseding amendments. In
+contrast, dated `records/` files and existing `ops/friction-log.md` entries are append-only
+history: correct them through a new record or permitted status annotation, never by rewriting the
+old evidence.
 
 ## Delivery method
 

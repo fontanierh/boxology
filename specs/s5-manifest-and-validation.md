@@ -1,121 +1,118 @@
 # S5 Spec — Manifest and Validation Tooling
 
-[Stream definition](../boxology-details/11-v0-streams.md#s5--manifest-and-validation-tooling) · Status: **accepted** (amended by maintainer decision on 2026-08-03)
+[Stream definition](../boxology-details/11-v0-streams.md#s5--manifest-and-validation-tooling) ·
+Status: **delivered**
 
-S5 builds the workspace tooling: `boxology.toml` parsing and discovery, ownership and path classification, crate-role mapping, the Cargo-edge policy checker, lockfile validation, and the `boxology generate` / `boxology check` commands with the emitted GitHub Actions workflow. The manifest format, discovery walk, ownership and derived-artifact rules, edge-policy table, check baseline, exit codes, and JSON contract are normative in [Packages](../boxology-details/02-packages.md) and [Rust Build Topology](../boxology-details/08-rust-build-topology.md); this spec does not restate them. It records implementation decisions, resolves the details the normative text delegates, and scopes the v0 subset honestly. It also consumes [S2](s2-contract-generator.md) (regeneration, `GenerationRequest` orchestration owned by #107) and [S4](s4-contract-change-classification.md) (classification, the shared `boxology-schema` codec).
+S5 delivers strict `boxology.toml` parsing and discovery, ownership/path classification,
+crate-role and Cargo-edge validation, lockfile checks, and the `boxology generate` / `boxology
+check` commands. [Packages](../boxology-details/02-packages.md) and
+[Rust Build Topology](../boxology-details/08-rust-build-topology.md) remain normative for the
+format and validation baseline; this file records the implemented subset and live residuals.
 
-## Purpose
+## Boundary
 
-S5 turns the merge-discipline substrate into commands a repository actually runs: the same `boxology check` for developers, the lead, and generated CI, with no hidden validation layer. It is also the absorption target fixed by S0 D10 — S7 adopts manifests and gates repository CI with `boxology check`, then the first task immediately post-v0 (#342) delegates platform validation from `cargo xtask ci` and deletes the bootstrap registries. Every check S5 ships must therefore be manifest-derived from birth; S5 may not introduce a second hand-maintained registry.
+V0 `check` reports policy facts; it is not a merger and does not replay a base package plus an
+accountable diff, resolve minimal lockfile closure, or authorize an incompatible contract change.
+Provider roles, isolation-profile enforcement, package-scoped validation, publication, and branch
+protection are not delivered. The CLI surface is `boxology generate [--package <id>]` and
+`boxology check [--base <revision>] [--format human|json]`.
 
-## Non-goals
+## Delivered decisions
 
-- **No merger.** The base-replay enforcement protocol — 02-packages' ownership steps 5–6 (regenerate from base plus the accountable diff) and the pinned minimal-closure lockfile resolver with foreign-impact reassessment — is factory merger machinery. The foundation has no factory service; v0 `check` reports, it does not replay. Deferred explicitly, not silently (see D6 and matters left open).
-- **No providers.** 02-packages defers provider crate roles until the first provider enters the foundation; manifest `kind = "provider"` is a coded "not supported in v0" rejection.
-- **No isolation profiles beyond recording.** L0 is the foundation default; no profile validation machinery.
-- **No package-scoped or impact-selected validation.** V1 `check` always validates the complete workspace, per 08-topology.
-- **No branch protection, publication, distribution, or registry.** Recorded v0 exclusions and S0 D9 stand.
-- **No additional commands on the `boxology` binary.** Exactly `boxology generate [--package <id>]` and `boxology check [--base <rev>] [--format human|json]`. Other v0 binaries (S6's `boxology-init`) are their own streams' deliverables; further `boxology` subcommands are post-v0.
+### D1 — Purity split
 
-## Decisions
+- `boxology-manifest` is the pure strict schema-1 parser.
+- `boxology-workspace` is pure over supplied file, manifest, schema, and Cargo-metadata data. It
+  owns discovery, classification, crate roles, and edge policy without filesystem/process access.
+- `boxology-cli` owns effects: filesystem and git reads, Cargo commands, generation, validation,
+  and report rendering. The `boxology` facade crate remains authoring-only.
 
-### D1 — Crate topology and the purity split
+Library diagnostics use stable `BXW####` codes and deterministic ordering.
 
-Three crates, mirroring the platform's purity discipline:
+### D2 — Manifest and classification
 
-- **`boxology-manifest`** — the strict v1 manifest model and parser. Pure: bytes in, model or coded diagnostics out.
-- **`boxology-workspace`** — discovery classification, ownership and path attribution, crate-role mapping, and the edge-policy checker. Pure over supplied inputs: a normalized file listing, parsed manifests, and a `cargo metadata` JSON document are *data arguments*; the library never spawns a process, reads the filesystem, or consults git.
-- **`boxology-cli`** — the binary, named `boxology`. It owns every effect: walking the filesystem, invoking `git` for `--base` material, running `cargo metadata`/`fmt`/`clippy`/`test`, executing `[quality].commands`, and invoking S2's generation orchestration (#107 owns `GenerationRequest`/`GeneratedTree` and per-file atomic orchestration; S5 supplies manifest-derived requests and never reimplements them).
+Schema 1 accepts `box`, `composition`, and `platform`; unknown keys, newer schemas, provider kind,
+invalid workspace-relative globs, and impossible role combinations fail closed. Composition
+bindings select an exact capability or a nonempty `<box>.*` expansion and use `in-process` or
+`http` transport without exceeding declared exposure.
 
-The existing **`boxology` facade crate stays authoring-only** (macros, `CallContext` re-exports, per 08-topology); the CLI binary shares its name but not its package. Diagnostics use a stable **`BXW####`** namespace, disjoint from `BXG`/`BXC`; there is no uncoded failure path in either library.
+A platform package may declare fixture-opaque owned subtrees. Nested manifests in those trees are
+data, not discovered packages. Platform-only `protected` declarations identify control-plane
+paths, but their V0 strength is reporting only.
 
-### D2 — The v0 manifest subset, fail-closed
+Every tracked file classifies exactly once as one package's owned source or one declared derived
+output. Ambiguous, overlapping, and unowned paths fail with sorted diagnostics. Cargo packages
+match exactly one declared crate role. Edge policy reads declared normal, build, dev, renamed,
+optional, feature, and target-specific dependencies from `cargo metadata`; source inclusion that
+bypasses a Cargo edge remains outside that model.
 
-`schema = 1` exactly; an unknown newer value is a coded rejection, never a skip (normative). Accepted kinds are `box`, `composition`, and `platform`. Within schema 1, unknown keys reject (normative); this spec adds the delegated details:
+### D3 — Generation
 
-- **Glob dialect**: `owned`, `inputs`, and `outputs` patterns use gitignore-style matching with `**`, workspace-relative, case-sensitive, no `..` or absolute segments (rejected at parse). The exact dialect corner cases are pinned in T1's task spec and frozen by fixture goldens.
-- **Composition validation** is structural against checked-in artifacts: every selected box identity exists; a binding selects either one exact `<box>.<name>` capability or every capability of that box with `<box>.*` in its checked-in `schema.json` (read through `boxology-schema`). Wildcard expansion includes capabilities added in the future, must be nonempty, and is ordered bytewise by qualified capability id for deterministic output. Transport vocabulary is `in-process` | `http`; binding exposure does not exceed `max_exposure` for every capability in the expansion under the total order fixed by S4 D5. Runtime binding compatibility remains S1 assembly's job at startup; the manifest layer checks what the documents can prove.
-- **Identity lifecycle** (split, merge, transfer, retirement) remains #3; v0 knows only creation-by-appearance and workspace-unique ids.
-- **Fixture opacity**: a platform-kind package may declare owned subtrees as **fixture data** — `fixtures = [...]` patterns (exact key and grammar under T1's authority). Fixture paths classify as that package's owned non-derived files, and discovery does **not** treat a `boxology.toml` inside them as a workspace package. This is what lets a repository (this one at stage 2) carry fixture projects — including deliberately malformed manifests — without them entering real workspace validation. The corresponding one-sentence extension to 02-packages' discovery walk lands in this amendment's diff.
-- **Protected control-plane declarations**: the optional schema-1 key `protected = [...]` is platform-only: only a platform package may declare protected control-plane paths. When present, it must be non-empty and use the existing workspace-relative glob dialect. V0 strength is declaration/reporting-only; cross-list protected-vs-derived enforcement and merger behavior remain out of scope.
+Generation candidates and inputs come from manifests, including declared imported schemas. The
+CLI regenerates into temporary output, compares bytes, writes only changed packages through the
+generator's confined per-file atomic publication, refreshes provenance, and attaches the S4
+classification unmodified. `--package` selects one package; a byte-identical run writes nothing.
 
-### D3 — Deterministic classification
+V0 assumes the source-tree generator is one byte-stable version. A published generator that
+changes representation for unchanged source must add the provenance-compatible historical skip
+before claiming that release boundary.
 
-Discovery follows 02-packages' walk verbatim. Every tracked file classifies **exactly once**: a non-derived path owned by one package, or one declared derived output; ambiguous, overlapping, or unowned paths are coded failures naming every candidate. All reporting is ordered by package id, then workspace-relative path — no map-iteration or filesystem ordering leaks. The workspace's `Cargo.lock` classifies as the platform package's declared global derived artifact.
+### D4 — Check and base semantics
 
-### D4 — Edge policy over the metadata document
+`check` is non-mutating, whole-workspace, and ordered. Validation defects exit `1`, invocation or
+tooling failures exit `2`, and success exits `0`. Human and schema-versioned JSON reports carry the
+same findings.
 
-The 08-topology edge table is enforced against the `cargo metadata` document plus manifest crate roles — v0 vocabulary exactly `box-implementation`, `box-contract`, `composition`, `platform`. Coverage spans normal, build, dev, renamed, optional, feature-activated, and target-specific edges; a renamed or feature-gated dependency is the same edge. Edge reading is **declaration-based** — `packages[].dependencies`, never the host- and feature-dependent `resolve` graph — which is what makes purity over one metadata document sound; the exact `cargo metadata` invocation (locked, no platform filter) is pinned in T3's task spec. A forbidden dependency concealed without a Cargo edge (e.g. `include!` of foreign source) is outside metadata's reach and is recorded as a known v0 limit. Every Cargo package must match exactly one `[[crates]]` entry by normalized path and package name (normative); unmatched crates and role-impossible edges are coded failures.
+With `--base`, the CLI obtains base manifests and schemas from git. Contract changes are classified
+against that revision and reported without suppression or policy authorization. Changed paths are
+attributed under the **base revision's declarations**, including accountable-package,
+foreign-source, and derived-output findings. A lockfile diff without an accountable package's
+manifest dependency-declaration change emits a coded scope finding; minimal-closure replay remains
+deferred. This is reporting strength, not the
+factory merger's replay/enforcement protocol. Without `--base`, local check uses the merge base
+with `main`; where no usable revision exists, base-relative steps are explicitly reported skipped.
 
-### D5 — `generate` orchestration
+The baseline includes discovery/ownership, regeneration comparison, classification, lockfile
+freshness, manifest-derived formatting, workspace Clippy/tests, and manifest quality commands.
+Contract-classification findings are report-only and do not alone change the exit code; merger
+policy remains outside the checker.
 
-Candidates are packages with declared derived outputs whose generator is the workspace contract generator; the workspace's `Cargo.lock` declaration (generator identity `cargo`) is validated by D6's freshness rule, never fed to S2. For each candidate, the CLI assembles the `GenerationRequest` from the manifest's `inputs` patterns **and its declared `[[imports]]`, each resolved by package identity to the imported package's checked-in contract schema** — input completeness remains by construction because both halves are manifest-derived, and S2's model-level validation fails closed if traversal wants a file the request does not carry. Regeneration runs into temporary output; only packages whose bytes differ from the checked-in tree are written (this *is* the "declared inputs changed" detection — byte truth, not mtime heuristics); `--package` forces one package. Writes go through S2's per-file atomic orchestration; provenance updates on write. The command then reports the semantic classification per changed package: the previously checked-in `schema.json` is the base, the regenerated document the submitted, classified by `boxology-classifier` and attached to the report unmodified — `generate` has no mechanism to omit or soften it.
+Three execution contexts are intentionally distinct:
 
-**Recorded v0 narrowing (single-generator assumption).** 08-topology's lifecycle lets historical artifacts rest on recorded compatible generator provenance without mass regeneration. V0 assumes one current generator whose releases are byte-stable for unchanged inputs — true while everything ships from this source tree — so byte-diff detection and step 2's unconditional compare are exact. The provenance-recorded compatibility skip becomes mandatory scope at the first generator release whose representation improves for unchanged source; that trigger is recorded in matters left open, not silently dropped.
+- generated projects receive a golden-pinned `ubuntu-latest` workflow with explicit
+  `boxology check --base <pull-request-base>`; V0 did not execute that source-provisioned workflow,
+  and its first run is deferred to #525 at the first pinned external release;
+- this repository's required PR job runs no product command;
+- local/deep `cargo xtask ci` owns exactly one complete product check.
 
-### D6 — `check` composition and the `--base` posture
+### D5 — Determinism and CI absorption
 
-`check` composes the eight baseline steps of 08-topology in order, non-mutating, whole-workspace, with the normative exit codes (`0`/`1`/`2`) and `--format json` emitting one document whose top-level `schema` field identifies the diagnostic format version. The delegated details:
+Library results and report structure are sorted and independent of locale, root path, and time.
+Captured third-party tool text is outside the byte-determinism claim. V0 proved the registered
+workspace-report subject across controlled contexts on native macOS ARM64; #525 owns continuous
+cross-platform evidence and first-release execution of the emitted Linux workflow.
 
-- **Regeneration compare** (step 2): temp regeneration, byte compare under the provenance-normalization rules; a stale or tampered artifact fails naming the exact repair command (`boxology generate --package <id>`).
-- **`--base` classification** (step 3): the CLI obtains base manifests and schemas via git; contract changes are classified by S4 against the base revision and reported even when harness policy later authorizes the merge — `check` never suppresses or downgrades a finding.
-- **Diff ownership reporting**: with `--base`, changed paths are classified under the **base revision's** declarations (merger step 2 semantics): exactly one accountable package, foreign-source detection, derived-output attribution. V0 reports these as findings; the enforcement replay (merger steps 5–6) stays out, per non-goals.
-- **Lockfile** (step 4 subset): freshness is proven by pinned `--locked` resolution (an out-of-date lockfile is a coded failure); classification per D3. With `--base`, a **scope finding** honors S0 D6's "mechanical enforcement arrives with S5" at reporting strength: a lockfile diff while no manifest dependency declaration of the accountable package changed is a coded finding (the `cargo update`-drive-by case). The full minimal-closure attribution replay is deferred with the merger.
-- **Base default**: without `--base`, local `check` resolves the base to the merge base with `main` — the fixed v0 branch name, a recorded narrowing of 08's "configured main branch" (configurability arrives with a manifest-schema extension, not a guessed key). Where no such revision exists (no repository, unborn branch), base-relative steps are skipped and the report says so explicitly. Three CI topologies must stay distinct: the **emitted project workflow** always passes an explicit `--base <pull-request-base>`; **this repository's required PR lane** runs no product `boxology check` command (lean native-Mac hygiene, changed-crate tests, invariants, and conditional root build-graph/reaper checks; #531/#548); and **dispatch-only deep validation** runs the complete product check under the default-base posture rather than forcing `--base`.
-- **Exit-code mapping**: repository-validation defects — discovery/ownership/role/edge violations, unowned or foreign-source paths, stale or tampered artifacts, lockfile failures, failing fmt/clippy/tests/quality commands — exit `1`. **Contract-classification findings of every class are report-only** and do not by themselves change the exit code: per 08's policy boundary the platform reports and the harness gates, and in v0 the harness is the human reading the report. This is what makes "reported even when policy authorizes the merge" operable without override machinery.
-- **Formatting** (step 5): the hand-authored package selection is **derived from manifests** — owned crate paths minus declared derived outputs — never a second S5 registry; this is the data that deletes S0's bootstrap lists in immediate-post-v0 #342.
-- **Quality commands** (step 8): executed sequentially in package-id order, trusted per the foundation threat boundary, output captured, any nonzero exit failing the run. The checker contains no per-project branch; the generated Hello project's conformance tests enter through its own manifest.
+PR #571 completed [#342](https://github.com/fontanierh/boxology/issues/342): each canonical
+`cargo xtask ci` aggregate delegates platform validation to exactly one `boxology check`, retained
+repository-only checks have separate names, and the duplicated derived-output and formatting
+registries were deleted in favor of manifest data.
 
-### D7 — The emitted workflow is S5 data
+## Delivered acceptance evidence
 
-The repository-owned GitHub Actions workflow — `boxology check --base <pull-request-base>` on `ubuntu-latest`, per 08-topology — is a golden-pinned document owned by S5 and exposed as library data. S6's initializer writes it into generated projects; S5 owns its content and its conformance to the check contract, including the checkout fetch strategy that guarantees the base revision is locally available to `--base`. V0 acceptance pins those emitted bytes and their anchor tests; execution of the unpublished source-provisioned Linux workflow is deferred to the first pinned external release boundary under #525.
+The merged S5 suite covers malformed manifests, every Cargo edge kind, deterministic ownership,
+green and tampered workspaces, no-op and selected generation, all exit codes and both renderings,
+base-relative incompatible/reporting cases, lock freshness, two independent quality-command
+fixtures, emitted-workflow goldens, and native-Mac repeated-root determinism. Completion evidence
+is tracked by [#328](https://github.com/fontanierh/boxology/issues/328),
+[#329](https://github.com/fontanierh/boxology/issues/329), and the
+[V0 record](../records/2026-08-09-v0-completion-evidence.md).
 
-### D8 — Determinism
+## Live residuals
 
-Both libraries are pure and their reports byte-deterministic: sorted output, workspace-relative normalized paths, no timestamps, environment values, or locale dependence. T2 registers a real determinism subject with S0's harness — the validation report over a fixture workspace — and its coverage grows as checks land. **V0 evidence** is that the workspace-report subject is byte-identical across repetitions and roots on native macOS ARM64 in the final exact-main deep validation run; continuous cross-platform cadence and Linux/x86 re-proof before the first pinned external release are owned by #525. **Captured external tool output** (cargo, clippy, tests, quality commands) is outside every determinism claim; its embedding and truncation rules live under T5's JSON authority, and AC5's human/JSON agreement is over findings, not captured text. The JSON field inventory is task-spec work under T5's authority.
-
-## Acceptance criteria
-
-1. A malformed-manifest corpus covers every rejection rule in 02-packages and D2 — unknown key, unknown newer schema, provider kind, duplicate identity, overlapping ownership, unowned file, absolute/`..`/symlink escape, glob violations, role mismatch, unmatched crate — each with a coded failing fixture asserting code and path.
-2. The edge-policy matrix is fully covered: every table row crossed with every edge kind (normal, build, dev, renamed, optional, feature-activated, target-specific) has a fixture proving detection.
-3. Conforming fixture workspaces validate green end-to-end; a byte-tampered and a stale generated artifact each fail regeneration compare naming the repair command.
-4. `generate` rewrites only byte-differing packages, honors `--package`, updates provenance on write, and attaches the S4 classification unmodified; a no-op run writes nothing and reports `unchanged`.
-5. All three exit codes are proven; the JSON document carries the top-level `schema` field; human and JSON renderings agree on findings.
-6. With `--base`: an incompatible contract change is reported as `incompatible` on a fixture pair that merges anyway; single-accountable-package and foreign-source findings are proven both passing and failing.
-7. An out-of-date lockfile fails freshness; `Cargo.lock` classifies as the platform package's derived artifact.
-8. Quality commands run from manifests on two distinct fixture projects with no checker branching; a failing command fails `check`.
-9. The T2 workspace-report determinism subject is byte-identical across repetitions and roots on native macOS ARM64 in the final exact-main deep validation run; continuous cross-platform cadence and first-release Linux workflow execution are owned by #525.
-10. The emitted workflow document is golden-pinned as `ubuntu-latest` `boxology check --base` bytes with anchor tests; execution of that unpublished source-provisioned workflow is deferred to the first pinned external release boundary under #525.
-
-## Task list
-
-| Task | Content | Est. PRs |
-| --- | --- | --- |
-| T1 | `boxology-manifest`: strict v1 model, parse diagnostics, glob dialect, malformed corpus | 2 |
-| T2 | `boxology-workspace`: discovery classification, ownership attribution, crate-role mapping, determinism subject | 2 |
-| T3 | Edge-policy checker: full table across all edge kinds | 1–2 |
-| T4 | `generate`: manifest-derived requests, byte-diff detection, provenance, S4 classification attachment | 2 |
-| T5 | `check`: baseline composition, exit codes and mapping, JSON, `--base` classification/ownership/lockfile-scope reporting, base default, composition and declared-import cross-document validation, quality commands, workflow document | 2–3 |
-| T6 | Golden closure: fixture-workspace suite, corpus completeness, native-macOS ARM64 repeated-root determinism evidence (cross-platform cadence under #525) | 1 |
-
-T1–T3 form a stack independent of S2 and S4 and may begin at once; T1 starts immediately. T4 is blocked by S2 #107 (orchestration surface) and S4 #316/#318/#319 (schema codec, taxonomy, report); T5 consumes T1–T4 and additionally #316 for its cross-document composition validation (D2) and #319 for classification reporting; T6 remains last, followed by the S5-COMPLETE check against this spec.
-
-## Matters left open
-
-- The merger's base-replay enforcement (ownership steps 5–6, minimal-closure lockfile resolver, foreign-impact reassessment) — factory-side, post-v0; v0 `check` reports the same facts without replaying them, including the D6 lockfile-scope finding as the v0 strength of S0 D6's promise.
-- The provenance-recorded compatible-generator skip for historical artifacts — mandatory at the first generator release with representational changes for unchanged source (the D5 single-generator narrowing's trigger).
-- Provider roles, isolation-profile validation, package-scoped validation, independent build roots — deferred per the normative documents.
-- Exact `BXW####` codes, the JSON field inventory, and glob-dialect corner cases — task-spec work (T1/T5 authority).
-- Identity lifecycle (#3) and the new-package creation protocol (#47) — unchanged, still open.
-- The `xtask ci` delegation itself — executed by immediate-post-v0 S7-T5/#342 per S0 D10, not by this stream; S7's manifest adoption and `boxology check` CI gate precede it.
-- #477 items 2–6 remain open as post-V0 diagnostic/test-quality residuals: cycle diagnostic locality, self-cycle/transitive-chain coverage, imported-path diagnostic invariant, BXW0068 retirement comment, and one degraded mutant. They do not affect the proven one-pass ordered-generation behavior or the current V0 corpus; item 1 is the V0-gating one-pass stale-import convergence proof closed here.
-
-## Tracker notes
-
-The stream definition in `11-v0-streams.md` gains its spec link in this PR's diff; no other normative document changes. On merge, the operator files the six task issues plus S5-COMPLETE with `stream:s5` labels, recording the T4 dependencies on #107, #316, and #318. #74's boxification list already names `boxology check`; no edit needed. #3 and #47 are cited, not changed. The 2026-08-03 amendment below reconciles this spec to S0 D10's revised absorption schedule.
-
-**Amendment of 2026-07-24** (one independent review round): recorded the D5 single-generator narrowing with its trigger; added the D6 lockfile-scope finding reconciling S0 D6's promise at reporting strength; pinned the no-flag base default (merge base with `main`, recorded narrowing) and the exit-code mapping (validation defects exit `1`; classification findings report-only); added the D2 fixture-opacity declaration with its 02-packages discovery extension in this diff; assigned composition/declared-import cross-document validation to T5 with its #316 dependency; added #319 to T4/T5; pinned declaration-based edge reading and recorded the `include!` residual; scoped determinism claims around captured tool output; reworded the command-surface non-goal and the T1–T3 parallel-start sentence. Operator edits on merge: #326 and #327 gain the #319 dependency; #327 gains cross-document validation scope and the #316 dependency.
-
-**Amendment of 2026-08-03** (maintainer acceleration decision): reconciled the absorption schedule with S0 D10 and S7 D5. S7 adopts root manifests and keeps `boxology check` gating repository CI in v0; S7-T5/#342 deletes the temporary xtask registries and completes delegation as the first task immediately post-v0.
-
-**Amendment of 2026-08-04** (#328 closure): D6 distinguishes the emitted workflow's explicit `--base`, this repository's required PR lane with no product `boxology check` command (#531/#548), and dispatch-only deep validation's complete default-base check; D8/AC9/T6 narrow V0 determinism evidence to native macOS ARM64 repeated-root proof in the final exact-main deep run, transferring continuous cross-platform cadence to #525; D7/AC10 retain golden-pinned emitted `ubuntu-latest` workflow bytes and anchor tests while deferring source-provisioned Linux execution to the first-release boundary under #525; #477 item 1 is proven by the one-pass stale-import convergence seam, while items 2–6 transfer to post-V0 diagnostic/test-quality residuals under Matters left open.
+- The factory merger's base replay, minimal lock closure, and foreign-impact reassessment.
+- The first-release provenance-compatible generator boundary and Linux/cross-platform proof (#525).
+- Provider roles, isolation validation, package-scoped checks, identity lifecycle (#3), and
+  new-package creation policy (#47).
+- [#477](https://github.com/fontanierh/boxology/issues/477) items 2–6: cycle diagnostic locality,
+  self-cycle/transitive-chain coverage, imported-path diagnostic invariants, the BXW0068 retirement
+  comment, and one degraded mutant. Item 1's one-pass stale-import convergence is delivered.
