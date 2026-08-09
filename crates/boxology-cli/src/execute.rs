@@ -329,7 +329,7 @@ pub(crate) fn generate_tree(
     .map_err(|diagnostics| {
         ExecuteError::generator(package_dir.join(plan.crate_root().as_str()), diagnostics)
     })?;
-    let tree = boxology_generator::generate(&request).map_err(|diagnostics| {
+    let tree = boxology_generator::generate(request).map_err(|diagnostics| {
         ExecuteError::generator(package_dir.join(plan.crate_root().as_str()), diagnostics)
     })?;
     for output in OUTPUTS {

@@ -174,7 +174,7 @@ fn ping_generation_is_cold_exact_and_matches_the_checked_in_tree() {
     assert_eq!(request.crate_root().as_str(), "implementation/src/lib.rs");
     assert_eq!(request.inputs().len(), 2, "generated files are not inputs");
     assert!(request.imports().is_empty());
-    let generated = generate(&request).expect("cold Ping generation succeeds");
+    let generated = generate(request).expect("cold Ping generation succeeds");
     let generated_paths: BTreeSet<_> = generated
         .files()
         .iter()

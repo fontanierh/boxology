@@ -526,7 +526,7 @@ fn publish_fixture_outputs(
 
 fn run_fixture(out: &Path, fixture: &Fixture) -> Result<(), String> {
     let request = fixture_request(fixture)?;
-    let generated = generate(&request)
+    let generated = generate(request)
         .map_err(|error| format!("{} cold generation failed: {error}", fixture.name))?;
     let generated_paths: Vec<_> = generated.files().iter().map(|file| file.path()).collect();
     if generated_paths.as_slice() != FIXTURE_OUTPUTS {
@@ -1174,8 +1174,8 @@ impl HelloService {{
         cold_contract.semantic_digest(),
     )
     .map_err(|error| format!("write cold semantic digest: {error}"))?;
-    let cold_output = generate(&cold_request)
-        .map_err(|error| format!("fixed cold generation failed: {error}"))?;
+    let cold_output =
+        generate(cold_request).map_err(|error| format!("fixed cold generation failed: {error}"))?;
     let hostile_sentinels = [
         "BOXOLOGY_BODY_SENTINEL",
         "BOXOLOGY_INITIALIZER_SENTINEL",
@@ -1548,7 +1548,7 @@ mod tests {
         let root = subject_root("goldens");
         run(&root.0).unwrap();
         for fixture in &FIXTURES {
-            let generated = generate(&fixture_request(fixture).unwrap()).unwrap();
+            let generated = generate(fixture_request(fixture).unwrap()).unwrap();
             for file in generated.files() {
                 let path = root
                     .0

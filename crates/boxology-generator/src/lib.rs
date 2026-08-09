@@ -58,16 +58,16 @@ impl GeneratedTree {
 /// # Errors
 /// Returns sorted model diagnostics when the request, source topology, controlled contract, or
 /// complete output declaration is invalid.
-pub fn generate(request: &GenerationRequest) -> Result<GeneratedTree, Diagnostics> {
+pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics> {
     request.require_exact_outputs(&OUTPUTS)?;
-    let parsed = ParsedRustInputs::parse(request)?;
+    let parsed = ParsedRustInputs::parse(&request)?;
     let contract = parsed.controlled_contract()?;
     contract.require_v0_emittable()?;
     // Hydrate and fail closed on any declared import, then thread the returned models into the
     // adapter's implementation descriptor. A box with no imports emits `[]` — the pre-import token
     // — so every existing box stays byte-identical; imports are implementation-local and never
     // affect the outward contract, schema, revision, or semantic digest.
-    let imports = ImportModel::parse_all(request)?;
+    let imports = ImportModel::parse_all(&request)?;
     let revision = schema::revision(request.box_id().as_str(), contract.model());
     let manifest = format!(
         "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",
@@ -1487,7 +1487,7 @@ macro_rules! __boxology_check_implementation {
     }
 
     fn tree(source: &str, reverse: bool) -> GeneratedTree {
-        generate(&request(source, reverse, OUTPUTS.to_vec())).unwrap()
+        generate(request(source, reverse, OUTPUTS.to_vec())).unwrap()
     }
 
     fn file<'a>(tree: &'a GeneratedTree, path: &str) -> &'a GeneratedFile {
@@ -1608,7 +1608,7 @@ macro_rules! __boxology_check_implementation {
         assert_eq!(schema::projection("hello", contract.model()), PROJECTION);
         let independently_hashed = format!("sha256:{:x}", Sha256::digest(PROJECTION));
         let schema = SCHEMA_TEMPLATE.replace("{REVISION}", &independently_hashed);
-        let generated = generate(&cold).unwrap();
+        let generated = generate(cold).unwrap();
         assert_eq!(
             file(&generated, "generated/schema.json").bytes(),
             schema.as_bytes()
@@ -2021,7 +2021,7 @@ macro_rules! __boxology_check_implementation {
             "imports/hello.json",
             &valid_hello_schema(),
         );
-        let tree = generate(&request).unwrap();
+        let tree = generate(request).unwrap();
         let adapter =
             std::str::from_utf8(file(&tree, "generated/adapter/adapter.rs").bytes()).unwrap();
         syn::parse_file(adapter).expect("import adapter must parse");
@@ -2051,7 +2051,7 @@ macro_rules! __boxology_check_implementation {
                 ("world", "imports/world.json", &world),
             ],
         );
-        let tree = generate(&request).unwrap();
+        let tree = generate(request).unwrap();
         let adapter =
             std::str::from_utf8(file(&tree, "generated/adapter/adapter.rs").bytes()).unwrap();
         syn::parse_file(adapter).expect("typed-import adapter must parse");
@@ -2106,8 +2106,8 @@ macro_rules! __boxology_check_implementation {
     fn zero_import_and_with_import_differ_only_in_adapter() {
         // Imports are implementation-local: declaring one changes only the adapter. The outward
         // contract crate, schema, revision, and semantic digest are byte-identical with and without.
-        let without = generate(&request_for("greeter", CONTRACT)).unwrap();
-        let with = generate(&request_for_with_import(
+        let without = generate(request_for("greeter", CONTRACT)).unwrap();
+        let with = generate(request_for_with_import(
             "greeter",
             CONTRACT,
             "hello",
@@ -2299,7 +2299,7 @@ macro_rules! __boxology_check_implementation {
         let decorated = "// ignored\nboxology::contract! { #[error] pub enum GreetError { EmptyName } /* ignored */ #[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, GreetError>; }";
         assert_eq!(tree(CONTRACT, false), tree(decorated, true));
         assert_eq!(
-            generate(&request(
+            generate(request(
                 CONTRACT,
                 true,
                 OUTPUTS.iter().rev().copied().collect()
@@ -2312,7 +2312,7 @@ macro_rules! __boxology_check_implementation {
     #[test]
     fn reserved_unknown_variant_fails_before_artifact_generation() {
         let source = CONTRACT.replace("EmptyName", "Unknown");
-        let result = generate(&request(&source, false, OUTPUTS.to_vec()));
+        let result = generate(request(&source, false, OUTPUTS.to_vec()));
         let diagnostics = result.expect_err("reserved input must not return an artifact tree");
         assert_eq!(
             diagnostics.to_string(),
@@ -2323,32 +2323,32 @@ macro_rules! __boxology_check_implementation {
     #[test]
     fn value_payload_generates_and_named_payload_fails_before_emission() {
         let value = CONTRACT.replace("EmptyName", "Code(u32)");
-        let generated = generate(&request(&value, false, OUTPUTS.to_vec())).expect("value payload");
+        let generated = generate(request(&value, false, OUTPUTS.to_vec())).expect("value payload");
         let rust =
             std::str::from_utf8(file(&generated, "generated/contract/src/lib.rs").bytes()).unwrap();
         assert!(rust.contains("Code(u32)"));
 
         let named = CONTRACT.replace("EmptyName", "Detail { message: String }");
-        let diagnostics = generate(&request(&named, false, OUTPUTS.to_vec())).unwrap_err();
+        let diagnostics = generate(request(&named, false, OUTPUTS.to_vec())).unwrap_err();
         assert_eq!(
             diagnostics.to_string(),
             "BXG0048 src/lib.rs:1:11-1:19 offending=\"named-field error variants are not yet emittable\" rule=\"named-field payloads require contract-emitter support\" source=\"specs/s2-contract-generator.md D3\""
         );
 
         let value_blob = CONTRACT.replace("EmptyName", "Code(Blob)");
-        let diagnostics = generate(&request(&value_blob, false, OUTPUTS.to_vec())).unwrap_err();
+        let diagnostics = generate(request(&value_blob, false, OUTPUTS.to_vec())).unwrap_err();
         assert_eq!(
             diagnostics.to_string(),
             "BXG0040 src/lib.rs:1:11-1:19 offending=\"Blob capability boundary or value-payload leaf not yet emittable in v0\" rule=\"the `Blob` capability boundary or value-payload leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.\" source=\"specs/s2-contract-generator.md D3,D5\""
         );
 
         let empty_named = CONTRACT.replace("EmptyName", "EmptyNamed {}");
-        let diagnostics = generate(&request(&empty_named, false, OUTPUTS.to_vec())).unwrap_err();
+        let diagnostics = generate(request(&empty_named, false, OUTPUTS.to_vec())).unwrap_err();
         assert_eq!(diagnostics.as_slice().len(), 1);
         assert_eq!(diagnostics.as_slice()[0].code(), "BXG0048");
 
         let named_and_blob = named.replace("name:String", "name:Blob");
-        let diagnostics = generate(&request(&named_and_blob, false, OUTPUTS.to_vec())).unwrap_err();
+        let diagnostics = generate(request(&named_and_blob, false, OUTPUTS.to_vec())).unwrap_err();
         assert_eq!(
             diagnostics
                 .as_slice()
@@ -3258,7 +3258,7 @@ macro_rules! __boxology_check_implementation {
 
     #[test]
     fn mixed_payload_variants_still_fail_generate_with_bxg0048() {
-        let diagnostics = generate(&request(MIXED, false, OUTPUTS.to_vec())).unwrap_err();
+        let diagnostics = generate(request(MIXED, false, OUTPUTS.to_vec())).unwrap_err();
         assert_eq!(
             diagnostics
                 .as_slice()
@@ -3893,7 +3893,7 @@ fn main() {
             "imports/hello.json",
             &valid_hello_schema(),
         );
-        for file in generate(&request).unwrap().files() {
+        for file in generate(request).unwrap().files() {
             let path = root.join(file.path());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, file.bytes()).unwrap();
@@ -4009,7 +4009,7 @@ fn main() {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
-        for file in generate(&request_for("hello", CONTRACT)).unwrap().files() {
+        for file in generate(request_for("hello", CONTRACT)).unwrap().files() {
             let path = root.join("hello").join(file.path());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, file.bytes()).unwrap();
@@ -4021,7 +4021,7 @@ fn main() {
             "imports/hello.json",
             &valid_hello_schema(),
         );
-        for file in generate(&greeter_request).unwrap().files() {
+        for file in generate(greeter_request).unwrap().files() {
             let path = root.join("greeter").join(file.path());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, file.bytes()).unwrap();
@@ -4216,7 +4216,7 @@ fn main() {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
-        for file in generate(&request_for("store", source)).unwrap().files() {
+        for file in generate(request_for("store", source)).unwrap().files() {
             let path = root.join(file.path());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, file.bytes()).unwrap();
@@ -4361,7 +4361,7 @@ fn main() {
             ),
         ];
         for (outputs, expected) in cases {
-            let diagnostics = generate(&request(CONTRACT, false, outputs)).unwrap_err();
+            let diagnostics = generate(request(CONTRACT, false, outputs)).unwrap_err();
             assert_eq!(diagnostics.as_slice().len(), 1);
             assert_eq!(diagnostics.as_slice()[0].code(), "BXG0039");
             assert_eq!(diagnostics.to_string(), expected);
@@ -4383,7 +4383,7 @@ fn main() {
             CONTRACT.replace("name:String", "name:u32"),
             CONTRACT.replace("Result<String", "Result<bool"),
         ] {
-            generate(&request(&source, false, OUTPUTS.to_vec()))
+            generate(request(&source, false, OUTPUTS.to_vec()))
                 .expect("scalar boundary leaves now generate end-to-end");
         }
         for source in [
@@ -4395,7 +4395,7 @@ fn main() {
                 .and_then(|parsed| parsed.controlled_contract())
                 .unwrap()
                 .span();
-            let diagnostics = generate(&request).unwrap_err();
+            let diagnostics = generate(request).unwrap_err();
             assert_eq!(diagnostics.as_slice().len(), 1);
             assert_eq!(diagnostics.as_slice()[0].code(), "BXG0040");
             assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
@@ -4408,7 +4408,7 @@ fn main() {
             .and_then(|parsed| parsed.controlled_contract())
             .unwrap()
             .span();
-        let diagnostics = generate(&request).unwrap_err();
+        let diagnostics = generate(request).unwrap_err();
         assert_eq!(diagnostics.as_slice().len(), 1);
         assert_eq!(diagnostics.as_slice()[0].code(), "BXG0040");
         assert_eq!(diagnostics.as_slice()[0].span(), expected_span);
@@ -4419,7 +4419,7 @@ fn main() {
         // The BXG0041 single-capability guard is lifted: the same two-capability store box that
         // used to fail closed now generates end-to-end through generate() with the full output set.
         let source = "boxology::contract! { #[error] pub enum StoreError { Missing } #[capability(exposure=external)] pub async fn get(key:u64)->Result<String,StoreError>; #[capability(exposure=external)] pub async fn put(value:String)->Result<bool,StoreError>; }";
-        let tree = generate(&request_for("store", source))
+        let tree = generate(request_for("store", source))
             .expect("a two-capability box generates now that the guard is lifted");
         for path in OUTPUTS {
             assert!(
@@ -4527,7 +4527,7 @@ fn main() {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
-        for file in generate(&request_for("store", source)).unwrap().files() {
+        for file in generate(request_for("store", source)).unwrap().files() {
             let path = root.join(file.path());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, file.bytes()).unwrap();
