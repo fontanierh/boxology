@@ -1,0 +1,276 @@
+# Post-V0 self-hosting roadmap
+
+## Purpose and operating rule
+
+This is the living execution map after V0. It turns the self-hosting ladder into
+small product proofs: Telegram first, Boxology's useful tool entrypoints second,
+and a minimum coding-agent harness third. The tracking epic is
+[#572](https://github.com/fontanierh/boxology/issues/572).
+
+Be pragmatic: take the shortest honest path to a working consumer, prefer small
+reversible changes, and distinguish current support from follow-up work. Add a
+platform feature only when the next real box needs it. Do not box internal crates
+for symmetry, clone another harness speculatively, or turn evidence into ceremony.
+No shortcut may fabricate support or hide a trade-off.
+
+## What “self-hosted” means
+
+A product use-case entrypoint is self-hosted only when all of these are true:
+
+1. governed `boxology.toml` manifests declare the box and its consuming
+   composition in their appropriate packages;
+2. Boxology generates the contract, implementation-local adapter, and typed handle;
+3. the composition consumes that generated handle rather than calling the service
+   implementation directly;
+4. cold regeneration from a clean copy is byte-stable; and
+5. `boxology check` is green for the governed workspace.
+
+Passing a request through a handwritten JSON CLI is useful application behavior,
+but is not this proof. Conversely, self-hosting applies to use-case entrypoints,
+not every Cargo crate. Internal crates retain the appropriate governed non-box
+role whenever boxing them would add indirection without testing a product claim.
+
+## Kernel and substrate that stay outside the target
+
+The following are not migration targets merely to increase a box count:
+
+- `boxology-contract` and `boxology-runtime`, which supply the contract and call
+  substrate from which generated boxes are built;
+- `boxology`, `boxology-macros`, and `boxology-contract-syntax`, which expose or
+  construct that substrate;
+- `boxology-http`, the binding infrastructure, and
+  `boxology-http-conformance`, its conformance evidence;
+- fixture, generated-contract, and test-only packages whose purpose is evidence;
+  and
+- `xtask`, CI workflows, and `ops/`, which operate this repository rather than
+  expose a reusable product use case.
+
+These packages retain their appropriate governed platform, `box-contract`, or
+fixture ownership and must pass repository checks. Exclusion from boxification is
+not exclusion from ownership or quality.
+
+## Proven baseline
+
+V0 completed on 2026-08-09. The immutable
+[V0 completion record](../records/2026-08-09-v0-completion-evidence.md) preserves
+its candidate and validation chain. The post-V0 absorption in
+[#342](https://github.com/fontanierh/boxology/issues/342) then merged through
+[PR #571](https://github.com/fontanierh/boxology/pull/571): `cargo xtask ci` owns
+one complete product check, while the required PR path remains deliberately lean.
+That merged state, not the record's then-future residual list, is current truth.
+
+The repository is already governed by Boxology manifests and `boxology check`.
+`crates/boxology-telegram` is already a tested handwritten service and JSON CLI,
+but it has no generated Boxology contract, implementation-local adapter, or
+composition. That gap is the next useful self-hosting proof.
+
+## Dependency order and milestones
+
+| Milestone | Scope | Acceptance boundary |
+| --- | --- | --- |
+| T0 — scalar Telegram dogfood | [#573](https://github.com/fontanierh/boxology/issues/573): one code-only, non-idempotent `send_text(String) -> Result<i64, SendTextError>` capability over the existing service and fake API | An assembled in-process runtime/test seam connects a real generated handle to the existing implementation; the existing CLI is unchanged; fake-API success and error paths pass; cold generation and `boxology check` pass. This is partial dogfood, not full self-hosting |
+| T1 — Telegram-forced structured subset | [#574](https://github.com/fontanierh/boxology/issues/574): structs, unit enums, acyclic local references, `Option`, and `Vec`, with their required generated named-field forms | Positive nested/container fixtures and fail-closed unsupported-form fixtures pass; cold output is byte-stable; the subset is sufficient for Telegram command payloads |
+| T2 — full Telegram composition | Continue [#573](https://github.com/fontanierh/boxology/issues/573) across the substantive command surface | The implementation is a box, the CLI is a binding/composition, and substantive operations cross generated handles; `listen` orchestrates typed polling; parity, cold generation, classification, and check evidence pass |
+| T3 — useful Boxology tools | [#575](https://github.com/fontanierh/boxology/issues/575): classifier, `check`, generator, and installer use-case entrypoints | Each selected entrypoint has a real typed contract and composition consumer; #575 records the checked-in generator bootstrap boundary without claiming prior-release regeneration. The first pinned release later supplies that proof |
+| H0 — minimum Pi-like harness | [#576](https://github.com/fontanierh/boxology/issues/576): `model-completion` application box, tool runner, session store, agent loop, and stdio JSON/RPC composition | A deterministic fake-model turn, a small live-model task in an isolated worktree, resume plus compaction, and generated-handle traversal all pass |
+| H1 — Prime-like durability | Only capabilities demanded by an operating consumer | Each accepted capability is an application box or composition with its own recovery evidence; there is no blanket platform expansion |
+
+Do not start by cloning Pi or Prime. T0 is intentionally one PR. The expected
+stack shape—not a calendar promise—is one PR for first dogfood, three to five
+PRs for the structured vocabulary, and three to four PRs for Telegram parity and
+evidence. Every PR remains at or below 600 hand-authored lines.
+
+## Telegram migration matrix
+
+The current column describes the handwritten `boxology-telegram` crate on this
+baseline. “First dogfood evidence” describes the first honest generated-handle
+proof, not a claim that command parity already exists.
+
+| Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
+| --- | --- | --- | --- | --- |
+| Pairing: begin | JSON CLI creates a bounded pending private-pair request in durable local state | Structured request/result contract and generated handle | Fake API/state test invokes the typed capability through composition and observes the pending pair | Rich authentication/backend policy |
+| Pairing: complete | JSON CLI polls for the matching private user/chat and confirms it | Structured update/result shapes and generated handle | Typed composition completes a fake private pairing and persists the same state transition | General identity or multi-user model |
+| Pairing: revoke | JSON CLI explicitly clears local pairing | Typed result and generated handle | Typed call revokes a fixture pairing and returns its result | Remote credential revocation protocol |
+| Send | Idempotent handwritten command sends text to the paired chat and tracks ambiguity | T0 scalar handle first; structured idempotency/result state for parity later | `send_text(String) -> Result<i64, SendTextError>` uses the existing service/fake API through an in-process generated-handle seam | Attachments, formatting, `Blob`, `Secret`, and generic outbound backends |
+| Reply | Handwritten command resolves an event and sends a reply with a deduplication key | Structured event reference/request plus generated handle | Fake paired update is polled, then replied to through typed composition | Cross-backend reply abstraction |
+| Poll | Handwritten long-poll imports authorized updates into the durable inbox | Structured event batch, optional timeout, and generated handle | Fake updates cross a typed poll handle with stable event ordering | Streaming transport |
+| Ack | Handwritten command marks one inbox event handled | Structured event identifier/result and generated handle | Typed ack changes exactly the selected fixture event | Batch ack |
+| Ask | Handwritten command sends a recommendation and alternatives and tracks lifecycle state | Nested structs, `Vec`, `Option`, unit enums, and generated handle | Typed fake-API ask preserves alternatives and durable lifecycle state | General interactive-form framework |
+| Resolve-send | Handwritten command resolves an ambiguous outbound record | Structured resolution enum/payload and generated handle | Typed delivered/not-delivered fixture updates the exact deduplication record | Generic distributed transaction semantics |
+| Local status | Handwritten, non-network status reports enablement, pairing, offsets, inbox, asks, and outbound state | Structured report and generated handle if a composition consumes it | Deterministic typed status over fixture state | Observability platform |
+| Probed status | Handwritten status can call Telegram `getMe` and webhook info under explicit enablement | Structured report/error and generated handle | Fake API proves reachability and bot/webhook comparison through the handle | General health-check framework |
+| Listen | Handwritten binding owns a bounded loop, lease, heartbeat, and event output | Composition orchestration over typed `poll`; no streaming platform feature | Bounded listener fixture repeatedly calls the generated poll handle and emits the existing envelope sequence | Native streaming capability |
+
+T0 deliberately does not reproduce the current CLI's idempotent `send` contract.
+It is a code-only, non-idempotent seam that proves generation and in-process
+dispatch through an assembled runtime/test seam with one scalar input and one
+scalar success value. It does not yet establish a governed composition and is not
+full self-hosting. The existing CLI does not change in T0. T2 later makes the
+service implementation a governed box and the CLI a composition/binding; every
+substantive CLI operation must then cross a generated handle.
+
+Live bot credentials and real pairing, polling, listening, or sending remain a
+separate operational authorization under
+[#248](https://github.com/fontanierh/boxology/issues/248). Product self-hosting
+does not enable Telegram or grant permission to contact it.
+
+## Crate and category disposition
+
+| Crate/category | Disposition | First useful proof |
+| --- | --- | --- |
+| `boxology-telegram` | Migrate use-case entrypoints; retain working implementation behavior and handwritten binding during the transition | T0 scalar send, then T2 command parity |
+| `boxology-classifier` | Box the classify use case, not every parsing helper | Typed old/new schema input to findings report under #575 |
+| `boxology-cli` | Keep as a binding; route substantive self-hosted commands through generated handles | `check` and installer compositions under #575 |
+| `boxology-generator-model`, `boxology-generator-writer`, `boxology-generator` | Box the generation entrypoint and keep model/writer internals ordinary; #575 records the current checked-in bootstrap boundary, while the first pinned release later proves prior-release regeneration | Typed generation plan/result under #575 |
+| `boxology-init` | Treat as installer composition, not an independent box-for-symmetry target | Standalone composition consumes the generator handle, plus the check handle only if that real composition needs validation |
+| `boxology-workspace`, `boxology-manifest`, `boxology-schema` | Keep parsing and schema substrate ordinary; expose only consumer-demanded workspace/check operations | `check(workspace, base) -> report` seam under #575 |
+| `boxology-contract`, `boxology-runtime` | Irreducible contract/call substrate; do not box | Continuous governed-package validation |
+| `boxology`, macros, contract syntax | Facade and construction substrate; do not box for counts | Existing generated-project and compiler evidence |
+| HTTP binding and conformance | Binding infrastructure and evidence; leave ordinary unless a distinct HTTP application use case appears | Existing conformance suite |
+| Generated contracts, conformance packages, fixtures | Evidence artifacts, not product boxes | Cold generation, golden comparison, and check |
+| `xtask`, workflows, `ops/` | Repository operations, outside product self-hosting | Repository validation and process-safety evidence |
+
+## Minimum Pi-like harness
+
+The comparison target is Pi's official
+[repository](https://github.com/earendil-works/pi), especially its
+[agent core](https://github.com/earendil-works/pi/tree/main/packages/agent) and
+[coding-agent package](https://github.com/earendil-works/pi/tree/main/packages/coding-agent).
+These sources show the useful minimum: a stateful model/tool loop, coding tools,
+sessions and compaction, and programmatic modes. They are a product reference,
+not a compatibility contract.
+
+The minimum Boxology architecture is five application boundaries:
+
+```text
+model-completion.complete
+tool-runner.execute
+session-store.load / session-store.append
+agent-loop.run_turn
+stdio JSON/RPC composition
+```
+
+`model-completion` is a normal application capability in a `kind = "box"`
+package; Boxology has no provider package kind. `agent-loop.run_turn` consumes the
+other generated handles. The first version can compile in one model implementation
+and four tools (`read`, `write`, `edit`, and `bash`); it does not need runtime
+plugin discovery.
+
+| Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
+| --- | --- | --- | --- | --- |
+| Model completion/agent loop | Boxology has unary typed calls and generated handles, but no model protocol or agent loop | `model-completion.complete` application-box contract and `agent-loop.run_turn` composition | Deterministic fake model requests one tool, consumes its result, then returns a final answer | Model-backend marketplace, multimodal or streaming protocol |
+| Tool execution | No coding-tool application box | `tool-runner.execute` plus bounded `read`/`write`/`edit`/`bash` implementations | Fake-model turn edits an isolated fixture only through the generated tool handle | Dynamic tool plugins and a general permission framework |
+| Sessions/resume | No agent session application | Append-only turn/tool events and `session-store.load/append` | Stop and restart, load the same session, and complete the next turn deterministically | Distributed session service |
+| Compaction | No agent-context compactor | Deterministic summary/checkpoint operation owned by the harness composition | Resume a fixture beyond its context threshold from a persisted compacted state | Multiple compaction strategies |
+| Interactive/print/JSON/RPC modes | Product CLIs exist, including Telegram JSON, but no generic agent protocol | Stdio JSON/RPC composition; interactive or print adapter only when needed | RPC request drives one complete fake-model turn with ordered events | Network daemon protocol and UI |
+| Skills/prompt templates | Checked-in Agent Skills and repository instructions already exist | H0 statically loads selected checked-in skills and prompts | Deterministic turn includes the exact selected skill/prompt content in model context | Executable packages, hot-loading, and a marketplace |
+| Extensions/packages/themes | No dynamic harness extension ecosystem | Nothing for H0; statically compose required boxes | One checked-in composition selects its model implementation and tool set without dynamic loading | Package registry, themes, and hot-loading |
+| Security/sandbox | Boxology is not a sandbox and has no generic permission engine | Isolated worktree and explicit process/environment boundaries in acceptance | Live-model task changes only its assigned worktree and records commands/results | Built-in sandbox or permission framework |
+
+H0 acceptance is one deterministic fake-model loop, one authorized live-model
+small real task in an isolated worktree, session resume plus compaction, and proof
+that every application boundary uses generated handles. No result may claim that
+Boxology or the harness supplies a built-in sandbox.
+
+## Prime-like durability, only when demanded
+
+Prime Agent's official
+[repository and documentation](https://github.com/PrimeIntellect-ai/prime-agent)
+show a broader operating agent: persistent Python execution, recursive child
+agents, continual harness state, daemons, messaging, and scheduled autonomy.
+These are candidate application boxes and compositions after H0, not features to
+push automatically into the Boxology kernel.
+
+| Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
+| --- | --- | --- | --- | --- |
+| Persistent Python kernel | None | A stateful Python-session application box only if a consumer needs it | Restart/reattach preserves one explicit kernel state fixture | General notebook platform and arbitrary kernel types |
+| Recursive child agents / RLM | No agent runtime | Child-run composition using model, tool, and session handles, with bounded depth/budget | Parent delegates one deterministic subproblem and records the returned evidence | Unbounded recursion or automatic swarm policy |
+| Versioned continual-harness state, refinement, rollback | No harness memory/refinement product | Versioned application state and explicit accept/rollback operations | Failed refinement rolls back to the last accepted version byte-for-byte | Self-modifying platform policy |
+| Daemon and reattach | No harness daemon | Recoverable supervisor/session composition | Kill and restart a fixture daemon, then reattach without duplicating the turn | General distributed scheduler |
+| Direct agent messaging | No application messaging fabric | Addressed mailbox box when two real agents require it | Two fixture sessions exchange one deduplicated message | Global event bus |
+| Persistent goals | No goal application | Versioned goal state attached to a session | Resume preserves active goal and completion evidence | Portfolio planning engine |
+| Heartbeats | No agent heartbeat application | Lease/heartbeat composition for a real long-lived consumer | Stale fixture lease is detected and safely reclaimed | Universal liveness substrate |
+| Schedules | No agent scheduler application | Durable trigger box with explicit ownership and replay rules | Restart fires one due fixture once | Cron replacement or broad automation platform |
+| Bounded autonomy | No autonomous harness | Composition-level limits for turns, time, cost, and owned resources | Fixture stops at each bound and preserves resumable state | Open-ended autonomy |
+| Security | No sandbox or generic permissions | Per-application authority, secret, filesystem, and process boundaries | Negative tests deny an out-of-scope fixture operation | Claiming Prime or Boxology is a security sandbox |
+
+[#57](https://github.com/fontanierh/boxology/issues/57) remains the coordination
+home for distributed needs. A Prime-like feature should move from this table into
+an executable issue only when a named consumer and recovery test make it necessary.
+
+## Platform features versus application boxes
+
+The next platform-language increment is exactly the Telegram-forced subset in
+[#574](https://github.com/fontanierh/boxology/issues/574):
+
+- structs with named fields;
+- unit enums;
+- acyclic local type references;
+- `Option<T>`; and
+- `Vec<T>`.
+
+That slice extends parsing/modeling, schema, generation, and evidence only as far
+as Telegram needs. It is coordinated with the broader grammar and emission homes
+[#102](https://github.com/fontanierh/boxology/issues/102) and
+[#104](https://github.com/fontanierh/boxology/issues/104); it does not silently
+close their remaining breadth. The resulting fixture breadth stays coordinated
+with [#100](https://github.com/fontanierh/boxology/issues/100).
+
+Explicitly deferred until a real consumer forces them are maps, `Field`, `Secret`,
+`Blob`, recursive types, forward references, named error payloads, capability
+wire-name overrides, streaming, dynamic plugins or model backends, a generic
+permission framework, and a sandbox. Model-completion boxes, tools, sessions,
+compaction, Python kernels, subagents, goals, heartbeats, schedules, and autonomy
+are application boxes or compositions, not reasons to enlarge the kernel by default.
+
+## Dogfood and evidence protocol
+
+Every dogfood or self-hosting milestone must leave replayable evidence:
+
+1. deterministic fake-model or fake-API tests cover success and meaningful
+   failure/ambiguity paths;
+2. tests consume real generated handles, not handwritten substitutes with the
+   same shape; from T2 onward the governed composition consumes those handles;
+3. cold generation from a clean copy is byte-stable and a second generation is
+   unchanged;
+4. `boxology check` passes on the governed workspace;
+5. a dated append-only record captures exact commit, commands, outcomes, and
+   limitations;
+6. mechanical or semantic friction is recorded in
+   [`ops/friction-log.md`](../ops/friction-log.md); and
+7. the epic, task, related legacy issues, PR reviews, and current `main` are
+   reconciled before closure.
+
+A live-model or live-Telegram check complements deterministic evidence; it
+never replaces it. Secrets stay outside the repository, and external contact
+still requires its own authorization.
+
+## Tracker and dependency map
+
+| Issue | Role and dependency |
+| --- | --- |
+| [#572](https://github.com/fontanierh/boxology/issues/572) | Epic and current-roadmap owner; closes only after its accepted child scope is completed or transferred explicitly |
+| [#573](https://github.com/fontanierh/boxology/issues/573) | Telegram product self-hosting; T0 starts now, while structured command parity depends on #574 |
+| [#574](https://github.com/fontanierh/boxology/issues/574) | Minimum structured Telegram boundary; bounded slices from #102/#104 with fixture coordination under #100 |
+| [#575](https://github.com/fontanierh/boxology/issues/575) | Classifier/check/generator/installer use-case entrypoints; follows proven Telegram handles and advances the stage-3 forcing function in #74 |
+| [#576](https://github.com/fontanierh/boxology/issues/576) | Minimum Pi-like harness; follows generated-handle dogfood and models completion as an application box rather than inventing a provider package kind or new kernel feature |
+| [#74](https://github.com/fontanierh/boxology/issues/74) | Existing stage-3 tool-self-hosting forcing function; #575 is its executable rung, not a duplicate closure claim |
+| [#100](https://github.com/fontanierh/boxology/issues/100) | Broader fixture/type-vocabulary evidence; #574 adds only the Telegram-forced cases |
+| [#102](https://github.com/fontanierh/boxology/issues/102) | Broader parser/model grammar; #574 is the accepted minimum local subset |
+| [#104](https://github.com/fontanierh/boxology/issues/104) | Broader named-field/type emission; #574 takes only the subset required for Telegram |
+| [#57](https://github.com/fontanierh/boxology/issues/57) | Distributed coordination; relevant to Prime-like messaging/agents only after a real consumer exists |
+| [#248](https://github.com/fontanierh/boxology/issues/248) | Separately authorized live Telegram credentials and operations; never implied by product self-hosting |
+
+## Anti-goals and explicit deferrals
+
+- Do not box the runtime, contract machinery, facade, syntax, bindings, evidence
+  packages, or repository operations merely for symmetry.
+- Do not rewrite the working Telegram service before one generated handle proves
+  the boundary, and do not change its CLI in the scalar T0 slice.
+- Do not conflate generated Telegram code with authorization to use live Telegram.
+- Do not clone Pi's extension ecosystem or Prime's durable-agent surface before
+  the minimum Telegram and harness consumers expose a concrete need.
+- Do not add a platform matrix, factory policy, permission system, sandbox,
+  streaming protocol, or dynamic model/plugin system to satisfy a roadmap box.
+- Do not make calendar promises. Sequence by dependency, keep each PR reviewable,
+  and update this document when evidence changes the shortest honest path.
