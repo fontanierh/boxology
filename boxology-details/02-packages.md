@@ -124,13 +124,16 @@ identity exists and expands every selector against the generated contract. An ex
 nonempty, is ordered bytewise by qualified capability id for deterministic output, and checks the
 binding's exposure against every expanded capability's declared maximum.
 
-The initializer creates a logical `platform` package at the workspace root. Its manifest owns root `Cargo.toml`, repository CI, generator configuration, ownership rules, and other non-derived root machinery, and declares `Cargo.lock` as the workspace's global derived artifact. The Hello box and application composition live under their own package roots with their own manifests. The platform package may initially contain no Rust crate.
+The initializer creates a logical `platform` package at the workspace root. Its manifest owns root `Cargo.toml`, repository CI, generator configuration, ownership rules, and other non-derived root machinery, and declares `Cargo.lock` as the workspace's global derived artifact. The generated `ping` box and `ping-app` composition live under their own package roots with their own manifests. The platform package contains no Rust crate.
 
-Repository-wide ownership policy, CI, build tooling, generator definitions, and merger enforcement belong to platform packages. Ownership, provenance, and quality-policy declarations are protected control-plane data. A pull request cannot weaken or replace the base revision's rules in order to authorize its own changes.
+Repository-wide ownership policy, CI, build tooling, generator definitions, and merger enforcement belong to platform packages. Ownership, provenance, and quality-policy declarations are protected control-plane data. The current checker uses base-revision manifests and schemas to attribute and report changed paths and contract facts. It does **not** execute immutable base checker code: the candidate can change the checker and workflow, no merger replay or separation-of-duties service is shipped, and branch protection is not configured by Boxology. Protected declarations therefore flag review-sensitive control-plane changes; they do not prevent self-judging policy edits. Semantic self-protection remains [#17](https://github.com/fontanierh/boxology/issues/17).
 
 ## Ownership and derived-artifact enforcement
 
-The merger evaluates ownership from the base revision of a pull request:
+The following is the intended **future factory-merger protocol**, not a current `boxology check`
+guarantee. The shipped checker reports the base-relative facts it can establish but does not replay
+the candidate from an immutable base or authorize merges. The future merger evaluates ownership
+from the base revision of a pull request:
 
 1. Read the ownership and derivation declarations from the base revision.
 2. Classify every changed path exactly once as either a non-derived path owned by one package or one declared derived output. Reject ambiguous, overlapping, or unowned classifications.
@@ -147,7 +150,10 @@ Protected control-plane files cannot be relabeled as derived output to evade the
 
 ## Shared Cargo lockfile
 
-`Cargo.lock` is a global derived artifact with semantic risk, not harmless generated output. An ordinary package pull request must:
+`Cargo.lock` is a global derived artifact with semantic risk, not harmless generated output. The
+current checker reports a coded scope finding when it changes without an accountable package's
+manifest dependency-declaration change. The stronger minimal-closure rules below belong to the
+future merger protocol: an ordinary package pull request must then:
 
 1. Begin with the base revision's lockfile.
 2. Apply only the accountable package's permitted non-derived changes.

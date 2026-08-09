@@ -1,6 +1,6 @@
 # S3 Spec — HTTP Binding
 
-[Stream definition](../boxology-details/11-v0-streams.md#s3--http-binding) · Status: **accepted at merge** (two review rounds addressed; cross-stream contract in issue #85)
+[Stream definition](../boxology-details/11-v0-streams.md#s3--http-binding) · Status: **delivered in V0** · [Completion evidence](../records/2026-08-09-v0-completion-evidence.md)
 
 S3 implements the v1 HTTP transport against S1's assembly API. The wire contract — routing, JSON mapping, envelopes, status table, headers — is normative in the [Foundation HTTP binding section of Runtime](../boxology-details/03-runtime.md); this spec does not restate it. It records implementation decisions, resolves the details the normative text delegates, and defines the conformance suite that makes every choice observable.
 
@@ -10,7 +10,7 @@ The HTTP binding proves "defined once, invoked through Rust and HTTP" is a platf
 
 ## Scope decisions
 
-- **Server and client both ship.** Confirmed (the first review asked for the decision before tasks): the normative text specifies client-side `CallError` synthesis, the suite needs a typed driver, and the client is the executable proof that moving a capability behind HTTP changes no consumer types.
+- **Server and client both ship.** The normative text specifies client-side `CallError` synthesis, the suite uses a typed driver, and the client proves that moving a capability behind HTTP changes no consumer types.
 - **HTTP/1.1 only, stated and tested.** The first draft claimed HTTP/2 "as negotiated" while testing only 1.1 — an untested support claim, withdrawn. The server serves HTTP/1.1 (`http1`-only stack configuration); the client speaks HTTP/1.1. HTTP/2 (including any h2c posture) is post-v0 and arrives only with conformance coverage.
 - **TLS out**: plaintext for local development and behind-proxy deployment; exactly a support statement, no Internet-facing claim implied.
 - No auth (anonymous context constructed in-binding; identity headers untrusted), no streaming, no compression (`Content-Encoding` present → `415`), no CORS, no metrics export.
@@ -19,7 +19,7 @@ The HTTP binding proves "defined once, invoked through Rust and HTTP" is a platf
 
 ### D1 — Stack and features
 
-`boxology-http`, one crate, **feature-isolated**: `server` (axum/hyper, default-on), `client` (reqwest, off by default), shared codec always. Exact versions and feature sets pinned at T1 and recorded there. Both sides use a deliberately thin slice: one route, raw body/headers, no middleware stack.
+`boxology-http`, one crate, is **feature-isolated**: `server` (axum/hyper, default-on), `client` (reqwest, off by default), shared codec always. Exact versions and feature sets are locked. Both sides use a deliberately thin slice: one route, raw body/headers, no middleware stack.
 
 ### D2 — Codec: descriptor-guided, role-aware, over a lossless syntax layer
 
@@ -32,7 +32,7 @@ Encode is the reverse: `ContractValue` → **canonical bytes** (D3). Non-finite 
 
 ### D3 — Canonical response encoding (byte-assertable)
 
-The first draft demanded byte assertions without defining bytes. The canonical encoder is fully specified: UTF-8; no insignificant whitespace; struct keys in descriptor field order; envelope key sequences fixed exactly (`{"result":{"value":…}}`; `{"error":{"kind":…,"value":…}}`; `{"error":{"kind":…,"code":…,"message":…}}`); map keys sorted bytewise; escaping exactly `\"`, `\\`, `\b`, `\t`, `\n`, `\f`, `\r`, with remaining control characters as lowercase `\u00xx` and nothing else escaped; `f64` via Ryu-shortest and **`f32` via Ryu's f32 mode** (descriptor width selects; no widening-then-print), negative zero and boundaries pinned by golden vectors; integers per the canonical rules; Base64 standard alphabet with padding, **decoded strictly canonically** (non-canonical alphabet, wrong padding, or nonzero trailing pad bits rejected); no trailing newline. **Golden byte vectors for every scalar edge, control character, float boundary, map ordering, envelope, and Base64 edge are pinned in T2** as the cross-encoder authority. **Byte-identity claims apply to canonical encoder output only** — accepted non-canonical *request* bytes (extra whitespace) need not round-trip byte-for-byte, and the suite states each assertion's domain.
+The canonical encoder is fully specified: UTF-8; no insignificant whitespace; struct keys in descriptor field order; envelope key sequences fixed exactly (`{"result":{"value":…}}`; `{"error":{"kind":…,"value":…}}`; `{"error":{"kind":…,"code":…,"message":…}}`); map keys sorted bytewise; escaping exactly `\"`, `\\`, `\b`, `\t`, `\n`, `\f`, `\r`, with remaining control characters as lowercase `\u00xx` and nothing else escaped; `f64` via Ryu-shortest and **`f32` via Ryu's f32 mode** (descriptor width selects; no widening-then-print), negative zero and boundaries pinned by golden vectors; integers per the canonical rules; Base64 standard alphabet with padding, **decoded strictly canonically** (non-canonical alphabet, wrong padding, or nonzero trailing pad bits rejected); no trailing newline. Golden byte vectors for every scalar edge, control character, float boundary, map ordering, envelope, and Base64 edge are pinned as the cross-encoder authority. **Byte-identity claims apply to canonical encoder output only** — accepted non-canonical *request* bytes (extra whitespace) need not round-trip byte-for-byte, and the suite states each assertion's domain.
 
 ### D4 — Routing and identifier canonicality
 
@@ -40,7 +40,7 @@ Exact match on `POST /rpc/{box_id}/{capability_local_name}` (the qualified `box.
 
 ### D5 — Stable wire error codes
 
-Promised-but-unnamed codes are named; these are wire contract, in the call-error envelope's `code` field, and enter the conformance traceability table: `unknown_box`, `unknown_capability`, `invalid_request` (malformed syntax, contract violation, bad header grammar, query present, empty body, trailing bytes), `method_not_allowed` (`405`, with `Allow: POST`), `payload_too_large` (`413`), `unsupported_media_type` (`415`), `deadline_exceeded`, `unavailable`, `invalid_upstream_response`, `internal`. **Every service-generated invocation status carries the call-error envelope with its code** — including `405`/`413`/`415`; pre-service HTTP/1 framing failures such as malformed request-line `400`, over-long request-target `414`, and parse-buffer-exhaustion `431` are bare per `03-runtime.md`. A handler-returned `Cancelled` while the client is still connected maps to `500 internal` (self-cancellation absent client cancellation is an internal condition). Typed-client classification of statuses a conforming client can still receive: `413` → `ContractViolation` (deployment limit lower than payload); `405`/`415` → `InvalidResponse` (impossible from a conforming client). The enumeration is normative in `03-runtime.md`, **edited in this PR's diff**.
+These named codes are wire contract in the call-error envelope and enter the conformance traceability table: `unknown_box`, `unknown_capability`, `invalid_request` (malformed syntax, contract violation, bad header grammar, query present, empty body, trailing bytes), `method_not_allowed` (`405`, with `Allow: POST`), `payload_too_large` (`413`), `unsupported_media_type` (`415`), `deadline_exceeded`, `unavailable`, `invalid_upstream_response`, `internal`. **Every service-generated invocation status carries the call-error envelope with its code** — including `405`/`413`/`415`; pre-service HTTP/1 framing failures such as malformed request-line `400`, over-long request-target `414`, and parse-buffer-exhaustion `431` are bare per `03-runtime.md`. A handler-returned `Cancelled` while the client is still connected maps to `500 internal` (self-cancellation absent client cancellation is an internal condition). Typed-client classification of statuses a conforming client can still receive: `413` → `ContractViolation` (deployment limit lower than payload); `405`/`415` → `InvalidResponse` (impossible from a conforming client). The enumeration is normative in `03-runtime.md`.
 
 ### D6 — Header grammars, exactly
 
@@ -81,46 +81,22 @@ Packaging corrected: a separate **`boxology-http-conformance`** dev-only crate (
 2. **Raw-socket cases**, table-driven `(request bytes, expected status, expected code)`: malformed/duplicate-key JSON, wrong/duplicate media type, Content-Encoding, oversized body and header block, slow-trickled body vs. budget, invalid/duplicate timeout header, `%`-containing paths, query strings, non-POST/OPTIONS, empty body, trailing bytes, non-canonical integer strings, unknown fields/variants (role-checked), depth bombs.
 3. **Adversarial raw-server cases** (client side): every classification row of D8's table, truncated bodies, oversized responses, redirect/204.
 
-**Traceability is mandatory**: every rule in the normative wire text and every decision in this spec maps to at least one case; the T6 task spec carries the matrix and CI fails on unmapped rules ([#115](https://github.com/fontanierh/boxology/issues/115) current-wire zero-unmapped gate). Same-poll race cases (paused clock), pipeline compound-invalid cases, and the strict-Base64 and float golden vectors are matrix rows like any other.
+**Traceability is mandatory**: every rule in the normative wire text and every decision in this spec maps to at least one case; the checked-in matrix fails CI on unmapped rules ([#115](https://github.com/fontanierh/boxology/issues/115) current-wire zero-unmapped gate). Same-poll race cases (paused clock), pipeline compound-invalid cases, and the strict-Base64 and float golden vectors are matrix rows like any other.
 
 ## Acceptance criteria
 
-1. Conformance suite green on both platforms, including all raw-socket and raw-server tables and the named-code assertions for both `404` kinds.
+1. Conformance suite, all raw-socket/raw-server tables, and both named `404` assertions are green in native macOS ARM64 V0 evidence; cross-platform re-proof is [#525](https://github.com/fontanierh/boxology/issues/525) scope.
 2. `greet("Ada") → "Hello, Ada!"` over a real socket via typed client **and** via a raw request, with the response byte-asserted against the canonical encoder.
-3. Disconnect: the observer fixture sees cancellation; the completing-after-disconnect case produces no server-side error and a discarded response; both proven via the D7 task-ownership mechanism (asserted on the tracker, not incidental behavior).
+3. Disconnect: the observer fixture sees cancellation; the completing-after-disconnect case produces no server-side error and a discarded response; both are explicitly asserted against D7's composition-owned task tracking rather than inferred from incidental stack behavior.
 4. Repeated `Idempotency-Key` demonstrably executes twice.
 5. Deadline: expired-before-dispatch → `504` + zero invocations; small-positive-budget → handler observes decreasing budget then `504`; trickled-body pre-dispatch expiry → `504`; `Boxology-Timeout-Ms: garbage` and duplicates → `400`.
 6. Composition validation rejects a synthetic non-unary capability and a top-level-`Field` capability at `expose` time with the capability and feature named (the binding-level rejection, per S1 D10).
-7. An S3-local `cargo metadata` test asserts no fixture contract crate depends on `boxology-http` (mechanical now; S5 owns the global rule later — replacing the first draft's non-demonstrable criterion).
-
-## Task list
-
-| Task | Content | Est. PRs |
-| --- | --- | --- |
-| T1 | Syntax layer (lossless tree, guards) + descriptor-guided role-aware semantic codec | 2 |
-| T2 | Canonical encoder + envelopes + status/code mapping | 1–2 |
-| T3 | Server: routing/canonicality, header grammars, lifecycle/task-ownership, limits, shutdown | 2 |
-| T4 | Client: headers, limits, classification table, `CallError` synthesis | 2 |
-| T5 | `boxology-http-conformance` harness + typed-client cases | 1–2 |
-| T6 | Raw-socket + raw-server tables + traceability matrix with unmapped-rule gate | 2 |
-
-T1 → T2 → {T3, T4} → T5 → T6. Depends on S1 (descriptors, roles, assembly, fixtures); S2 only for regenerated fixtures late — hand-written S1 fixtures suffice to start.
+7. Workspace-isolation tests assert that no fixture contract crate depends on `boxology-http`, including a negative fixture that injects and detects such an edge.
 
 ## Matters left open
 
 *(None load-bearing for v0.)*
 
-- Default drain and header-read timeouts — set at T3 with measured values, recorded in the task PR.
-- Depth-guard default (128) and response cap (8 MiB) — revisit on evidence.
+- Current drain, header-read, depth-guard, and response-cap defaults remain evidence-driven and may be revisited without widening the claimed protocol.
 - Raw-case table graduating to a cross-binding conformance format — at the second remote binding.
 - Extended `kitchen-sink` / structured-container typed E2E and `Blob`/`Secret` typed E2E suite — [#100](https://github.com/fontanierh/boxology/issues/100), [#104](https://github.com/fontanierh/boxology/issues/104).
-
-## Tracker notes
-
-This spec decides parts of what #6 listed as open (foundation routing, server lifecycle, transport-boundary deadline enforcement); #6 retains discovery, placement, multi-box topology, and overload. #29's reconciliation notes v0 carries and validates W3C context without export. The axum/hyper/reqwest intake passes S0's deny gates. Normative `03-runtime.md` changes (named code enumeration incl. `405`/`413`/`415`, the no-percent-escape routing rule, HTTP/1.1-only) are **in this PR's diff**. S1's third revision supplies the presence/opacity ABI and transport lifecycle this spec consumes. Issue #85's S3 items (lifecycle API, disconnect strength, complete status/code table, race precedence, header holes, canonical-byte completeness, panic ownership, pipeline order, normative edits) are resolved in this revision.
-
-**Amendment of 2026-08-04** (maintainer corpus-acceleration decision): D9 end-to-end fixture obligation is the scalar/unit-error `hello`/`ping` surface and `ping-app`; phantom `kitchen-sink`/full typed presence-grid wire replay moves to named post-v0 residuals. Raw-socket/raw-server tables, canonical encoder goldens, AC2/AC6, and [#115](https://github.com/fontanierh/boxology/issues/115) current-wire zero-unmapped traceability remain gating. Operator reconciliation updates [#100](https://github.com/fontanierh/boxology/issues/100), [#104](https://github.com/fontanierh/boxology/issues/104), [#115](https://github.com/fontanierh/boxology/issues/115), [#116](https://github.com/fontanierh/boxology/issues/116), and [#343](https://github.com/fontanierh/boxology/issues/343)'s residual ledger.
-
-**Amendment of 2026-08-04 (#522 reconciliation).** AC1's "both platforms" V0 evidence reads as native macOS ARM64 V0 evidence; cross-platform re-proof is owned by [#525](https://github.com/fontanierh/boxology/issues/525).
-
-**Amendment of 2026-08-04 (#115 empirical reconciliation).** `max_buf_size` is a parse-buffer bound, not a universal complete-head byte ceiling; with a sufficient configured buffer, an over-long request target yields bare `414`, which joins `400`/`431` in the pre-service table; no upper clamp is added.
