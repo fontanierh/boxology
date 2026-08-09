@@ -2,13 +2,24 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
-This document defines the high-level workstreams for implementing the v0 foundation milestone. It is the top level of the [v0 execution methodology](../AGENTS.md#v0-execution-methodology): each stream will receive its own spec and task list before implementation, and every task resolves into a stack of small, individually reviewable pull requests.
+**Status: V0 complete (2026-08-09).** The
+[completion record](../records/2026-08-09-v0-completion-evidence.md) preserves the exact-main
+evidence and accepted boundary. This document now describes the capabilities delivered by the
+high-level workstreams under the [v0 execution methodology](../AGENTS.md#v0-execution-methodology).
 
-Streams partition the v0 scope defined by the [product contract](07-product-contract.md). They are workstreams, not strict phases: later streams depend on earlier ones, but work overlaps where dependencies allow.
+Streams partition the delivered v0 scope defined by the [product contract](07-product-contract.md).
+The dependency ordering below is historical; current work follows the
+[post-V0 self-hosting roadmap](12-post-v0-self-hosting-roadmap.md), tracked by
+[#572](https://github.com/fontanierh/boxology/issues/572), and
+[#74](https://github.com/fontanierh/boxology/issues/74).
 
 ## S0 — Product-repo bootstrap and CI
 
-The infrastructure every other stream stands on: the Cargo workspace scaffold for Boxology's own crates, the pinned toolchain, the determinism harness, and pull-request validation for this repository. After V0, #342 makes `cargo xtask ci` the sole owner of one full `boxology check`, while the required native Apple-silicon Mac PR lane stays lean: hygiene, repository invariants, directly changed crates, conditional root build-graph and opaque-fixture checks, and scoped process-reaper coverage. The full product check remains dispatch-only because measured runs exceed the 20-minute PR timeout; no policy-only product mode exists. Continuous Linux/x86/cross-platform validation and determinism comparison are post-V0 residual work. Lands first; serves everyone. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
+The infrastructure every other stream stands on: the Cargo workspace scaffold, pinned toolchain,
+determinism harness, and repository validation. PR #571 completed #342: `cargo xtask ci` owns one
+full `boxology check`, while required PR validation is one lean native Apple-silicon Mac job with
+no product command. Continuous Linux/x86/cross-platform proof is not claimed; #525 owns it before
+the first pinned external release. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
 
 ## S1 — Runtime core and composition assembly
 
@@ -16,7 +27,7 @@ The kernel crates that everything else consumes: `CallContext`, the `ContractTyp
 
 ## S2 — Contract generator
 
-The deterministic contract generator: structural discovery of one controlled contract block and its ordinary inherent implementation, pure pre-Cargo parsing and emission, and normal-compile signature proof. It emits the sole public boundary types, language-neutral schema, stable identities and revision, typed handles, dispatch interface, adapter, provenance, and cross-platform deterministic bytes. The v0 long pole; the milestone is not complete until generation, provenance, reproducibility, compilation, and typed invocation work as one path. Contract-change *classification* is deliberately not here — S2 emits the schema and revision; S4 judges changes. Normative inputs: [Rust Build Topology](08-rust-build-topology.md), [Canonical Capability Contract](09-capability-contract.md). Depends on S1 for the types the generated code targets. Spec: [S2 — Contract Generator](../specs/s2-contract-generator.md).
+The delivered deterministic contract generator structurally discovers one controlled contract block and its ordinary inherent implementation, performs pure pre-Cargo parsing and emission, and proves signatures through normal compilation. It emits the sole public boundary types, language-neutral schema, stable identities and revision, typed handles, dispatch interface, adapter, and provenance. V0 proved generation, provenance, reproducibility, compilation, and typed invocation as one path on native macOS ARM64; cross-platform proof remains #525 scope. Contract-change *classification* is deliberately not here — S2 emits the schema and revision; S4 judges changes. Normative inputs: [Rust Build Topology](08-rust-build-topology.md), [Canonical Capability Contract](09-capability-contract.md). Spec: [S2 — Contract Generator](../specs/s2-contract-generator.md).
 
 ## S3 — HTTP binding
 
@@ -36,7 +47,11 @@ The deterministic initializer: creating the Cargo workspace, the Hello box (impl
 
 ## S7 — Skill, acceptance, and stage-2 self-hosting
 
-The portable Agent Skills-format skill that teaches a coding agent the box model and names it the lead; the end-to-end acceptance run of the foundation scenario, including the `greet(name)` task; and stage 2 of the [self-hosting ladder](10-strategy-review.md#self-hosting-ladder) — adopting `boxology.toml` manifests and `boxology check` on this product repository itself, including the standing friction log required by the dogfooding pain discriminator. Depends on S0–S6. Spec: [S7 — Skill, Acceptance, and Stage-2 Self-Hosting](../specs/s7-skill-acceptance-self-hosting.md).
+The delivered portable Agent Skills-format onboarding skill; the clean end-to-end foundation
+acceptance run, including the `greet(name)` task; and stage 2 of the
+[self-hosting ladder](10-strategy-review.md#self-hosting-ladder) — adopted root manifests,
+`boxology check`, and the standing friction log. Spec:
+[S7 — Skill, Acceptance, and Stage-2 Self-Hosting](../specs/s7-skill-acceptance-self-hosting.md).
 
 ## The v0 evidence corpus
 
@@ -69,11 +84,14 @@ Decided during stream review; recorded so their absence reads as intent rather t
 - **Distribution and publishing.** V0 is for this project's bootstrap phase; it is consumed from a source checkout (`cargo install --path`, local skill file). Packaging, versioning, crates.io/GitHub-release publishing, and skill delivery become in-scope with the first release intended for users who are not us, after v0. The product contract's release-bundle section describes that bundle's *contents*, not a v0 distribution channel.
 - **The generic development CLI binding** — post-v0; it arrives as part of the tool-boxification rung of [issue #74](https://github.com/fontanierh/boxology/issues/74).
 - **Human-facing getting-started documentation** beyond the skill and the generated project's own README — minimal, inside S7.
-- **Windows** — the supported matrix is Linux (factory and CI) and macOS (local), per the merged validation baseline.
+- **Cross-platform support.** V0 is evidenced only on native macOS ARM64. Linux/x86 and any wider
+  support claim require the deliberate proof owned by [#525](https://github.com/fontanierh/boxology/issues/525).
 - **Authentication, providers, streaming, client-binding SDKs, foreign-language boxes** — all post-v0 per the merged scope.
 
-## Sequencing notes
+## Historical sequencing notes
 
 - The dependency spine is S0 → S1 → S2 → {S3, S4} → S5 → S6 → S7, with S5's manifest/ownership portion parallelizable from the start.
-- Stage 3 of the self-hosting ladder — boxifying the tools themselves — deliberately comes **after** v0: tools are built conventionally as platform packages first, then boxified as the first rung of the [issue #74](https://github.com/fontanierh/boxology/issues/74) commitment.
+- Stage 3 of the self-hosting ladder — boxifying the tools themselves — follows v0 under the
+  current [post-V0 roadmap epic](https://github.com/fontanierh/boxology/issues/572) and the
+  [issue #74](https://github.com/fontanierh/boxology/issues/74) commitment.
 - Stream boundaries are also review boundaries: a pull request belongs to one task, a task to one stream, and cross-stream interface changes are made in the owning stream. S1 owns assembly semantics; transport streams implement against them.
