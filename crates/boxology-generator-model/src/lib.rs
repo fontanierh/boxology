@@ -817,6 +817,270 @@ mod tests {
         assert_eq!(mirror["diagnostics"][0]["offending"], "bad\n\"construct\\");
     }
 
+    fn one(code: &str, diagnostics: Diagnostics) -> Diagnostic {
+        let mut diagnostics = diagnostics.0.into_iter();
+        let diagnostic = diagnostics
+            .next()
+            .expect("real failure returns a diagnostic");
+        assert!(
+            diagnostics.next().is_none(),
+            "{code} fixture returned more than one diagnostic"
+        );
+        assert_eq!(diagnostic.code(), code);
+        diagnostic
+    }
+
+    fn model_request(files: &[(&str, &str)]) -> GenerationRequest {
+        let mut inputs = vec![(
+            "boxology.toml".into(),
+            b"schema = 1\nid = \"demo\"\nkind = \"box\"\n".to_vec(),
+        )];
+        inputs.extend(
+            files
+                .iter()
+                .map(|(path, source)| ((*path).into(), source.as_bytes().to_vec())),
+        );
+        GenerationRequest::new(id("demo"), "root.rs".into(), inputs, vec![], vec![]).unwrap()
+    }
+
+    fn expect_failure<T>(result: Result<T, Diagnostics>) -> Diagnostics {
+        match result {
+            Ok(_) => panic!("real failure fixture unexpectedly passed"),
+            Err(diagnostics) => diagnostics,
+        }
+    }
+
+    fn rust_failure(code: &str, files: &[(&str, &str)]) -> Diagnostics {
+        let request = model_request(files);
+        let parsed = match ParsedRustInputs::parse(&request) {
+            Err(diagnostics) if code == "BXG0014" => return diagnostics,
+            result => result.unwrap(),
+        };
+        match code {
+            "BXG0016" | "BXG0017" | "BXG0018" => expect_failure(parsed.resolve_reachable_inputs()),
+            "BXG0019" | "BXG0020" | "BXG0021" | "BXG0022" | "BXG0023" | "BXG0024" | "BXG0025"
+            | "BXG0026" | "BXG0027" | "BXG0028" | "BXG0029" => {
+                expect_failure(parsed.discover_contract_declarations())
+            }
+            "BXG0030" => expect_failure(parsed.discover_capability_declarations()),
+            "BXG0031" => expect_failure(parsed.validate_capability_call_shapes()),
+            "BXG0032" | "BXG0033" => expect_failure(parsed.validate_capability_marker_metadata()),
+            "BXG0034" | "BXG0035" => expect_failure(parsed.validate_capability_identities()),
+            "BXG0036" | "BXG0037" | "BXG0038" => expect_failure(parsed.controlled_contract()),
+            "BXG0040" | "BXG0048" => parsed
+                .controlled_contract()
+                .unwrap()
+                .require_v0_emittable()
+                .unwrap_err(),
+            _ => panic!("unsupported Rust corpus code {code}"),
+        }
+    }
+
+    fn manifest_failure(id: &str, source: &str) -> Diagnostics {
+        Manifest::parse(
+            &GenerationRequest::new(
+                BoxId::new(id).unwrap(),
+                "root.rs".into(),
+                vec![
+                    ("boxology.toml".into(), source.as_bytes().to_vec()),
+                    ("root.rs".into(), vec![]),
+                ],
+                vec![],
+                vec![],
+            )
+            .unwrap(),
+        )
+        .unwrap_err()
+    }
+
+    fn import_schema(
+        box_id: &str,
+        revision: &str,
+        format: u64,
+        capabilities: serde_json::Value,
+    ) -> String {
+        serde_json::json!({ "box_id": box_id, "capabilities": capabilities, "revision": revision, "schema_format": format }).to_string()
+    }
+
+    fn import_failure(request_box: &str, schema: &str) -> Diagnostics {
+        let request = GenerationRequest::new(
+            id(request_box),
+            "root.rs".into(),
+            vec![
+                ("boxology.toml".into(), vec![]),
+                ("root.rs".into(), vec![]),
+                ("imports/hello.json".into(), schema.as_bytes().to_vec()),
+            ],
+            vec![(id("hello"), "imports/hello.json".into())],
+            vec![],
+        )
+        .unwrap();
+        ImportModel::parse_all(&request).unwrap_err()
+    }
+
+    #[rustfmt::skip]
+    fn real_diagnostic_corpus() -> Diagnostics {
+        let mut cases = Vec::with_capacity(47);
+        macro_rules! case { ($code:literal, $failure:expr) => { cases.push(one($code, $failure)); }; }
+        case!("BXG0001", GenerationRequest::new(id("demo"), "/root.rs".into(), vec![("boxology.toml".into(), vec![])], vec![], vec![]).unwrap_err());
+        case!("BXG0002", GenerationRequest::new(id("demo"), "root.rs".into(), vec![("boxology.toml".into(), vec![]), ("root.rs".into(), vec![]), ("root.rs".into(), vec![])], vec![], vec![]).unwrap_err());
+        case!("BXG0003", GenerationRequest::new(id("demo"), "root.rs".into(), vec![("boxology.toml".into(), vec![]), ("root.rs".into(), vec![0xff])], vec![], vec![]).unwrap_err());
+        case!("BXG0004", GenerationRequest::new(id("demo"), "root.rs".into(), vec![("root.rs".into(), vec![])], vec![], vec![]).unwrap_err());
+        case!("BXG0005", GenerationRequest::new(id("demo"), "root.rs".into(), vec![("boxology.toml".into(), vec![]), ("root.rs".into(), vec![])], vec![(id("hello"), "imports/hello.json".into())], vec![]).unwrap_err());
+        case!("BXG0006", GenerationRequest::new(id("demo"), "root.rs".into(), vec![("boxology.toml".into(), vec![]), ("root.rs".into(), vec![]), ("one.json".into(), vec![]), ("two.json".into(), vec![])], vec![(id("hello"), "one.json".into()), (id("hello"), "two.json".into())], vec![]).unwrap_err());
+        case!("BXG0007", manifest_failure("demo", "schema = 1\nid = \"demo"));
+        case!("BXG0008", manifest_failure("demo", "id = \"demo\"\nkind = \"box\"\n"));
+        case!("BXG0009", manifest_failure("demo", "schema = 2\nid = \"demo\"\nkind = \"box\"\n"));
+        case!("BXG0010", manifest_failure("demo", "schema = 1\nkind = \"box\"\n"));
+        case!("BXG0011", manifest_failure("demo", "schema = 1\nid = \"Bad\"\nkind = \"box\"\n"));
+        case!("BXG0012", manifest_failure("demo", "schema = 1\nid = \"other\"\nkind = \"box\"\n"));
+        case!("BXG0013", manifest_failure("demo", "schema = 1\nid = \"demo\"\nkind = \"service\"\n"));
+        case!("BXG0014", rust_failure("BXG0014", &[("root.rs", "fn broken() { @ }")]));
+        case!("BXG0015", GenerationRequest::new(id("demo"), "missing.rs".into(), vec![("boxology.toml".into(), vec![])], vec![], vec![]).unwrap_err());
+        case!("BXG0016", rust_failure("BXG0016", &[("root.rs", "#[path=\"x\"] mod x;")]));
+        case!("BXG0017", rust_failure("BXG0017", &[("root.rs", "mod missing;")]));
+        case!("BXG0018", rust_failure("BXG0018", &[("root.rs", "mod both;"), ("both.rs", ""), ("both/mod.rs", "")]));
+        case!("BXG0019", rust_failure("BXG0019", &[("root.rs", ""), ("dead.rs", "#[boxology::contract] struct Dead;")]));
+        case!("BXG0020", rust_failure("BXG0020", &[("root.rs", "#[cfg(x)] #[boxology::contract] struct S;")]));
+        case!("BXG0021", rust_failure("BXG0021", &[("root.rs", "#[boxology::contract] struct S; #[boxology::contract] enum S { A }")]));
+        case!("BXG0022", rust_failure("BXG0022", &[("root.rs", "#[Private] #[boxology::contract] struct S;")]));
+        case!("BXG0023", rust_failure("BXG0023", &[("root.rs", "#[derive(Copy)] #[boxology::contract] struct S;")]));
+        case!("BXG0024", rust_failure("BXG0024", &[("root.rs", "#[boxology::contract(Private)] struct S;")]));
+        case!("BXG0025", rust_failure("BXG0025", &[("root.rs", "#[deprecated(Private)] #[boxology::contract] struct S;")]));
+        case!("BXG0026", rust_failure("BXG0026", &[("root.rs", "#[doc] #[boxology::contract] struct S;")]));
+        case!("BXG0027", rust_failure("BXG0027", &[("root.rs", "#[boxology::contract] struct S { a: u8, a: u8 }")]));
+        case!("BXG0028", rust_failure("BXG0028", &[("root.rs", "#[boxology::contract] enum S { A, A }")]));
+        case!("BXG0029", rust_failure("BXG0029", &[("root.rs", "#[boxology::contract] fn bad() {}")]));
+        case!("BXG0030", rust_failure("BXG0030", &[("root.rs", "#[boxology::capability] fn bad() {}")]));
+        case!("BXG0031", rust_failure("BXG0031", &[("root.rs", "struct H; impl H { #[boxology::capability] fn bad() {} }")]));
+        case!("BXG0032", rust_failure("BXG0032", &[("root.rs", "struct H; impl H { #[boxology::capability(exposure=\"bad\")] async fn good(&self,a:A,b:B)->R { loop{} } }")]));
+        case!("BXG0033", rust_failure("BXG0033", &[("root.rs", "struct H; impl H { #[boxology::capability(idempotency=\"keyed\")] async fn good(&self,a:A,b:B)->R { loop{} } }")]));
+        case!("BXG0034", rust_failure("BXG0034", &[("root.rs", "struct H; impl H { #[boxology::capability] async fn BadName(&self,a:A,b:B)->R { loop{} } }")]));
+        case!("BXG0035", rust_failure("BXG0035", &[("root.rs", "struct H; impl H { #[boxology::capability] async fn same(&self,a:A,b:B)->R { loop{} } #[boxology::capability(name=\"same\")] async fn other(&self,a:A,b:B)->R { loop{} } }")]));
+        case!("BXG0036", rust_failure("BXG0036", &[("root.rs", "fn f(){ boxology::contract! { #[error] pub enum Fault { Empty } #[capability(exposure=external)] pub async fn go(a:String)->Result<String,Fault>; } }")]));
+        case!("BXG0037", rust_failure("BXG0037", &[("root.rs", "")]));
+        case!("BXG0038", rust_failure("BXG0038", &[("root.rs", "boxology::contract! { private }")]));
+        let request = model_request(&[("root.rs", "")]);
+        case!("BXG0039", request.require_exact_outputs(&["generated/schema.json"]).unwrap_err());
+        case!("BXG0040", rust_failure("BXG0040", &[("root.rs", "boxology::contract! { #[error] pub enum Fault { Code(Blob) } #[capability(exposure=external)] pub async fn go(a:String)->Result<String,Fault>; }")]));
+        let revision = format!("sha256:{}", "0".repeat(64));
+        let capability = serde_json::json!({ "id": "hello.greet", "input": { "name": "name", "type": "String" }, "name": "greet", "output": { "type": "String" }, "shape": "unary" });
+        case!("BXG0042", import_failure("demo", "[]"));
+        case!("BXG0043", import_failure("demo", &import_schema("hello", &revision, 2, serde_json::json!([capability.clone()]))));
+        case!("BXG0044", import_failure("demo", &import_schema("other", &revision, 1, serde_json::json!([capability.clone()]))));
+        case!("BXG0045", import_failure("hello", &import_schema("hello", &revision, 1, serde_json::json!([capability.clone()]))));
+        case!("BXG0046", import_failure("demo", &import_schema("hello", "bad", 1, serde_json::json!([capability]))));
+        case!("BXG0047", import_failure("demo", &import_schema("hello", &revision, 1, serde_json::json!([]))));
+        case!("BXG0048", rust_failure("BXG0048", &[("root.rs", "boxology::contract! { #[error] pub enum Fault { Detail { message: String } } #[capability(exposure=external)] pub async fn go(a:String)->Result<String,Fault>; }")]));
+        Diagnostics(cases)
+    }
+
+    #[test]
+    fn real_diagnostic_corpus_has_exact_human_and_json_mirrors() {
+        let diagnostics = real_diagnostic_corpus();
+        assert_eq!(diagnostics.as_slice().len(), 47);
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(Diagnostic::code)
+                .collect::<Vec<_>>(),
+            DIAGNOSTIC_CODES
+        );
+        for diagnostic in &diagnostics {
+            let span = diagnostic.span();
+            assert!(
+                [
+                    span.start().line(),
+                    span.start().column(),
+                    span.end().line(),
+                    span.end().column()
+                ]
+                .into_iter()
+                .all(|value| value > 0)
+            );
+        }
+        let human = format!("{diagnostics}\n");
+        const EXPECTED_HUMAN: &str = r##"BXG0001 <request>:1:1-1:1 offending="crate_root logical path" rule="logical paths must be forward-slash relative" source="specs/s2-contract-generator.md D1"
+BXG0002 root.rs:1:1-1:1 offending="input[2] duplicates input[1]" rule="input logical paths must be unique" source="specs/s2-contract-generator.md D1"
+BXG0003 root.rs:1:1-1:1 offending="input[1] bytes" rule="Rust, TOML, and JSON inputs must be valid UTF-8" source="specs/s2-contract-generator.md D1"
+BXG0004 <request>:1:1-1:1 offending="required input boxology.toml" rule="the request must include boxology.toml" source="specs/s2-contract-generator.md D1"
+BXG0005 imports/hello.json:1:1-1:1 offending="import[0] schema input" rule="each declared import schema must be present among the request inputs" source="specs/s2-contract-generator.md D1"
+BXG0006 two.json:1:1-1:1 offending="import[1] duplicates import[0] package hello" rule="declared import package identities must be unique" source="specs/s2-contract-generator.md D1"
+BXG0007 boxology.toml:2:11-2:11 offending="manifest TOML syntax" rule="boxology.toml must be well-formed TOML" source="boxology-details/02-packages.md"
+BXG0008 boxology.toml:1:1-1:1 offending="manifest key schema" rule="the manifest must declare an integer schema version" source="boxology-details/02-packages.md"
+BXG0009 boxology.toml:1:10-1:11 offending="manifest key schema" rule="the generator reads manifest schema version 1 and must reject others" source="boxology-details/02-packages.md"
+BXG0010 boxology.toml:1:1-1:1 offending="manifest key id" rule="the manifest must declare a string package id" source="boxology-details/02-packages.md"
+BXG0011 boxology.toml:2:6-2:11 offending="manifest key id" rule="the package id must match [a-z][a-z0-9-]*" source="specs/s2-contract-generator.md D4"
+BXG0012 boxology.toml:2:6-2:13 offending="manifest id other differs from request box identity demo" rule="the manifest package id must equal the request box identity" source="specs/s2-contract-generator.md D4"
+BXG0013 boxology.toml:3:8-3:17 offending="manifest key kind" rule="the generation subject must declare kind = \"box\"" source="specs/s2-contract-generator.md D1"
+BXG0014 root.rs:1:15-1:16 offending="Rust source syntax" rule="every declared .rs input must parse as a complete Rust file" source="specs/s2-contract-generator.md D2"
+BXG0015 missing.rs:1:1-1:1 offending="crate_root input" rule="crate_root must name one declared .rs input" source="specs/s2-contract-generator.md D1-D2"
+BXG0016 root.rs:1:3-1:7 offending="module path override" rule="#[path] module overrides are not supported in v0" source="specs/s2-contract-generator.md D2"
+BXG0017 root.rs:1:5-1:12 offending="missing outline module input" rule="outline module lookup must find x.rs or x/mod.rs among declared Rust inputs" source="specs/s2-contract-generator.md D2"
+BXG0018 root.rs:1:5-1:9 offending="ambiguous outline module inputs" rule="outline module lookup must not find both x.rs and x/mod.rs among declared Rust inputs" source="specs/s2-contract-generator.md D2"
+BXG0019 dead.rs:1:3-1:22 offending="Boxology-annotated item" rule="Boxology-annotated items must be reachable from the declared crate root" source="specs/s2-contract-generator.md D2"
+BXG0020 root.rs:1:3-1:6 offending="cfg attribute" rule="cfg and cfg_attr are forbidden on exported items, their fields or variants, surrounding impls, and ancestor module declarations" source="specs/s2-contract-generator.md D2"
+BXG0021 root.rs:1:60-1:61 offending="colliding lifted contract type name" rule="contract type names must be unique in the flat lifted namespace" source="specs/s2-contract-generator.md D2-D4"
+BXG0022 root.rs:1:3-1:10 offending="non-allowlisted contract attribute" rule="contract declarations, their fields, and variants may use only doc, direct boxology attributes, deprecated, and derive" source="specs/s2-contract-generator.md D2"
+BXG0023 root.rs:1:10-1:14 offending="non-allowlisted contract derive" rule="contract declarations, their fields, and variants may derive only Debug, Clone, and PartialEq" source="specs/s2-contract-generator.md D2"
+BXG0024 root.rs:1:13-1:21 offending="invalid contract declaration annotation" rule="contract declarations use #[boxology::contract]; only enums may use the single error marker" source="specs/s2-contract-generator.md D1-D4"
+BXG0025 root.rs:1:3-1:13 offending="invalid or duplicate deprecation attribute" rule="deprecation may appear at most once per exported type, field, or variant as #[deprecated] or #[deprecated(note = \"...\")]" source="specs/s2-contract-generator.md D2,D5a"
+BXG0026 root.rs:1:3-1:6 offending="invalid documentation attribute" rule="documentation attributes must use #[doc = \"...\"] with a direct string literal and no expression attributes" source="specs/s2-contract-generator.md D2"
+BXG0027 root.rs:1:41-1:42 offending="duplicate named contract field identity" rule="named field identities must be unique within each immediate contract field container" source="specs/s2-contract-generator.md D4"
+BXG0028 root.rs:1:35-1:36 offending="duplicate contract enum variant identity" rule="variant identities must be unique within each contract enum" source="specs/s2-contract-generator.md D4"
+BXG0029 root.rs:1:13-1:21 offending="misplaced contract declaration annotation" rule="direct boxology::contract annotations are allowed only on reachable module-scope structs and enums" source="specs/s2-contract-generator.md D1-D2"
+BXG0030 root.rs:1:13-1:23 offending="misplaced capability annotation" rule="direct boxology::capability annotations are allowed only on functions in inherent impls" source="specs/s2-contract-generator.md D1,D8"
+BXG0031 root.rs:1:47-1:50 offending="invalid structural capability signature" rule="v0 capabilities must be async methods with a shared &self receiver, exactly two typed parameters after the receiver, no variadic parameter, and an explicit return type" source="specs/s2-contract-generator.md D1,D8"
+BXG0032 root.rs:1:52-1:57 offending="invalid capability metadata" rule="capability metadata supports name, exposure, and idempotency with the v0 values declared by S2" source="specs/s2-contract-generator.md D1,D3"
+BXG0033 root.rs:1:55-1:62 offending="unsupported capability metadata" rule="capability metadata supports name, exposure, and idempotency with the v0 values declared by S2" source="specs/s2-contract-generator.md D1,D3"
+BXG0034 root.rs:1:53-1:60 offending="invalid effective capability name" rule="capability local names must match [a-z][a-z0-9_]* after applying an optional name override" source="specs/s2-contract-generator.md D4"
+BXG0035 root.rs:1:115-1:121 offending="duplicate effective capability identity" rule="effective capability names must be unique within a box; the first declaration in deterministic declaration order owns the identity" source="specs/s2-contract-generator.md D4"
+BXG0036 root.rs:1:19-1:27 offending="misplaced controlled contract invocation" rule="exact boxology::contract! invocations must appear once at reachable module scope" source="specs/s2-contract-generator.md D2"
+BXG0037 root.rs:1:1-1:1 offending="missing controlled contract invocation" rule="exact boxology::contract! invocations must appear once at reachable module scope" source="specs/s2-contract-generator.md D2"
+BXG0038 root.rs:1:23-1:30 offending="invalid controlled contract syntax" rule="contract tokens must satisfy the controlled v0 grammar" source="specs/s2-contract-generator.md D3"
+BXG0039 <request>:1:1-1:1 offending="declared outputs []" rule="declared outputs must equal the generator's complete output set without duplicates" source="specs/s2-contract-generator.md D1"
+BXG0040 root.rs:1:11-1:19 offending="Blob capability boundary or value-payload leaf not yet emittable in v0" rule="the `Blob` capability boundary or value-payload leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable." source="specs/s2-contract-generator.md D3,D5"
+BXG0042 imports/hello.json:1:1-1:1 offending="import hello schema" rule="an imported schema must decode as a JSON object" source="specs/s2-contract-generator.md D4"
+BXG0043 imports/hello.json:1:1-1:1 offending="import hello schema_format" rule="an imported schema_format must be the integer 1" source="specs/s2-contract-generator.md D4"
+BXG0044 imports/hello.json:1:1-1:1 offending="import hello box_id" rule="an imported schema box_id must equal the declared import package" source="specs/s2-contract-generator.md D4"
+BXG0045 imports/hello.json:1:1-1:1 offending="import hello self-import" rule="a box must not declare an import of itself" source="specs/s2-contract-generator.md D3"
+BXG0046 imports/hello.json:1:1-1:1 offending="import hello revision" rule="an imported revision must be \"sha256:\" followed by 64 lowercase hexadecimal digits" source="specs/s2-contract-generator.md D4"
+BXG0047 imports/hello.json:1:1-1:1 offending="import hello capabilities" rule="each imported capability must declare a unique valid name, its box-qualified id, a unary shape, and known boundary leaves" source="specs/s2-contract-generator.md D4"
+BXG0048 root.rs:1:11-1:19 offending="named-field error variants are not yet emittable" rule="named-field payloads require contract-emitter support" source="specs/s2-contract-generator.md D3"
+"##;
+        assert_eq!(human, EXPECTED_HUMAN);
+
+        let mirror: serde_json::Value = serde_json::from_str(&diagnostics.render_json()).unwrap();
+        assert_eq!(mirror["schema"], "boxology.generator-diagnostics@1");
+        let entries = mirror["diagnostics"].as_array().unwrap();
+        assert_eq!(entries.len(), 47);
+        for (entry, diagnostic) in entries.iter().zip(diagnostics.as_slice()) {
+            let span = diagnostic.span();
+            assert_eq!(entry["code"], diagnostic.code());
+            assert_eq!(entry["path"], diagnostic.path().as_str());
+            assert_eq!(
+                entry["span"]["start"]["line"].as_u64(),
+                Some(span.start().line() as u64)
+            );
+            assert_eq!(
+                entry["span"]["start"]["column"].as_u64(),
+                Some(span.start().column() as u64)
+            );
+            assert_eq!(
+                entry["span"]["end"]["line"].as_u64(),
+                Some(span.end().line() as u64)
+            );
+            assert_eq!(
+                entry["span"]["end"]["column"].as_u64(),
+                Some(span.end().column() as u64)
+            );
+            assert_eq!(entry["offending"], diagnostic.offending_construct());
+            assert_eq!(entry["rule"], diagnostic.rule());
+            assert_eq!(entry["rule_source"], diagnostic.rule_source());
+        }
+    }
+
     #[derive(Default)]
     struct AllocationAudit {
         codes: BTreeSet<&'static str>,
@@ -904,9 +1168,17 @@ mod tests {
         }
 
         fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
-            let kind = match item.self_ty.as_ref() { syn::Type::Path(path) => path.path.segments.last().map(|segment| &segment.ident), _ => None };
-            if kind.is_some_and(|ident| ident == "DiagnosticCode") { return; }
-            let previous = std::mem::replace(&mut self.placement, kind.is_some_and(|ident| ident == "PlacementVisitor"));
+            let kind = match item.self_ty.as_ref() {
+                syn::Type::Path(path) => path.path.segments.last().map(|segment| &segment.ident),
+                _ => None,
+            };
+            if kind.is_some_and(|ident| ident == "DiagnosticCode") {
+                return;
+            }
+            let previous = std::mem::replace(
+                &mut self.placement,
+                kind.is_some_and(|ident| ident == "PlacementVisitor"),
+            );
             syn::visit::visit_item_impl(self, item);
             self.placement = previous;
         }
@@ -918,8 +1190,19 @@ mod tests {
             let name = item.sig.ident.to_string();
             let returns_diagnostic = matches!(&item.sig.output, syn::ReturnType::Type(_, ty)
                 if matches!(ty.as_ref(), syn::Type::Path(path) if path.path.is_ident("Diagnostic")));
-            if returns_diagnostic && !matches!(name.as_str(), "diagnostic" | "request_diagnostic" | "capability_identity_error" | "contract_role_diagnostic" | "deprecation_diagnostic" | "module_diagnostic") {
-                self.errors.push(format!("unexpected diagnostic constructor {name}"));
+            if returns_diagnostic
+                && !matches!(
+                    name.as_str(),
+                    "diagnostic"
+                        | "request_diagnostic"
+                        | "capability_identity_error"
+                        | "contract_role_diagnostic"
+                        | "deprecation_diagnostic"
+                        | "module_diagnostic"
+                )
+            {
+                self.errors
+                    .push(format!("unexpected diagnostic constructor {name}"));
             }
             let Some(index) = helper_index(&name) else {
                 return syn::visit::visit_item_fn(self, item);
@@ -953,8 +1236,13 @@ mod tests {
         }
 
         fn visit_local(&mut self, local: &'ast syn::Local) {
-            let named = local.init.as_ref().is_some_and(|init| matches!(init.expr.as_ref(), syn::Expr::Closure(_)));
-            if named && matches!(&local.pat, syn::Pat::Ident(pattern) if helper_index(&pattern.ident.to_string()).is_some()) {
+            let named = local
+                .init
+                .as_ref()
+                .is_some_and(|init| matches!(init.expr.as_ref(), syn::Expr::Closure(_)));
+            if named
+                && matches!(&local.pat, syn::Pat::Ident(pattern) if helper_index(&pattern.ident.to_string()).is_some())
+            {
                 self.errors.push("helper shadow closure".into());
             }
             let previous = self.named_closure;
@@ -964,8 +1252,14 @@ mod tests {
         }
 
         fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
-            let binding = match tree { syn::UseTree::Name(name) => Some(&name.ident), syn::UseTree::Rename(name) => Some(&name.rename), _ => None };
-            if matches!(tree, syn::UseTree::Glob(_)) || binding.is_some_and(|name| helper_index(&name.to_string()).is_some()) {
+            let binding = match tree {
+                syn::UseTree::Name(name) => Some(&name.ident),
+                syn::UseTree::Rename(name) => Some(&name.rename),
+                _ => None,
+            };
+            if matches!(tree, syn::UseTree::Glob(_))
+                || binding.is_some_and(|name| helper_index(&name.to_string()).is_some())
+            {
                 self.errors.push("helper shadow import".into());
             }
             syn::visit::visit_use_tree(self, tree);
@@ -1016,13 +1310,16 @@ mod tests {
                             if !exact {
                                 self.errors.push("helper does not forward code".into());
                             }
-                        } else if !(self.placement && matches!(&field.expr, syn::Expr::Field(access)
+                        } else if !(self.placement
+                            && matches!(&field.expr, syn::Expr::Field(access)
                             if matches!(access.base.as_ref(), syn::Expr::Path(path) if path.path.is_ident("self"))
-                                && matches!(&access.member, syn::Member::Named(ident) if ident == "code"))) {
+                                && matches!(&access.member, syn::Member::Named(ident) if ident == "code")))
+                        {
                             self.record(&field.expr);
                         }
                         if self.named_closure && structure.path.is_ident("Diagnostic") {
-                            self.errors.push("named closure constructs diagnostic".into());
+                            self.errors
+                                .push("named closure constructs diagnostic".into());
                         }
                     }
                     None => self.errors.push("uncoded diagnostic allocation".into()),
