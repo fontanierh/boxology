@@ -80,7 +80,7 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source_digest: "b633faf32525a7b4883e9f7f07c77a0738f199797927240d71abd32618f59dd3",
         body_digest: "b010c6eb43ce00b40f6dd11c3aa63c1f62ad8c2e3196f8e7e1e4ffd10331e65a",
     };
-// #107A generator source-surface closure lock; coarse fail-closed scan, precision PR pending. PR-required. Transitive: #358.
+// #107A closed generator source-surface and effect authority. PR-required. Transitive: #358.
 const GENERATOR_SOURCE_INVENTORY_TESTS: &[&str] = &[
     "closure_rules_reject_live_hostile_corpus",
     "effect_scan_allows_positive_controls",
@@ -99,8 +99,8 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
         tests: GENERATOR_SOURCE_INVENTORY_TESTS,
-        source_digest: "3359fcb86ff1890a0c358d391b8225a355a5995f97ab40bb1e11845e2e75c297",
-        body_digest: "41e7ab2344e9f8e3d860bdec77784288fb9bbbbea9666535d90f1e963dbfae45",
+        source_digest: "4e032f8b6046a98ed9477057313f659faae539c236dd6285ec75486178f2a5b7",
+        body_digest: "703b85e771149ae68064568bfa7a453962d608ae49edc165df2bf4ee96bc26c0",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",
@@ -927,8 +927,8 @@ mod tests {
                     source: "crates/boxology-generator-model/tests/purity_lock.rs",
                     default_source: "tests/purity_lock.rs",
                     tests: GENERATOR_SOURCE_INVENTORY_TESTS,
-                    source_digest: "3359fcb86ff1890a0c358d391b8225a355a5995f97ab40bb1e11845e2e75c297",
-                    body_digest: "41e7ab2344e9f8e3d860bdec77784288fb9bbbbea9666535d90f1e963dbfae45",
+                    source_digest: "4e032f8b6046a98ed9477057313f659faae539c236dd6285ec75486178f2a5b7",
+                    body_digest: "703b85e771149ae68064568bfa7a453962d608ae49edc165df2bf4ee96bc26c0",
                 },
             ),
         ];
