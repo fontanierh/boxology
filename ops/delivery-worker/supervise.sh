@@ -20,8 +20,14 @@ if [[ "$TEST_MODE" == 1 ]]; then
 fi
 
 die() { printf 'delivery-worker: action=refuse reason=%s\n' "$1" >&2; exit "${2:-64}"; }
-emit() { printf 'run=%s phase=%s harness=%s pid=%s pgid=%s action=%s reason=%s lock=%s\n' \
-  "$R_RUN" "$R_PHASE" "$R_HARNESS" "${R_PID:-0}" "${R_PGID:-0}" "$1" "$2" "${3:-unknown}"; }
+emit() {
+  local locks=${3:-unknown} suffix=owned_lock=unknown
+  [[ "$locks" == released ]] && suffix=owned_lock=released
+  [[ "$locks" == shared ]] && suffix='owned_lock=released shared_lock=held_by_other'
+  [[ "$locks" == not_observed ]] && suffix=owned_lock=not_observed
+  printf 'run=%s phase=%s harness=%s pid=%s pgid=%s action=%s reason=%s %s\n' \
+    "$R_RUN" "$R_PHASE" "$R_HARNESS" "${R_PID:-0}" "${R_PGID:-0}" "$1" "$2" "$suffix"
+}
 canon() { "$REALPATH" "$1" 2>/dev/null; }
 under() { [[ "$1" == "$2" || "$1" == "$2"/* ]]; }
 safe() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; }
@@ -63,6 +69,7 @@ write_record() {
   { printf 'schema=1\nrun=%s\nphase=%s\nharness=%s\npid=%s\npgid=%s\nsession=%s\nuid=%s\nlstart=%s\nobserved=%s\ncommand=%s\nparent=%s\nparent_session=%s\nparent_lstart=%s\nworktree=%s\ncwd=%s\ncommon=%s\nmeta=%s\nwt_id=%s\ngitfile_id=%s\nmeta_id=%s\nhead=%s\nstage=%s\ncreated=%s\nupdated=%s\nterm=%s\n' \
     "$R_RUN" "$R_PHASE" "$R_HARNESS" "$R_PID" "$R_PGID" "$R_SESSION" "$R_UID" "$R_LSTART" "$R_OBS" "$R_CMD" "$R_PARENT" "$R_PARENT_SESSION" "$R_PARENT_LSTART" "$R_WT" "$R_CWD" "$R_COMMON" "$R_META" "$R_WT_ID" "$R_GITFILE_ID" "$R_META_ID" "$R_HEAD" "$R_STAGE" "$R_CREATED" "$R_UPDATED" "${R_TERM:-}"
     while IFS= read -r m; do if [[ -n "$m" ]]; then printf 'member=%s\n' "$m"; fi; done <<<"${R_MEMBERS:-}"
+    while IFS= read -r m; do if [[ -n "$m" ]]; then printf 'owned_lock=%s\n' "$m"; fi; done <<<"${R_LOCKS:-}"
   } >"$t" || return 1
   if [[ "$TEST_MODE" == 1 && "${DW_FAIL_RECORD_WRITE:-0}" == 1 ]]; then return 1; fi
   /bin/chmod 600 "$t" && /bin/mv -f "$t" "$f"
@@ -70,10 +77,11 @@ write_record() {
 read_record() {
   local f k v seen='|' line; f=$(record_path)
   [[ -f "$f" && ! -L "$f" && "$("$STAT" -f '%u:%Lp' "$f" 2>/dev/null)" == "$UID_N:600" ]] || return 1
-  R_MEMBERS=; R_SCHEMA=; R_PID=; R_PGID=; R_SESSION=; R_UID=; R_LSTART=; R_OBS=; R_CMD=; R_PARENT=; R_PARENT_SESSION=; R_PARENT_LSTART=; R_WT=; R_CWD=; R_COMMON=; R_META=; R_WT_ID=; R_GITFILE_ID=; R_META_ID=; R_HEAD=; R_STAGE=; R_CREATED=; R_UPDATED=; R_TERM=
+  R_MEMBERS=; R_LOCKS=; R_SCHEMA=; R_PID=; R_PGID=; R_SESSION=; R_UID=; R_LSTART=; R_OBS=; R_CMD=; R_PARENT=; R_PARENT_SESSION=; R_PARENT_LSTART=; R_WT=; R_CWD=; R_COMMON=; R_META=; R_WT_ID=; R_GITFILE_ID=; R_META_ID=; R_HEAD=; R_STAGE=; R_CREATED=; R_UPDATED=; R_TERM=
   while IFS= read -r line || [[ -n "$line" ]]; do
     k=${line%%=*}; v=${line#*=}; [[ "$line" == *=* ]] || return 1
     if [[ "$k" == member ]]; then R_MEMBERS="${R_MEMBERS}${R_MEMBERS:+$'\n'}$v"; continue; fi
+    if [[ "$k" == owned_lock ]]; then R_LOCKS="${R_LOCKS}${R_LOCKS:+$'\n'}$v"; continue; fi
     [[ "$seen" != *"|$k|"* ]] || return 1; seen="$seen$k|"
     case "$k" in schema) R_SCHEMA=$v;; run) [[ "$v" == "$R_RUN" ]] || return 1;; phase) R_PHASE=$v;; harness) R_HARNESS=$v;; pid) R_PID=$v;; pgid) R_PGID=$v;; session) R_SESSION=$v;; uid) R_UID=$v;; lstart) R_LSTART=$v;; observed) R_OBS=$v;; command) R_CMD=$v;; parent) R_PARENT=$v;; parent_session) R_PARENT_SESSION=$v;; parent_lstart) R_PARENT_LSTART=$v;; worktree) R_WT=$v;; cwd) R_CWD=$v;; common) R_COMMON=$v;; meta) R_META=$v;; wt_id) R_WT_ID=$v;; gitfile_id) R_GITFILE_ID=$v;; meta_id) R_META_ID=$v;; head) R_HEAD=$v;; stage) R_STAGE=$v;; created) R_CREATED=$v;; updated) R_UPDATED=$v;; term) R_TERM=$v;; *) return 1;; esac
   done <"$f"
@@ -83,7 +91,15 @@ read_record() {
   case "$R_STAGE" in running|interrupted|exited|term_prepared|term_sent) ;; *) return 1;; esac
   [[ -z "$R_TERM" || "$R_TERM" =~ ^[0-9]+$ ]] || return 1
   local m mp; while IFS= read -r m; do [[ -z "$m" ]] && continue; mp=${m%%:*}; [[ "$m" =~ ^[1-9][0-9]*:[a-f0-9]{64}$ && "$mp" -gt 1 ]] || return 1; done <<<"$R_MEMBERS"
+  [[ "$R_STAGE" != term_prepared || -n "$R_MEMBERS" ]] || return 1
   [[ "$R_STAGE" != term_sent || ( -n "$R_TERM" && -n "$R_MEMBERS" ) ]] || return 1
+  local l owner rest dev ino access mode path
+  while IFS= read -r l; do
+    [[ -z "$l" ]] && continue; rest=${l#*|}; dev=${rest%%:*}; rest=${rest#*:}; ino=${rest%%|*}; rest=${rest#*|}
+    owner=${l%%|*}; access=${rest%%|*}; rest=${rest#*|}; mode=${rest%%|*}; path=${rest#*|}
+    [[ "$l" =~ ^[1-9][0-9]*\|[0-9]+:[0-9]+\|[rwu?]\|[-RWrwux?]\|/ && "$owner" -gt 1 && "$dev" =~ ^[0-9]+$ && "$ino" =~ ^[0-9]+$ && -n "$path" && "$path" != *'|'* ]] || return 1
+    [[ $'\n'"$R_MEMBERS"$'\n' == *$'\n'"$owner:"* ]] || return 1
+  done <<<"$R_LOCKS"
 }
 
 snapshot() { "$PS" -axo pid=,ppid=,pgid=,sess=,uid=,lstart=,comm= >"$1" 2>/dev/null && /usr/bin/awk 'NF < 11 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ || $4 !~ /^[0-9]+$/ || $5 !~ /^[0-9]+$/ { exit 1 }' "$1"; }
@@ -142,6 +158,54 @@ survivors() {
 }
 kill_evidence() { record_worktree || return 1; if row "$R_PID" "$1"; then guardian "$1" && collect "$1"; else survivors "$1"; fi; }
 
+lock_name() { case "${1##*/}" in .package-cache|.cargo-build-lock|.cargo-artifact-lock|.cargo-lock) return 0;; *) return 1;; esac; }
+append_lock() {
+  local pid=$1 access=${2:-?} mode=${3:--} inode=$4 path=$5 id
+  lock_name "$path" || return 0; [[ "$path" != *'|'* && "$path" != *$'\n'* ]] || return 1
+  case "$access" in r|w|u) ;; *) access=?;; esac; case "$mode" in R|W|r|w|u|x) ;; *) mode=-;; esac
+  path=$(canon "$path") || return 1; [[ -f "$path" && ! -L "$path" ]] || return 1
+  id=$(fid "$path") || return 1; [[ "${id#*:}" == "$inode" ]] || return 1
+  local item="$pid|$id|$access|$mode|$path"
+  [[ $'\n'"$R_LOCKS"$'\n' == *$'\n'"$item"$'\n' ]] || R_LOCKS="${R_LOCKS}${R_LOCKS:+$'\n'}$item"
+}
+observe_locks() {
+  local members=$1 m pid fp out="$STATE/.$R_RUN.lsof.$$" field fd= access=? mode=- inode= path= seen=0
+  R_LOCKS=
+  while IFS= read -r m; do
+    [[ -n "$m" ]] || continue; pid=${m%%:*}; fp=${m#*:}
+    snapshot "$out.ps" && row "$pid" "$out.ps" || { /bin/rm -f "$out" "$out.ps"; return 1; }
+    local c; c=$(cwd_of "$pid") || return 1; [[ "$(fingerprint "$c")" == "$fp" ]] || return 1
+    "$LSOF" -n -P -a -p "$pid" -F0pfailn >"$out" 2>/dev/null || { /bin/rm -f "$out" "$out.ps"; return 1; }
+    while IFS= read -r -d '' field; do
+      [[ "$field" == $'\n'* ]] && field=${field#$'\n'}
+      case "$field" in
+        p*) [[ "${field#p}" == "$pid" ]] || return 1; seen=1;;
+        f*) [[ -n "$fd" && -n "$path" ]] && append_lock "$pid" "$access" "$mode" "$inode" "$path" || [[ -z "$fd" || -z "$path" ]] || return 1; fd=${field#f}; access=?; mode=-; inode=; path=;;
+        a*) access=${field#a};; l*) mode=${field#l}; [[ -n "$mode" ]] || mode=-;;
+        i*) inode=${field#i};; n*) path=${field#n};; '') ;;
+        *) return 1;;
+      esac
+    done <"$out"
+    [[ -n "$fd" && -n "$path" ]] && append_lock "$pid" "$access" "$mode" "$inode" "$path" || [[ -z "$fd" || -z "$path" ]] || return 1
+    [[ $seen == 1 ]] || return 1; /bin/rm -f "$out" "$out.ps"; fd=; access=?; mode=-; inode=; path=; seen=0
+  done <<<"$members"
+}
+classify_locks() {
+  local l rest id path out="$STATE/.$R_RUN.lockcheck.$$" any=0 rc
+  [[ -n "${R_LOCKS:-}" ]] || { printf 'not_observed\n'; return; }
+  while IFS= read -r l; do
+    path=${l#*|}; path=${path#*|}; path=${path#*|}; path=${path#*|}; id=${l#*|}; id=${id%%|*}
+    [[ "$(fid "$path")" == "$id" ]] || { /bin/rm -f "$out"; printf 'unknown\n'; return; }
+    "$LSOF" -n -P -F0pi -- "$path" >"$out" 2>/dev/null; rc=$?
+    if [[ $rc -eq 0 ]]; then
+      /usr/bin/tr '\0' '\n' <"$out" | /usr/bin/awk -v ino="${id#*:}" '/^p[0-9]+$/{p=1} /^i/{if ($0!="i" ino) bad=1} END{exit (!p || bad)}'
+      rc=$?; [[ $rc -eq 0 ]] || { /bin/rm -f "$out"; printf 'unknown\n'; return; }; any=1
+    elif [[ $rc -ne 1 || -s "$out" ]]; then /bin/rm -f "$out"; printf 'unknown\n'; return
+    fi
+  done <<<"$R_LOCKS"
+  /bin/rm -f "$out"; [[ $any == 1 ]] && printf 'shared\n' || printf 'released\n'
+}
+
 locked() { exec 8>"$STATE/$R_RUN.lock" || return 1; "$LOCKF" -t 0 8 >/dev/null 2>&1; }
 clear_record() { /bin/rm -f "$(record_path)" "$STATE/$R_RUN.identity"; }
 abort_launch() { trap - INT TERM HUP; printf 'abort\n' >&7 2>/dev/null; exec 7>&-; wait "$guardian" 2>/dev/null; /bin/rm -f "$gate" "$snap" "$STATE/$R_RUN.identity" "$(record_path)" "$(record_path).tmp.$$"; }
@@ -159,7 +223,7 @@ run_cmd() {
   : >"$STATE/$R_RUN.identity"; /bin/chmod 600 "$STATE/$R_RUN.identity"; gate="$STATE/$R_RUN.gate.$$"; /usr/bin/mkfifo "$gate" || die gate_create
   exec 7<>"$gate" || { /bin/rm -f "$gate" "$STATE/$R_RUN.identity"; die gate_open; }
   set -m; ( exec 8>&- 7>&-; cd "$R_CWD" || exit 125; exec 9<"$STATE/$R_RUN.identity"; IFS= read -r x <"$gate"; [[ "$x" == go ]] || exit 125; set +m; "${argv[@]}"; exit $? ) & guardian=$!; set +m
-  R_PID=$guardian; R_PGID=$guardian; R_MEMBERS=; R_TERM=; R_CREATED=$(now); R_UPDATED=$R_CREATED; R_STAGE=running
+  R_PID=$guardian; R_PGID=$guardian; R_MEMBERS=; R_LOCKS=; R_TERM=; R_CREATED=$(now); R_UPDATED=$R_CREATED; R_STAGE=running
   local i released=0 snap="$STATE/.$R_RUN.launch.$$"
   trap 'if [[ "$released" == 0 ]]; then abort_launch; else trap - INT TERM HUP; R_STAGE=interrupted; R_UPDATED=$(now); write_record 2>/dev/null; fi; exit 143' INT TERM HUP
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do snapshot "$snap" && launch_guardian "$snap" && break; "$SLEEP" .05; done
@@ -176,39 +240,50 @@ run_cmd() {
 }
 
 reap_cmd() {
-  local dry=0 resume=0 remaining snap="$STATE/.$R_RUN.reap.$$" before lock_state=unknown
+  local dry=0 resume=0 prepared=0 remaining snap="$STATE/.$R_RUN.reap.$$" before lock_state=unknown
   [[ "${1:-}" == --dry-run ]] && { dry=1; shift; }; [[ $# -eq 0 ]] || die bad_argument
   setup_state; locked || die run_locked 75; read_record || die unsafe_record
   snapshot "$snap" || die ps_failed
   if row "$R_PID" "$snap"; then
     guardian "$snap" || { /bin/rm -f "$snap"; emit refuse ambiguous; return 70; }
     if [[ "$R_STAGE" == term_sent && -n "$R_MEMBERS" ]]; then survivors "$snap" || { emit refuse changed_after_term; return 70; }; before=$C_MEMBERS; resume=1
+    elif [[ "$R_STAGE" == term_prepared && -n "$R_MEMBERS" ]]; then survivors "$snap" || { emit refuse changed_after_prepare; return 70; }; before=$C_MEMBERS; prepared=1
     else collect "$snap" || { emit refuse ambiguous; return 70; }; before=$C_MEMBERS; fi
   elif [[ "$R_STAGE" == term_sent && -n "$R_MEMBERS" ]]; then
     survivors "$snap" || { emit refuse changed_after_term; return 70; }; before=$C_MEMBERS; resume=1
+  elif [[ "$R_STAGE" == term_prepared && -n "$R_MEMBERS" ]]; then
+    survivors "$snap" || { emit refuse changed_after_prepare; return 70; }; before=$C_MEMBERS; prepared=1
   elif group_present "$snap"; then emit refuse leader_missing; return 70
   else /bin/rm -f "$snap"; if [[ $dry == 1 ]]; then emit would-clear group_empty "$lock_state"; else clear_record; emit clear group_empty "$lock_state"; fi; return 0; fi
   if [[ $resume == 1 ]]; then
-    if [[ -z "$before" ]]; then if [[ $dry == 1 ]]; then emit would-clear term "$lock_state"; else clear_record; emit clear term "$lock_state"; fi; return 0; fi
+    if [[ -z "$before" ]]; then /bin/rm -f "$snap"; lock_state=$(classify_locks); if [[ $dry == 1 ]]; then emit would-clear term "$lock_state"; else clear_record; emit clear term "$lock_state"; fi; return 0; fi
     remaining=$((R_TERM + GRACE - $(now)))
     if [[ $dry == 1 ]]; then /bin/rm -f "$snap"; [[ $remaining -gt 0 ]] && emit would-kill grace || emit would-kill verified; return 0; fi
     [[ $remaining -gt 0 ]] && "$SLEEP" "$remaining"
     snapshot "$snap" && survivors "$snap" || { emit refuse changed_after_term; return 70; }; before=$C_MEMBERS
   fi
-  if [[ $dry == 1 ]]; then /bin/rm -f "$snap"; emit would-term verified; return 0; fi
-  if [[ $resume == 0 ]]; then
+  if [[ $prepared == 1 && -z "$before" ]]; then
+    /bin/rm -f "$snap"; lock_state=$(classify_locks); if [[ $dry == 1 ]]; then emit would-clear prepared "$lock_state"; else clear_record; emit clear prepared "$lock_state"; fi; return 0
+  fi
+  if [[ $resume == 0 && $prepared == 0 ]]; then observe_locks "$before" || { emit refuse lock_observation; return 70; }; fi
+  [[ -n "$R_LOCKS" ]] && lock_state=unknown || lock_state=not_observed
+  if [[ $dry == 1 ]]; then /bin/rm -f "$snap"; emit would-term verified "$lock_state"; return 0; fi
+  if [[ $resume == 0 && $prepared == 0 ]]; then
     R_MEMBERS=$before; R_STAGE=term_prepared; R_UPDATED=$(now); write_record || die record_write
-    snapshot "$snap" && guardian "$snap" && collect "$snap" && same_members "$before" "$C_MEMBERS" || { emit refuse changed_before_term; return 70; }
+  fi
+  if [[ $resume == 0 ]]; then
+    if [[ $prepared == 1 ]]; then snapshot "$snap" && survivors "$snap" && same_members "$before" "$C_MEMBERS"
+    else snapshot "$snap" && guardian "$snap" && collect "$snap" && same_members "$before" "$C_MEMBERS"; fi || { emit refuse changed_before_term; return 70; }
     "$KILL" -TERM "-$R_PGID" 2>/dev/null || { emit retain term_failed; return 71; }
     R_STAGE=term_sent; R_TERM=$(now); R_UPDATED=$R_TERM; write_record || die record_write
     "$SLEEP" "$GRACE"; snapshot "$snap" || die ps_failed; survivors "$snap" || { emit refuse changed_after_term; return 70; }
   fi
-  [[ -n "$C_MEMBERS" ]] || { clear_record; emit clear term; return 0; }
+  [[ -n "$C_MEMBERS" ]] || { /bin/rm -f "$snap"; lock_state=$(classify_locks); clear_record; emit clear term "$lock_state"; return 0; }
   before=$C_MEMBERS; snapshot "$snap" && kill_evidence "$snap" && same_members "$before" "$C_MEMBERS" || { emit refuse changed_before_kill; return 70; }
   "$KILL" -KILL "-$R_PGID" 2>/dev/null || { emit retain kill_failed; return 71; }
   "$SLEEP" .1; snapshot "$snap" || die ps_failed; survivors "$snap" || { emit refuse post_kill_ambiguous; return 70; }
   [[ -z "$C_MEMBERS" ]] || { emit retain post_kill_survivor; return 70; }
-  /bin/rm -f "$snap"; clear_record; emit clear kill "$lock_state"
+  /bin/rm -f "$snap"; lock_state=$(classify_locks); clear_record; emit clear kill "$lock_state"
 }
 
 status_cmd() { setup_state; if [[ ! -e "$(record_path)" ]]; then printf 'run=%s state=inactive\n' "$R_RUN"; return; fi; read_record || die unsafe_record; emit status "$R_STAGE"; }
