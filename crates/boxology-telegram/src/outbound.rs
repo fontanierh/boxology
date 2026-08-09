@@ -377,9 +377,9 @@ pub(crate) fn deliver_ask(
 fn delivery_value(dedup_key: String, message_id: i64, deduplicated: bool) -> Value {
     json!({
         "dedup_key": dedup_key,
+        "deduplicated": deduplicated,
         "delivery": "delivered",
         "message_id": message_id,
-        "deduplicated": deduplicated,
     })
 }
 
