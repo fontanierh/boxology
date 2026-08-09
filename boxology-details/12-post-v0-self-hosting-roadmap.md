@@ -60,9 +60,10 @@ one complete product check, while the required PR path remains deliberately lean
 That merged state, not the record's then-future residual list, is current truth.
 
 The repository is already governed by Boxology manifests and `boxology check`.
-`crates/boxology-telegram` is already a tested handwritten service and JSON CLI,
-but it has no generated Boxology contract, implementation-local adapter, or
-composition. That gap is the next useful self-hosting proof.
+`crates/boxology-telegram` is a tested handwritten service and JSON CLI. T0
+dogfood landed through [PR #583](https://github.com/fontanierh/boxology/pull/583):
+it now has a generated scalar contract, implementation-local adapter, and real
+composition proof. Structured command breadth is the next self-hosting gap.
 
 ## Dependency order and milestones
 
