@@ -1,12 +1,20 @@
 use super::api;
 use super::state::{self, BotFingerprint, EventRecord, Pairing, Paths};
-use super::{ENABLED_VARIABLE, ExitClass, SCHEMA, test_guard};
+use super::{ENABLED_VARIABLE, ExitClass, SCHEMA, TelegramService, generated, test_guard};
+use boxology_contract::{
+    BoxId, CallContext, Caller, CancelToken, CapabilityId, ErasedCallError, ErasedCallTarget,
+    ExposureLevel, SlotValue, TraceContext,
+};
+use boxology_runtime::{CompositionBuilder, TransportExposure, test_support::StubTransport};
 use serde_json::{Value, json};
 use std::fs;
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex};
+use std::task::{Context as TaskContext, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -170,6 +178,49 @@ fn read_request(stream: &mut TcpStream) -> Vec<u8> {
         }
     }
     bytes
+}
+
+fn request_body(request: &[u8]) -> Value {
+    let header_end = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("request headers");
+    serde_json::from_slice(&request[header_end + 4..]).expect("JSON request body")
+}
+
+fn call_context() -> CallContext {
+    CallContext::new(
+        Caller::Anonymous,
+        None,
+        CancelToken::new(),
+        TraceContext::empty(),
+        None,
+    )
+}
+
+fn run_ready<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    match future
+        .as_mut()
+        .poll(&mut TaskContext::from_waker(Waker::noop()))
+    {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("Telegram in-process call unexpectedly pending"),
+    }
+}
+
+struct ExposureTarget(TransportExposure);
+
+impl ErasedCallTarget for ExposureTarget {
+    fn call<'a>(
+        &'a self,
+        capability: &'a CapabilityId,
+        context: CallContext,
+        input: SlotValue,
+    ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+        assert_eq!(capability, self.0.descriptor().id());
+        self.0.dispatch(context, input)
+    }
 }
 
 #[test]
@@ -342,6 +393,56 @@ fn typed_send_seam_returns_exact_delivery_and_replay_receipts() {
         }
     );
     assert_eq!(context.fake.request_count(), 1);
+}
+
+#[test]
+fn generated_typed_handle_sends_text_through_the_assembled_box() {
+    let context = Context::new(vec![
+        response(&json!({"message_id": 573})),
+        response(&json!({"message_id": 574})),
+    ]);
+    paired_state(&Paths::from_env().unwrap());
+    let descriptor = generated::implementation_descriptor();
+    let capability = descriptor.contract().capabilities()[0].id().clone();
+    let transport = Arc::new(StubTransport::new());
+    let mut builder = CompositionBuilder::new();
+    builder.add_box(descriptor, |imports| {
+        generated::factory(TelegramService, imports)
+    });
+    builder.expose(
+        BoxId::new("telegram").unwrap(),
+        capability,
+        transport.clone(),
+        ExposureLevel::CodeOnly,
+    );
+
+    let composition = builder.start().expect("Telegram composition starts");
+    let runtime = transport.runtime().expect("stub transport starts");
+    let [exposure] = runtime.exposures() else {
+        panic!("Telegram must expose exactly one capability")
+    };
+    let telegram = boxology_generated_contract::TelegramHandle::from_erased(Arc::new(
+        ExposureTarget(exposure.clone()),
+    ));
+    assert_eq!(
+        run_ready(telegram.send_text(call_context(), "typed dogfood".into())),
+        Ok(573)
+    );
+    assert_eq!(
+        run_ready(telegram.send_text(call_context(), "typed dogfood".into())),
+        Ok(574),
+        "each handle call must use a fresh internal deduplication key"
+    );
+
+    let requests = context.fake.requests.lock().expect("fake requests");
+    assert_eq!(requests.len(), 2);
+    for request in requests.iter() {
+        let body = request_body(request);
+        assert_eq!(body["chat_id"], 42);
+        assert_eq!(body["text"], "typed dogfood");
+    }
+    drop(requests);
+    drop(composition);
 }
 
 #[test]

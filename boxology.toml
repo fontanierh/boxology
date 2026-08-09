@@ -29,7 +29,6 @@ owned = [
     "crates/boxology-manifest/**",
     "crates/boxology-runtime/**",
     "crates/boxology-schema/**",
-    "crates/boxology-telegram/**",
     "crates/boxology-workspace/**",
     "crates/boxology/**",
     "crates/fixtures/fixture-tests/**",
@@ -133,11 +132,6 @@ role = "platform"
 [[crates]]
 cargo_package = "boxology-schema"
 path = "crates/boxology-schema"
-role = "platform"
-
-[[crates]]
-cargo_package = "boxology-telegram"
-path = "crates/boxology-telegram"
 role = "platform"
 
 [[crates]]

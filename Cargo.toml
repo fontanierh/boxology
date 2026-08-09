@@ -24,7 +24,8 @@ members = [
     "crates/boxology-http",
     "crates/boxology-http-conformance",
     "crates/boxology-runtime",
-    "crates/boxology-telegram",
+    "crates/boxology-telegram/implementation",
+    "crates/boxology-telegram/generated/contract",
     "crates/fixtures/fixture-tests",
     "crates/xtask",
 ]

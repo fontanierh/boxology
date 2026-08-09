@@ -1,0 +1,93 @@
+{
+  "box_id": "telegram",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.send_text",
+      "idempotency": "none",
+      "input": {
+        "name": "text",
+        "type": "String"
+      },
+      "max_exposure": "code_only",
+      "name": "send_text",
+      "output": {
+        "type": "i64"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "generator": "boxology-generator",
+    "generator_version": "0.0.0",
+    "semantic_digest": "sha256:dba14065bf25887afe41c866807f9fb4a5a7d45011318bab687d5e140c99794a"
+  },
+  "revision": "sha256:7250c0ba2e596b4395907986eda71d75a60ef4c204aacc058d4884399b89133d",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "SendTextError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Input",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Authorization",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Conflict",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Local",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Policy",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Transient",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Permanent",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Ambiguous",
+          "payload": "unit"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Invariant",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}

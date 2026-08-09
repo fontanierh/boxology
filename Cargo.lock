@@ -220,11 +220,15 @@ dependencies = [
 name = "boxology-telegram"
 version = "0.0.0"
 dependencies = [
+ "boxology",
+ "boxology-contract",
+ "boxology-runtime",
  "getrandom",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
+ "telegram-contract",
 ]
 
 [[package]]
@@ -1144,6 +1148,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "telegram-contract"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
 ]
 
 [[package]]
