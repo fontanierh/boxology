@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fixture processes only. Every signal target is created by this test.
 set -u
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"; S="$ROOT/supervise.sh"; WT="$(cd "$ROOT/../.." && pwd)"; PASS=0; FAIL=0; TMP=; FIXTURE_PIDS=; FIXTURE_GROUPS=
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"; S="$ROOT/supervise.sh"; PASS=0; FAIL=0; TMP=; FIXTURE_PIDS=; FIXTURE_GROUPS=
 ok() { if eval "$1"; then PASS=$((PASS+1)); else printf 'FAIL: %s\n' "$2"; FAIL=$((FAIL+1)); fi; }
 birth() { local r; r=$(/bin/ps -p "$1" -o pid=,lstart=,comm= 2>/dev/null) || return; [[ -n "$r" ]] || return; printf '%s\n' "$r" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'; }
 track_pid() { local p=$1 f i; for i in $(jot 20); do f=$(birth "$p"); [[ -n "$f" ]] && break; /bin/sleep .01; done; [[ -n "$f" ]] && FIXTURE_PIDS="$FIXTURE_PIDS $p:$f"; }
@@ -14,6 +14,14 @@ env_for() { export DELIVERY_WORKER_TEST_MODE=1 DW_STATE_DIR="$B/state" DW_GRACE_
 new() { B=$(/bin/realpath "$(mktemp -d /tmp/dw-test.XXXXXX)"); TMP="$TMP $B"; /bin/mkdir -m 700 "$B/state"; env_for; }
 wait_record() { local i; for i in $(jot 100); do [[ -f "$DW_STATE_DIR/$1.record" ]] && return; /bin/sleep .02; done; return 1; }
 run_real() { /bin/bash "$S" run --run-id "$1" --phase implement --harness codex --worktree "$WT" --cwd "$WT" -- "$2" "${3:-}"; }
+
+# Build the same reciprocal linked-worktree topology production requires. The test caller may be a
+# primary CI checkout or a local linked worktree; neither is itself treated as owned fixture state.
+FIXTURE=$(/bin/realpath "$(mktemp -d /tmp/dw-test.XXXXXX)"); TMP="$TMP $FIXTURE"
+REPO="$FIXTURE/repo"; ALLOWED="$FIXTURE/allowed"; WT="$ALLOWED/worker"; /bin/mkdir "$ALLOWED"
+/usr/bin/git init -q "$REPO"; /usr/bin/git -C "$REPO" -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -qm base
+/usr/bin/git -C "$REPO" worktree add -q --detach "$WT" HEAD
+export DELIVERY_WORKER_TEST_MODE=1 DW_MAIN="$REPO" DW_COMMON_GIT="$REPO/.git" DW_ALLOWED_ROOT="$ALLOWED" DW_DENIED_ROOTS="$ALLOWED/review-scratch:$ALLOWED/crab-runtime"
 
 # Gated launch is a dedicated group; a clean command clears without signaling.
 new; OUT=$(run_real clean /usr/bin/true); RC=$?
@@ -107,15 +115,14 @@ new; /bin/chmod 755 "$DW_STATE_DIR"; OUT=$(/bin/bash "$S" status --run-id mode 2
 ok '[[ $RC -ne 0 && "$OUT" == *"reason=state_mode"* ]]' 'permissive state directory refused'
 new; OUT=$(/bin/bash "$S" run --run-id spec --phase spec --harness codex --worktree "$WT" --cwd "$WT" -- /usr/bin/true 2>&1); RC=$?
 ok '[[ $RC -ne 0 && "$OUT" == *"reason=unsafe_phase"* ]]' 'spec phase refused'
-OUT=$(/bin/bash "$S" run --run-id main --phase implement --harness codex --worktree /Users/jim/module-based-engineering --cwd /Users/jim/module-based-engineering -- /usr/bin/true 2>&1); RC=$?
+OUT=$(/bin/bash "$S" run --run-id main --phase implement --harness codex --worktree "$REPO" --cwd "$REPO" -- /usr/bin/true 2>&1); RC=$?
 ok '[[ $RC -ne 0 && "$OUT" == *"reason=unsafe_worktree"* ]]' 'main checkout refused'
 
 # Valid linked fixtures prove denied review/Crab paths and another repository fail for their intended boundary.
-new; REPO="$B/repo"; ALLOWED="$B/allowed"; REVIEW="$ALLOWED/review-scratch"; CRAB="$ALLOWED/crab-runtime"; UNRELATED="$ALLOWED/unrelated"; /bin/mkdir "$ALLOWED"
-/usr/bin/git init -q "$REPO"; /usr/bin/git -C "$REPO" -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -qm base
+new; REVIEW="$ALLOWED/review-scratch"; CRAB="$ALLOWED/crab-runtime"; UNRELATED="$ALLOWED/unrelated"
 /usr/bin/git -C "$REPO" worktree add -q --detach "$REVIEW" HEAD; /usr/bin/git -C "$REPO" worktree add -q --detach "$CRAB" HEAD
 OTHER_REPO="$B/other"; /usr/bin/git init -q "$OTHER_REPO"; /usr/bin/git -C "$OTHER_REPO" -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -qm base; /usr/bin/git -C "$OTHER_REPO" worktree add -q --detach "$UNRELATED" HEAD
-export DW_MAIN="$REPO" DW_COMMON_GIT="$REPO/.git" DW_ALLOWED_ROOT="$ALLOWED" DW_DENIED_ROOTS="$REVIEW:$CRAB"; REFUSED=0
+REFUSED=0
 for BLOCKED in "$REVIEW" "$CRAB" "$UNRELATED"; do OUT=$(/bin/bash "$S" run --run-id "deny-${BLOCKED##*/}" --phase implement --harness codex --worktree "$BLOCKED" --cwd "$BLOCKED" -- /usr/bin/true 2>&1); RC=$?; [[ $RC -ne 0 && "$OUT" == *"reason=unsafe_worktree"* ]] && REFUSED=$((REFUSED+1)); done
 ok '[[ $REFUSED -eq 3 ]]' 'review scratch, Crab-shaped worktree, and unrelated repository are positively refused'
 
