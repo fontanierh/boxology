@@ -53,6 +53,3 @@ jobs:
 
       - name: Deep validation
         run: cargo xtask ci --no-budget
-
-      - name: Check Boxology model
-        run: cargo run -q -p boxology-cli --bin boxology -- check

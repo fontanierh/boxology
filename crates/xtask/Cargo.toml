@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 boxology-classifier = { version = "=0.0.0", path = "../boxology-classifier" }
+boxology-cli = { version = "=0.0.0", path = "../boxology-cli" }
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-generator = { version = "=0.0.0", path = "../boxology-generator" }
 boxology-generator-model = { version = "=0.0.0", path = "../boxology-generator-model" }
