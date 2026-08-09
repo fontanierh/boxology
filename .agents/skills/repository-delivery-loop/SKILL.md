@@ -5,7 +5,13 @@ description: Orchestrate repository implementation through independently configu
 
 # Repository Delivery Loop
 
-Ship each task through separate specification, implementation, review, repair, and operator gates. Keep product decisions with the authoritative repository and user; use configured workers to execute and challenge them.
+Ship substantive tasks through separate specification, implementation, review, repair, and operator gates. Keep product decisions with the authoritative repository and user; use configured workers to execute and challenge them.
+
+## Decide whether the loop is warranted
+
+The coordinator may handle a trivial change directly without this loop when the change is small, self-contained, mechanically obvious, non-behavioral, and proportionately verifiable without independent specification or review. Typical examples are an explicitly requested model-role configuration update, a typo, or an unambiguous metadata correction.
+
+Do not call a change trivial merely because its diff is short. Product behavior, public contracts, data or schema semantics, security boundaries, dependency policy, release gates, and CI authority remain substantive unless the user explicitly directs otherwise. State the bypass and its verification in the delivery evidence.
 
 ## Establish authority and order
 
@@ -22,6 +28,10 @@ Before starting a task, read `models.toml` from the directory containing this sk
 Require `schema = 1` and configured `spec`, `implement`, and `review` roles. A role must declare a non-empty ordered `candidates` list or inherit one other role with `use`. Reject unknown fallback conditions, missing fields, inheritance cycles, and roles that declare both `candidates` and `use`.
 
 Each candidate names a `harness`, `model`, and `effort`. Treat all three as exact requirements. Do not execute commands, flags, or other arbitrary values from the configuration.
+
+### Use the advisor sparingly
+
+Resolve the configured `advisor` role only for a critical decision that could materially change architecture, product scope, safety, irreversible migration, or the V0/release path and is not settled by repository authority plus the normal specification and review phases. Advisory work is read-only and is not a routine delivery-loop phase. Do not invoke it for ordinary task planning, implementation choices, review findings, or low-cost reversible decisions.
 
 ### Select a candidate
 
