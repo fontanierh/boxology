@@ -5,7 +5,8 @@
 //! into the adapter is deferred.
 
 use super::{
-    DeclaredImport, Diagnostic, Diagnostics, GenerationRequest, REQUEST_SPAN, RelativePath,
+    DeclaredImport, Diagnostic, DiagnosticCode, Diagnostics, GenerationRequest, REQUEST_SPAN,
+    RelativePath,
 };
 use boxology_contract::{BoxId, CapabilityName};
 use boxology_contract_syntax::CanonicalType;
@@ -112,6 +113,7 @@ impl ImportModel {
     }
 }
 
+#[rustfmt::skip]
 fn parse_one(
     request_box: &BoxId,
     import: &DeclaredImport,
@@ -122,21 +124,21 @@ fn parse_one(
     let package = import.package();
     let start = diagnostics.len();
     let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(bytes) else {
-        emit(diagnostics, path, package, "BXG0042", "schema");
+        emit(diagnostics, path, package, DiagnosticCode::Bxg0042, "schema");
         return None;
     };
     if package == request_box {
-        emit(diagnostics, path, package, "BXG0045", "self-import");
+        emit(diagnostics, path, package, DiagnosticCode::Bxg0045, "self-import");
     }
     if object.get("schema_format").and_then(Value::as_u64) != Some(1) {
-        emit(diagnostics, path, package, "BXG0043", "schema_format");
+        emit(diagnostics, path, package, DiagnosticCode::Bxg0043, "schema_format");
     }
     if object.get("box_id").and_then(Value::as_str) != Some(package.as_str()) {
-        emit(diagnostics, path, package, "BXG0044", "box_id");
+        emit(diagnostics, path, package, DiagnosticCode::Bxg0044, "box_id");
     }
     let revision = object.get("revision").and_then(Value::as_str);
     if !revision.is_some_and(is_valid_revision) {
-        emit(diagnostics, path, package, "BXG0046", "revision");
+        emit(diagnostics, path, package, DiagnosticCode::Bxg0046, "revision");
     }
     let capabilities = parse_capabilities(package, &object, path, diagnostics);
     (diagnostics.len() == start).then(|| ImportModel {
@@ -148,6 +150,7 @@ fn parse_one(
     })
 }
 
+#[rustfmt::skip]
 fn parse_capabilities(
     package: &BoxId,
     object: &serde_json::Map<String, Value>,
@@ -158,14 +161,14 @@ fn parse_capabilities(
     let entries = match object.get("capabilities") {
         Some(Value::Array(entries)) if !entries.is_empty() => entries,
         _ => {
-            emit(diagnostics, path, package, "BXG0047", "capabilities");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capabilities");
             return capabilities;
         }
     };
     let mut seen = BTreeSet::new();
     for entry in entries {
         let Value::Object(entry) = entry else {
-            emit(diagnostics, path, package, "BXG0047", "capability entry");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability entry");
             continue;
         };
         let Some(name) = entry
@@ -173,11 +176,11 @@ fn parse_capabilities(
             .and_then(Value::as_str)
             .and_then(|name| CapabilityName::new(name).ok())
         else {
-            emit(diagnostics, path, package, "BXG0047", "capability name");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability name");
             continue;
         };
         if !seen.insert(name.as_str().to_owned()) {
-            emit(diagnostics, path, package, "BXG0047", "duplicate name");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "duplicate name");
             continue;
         }
         let expected_id = format!("{}.{}", package.as_str(), name.as_str());
@@ -186,16 +189,16 @@ fn parse_capabilities(
         let input = leaf_type(entry.get("input"));
         let output = leaf_type(entry.get("output"));
         if !id_ok {
-            emit(diagnostics, path, package, "BXG0047", "capability id");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability id");
         }
         if !shape_ok {
-            emit(diagnostics, path, package, "BXG0047", "capability shape");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability shape");
         }
         if input.is_none() {
-            emit(diagnostics, path, package, "BXG0047", "input type");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "input type");
         }
         if output.is_none() {
-            emit(diagnostics, path, package, "BXG0047", "output type");
+            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "output type");
         }
         if let (true, true, Some(input_type), Some(output_type)) = (id_ok, shape_ok, input, output)
         {
@@ -227,20 +230,27 @@ fn is_valid_revision(value: &str) -> bool {
 }
 
 /// Pushes one payload-safe import diagnostic; `rule` and source follow the `code`.
+#[rustfmt::skip]
 fn emit(
     diagnostics: &mut Vec<Diagnostic>,
     path: &RelativePath,
     package: &BoxId,
-    code: &'static str,
+    code: DiagnosticCode,
     detail: &str,
 ) {
     let (rule, rule_source) = match code {
-        "BXG0042" => (OBJECT_RULE, D4),
-        "BXG0043" => (FORMAT_RULE, D4),
-        "BXG0044" => (BOX_ID_RULE, D4),
-        "BXG0045" => (SELF_RULE, D3),
-        "BXG0046" => (REVISION_RULE, D4),
-        _ => (CAPABILITY_RULE, D4),
+        DiagnosticCode::Bxg0042 => (OBJECT_RULE, D4),
+        DiagnosticCode::Bxg0043 => (FORMAT_RULE, D4),
+        DiagnosticCode::Bxg0044 => (BOX_ID_RULE, D4),
+        DiagnosticCode::Bxg0045 => (SELF_RULE, D3),
+        DiagnosticCode::Bxg0046 => (REVISION_RULE, D4),
+        DiagnosticCode::Bxg0047 => (CAPABILITY_RULE, D4),
+        DiagnosticCode::Bxg0001 | DiagnosticCode::Bxg0002 | DiagnosticCode::Bxg0003 | DiagnosticCode::Bxg0004 | DiagnosticCode::Bxg0005 | DiagnosticCode::Bxg0006 | DiagnosticCode::Bxg0007 | DiagnosticCode::Bxg0008 | DiagnosticCode::Bxg0009
+        | DiagnosticCode::Bxg0010 | DiagnosticCode::Bxg0011 | DiagnosticCode::Bxg0012 | DiagnosticCode::Bxg0013 | DiagnosticCode::Bxg0014 | DiagnosticCode::Bxg0015 | DiagnosticCode::Bxg0016 | DiagnosticCode::Bxg0017 | DiagnosticCode::Bxg0018 | DiagnosticCode::Bxg0019
+        | DiagnosticCode::Bxg0020 | DiagnosticCode::Bxg0021 | DiagnosticCode::Bxg0022 | DiagnosticCode::Bxg0023 | DiagnosticCode::Bxg0024 | DiagnosticCode::Bxg0025 | DiagnosticCode::Bxg0026 | DiagnosticCode::Bxg0027 | DiagnosticCode::Bxg0028 | DiagnosticCode::Bxg0029
+        | DiagnosticCode::Bxg0030 | DiagnosticCode::Bxg0031 | DiagnosticCode::Bxg0032 | DiagnosticCode::Bxg0033 | DiagnosticCode::Bxg0034 | DiagnosticCode::Bxg0035 | DiagnosticCode::Bxg0036 | DiagnosticCode::Bxg0037 | DiagnosticCode::Bxg0038 | DiagnosticCode::Bxg0039 | DiagnosticCode::Bxg0040 | DiagnosticCode::Bxg0048 => {
+            unreachable!("import diagnostics accept only BXG0042-BXG0047")
+        }
     };
     diagnostics.push(Diagnostic {
         path: path.clone(),

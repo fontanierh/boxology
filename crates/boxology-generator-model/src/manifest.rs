@@ -1,4 +1,7 @@
-use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, POINT, RelativePath, Span};
+use super::{
+    Diagnostic, DiagnosticCode, Diagnostics, GenerationRequest, LineColumn, POINT, RelativePath,
+    Span,
+};
 use boxology_contract::BoxId;
 use std::ops::Range;
 #[allow(deprecated)]
@@ -36,7 +39,7 @@ impl Manifest {
             Ok(document) => document,
             Err(error) => {
                 return Err(Diagnostics(vec![diagnostic(
-                    "BXG0007",
+                    DiagnosticCode::Bxg0007,
                     source_span(source, error.span()),
                     "manifest TOML syntax".into(),
                     "boxology.toml must be well-formed TOML",
@@ -48,7 +51,7 @@ impl Manifest {
         let schema_item = document.get("schema");
         let Some(schema) = schema_item.and_then(Item::as_integer) else {
             return Err(Diagnostics(vec![diagnostic(
-                "BXG0008",
+                DiagnosticCode::Bxg0008,
                 item_span(source, schema_item),
                 "manifest key schema".into(),
                 "the manifest must declare an integer schema version",
@@ -57,7 +60,7 @@ impl Manifest {
         };
         if schema != 1 {
             return Err(Diagnostics(vec![diagnostic(
-                "BXG0009",
+                DiagnosticCode::Bxg0009,
                 item_span(source, schema_item),
                 "manifest key schema".into(),
                 "the generator reads manifest schema version 1 and must reject others",
@@ -70,7 +73,7 @@ impl Manifest {
         let id = match id_item.and_then(Item::as_str) {
             None => {
                 errors.push(diagnostic(
-                    "BXG0010",
+                    DiagnosticCode::Bxg0010,
                     item_span(source, id_item),
                     "manifest key id".into(),
                     "the manifest must declare a string package id",
@@ -81,7 +84,7 @@ impl Manifest {
             Some(raw_id) => match BoxId::new(raw_id) {
                 Err(_) => {
                     errors.push(diagnostic(
-                        "BXG0011",
+                        DiagnosticCode::Bxg0011,
                         item_span(source, id_item),
                         "manifest key id".into(),
                         "the package id must match [a-z][a-z0-9-]*",
@@ -92,7 +95,7 @@ impl Manifest {
                 Ok(id) => {
                     if &id != request.box_id() {
                         errors.push(diagnostic(
-                            "BXG0012",
+                            DiagnosticCode::Bxg0012,
                             item_span(source, id_item),
                             format!(
                                 "manifest id {id} differs from request box identity {}",
@@ -110,7 +113,7 @@ impl Manifest {
         let kind_item = document.get("kind");
         if kind_item.and_then(Item::as_str) != Some("box") {
             errors.push(diagnostic(
-                "BXG0013",
+                DiagnosticCode::Bxg0013,
                 item_span(source, kind_item),
                 "manifest key kind".into(),
                 "the generation subject must declare kind = \"box\"",
@@ -128,7 +131,7 @@ impl Manifest {
 }
 
 fn diagnostic(
-    code: &'static str,
+    code: DiagnosticCode,
     span: Span,
     offending: String,
     rule: &'static str,

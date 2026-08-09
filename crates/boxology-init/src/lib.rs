@@ -315,7 +315,7 @@ fn embed(manifest: &[u8], implementation: &[u8]) -> Result<Vec<GeneratedFile>, D
             .collect(),
     )
     .map_err(|_| embedded_generation())?;
-    let generated = generate(&request).map_err(|_| embedded_generation())?;
+    let generated = generate(request).map_err(|_| embedded_generation())?;
     prefixed(
         generated
             .files()

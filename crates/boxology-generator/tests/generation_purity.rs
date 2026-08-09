@@ -160,8 +160,8 @@ fn generation_does_not_execute_hostile_implementation_inputs() {
         "stale purity marker was present before test"
     );
 
-    let baseline = generate(&baseline_request()).expect("inert baseline generation succeeds");
-    let hostile = generate(&hostile_request(&marker)).expect(
+    let baseline = generate(baseline_request()).expect("inert baseline generation succeeds");
+    let hostile = generate(hostile_request(&marker)).expect(
         "generation must not compile or execute implementation, initializer, build, or proc-macro inputs",
     );
 

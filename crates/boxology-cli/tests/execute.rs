@@ -561,7 +561,7 @@ fn plan_time_import_byte_snapshot_mutant_fails_to_converge() {
     );
 
     for plan in &plans {
-        let tree = generate(&live_generation_request(&root.0, plan, &snapshot)).unwrap();
+        let tree = generate(live_generation_request(&root.0, plan, &snapshot)).unwrap();
         write_generated_tree(&root.0, plan, &tree);
     }
 
@@ -577,7 +577,7 @@ fn generate_all_before_write_mutant_fails_to_converge() {
     let live = BTreeMap::new();
     let trees = plans
         .iter()
-        .map(|plan| generate(&live_generation_request(&root.0, plan, &live)).unwrap())
+        .map(|plan| generate(live_generation_request(&root.0, plan, &live)).unwrap())
         .collect::<Vec<_>>();
     for (plan, tree) in plans.iter().zip(&trees) {
         write_generated_tree(&root.0, plan, tree);
@@ -653,7 +653,7 @@ fn generated_paths() -> Vec<String> {
 #[test]
 fn first_run_writes_exact_outputs_from_exact_input_bytes() {
     let fixture = fixture("[\"generated/**\"]");
-    let expected = generate(&request(&fixture)).unwrap();
+    let expected = generate(request(&fixture)).unwrap();
     let outcome = execute(&fixture.root, &fixture.plan).unwrap();
     assert_eq!(outcome.written(), generated_paths().as_slice());
     assert!(outcome.removed().is_empty());
@@ -686,7 +686,7 @@ fn second_run_is_unchanged() {
 #[test]
 fn tamper_is_repaired_exactly() {
     let fixture = fixture("[\"generated/**\"]");
-    let expected = generate(&request(&fixture)).unwrap();
+    let expected = generate(request(&fixture)).unwrap();
     execute(&fixture.root, &fixture.plan).unwrap();
     let target = &expected.files()[0];
     fs::write(package_dir(&fixture).join(target.path()), b"tampered").unwrap();
@@ -721,7 +721,7 @@ fn generator_diagnostics_are_rendered_verbatim() {
         b"this is not a contract",
     )
     .unwrap();
-    let expected = generate(&request(&fixture)).unwrap_err();
+    let expected = generate(request(&fixture)).unwrap_err();
     let error = execute(&fixture.root, &fixture.plan).unwrap_err();
     assert_eq!(error.code(), "BXW0071");
     assert_eq!(
@@ -788,7 +788,7 @@ fn symlinked_input_parent_is_rejected_without_writing() {
 #[test]
 fn first_run_has_no_base_and_tree_submitted() {
     let fixture = fixture("[\"generated/**\"]");
-    let expected = generate(&request(&fixture)).unwrap();
+    let expected = generate(request(&fixture)).unwrap();
     let submitted = expected
         .files()
         .iter()
@@ -806,7 +806,7 @@ fn base_schema_is_the_pre_write_bytes() {
     execute(&fixture.root, &fixture.plan).unwrap();
     let schema = package_dir(&fixture).join("generated/schema.json");
     fs::write(&schema, b"tampered base").unwrap();
-    let expected = generate(&request(&fixture)).unwrap();
+    let expected = generate(request(&fixture)).unwrap();
     let submitted = expected
         .files()
         .iter()

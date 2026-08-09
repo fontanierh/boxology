@@ -22,6 +22,62 @@ pub use rust::{
 use boxology_contract::BoxId;
 use std::{collections::BTreeMap, fmt};
 
+/// Every live generator diagnostic code in order; retired `BXG0041` is absent.
+pub const DIAGNOSTIC_CODES: &[&str] = &DiagnosticCode::catalog();
+
+#[rustfmt::skip]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum DiagnosticCode {
+    Bxg0001, Bxg0002, Bxg0003, Bxg0004, Bxg0005, Bxg0006, Bxg0007, Bxg0008,
+    Bxg0009, Bxg0010, Bxg0011, Bxg0012, Bxg0013, Bxg0014, Bxg0015, Bxg0016,
+    Bxg0017, Bxg0018, Bxg0019, Bxg0020, Bxg0021, Bxg0022, Bxg0023, Bxg0024,
+    Bxg0025, Bxg0026, Bxg0027, Bxg0028, Bxg0029, Bxg0030, Bxg0031, Bxg0032,
+    Bxg0033, Bxg0034, Bxg0035, Bxg0036, Bxg0037, Bxg0038, Bxg0039, Bxg0040,
+    Bxg0042, Bxg0043, Bxg0044, Bxg0045, Bxg0046, Bxg0047, Bxg0048,
+}
+
+#[rustfmt::skip]
+impl DiagnosticCode {
+    const ALL: [Self; 47] = [
+        Self::Bxg0001, Self::Bxg0002, Self::Bxg0003, Self::Bxg0004, Self::Bxg0005,
+        Self::Bxg0006, Self::Bxg0007, Self::Bxg0008, Self::Bxg0009, Self::Bxg0010,
+        Self::Bxg0011, Self::Bxg0012, Self::Bxg0013, Self::Bxg0014, Self::Bxg0015,
+        Self::Bxg0016, Self::Bxg0017, Self::Bxg0018, Self::Bxg0019, Self::Bxg0020,
+        Self::Bxg0021, Self::Bxg0022, Self::Bxg0023, Self::Bxg0024, Self::Bxg0025,
+        Self::Bxg0026, Self::Bxg0027, Self::Bxg0028, Self::Bxg0029, Self::Bxg0030,
+        Self::Bxg0031, Self::Bxg0032, Self::Bxg0033, Self::Bxg0034, Self::Bxg0035,
+        Self::Bxg0036, Self::Bxg0037, Self::Bxg0038, Self::Bxg0039, Self::Bxg0040,
+        Self::Bxg0042, Self::Bxg0043, Self::Bxg0044, Self::Bxg0045, Self::Bxg0046,
+        Self::Bxg0047, Self::Bxg0048,
+    ];
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bxg0001 => "BXG0001", Self::Bxg0002 => "BXG0002", Self::Bxg0003 => "BXG0003", Self::Bxg0004 => "BXG0004",
+            Self::Bxg0005 => "BXG0005", Self::Bxg0006 => "BXG0006", Self::Bxg0007 => "BXG0007", Self::Bxg0008 => "BXG0008",
+            Self::Bxg0009 => "BXG0009", Self::Bxg0010 => "BXG0010", Self::Bxg0011 => "BXG0011", Self::Bxg0012 => "BXG0012",
+            Self::Bxg0013 => "BXG0013", Self::Bxg0014 => "BXG0014", Self::Bxg0015 => "BXG0015", Self::Bxg0016 => "BXG0016",
+            Self::Bxg0017 => "BXG0017", Self::Bxg0018 => "BXG0018", Self::Bxg0019 => "BXG0019", Self::Bxg0020 => "BXG0020",
+            Self::Bxg0021 => "BXG0021", Self::Bxg0022 => "BXG0022", Self::Bxg0023 => "BXG0023", Self::Bxg0024 => "BXG0024",
+            Self::Bxg0025 => "BXG0025", Self::Bxg0026 => "BXG0026", Self::Bxg0027 => "BXG0027", Self::Bxg0028 => "BXG0028",
+            Self::Bxg0029 => "BXG0029", Self::Bxg0030 => "BXG0030", Self::Bxg0031 => "BXG0031", Self::Bxg0032 => "BXG0032",
+            Self::Bxg0033 => "BXG0033", Self::Bxg0034 => "BXG0034", Self::Bxg0035 => "BXG0035", Self::Bxg0036 => "BXG0036",
+            Self::Bxg0037 => "BXG0037", Self::Bxg0038 => "BXG0038", Self::Bxg0039 => "BXG0039", Self::Bxg0040 => "BXG0040",
+            Self::Bxg0042 => "BXG0042", Self::Bxg0043 => "BXG0043", Self::Bxg0044 => "BXG0044", Self::Bxg0045 => "BXG0045",
+            Self::Bxg0046 => "BXG0046", Self::Bxg0047 => "BXG0047", Self::Bxg0048 => "BXG0048",
+        }
+    }
+
+    const fn catalog() -> [&'static str; 47] {
+        let (mut catalog, mut index) = ([""; 47], 0);
+        while index < Self::ALL.len() {
+            catalog[index] = Self::ALL[index].as_str();
+            index += 1;
+        }
+        catalog
+    }
+}
+
 const RULE_SOURCE: &str = "specs/s2-contract-generator.md D1";
 const CRATE_ROOT_SOURCE: &str = "specs/s2-contract-generator.md D1-D2";
 const POINT: LineColumn = LineColumn { line: 1, column: 1 };
@@ -117,7 +173,7 @@ impl GenerationRequest {
             Err(()) => {
                 errors.push(request_diagnostic(
                     request_path(),
-                    "BXG0001",
+                    DiagnosticCode::Bxg0001,
                     "crate_root logical path".into(),
                     "logical paths must be forward-slash relative",
                 ));
@@ -131,7 +187,7 @@ impl GenerationRequest {
                 if let Some(first) = input_paths.get(&path) {
                     errors.push(request_diagnostic(
                         path.clone(),
-                        "BXG0002",
+                        DiagnosticCode::Bxg0002,
                         format!("input[{index}] duplicates input[{first}]"),
                         "input logical paths must be unique",
                     ));
@@ -141,7 +197,7 @@ impl GenerationRequest {
                 if requires_utf8(&path) && std::str::from_utf8(&bytes).is_err() {
                     errors.push(request_diagnostic(
                         path.clone(),
-                        "BXG0003",
+                        DiagnosticCode::Bxg0003,
                         format!("input[{index}] bytes"),
                         "Rust, TOML, and JSON inputs must be valid UTF-8",
                     ));
@@ -155,7 +211,7 @@ impl GenerationRequest {
             errors.push(Diagnostic {
                 path: crate_root.clone(),
                 span: REQUEST_SPAN,
-                code: "BXG0015",
+                code: DiagnosticCode::Bxg0015,
                 offending: "crate_root input".into(),
                 rule: "crate_root must name one declared .rs input",
                 rule_source: CRATE_ROOT_SOURCE,
@@ -167,7 +223,7 @@ impl GenerationRequest {
         {
             errors.push(request_diagnostic(
                 request_path(),
-                "BXG0004",
+                DiagnosticCode::Bxg0004,
                 "required input boxology.toml".into(),
                 "the request must include boxology.toml",
             ));
@@ -183,7 +239,7 @@ impl GenerationRequest {
             if let Some(first) = first {
                 errors.push(request_diagnostic(
                     schema_path.clone().unwrap_or_else(request_path),
-                    "BXG0006",
+                    DiagnosticCode::Bxg0006,
                     format!(
                         "import[{index}] duplicates import[{first}] package {}",
                         package.as_str()
@@ -195,7 +251,7 @@ impl GenerationRequest {
                 if !input_paths.contains_key(&schema_path) {
                     errors.push(request_diagnostic(
                         schema_path.clone(),
-                        "BXG0005",
+                        DiagnosticCode::Bxg0005,
                         format!("import[{index}] schema input"),
                         "each declared import schema must be present among the request inputs",
                     ));
@@ -249,7 +305,7 @@ impl GenerationRequest {
         }
         Err(Diagnostics(vec![request_diagnostic(
             request_path(),
-            "BXG0039",
+            DiagnosticCode::Bxg0039,
             format!("declared outputs {actual:?}"),
             "declared outputs must equal the generator's complete output set without duplicates",
         )]))
@@ -285,16 +341,17 @@ impl Span {
 pub struct Diagnostic {
     path: RelativePath,
     span: Span,
-    code: &'static str,
+    code: DiagnosticCode,
     offending: String,
     rule: &'static str,
     rule_source: &'static str,
 }
 impl Diagnostic {
-    copy_getters! {
-        #[doc = "Returns the stable `BXG####` code."] code: &'static str = code;
-        #[doc = "Returns the source span."] span: Span = span;
+    /// Returns the stable `BXG####` code.
+    pub fn code(&self) -> &'static str {
+        self.code.as_str()
     }
+    copy_getters! { #[doc = "Returns the source span."] span: Span = span; }
     ref_getters! {
         #[doc = "Returns the workspace-relative logical path."] path: &RelativePath = path;
         #[doc = "Returns the offending construct description."] offending_construct: &str = offending;
@@ -307,7 +364,7 @@ impl fmt::Display for Diagnostic {
         write!(
             formatter,
             "{} {}:{}:{}-{}:{} offending={:?} rule={:?} source={:?}",
-            self.code,
+            self.code(),
             self.path.as_str(),
             self.span.start.line,
             self.span.start.column,
@@ -327,6 +384,44 @@ impl Diagnostics {
     ref_getters! {
         #[doc = "Returns the sorted diagnostics."] as_slice: &[Diagnostic] = 0;
     }
+
+    /// Renders canonical `boxology.generator-diagnostics@1` JSON.
+    pub fn render_json(&self) -> String {
+        let mut out = String::from(
+            "{\n  \"schema\": \"boxology.generator-diagnostics@1\",\n  \"diagnostics\": [\n",
+        );
+        for (index, diagnostic) in self.0.iter().enumerate() {
+            if index > 0 {
+                out.push_str(",\n");
+            }
+            let span = diagnostic.span();
+            out.push_str("    {\n      \"code\": ");
+            push_json_string(&mut out, diagnostic.code());
+            out.push_str(",\n      \"path\": ");
+            push_json_string(&mut out, diagnostic.path().as_str());
+            out.push_str(",\n      \"span\": {\n        \"start\": {\n          \"line\": ");
+            out.push_str(&span.start().line().to_string());
+            out.push_str(",\n          \"column\": ");
+            out.push_str(&span.start().column().to_string());
+            out.push_str("\n        },\n        \"end\": {\n          \"line\": ");
+            out.push_str(&span.end().line().to_string());
+            out.push_str(",\n          \"column\": ");
+            out.push_str(&span.end().column().to_string());
+            out.push_str("\n        }\n      },\n      \"offending\": ");
+            push_json_string(&mut out, diagnostic.offending_construct());
+            out.push_str(",\n      \"rule\": ");
+            push_json_string(&mut out, diagnostic.rule());
+            out.push_str(",\n      \"rule_source\": ");
+            push_json_string(&mut out, diagnostic.rule_source());
+            out.push_str("\n    }");
+        }
+        out.push_str("\n  ]\n}\n");
+        out
+    }
+}
+
+fn push_json_string(out: &mut String, value: &str) {
+    out.push_str(&serde_json::to_string(value).expect("a string always serializes as JSON"));
 }
 impl<'a> IntoIterator for &'a Diagnostics {
     type Item = &'a Diagnostic;
@@ -358,7 +453,7 @@ fn checked_path(
         Err(()) => {
             errors.push(request_diagnostic(
                 request_path(),
-                "BXG0001",
+                DiagnosticCode::Bxg0001,
                 format!("{kind}[{index}] logical path"),
                 "logical paths must be forward-slash relative",
             ));
@@ -369,7 +464,7 @@ fn checked_path(
 
 fn request_diagnostic(
     path: RelativePath,
-    code: &'static str,
+    code: DiagnosticCode,
     offending: String,
     rule: &'static str,
 ) -> Diagnostic {
@@ -396,6 +491,8 @@ fn requires_utf8(path: &RelativePath) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+    use syn::visit::Visit;
     const ROOT: &str = "root.rs";
 
     fn id(value: &str) -> BoxId {
@@ -690,5 +787,315 @@ mod tests {
         bounds::<(RelativePath, InputFile, DeclaredImport, GenerationRequest)>();
         bounds::<Manifest>();
         bounds::<(LineColumn, Span, Diagnostic, Diagnostics)>();
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn catalog_and_json_mirror_are_exact_and_hostile_safe() {
+        let canonical = |codes: &[&str]| {
+            codes.len() == 47 && codes.iter().enumerate().all(|(index, code)| {
+                let number = if index < 40 { index + 1 } else { index + 2 };
+                *code == format!("BXG{number:04}")
+            })
+        };
+        assert!(canonical(DIAGNOSTIC_CODES));
+        let mut duplicate = DIAGNOSTIC_CODES.to_vec();
+        duplicate[1] = duplicate[0];
+        let mut misspelled = DIAGNOSTIC_CODES.to_vec();
+        misspelled[0] = "BXG01";
+        let mut missing = DIAGNOSTIC_CODES.to_vec();
+        missing.remove(0);
+        assert!([duplicate, misspelled, missing].iter().all(|codes| !canonical(codes)));
+        let diagnostics = Diagnostics(vec![Diagnostic { path: RelativePath("hostile/\"line.json".into()), span: Span { start: LineColumn { line: 2, column: 3 }, end: LineColumn { line: 4, column: 5 } }, code: DiagnosticCode::Bxg0001, offending: "bad\n\"construct\\".into(), rule: "rule\t\"quoted\"", rule_source: "source\\path" }]);
+        assert_eq!(diagnostics.as_slice()[0].code(), "BXG0001");
+        assert_eq!(diagnostics.as_slice()[0].span().start().line(), 2);
+        assert_eq!(
+            diagnostics.render_json(),
+            "{\n  \"schema\": \"boxology.generator-diagnostics@1\",\n  \"diagnostics\": [\n    {\n      \"code\": \"BXG0001\",\n      \"path\": \"hostile/\\\"line.json\",\n      \"span\": {\n        \"start\": {\n          \"line\": 2,\n          \"column\": 3\n        },\n        \"end\": {\n          \"line\": 4,\n          \"column\": 5\n        }\n      },\n      \"offending\": \"bad\\n\\\"construct\\\\\",\n      \"rule\": \"rule\\t\\\"quoted\\\"\",\n      \"rule_source\": \"source\\\\path\"\n    }\n  ]\n}\n"
+        );
+        let mirror: serde_json::Value = serde_json::from_str(&diagnostics.render_json()).unwrap();
+        assert_eq!(mirror["diagnostics"][0]["offending"], "bad\n\"construct\\");
+    }
+
+    #[derive(Default)]
+    struct AllocationAudit {
+        codes: BTreeSet<&'static str>,
+        errors: Vec<String>,
+        helpers: BTreeSet<String>,
+        forwarded: Option<bool>,
+        placement: bool,
+        named_closure: bool,
+    }
+
+    impl AllocationAudit {
+        fn code(&mut self, expression: &syn::Expr) -> Option<DiagnosticCode> {
+            let syn::Expr::Path(path) = expression else {
+                self.errors.push("dynamic diagnostic code".into());
+                return None;
+            };
+            let segments = &path.path.segments;
+            if segments.len() != 2 || segments[0].ident != "DiagnosticCode" {
+                self.errors.push("dynamic diagnostic code".into());
+                return None;
+            }
+            let variant = segments[1].ident.to_string();
+            let code = DiagnosticCode::ALL
+                .iter()
+                .find(|code| format!("{code:?}") == variant)
+                .copied();
+            if code.is_none() {
+                self.errors
+                    .push(format!("unknown diagnostic code {variant}"));
+            }
+            code
+        }
+
+        fn record(&mut self, expression: &syn::Expr) {
+            if let Some(code) = self.code(expression) {
+                self.codes.insert(code.as_str());
+            }
+        }
+
+        fn record_call(&mut self, helper: &str, expression: &syn::Expr) {
+            if let Some(code) = self.code(expression) {
+                self.codes.insert(code.as_str());
+                if !helper_domain(helper, code) {
+                    self.errors
+                        .push(format!("wrong diagnostic domain for {helper}"));
+                }
+            }
+        }
+    }
+
+    #[rustfmt::skip]
+    fn helper_index(name: &str) -> Option<usize> {
+        match name { "diagnostic" => Some(0), "request_diagnostic" => Some(1), "capability_identity_error" | "module_diagnostic" => Some(2), "emit" | "add_metadata_error" => Some(3), _ => None }
+    }
+
+    #[rustfmt::skip]
+    fn helper_domain(name: &str, code: DiagnosticCode) -> bool {
+        let number = code.as_str()[3..].parse::<u8>().unwrap();
+        match name { "request_diagnostic" => (1..=6).contains(&number) || number == 39, "diagnostic" => (7..=13).contains(&number),
+            "module_diagnostic" => matches!(number, 16..=20 | 22 | 23 | 36 | 37), "add_metadata_error" => matches!(number, 32 | 33),
+            "capability_identity_error" => matches!(number, 34 | 35), "emit" => (42..=47).contains(&number), _ => false }
+    }
+
+    #[rustfmt::skip]
+    fn typed_code_parameter(item: &syn::ItemFn, index: usize) -> bool {
+        matches!(item.sig.inputs.get(index), Some(syn::FnArg::Typed(argument)) if matches!(argument.pat.as_ref(), syn::Pat::Ident(pattern) if pattern.ident == "code" && pattern.by_ref.is_none() && pattern.mutability.is_none() && pattern.subpat.is_none()) && matches!(argument.ty.as_ref(), syn::Type::Path(path) if path.path.is_ident("DiagnosticCode")))
+    }
+
+    #[rustfmt::skip]
+    fn is_test(attributes: &[syn::Attribute]) -> bool {
+        attributes.iter().any(|attribute| attribute.path().is_ident("cfg") && attribute.parse_args::<syn::Ident>().is_ok_and(|ident| ident == "test"))
+    }
+
+    #[rustfmt::skip]
+    impl<'ast> Visit<'ast> for AllocationAudit {
+        fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+            if !is_test(&item.attrs) {
+                syn::visit::visit_item_mod(self, item);
+            }
+        }
+        fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+            if item.ident != "DiagnosticCode" {
+                syn::visit::visit_item_enum(self, item);
+            }
+        }
+
+        fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+            let kind = match item.self_ty.as_ref() { syn::Type::Path(path) => path.path.segments.last().map(|segment| &segment.ident), _ => None };
+            if kind.is_some_and(|ident| ident == "DiagnosticCode") { return; }
+            let previous = std::mem::replace(&mut self.placement, kind.is_some_and(|ident| ident == "PlacementVisitor"));
+            syn::visit::visit_item_impl(self, item);
+            self.placement = previous;
+        }
+
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            if is_test(&item.attrs) {
+                return;
+            }
+            let name = item.sig.ident.to_string();
+            let returns_diagnostic = matches!(&item.sig.output, syn::ReturnType::Type(_, ty)
+                if matches!(ty.as_ref(), syn::Type::Path(path) if path.path.is_ident("Diagnostic")));
+            if returns_diagnostic && !matches!(name.as_str(), "diagnostic" | "request_diagnostic" | "capability_identity_error" | "contract_role_diagnostic" | "deprecation_diagnostic" | "module_diagnostic") {
+                self.errors.push(format!("unexpected diagnostic constructor {name}"));
+            }
+            let Some(index) = helper_index(&name) else {
+                return syn::visit::visit_item_fn(self, item);
+            };
+            if !self.helpers.insert(name.clone()) || !typed_code_parameter(item, index) {
+                self.errors.push(format!("invalid helper {name}"));
+                return;
+            }
+            self.forwarded = Some(false);
+            self.visit_block(&item.block);
+            if self.forwarded.take() != Some(true) {
+                self.errors
+                    .push(format!("helper {name} does not forward code"));
+            }
+        }
+
+        fn visit_pat_ident(&mut self, pattern: &'ast syn::PatIdent) {
+            if self.forwarded.is_some() && pattern.ident == "code" {
+                self.errors.push("helper shadows code".into());
+            }
+            syn::visit::visit_pat_ident(self, pattern);
+        }
+
+        fn visit_expr_assign(&mut self, assign: &'ast syn::ExprAssign) {
+            if self.forwarded.is_some()
+                && matches!(assign.left.as_ref(), syn::Expr::Path(path) if path.path.is_ident("code"))
+            {
+                self.errors.push("helper mutates code".into());
+            }
+            syn::visit::visit_expr_assign(self, assign);
+        }
+
+        fn visit_local(&mut self, local: &'ast syn::Local) {
+            let named = local.init.as_ref().is_some_and(|init| matches!(init.expr.as_ref(), syn::Expr::Closure(_)));
+            if named && matches!(&local.pat, syn::Pat::Ident(pattern) if helper_index(&pattern.ident.to_string()).is_some()) {
+                self.errors.push("helper shadow closure".into());
+            }
+            let previous = self.named_closure;
+            self.named_closure |= named;
+            syn::visit::visit_local(self, local);
+            self.named_closure = previous;
+        }
+
+        fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
+            let binding = match tree { syn::UseTree::Name(name) => Some(&name.ident), syn::UseTree::Rename(name) => Some(&name.rename), _ => None };
+            if matches!(tree, syn::UseTree::Glob(_)) || binding.is_some_and(|name| helper_index(&name.to_string()).is_some()) {
+                self.errors.push("helper shadow import".into());
+            }
+            syn::visit::visit_use_tree(self, tree);
+        }
+
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            let syn::Expr::Path(function) = call.func.as_ref() else {
+                syn::visit::visit_expr_call(self, call);
+                return;
+            };
+            let Some(name) = function
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+            else {
+                syn::visit::visit_expr_call(self, call);
+                return;
+            };
+            if let Some(index) = helper_index(&name) {
+                if self.named_closure {
+                    self.errors.push("named closure returns diagnostic".into());
+                }
+                if function.path.leading_colon.is_some() || function.path.segments.len() != 1 {
+                    self.errors.push(format!("qualified helper call {name}"));
+                }
+                if let Some(code) = call.args.get(index) {
+                    self.record_call(&name, code);
+                } else {
+                    self.errors.push(format!("uncoded {name} call"));
+                }
+            }
+            syn::visit::visit_expr_call(self, call);
+        }
+
+        fn visit_expr_struct(&mut self, structure: &'ast syn::ExprStruct) {
+            let seam = structure.path.segments.last().is_some_and(|segment| {
+                segment.ident == "Diagnostic" || segment.ident == "PlacementVisitor"
+            });
+            if seam {
+                match structure.fields.iter().find(
+                    |field| matches!(&field.member, syn::Member::Named(ident) if ident == "code"),
+                ) {
+                    Some(field) => {
+                        if self.forwarded.is_some() {
+                            let exact = matches!(&field.expr, syn::Expr::Path(path) if path.path.is_ident("code"));
+                            self.forwarded = Some(exact);
+                            if !exact {
+                                self.errors.push("helper does not forward code".into());
+                            }
+                        } else if !(self.placement && matches!(&field.expr, syn::Expr::Field(access)
+                            if matches!(access.base.as_ref(), syn::Expr::Path(path) if path.path.is_ident("self"))
+                                && matches!(&access.member, syn::Member::Named(ident) if ident == "code"))) {
+                            self.record(&field.expr);
+                        }
+                        if self.named_closure && structure.path.is_ident("Diagnostic") {
+                            self.errors.push("named closure constructs diagnostic".into());
+                        }
+                    }
+                    None => self.errors.push("uncoded diagnostic allocation".into()),
+                }
+            }
+            syn::visit::visit_expr_struct(self, structure);
+        }
+
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            if mac.path.is_ident("vec")
+                && let Ok(expressions) = mac.parse_body_with(
+                    syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+                )
+            {
+                for expression in &expressions {
+                    self.visit_expr(expression);
+                }
+            }
+        }
+    }
+
+    #[rustfmt::skip]
+    fn sources() -> [&'static str; 6] {
+        [include_str!("lib.rs"), include_str!("manifest.rs"), include_str!("imports.rs"), include_str!("rust.rs"), include_str!("../../boxology-generator/src/lib.rs"), include_str!("../../boxology-generator/src/schema.rs")]
+    }
+
+    #[rustfmt::skip]
+    fn audit<'a>(
+        sources: impl IntoIterator<Item = &'a str>,
+    ) -> Result<BTreeSet<&'static str>, Vec<String>> {
+        let mut audit = AllocationAudit::default();
+        for source in sources {
+            audit.visit_file(&syn::parse_file(source).unwrap());
+        }
+        let expected = ["add_metadata_error", "capability_identity_error", "diagnostic", "emit", "module_diagnostic", "request_diagnostic"]
+            .into_iter().map(str::to_owned).collect();
+        if audit.helpers != expected {
+            audit.errors.push("helper inventory mismatch".into());
+        }
+        if audit.errors.is_empty() {
+            Ok(audit.codes)
+        } else {
+            Err(audit.errors)
+        }
+    }
+
+    #[rustfmt::skip]
+    fn audit_sources(extra: &str) -> Result<BTreeSet<&'static str>, Vec<String>> { audit(sources().into_iter().chain([extra])) }
+
+    #[test]
+    #[rustfmt::skip]
+    fn exact_six_source_allocation_audit_kills_registry_mutants() {
+        assert_eq!(audit_sources("").unwrap(), DIAGNOSTIC_CODES.iter().copied().collect());
+        for mutant in [
+            "fn mutant(){request_diagnostic(request_path(), DiagnosticCode::Bxg0041, String::new(), \"r\");}",
+            "fn mutant(){request_diagnostic(request_path(), DiagnosticCode::Bxg9999, String::new(), \"r\");}",
+            "fn mutant(){request_diagnostic(request_path(), \"dynamic\", String::new(), \"r\");}",
+            "fn mutant(){request_diagnostic(request_path(), DiagnosticCode::Bxg0048, String::new(), \"r\");}",
+            "fn mutant(){crate::request_diagnostic(request_path(), DiagnosticCode::Bxg0001, String::new(), \"r\");}",
+            "fn request_diagnostic(){}",
+            "fn mutant(){let request_diagnostic=|path:RelativePath,_code:DiagnosticCode,offending:String,rule:&'static str|Diagnostic{path,span:REQUEST_SPAN,code:DiagnosticCode::Bxg0048,offending,rule,rule_source:RULE_SOURCE};let _=request_diagnostic(request_path(),DiagnosticCode::Bxg0001,String::new(),\"r\");}",
+            "fn alternate(path:RelativePath)->Diagnostic{Diagnostic{path,span:REQUEST_SPAN,code:DiagnosticCode::Bxg0001,offending:String::new(),rule:\"r\",rule_source:RULE_SOURCE}}",
+            "fn mutant(path: RelativePath){let _=Diagnostic{path,span:REQUEST_SPAN,offending:String::new(),rule:\"r\",rule_source:\"s\"};}",
+        ] {
+            assert!(audit_sources(mutant).is_err(), "surviving mutant: {mutant}");
+        }
+        let broken = include_str!("lib.rs").replace("span: REQUEST_SPAN,\n        code,\n        offending,", "span: REQUEST_SPAN,\n        code: DiagnosticCode::Bxg0048,\n        offending,");
+        let mut replaced = sources();
+        replaced[0] = &broken;
+        assert!(audit(replaced).is_err(), "wrong helper forwarding survived");
+        let mutated = include_str!("lib.rs").replace("fn request_diagnostic(\n    path: RelativePath,\n    code: DiagnosticCode,", "fn request_diagnostic(\n    path: RelativePath,\n    mut code: DiagnosticCode,")
+            .replace(") -> Diagnostic {\n    Diagnostic {\n        path,\n        span: REQUEST_SPAN,", ") -> Diagnostic {\n    code = DiagnosticCode::Bxg0048;\n    Diagnostic {\n        path,\n        span: REQUEST_SPAN,");
+        replaced[0] = &mutated;
+        assert!(audit(replaced).is_err(), "mutated helper code survived");
     }
 }

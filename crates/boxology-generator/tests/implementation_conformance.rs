@@ -458,7 +458,7 @@ fn check_mutated(
 ) -> Output {
     let case = root.join(name);
     let program = source(implementation);
-    let generated = generate(&request(&program)).unwrap();
+    let generated = generate(request(&program)).unwrap();
     for file in generated.files() {
         let path = case.join(file.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -582,8 +582,8 @@ impl crate::HelloService {
         "drop(context);\n        async {}.await;\n        Ok(name)",
     );
     assert_eq!(
-        generate(&request(&source(implementation))).unwrap(),
-        generate(&request(&source(&alternate))).unwrap()
+        generate(request(&source(implementation))).unwrap(),
+        generate(request(&source(&alternate))).unwrap()
     );
     fs::remove_dir_all(root).unwrap();
 }

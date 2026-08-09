@@ -541,7 +541,7 @@ mod tests {
             OUTPUTS.iter().map(|path| (*path).into()).collect(),
         )
         .unwrap();
-        generate(&request).unwrap()
+        generate(request).unwrap()
     }
 
     fn globs(patterns: &[&str]) -> Vec<GlobPattern> {

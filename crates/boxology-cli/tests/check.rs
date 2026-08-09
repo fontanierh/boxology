@@ -29,7 +29,7 @@ fn schema_bytes(box_id: &str, source: &str) -> Vec<u8> {
         OUTPUTS.iter().map(|path| (*path).to_owned()).collect(),
     )
     .unwrap();
-    generate(&request)
+    generate(request)
         .unwrap()
         .files()
         .iter()

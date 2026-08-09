@@ -1,4 +1,7 @@
-use super::{Diagnostic, Diagnostics, GenerationRequest, LineColumn, POINT, RelativePath, Span};
+use super::{
+    Diagnostic, DiagnosticCode, Diagnostics, GenerationRequest, LineColumn, POINT, RelativePath,
+    Span,
+};
 use boxology_contract::{BoxId, CapabilityId, CapabilityName, ExposureLevel, Idempotency};
 use std::collections::BTreeSet;
 use syn::ext::IdentExt;
@@ -164,7 +167,7 @@ impl ControlledContract {
             diagnostics.push(Diagnostic {
                 path: self.source.clone(),
                 span: self.span,
-                code: "BXG0040",
+                code: DiagnosticCode::Bxg0040,
                 offending: "Blob capability boundary or value-payload leaf not yet emittable in v0"
                     .into(),
                 rule: EMITTABLE_RULE,
@@ -175,7 +178,7 @@ impl ControlledContract {
             diagnostics.push(Diagnostic {
                 path: self.source.clone(),
                 span: self.span,
-                code: "BXG0048",
+                code: DiagnosticCode::Bxg0048,
                 offending: "named-field error variants are not yet emittable".into(),
                 rule: PAYLOAD_EMITTABLE_RULE,
                 rule_source: PAYLOAD_EMITTABLE_RULE_SOURCE,
@@ -511,7 +514,7 @@ impl ParsedRustInputs {
                     start: POINT,
                     end: POINT,
                 },
-                code: "BXG0037",
+                code: DiagnosticCode::Bxg0037,
                 offending: "missing controlled contract invocation".into(),
                 rule: CONTROLLED_SITE_RULE,
                 rule_source: RULE_SOURCE,
@@ -521,7 +524,7 @@ impl ParsedRustInputs {
                 diagnostics.push(module_diagnostic(
                     site.path,
                     site.item.mac.path.segments[1].ident.span(),
-                    "BXG0037",
+                    DiagnosticCode::Bxg0037,
                     "additional controlled contract invocation",
                     CONTROLLED_SITE_RULE,
                 ));
@@ -539,7 +542,7 @@ impl ParsedRustInputs {
                     .map(|component| Diagnostic {
                         path: site.path.clone(),
                         span: source_span(component.span()),
-                        code: "BXG0038",
+                        code: DiagnosticCode::Bxg0038,
                         offending: "invalid controlled contract syntax".into(),
                         rule: CONTROLLED_PARSE_RULE,
                         rule_source: CONTROLLED_PARSE_RULE_SOURCE,
@@ -609,7 +612,7 @@ impl ParsedRustInputs {
                 diagnostics.push(Diagnostic {
                     path: declaration.source.clone(),
                     span: declaration.identifier_span,
-                    code: "BXG0021",
+                    code: DiagnosticCode::Bxg0021,
                     offending: "colliding lifted contract type name".into(),
                     rule: COLLISION_RULE,
                     rule_source: COLLISION_RULE_SOURCE,
@@ -731,7 +734,7 @@ impl ParsedRustInputs {
             .map(|declaration| Diagnostic {
                 path: declaration.source.clone(),
                 span: declaration.identifier_span,
-                code: "BXG0031",
+                code: DiagnosticCode::Bxg0031,
                 offending: "invalid structural capability signature".into(),
                 rule: CAPABILITY_CALL_SHAPE_RULE,
                 rule_source: CAPABILITY_CALL_SHAPE_RULE_SOURCE,
@@ -787,7 +790,11 @@ impl ParsedRustInputs {
                     |name| (name.clone(), metadata.name_override_span.unwrap()),
                 );
                 CapabilityName::new(name).map_err(|_| {
-                    diagnostics.push(capability_identity_error(declaration, span, "BXG0034"));
+                    diagnostics.push(capability_identity_error(
+                        declaration,
+                        span,
+                        DiagnosticCode::Bxg0034,
+                    ));
                 })
             })
             .collect::<Vec<_>>();
@@ -804,7 +811,11 @@ impl ParsedRustInputs {
                     .marker_metadata()
                     .name_override_span
                     .unwrap_or(declaration.identifier_span);
-                diagnostics.push(capability_identity_error(declaration, span, "BXG0035"));
+                diagnostics.push(capability_identity_error(
+                    declaration,
+                    span,
+                    DiagnosticCode::Bxg0035,
+                ));
             }
         }
         diagnostics.sort();
@@ -888,7 +899,7 @@ impl ParsedRustInputs {
                     diagnostics.push(module_diagnostic(
                         &self.inputs[source].path,
                         identifier.span(),
-                        "BXG0016",
+                        DiagnosticCode::Bxg0016,
                         "module path override",
                         PATH_RULE,
                     ));
@@ -916,7 +927,7 @@ impl ParsedRustInputs {
                     diagnostics.push(module_diagnostic(
                         &self.inputs[source].path,
                         module.ident.span(),
-                        "BXG0017",
+                        DiagnosticCode::Bxg0017,
                         "missing outline module input",
                         MISSING_RULE,
                     ));
@@ -926,7 +937,7 @@ impl ParsedRustInputs {
                     diagnostics.push(module_diagnostic(
                         &self.inputs[source].path,
                         module.ident.span(),
-                        "BXG0018",
+                        DiagnosticCode::Bxg0018,
                         "ambiguous outline module inputs",
                         AMBIGUOUS_RULE,
                     ));
@@ -1154,7 +1165,7 @@ impl ParsedRustInputs {
                 diagnostics.push(module_diagnostic(
                     &self.inputs[source].path,
                     attribute_span(attribute, false),
-                    "BXG0020",
+                    DiagnosticCode::Bxg0020,
                     offending,
                     CONDITIONAL_RULE,
                 ));
@@ -1197,7 +1208,7 @@ fn parse_capability_metadata(
             diagnostics,
             declaration,
             boxology_leaf(marker).unwrap().span(),
-            "BXG0032",
+            DiagnosticCode::Bxg0032,
         );
     }
     let marker = markers[0];
@@ -1235,18 +1246,33 @@ fn parse_capability_metadata(
         };
         let key_name = key.to_string();
         if !seen.insert(key_name.clone()) {
-            add_metadata_error(diagnostics, declaration, key.span(), "BXG0032");
+            add_metadata_error(
+                diagnostics,
+                declaration,
+                key.span(),
+                DiagnosticCode::Bxg0032,
+            );
             continue;
         }
         if matches!(
             key_name.as_str(),
             "auth" | "default" | "min" | "max" | "validation"
         ) {
-            add_metadata_error(diagnostics, declaration, key.span(), "BXG0033");
+            add_metadata_error(
+                diagnostics,
+                declaration,
+                key.span(),
+                DiagnosticCode::Bxg0033,
+            );
             continue;
         }
         if !matches!(key_name.as_str(), "name" | "exposure" | "idempotency") {
-            add_metadata_error(diagnostics, declaration, key.span(), "BXG0032");
+            add_metadata_error(
+                diagnostics,
+                declaration,
+                key.span(),
+                DiagnosticCode::Bxg0032,
+            );
             continue;
         }
         let literal = match &value.value {
@@ -1270,10 +1296,20 @@ fn parse_capability_metadata(
             ("idempotency", "none") => draft.idempotency = Idempotency::None,
             ("idempotency", "inherent") => draft.idempotency = Idempotency::Inherent,
             ("idempotency", "keyed") => {
-                add_metadata_error(diagnostics, declaration, literal.span(), "BXG0033");
+                add_metadata_error(
+                    diagnostics,
+                    declaration,
+                    literal.span(),
+                    DiagnosticCode::Bxg0033,
+                );
             }
             ("exposure" | "idempotency", _) => {
-                add_metadata_error(diagnostics, declaration, literal.span(), "BXG0032");
+                add_metadata_error(
+                    diagnostics,
+                    declaration,
+                    literal.span(),
+                    DiagnosticCode::Bxg0032,
+                );
             }
             _ => unreachable!("supported keys are exhaustively matched"),
         }
@@ -1284,14 +1320,15 @@ fn parse_capability_metadata(
 fn capability_identity_error(
     declaration: &CapabilityDeclaration<'_>,
     span: Span,
-    code: &'static str,
+    code: DiagnosticCode,
 ) -> Diagnostic {
     let (offending, rule) = match code {
-        "BXG0034" => ("invalid effective capability name", CAPABILITY_NAME_RULE),
-        _ => (
+        DiagnosticCode::Bxg0034 => ("invalid effective capability name", CAPABILITY_NAME_RULE),
+        DiagnosticCode::Bxg0035 => (
             "duplicate effective capability identity",
             CAPABILITY_IDENTITY_RULE,
         ),
+        _ => unreachable!("capability identity diagnostics accept only BXG0034-BXG0035"),
     };
     Diagnostic {
         path: declaration.source.clone(),
@@ -1312,7 +1349,7 @@ fn invalid_capability_marker(
         diagnostics,
         declaration,
         boxology_leaf(marker).unwrap().span(),
-        "BXG0032",
+        DiagnosticCode::Bxg0032,
     );
 }
 
@@ -1320,11 +1357,12 @@ fn add_metadata_error(
     diagnostics: &mut Vec<Diagnostic>,
     declaration: &CapabilityDeclaration<'_>,
     span: proc_macro2::Span,
-    code: &'static str,
+    code: DiagnosticCode,
 ) {
     let offending = match code {
-        "BXG0032" => "invalid capability metadata",
-        _ => "unsupported capability metadata",
+        DiagnosticCode::Bxg0032 => "invalid capability metadata",
+        DiagnosticCode::Bxg0033 => "unsupported capability metadata",
+        _ => unreachable!("metadata diagnostics accept only BXG0032-BXG0033"),
     };
     diagnostics.push(Diagnostic {
         path: declaration.source.clone(),
@@ -1449,7 +1487,7 @@ impl<'ast> Visit<'ast> for UnreachableVisitor<'_> {
             self.diagnostics.push(module_diagnostic(
                 self.path,
                 attribute_span(attribute, true),
-                "BXG0019",
+                DiagnosticCode::Bxg0019,
                 "Boxology-annotated item",
                 UNREACHABLE_RULE,
             ));
@@ -1461,7 +1499,7 @@ impl<'ast> Visit<'ast> for UnreachableVisitor<'_> {
             self.diagnostics.push(module_diagnostic(
                 self.path,
                 item.path.segments[1].ident.span(),
-                "BXG0019",
+                DiagnosticCode::Bxg0019,
                 "Boxology contract invocation",
                 UNREACHABLE_RULE,
             ));
@@ -1507,7 +1545,7 @@ impl<'ast> Visit<'ast> for ControlledPlacementVisitor<'_> {
             self.diagnostics.push(module_diagnostic(
                 self.path,
                 item.path.segments[1].ident.span(),
-                "BXG0036",
+                DiagnosticCode::Bxg0036,
                 "misplaced controlled contract invocation",
                 CONTROLLED_SITE_RULE,
             ));
@@ -1688,7 +1726,7 @@ fn contract_role_diagnostic(path: &RelativePath, attribute: &syn::Attribute) -> 
                 .expect("contract attributes are direct Boxology paths")
                 .span(),
         ),
-        code: "BXG0024",
+        code: DiagnosticCode::Bxg0024,
         offending: "invalid contract declaration annotation".into(),
         rule: CONTRACT_ROLE_RULE,
         rule_source: CONTRACT_ROLE_RULE_SOURCE,
@@ -1715,7 +1753,7 @@ fn validate_contract_placement(
             allowed: &allowed,
             diagnostics,
             leaf: "contract",
-            code: "BXG0029",
+            code: DiagnosticCode::Bxg0029,
             offending: "misplaced contract declaration annotation",
             rule: CONTRACT_PLACEMENT_RULE,
             rule_source: CONTRACT_PLACEMENT_RULE_SOURCE,
@@ -1743,7 +1781,7 @@ fn validate_capability_placement(
             allowed: &allowed,
             diagnostics,
             leaf: "capability",
-            code: "BXG0030",
+            code: DiagnosticCode::Bxg0030,
             offending: "misplaced capability annotation",
             rule: CAPABILITY_PLACEMENT_RULE,
             rule_source: CAPABILITY_PLACEMENT_RULE_SOURCE,
@@ -1757,7 +1795,7 @@ struct PlacementVisitor<'a> {
     allowed: &'a BTreeSet<*const syn::Attribute>,
     diagnostics: &'a mut Vec<Diagnostic>,
     leaf: &'static str,
-    code: &'static str,
+    code: DiagnosticCode,
     offending: &'static str,
     rule: &'static str,
     rule_source: &'static str,
@@ -1844,7 +1882,7 @@ fn validate_member_identities(
                     diagnostics.push(Diagnostic {
                         path: declaration.source.clone(),
                         span: source_span(variant.ident.span()),
-                        code: "BXG0028",
+                        code: DiagnosticCode::Bxg0028,
                         offending: "duplicate contract enum variant identity".into(),
                         rule: VARIANT_IDENTITY_RULE,
                         rule_source: MEMBER_IDENTITY_RULE_SOURCE,
@@ -1874,7 +1912,7 @@ fn validate_field_identities(
             diagnostics.push(Diagnostic {
                 path: path.clone(),
                 span: source_span(identifier.span()),
-                code: "BXG0027",
+                code: DiagnosticCode::Bxg0027,
                 offending: "duplicate named contract field identity".into(),
                 rule: FIELD_IDENTITY_RULE,
                 rule_source: MEMBER_IDENTITY_RULE_SOURCE,
@@ -2017,7 +2055,7 @@ fn validate_documentation(
             diagnostics.push(Diagnostic {
                 path: path.clone(),
                 span: source_span(identifier.span()),
-                code: "BXG0026",
+                code: DiagnosticCode::Bxg0026,
                 offending: "invalid documentation attribute".into(),
                 rule: DOCUMENTATION_RULE,
                 rule_source: DOCUMENTATION_RULE_SOURCE,
@@ -2082,7 +2120,7 @@ fn deprecation_diagnostic(path: &RelativePath, attribute: &syn::Attribute) -> Di
                 .expect("deprecation validation owns direct attributes")
                 .span(),
         ),
-        code: "BXG0025",
+        code: DiagnosticCode::Bxg0025,
         offending: "invalid or duplicate deprecation attribute".into(),
         rule: DEPRECATION_RULE,
         rule_source: DEPRECATION_RULE_SOURCE,
@@ -2109,7 +2147,7 @@ fn validate_attributes(
             _ => diagnostics.push(module_diagnostic(
                 path,
                 attribute_span(attribute, false),
-                "BXG0022",
+                DiagnosticCode::Bxg0022,
                 "non-allowlisted contract attribute",
                 ATTRIBUTE_RULE,
             )),
@@ -2128,7 +2166,7 @@ fn validate_derives(
         diagnostics.push(module_diagnostic(
             path,
             attribute_span(attribute, false),
-            "BXG0023",
+            DiagnosticCode::Bxg0023,
             "non-allowlisted contract derive",
             DERIVE_RULE,
         ));
@@ -2144,7 +2182,7 @@ fn validate_derives(
             diagnostics.push(module_diagnostic(
                 path,
                 derive.span,
-                "BXG0023",
+                DiagnosticCode::Bxg0023,
                 "non-allowlisted contract derive",
                 DERIVE_RULE,
             ));
@@ -2190,7 +2228,7 @@ fn append_errors(path: &RelativePath, error: syn::Error, diagnostics: &mut Vec<D
         diagnostics.push(Diagnostic {
             path: path.clone(),
             span: source_span(component.span()),
-            code: "BXG0014",
+            code: DiagnosticCode::Bxg0014,
             offending: "Rust source syntax".into(),
             rule: RULE,
             rule_source: RULE_SOURCE,
@@ -2201,7 +2239,7 @@ fn append_errors(path: &RelativePath, error: syn::Error, diagnostics: &mut Vec<D
 fn module_diagnostic(
     path: &RelativePath,
     span: proc_macro2::Span,
-    code: &'static str,
+    code: DiagnosticCode,
     offending: &'static str,
     rule: &'static str,
 ) -> Diagnostic {

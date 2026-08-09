@@ -281,7 +281,7 @@ fn greeter_generation_is_cold_import_bearing_exact_and_matches_checked_in_tree()
         include_bytes!("../../hello/generated/schema.json")
     );
 
-    let generated = generate(&request).expect("cold Greeter generation succeeds");
+    let generated = generate(request).expect("cold Greeter generation succeeds");
     let generated_paths: Vec<_> = generated.files().iter().map(|file| file.path()).collect();
     assert_generated_inventory(&generated_paths);
 

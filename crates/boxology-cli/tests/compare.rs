@@ -132,7 +132,7 @@ fn fixture(stale: bool) -> Fixture {
     fs::write(root.join("ping/implementation/src/lib.rs"), CONTRACT).unwrap();
     let workspace = workspace(stale);
     let [plan] = plan(&workspace, None).unwrap().try_into().unwrap();
-    let tree = generate(&request(&root, &plan)).unwrap();
+    let tree = generate(request(&root, &plan)).unwrap();
     for file in tree.files() {
         let target = root.join("ping").join(file.path());
         fs::create_dir_all(target.parent().unwrap()).unwrap();

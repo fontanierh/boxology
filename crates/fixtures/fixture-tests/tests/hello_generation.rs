@@ -87,7 +87,7 @@ fn checked_in(path: &str) -> &'static [u8] {
 
 #[test]
 fn live_schema_digest_matches_the_generated_contract_marker() {
-    let generated = generate(&request()).expect("cold Hello generation succeeds");
+    let generated = generate(request()).expect("cold Hello generation succeeds");
     let schema: Value =
         serde_json::from_slice(generated_bytes(&generated, "generated/schema.json"))
             .expect("generated schema is JSON");
@@ -127,7 +127,7 @@ fn hello_generation_is_cold_and_matches_checked_in_outputs() {
     assert_eq!(request.crate_root().as_str(), "implementation/src/lib.rs");
     assert_eq!(request.inputs().len(), 2, "generated files are not inputs");
     assert!(request.imports().is_empty());
-    let generated = generate(&request).expect("cold Hello generation succeeds");
+    let generated = generate(request).expect("cold Hello generation succeeds");
 
     for path in OUTPUTS {
         let actual = generated_bytes(&generated, path);
