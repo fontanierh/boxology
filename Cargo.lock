@@ -1507,6 +1507,7 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "boxology-classifier",
+ "boxology-cli",
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",

@@ -106,3 +106,9 @@ Each entry is, in order: a `## YYYY-MM-DD — #issue` heading, one blank line, o
 - Classification: `mechanical`
 - Observation: Trivial changes, including model/configuration edits, may bypass the full delivery loop, and advisory is reserved for critical decisions; planning or advisory that is used must optimize the pragmatic shortest honest shipping path. This removes mechanical ceremony without weakening product evidence and completes the final manual friction-entry audit.
 - Evidence: [#560](https://github.com/fontanierh/boxology/pull/560) records the direct-change and advisor-sparing delivery policy; [#562](https://github.com/fontanierh/boxology/pull/562) records the pragmatic planning/advisory rule.
+
+## 2026-08-09 — #342
+
+- Classification: `mechanical`
+- Observation: The planned return of full `boxology check` to required PR CI is relaxed because its indivisible baseline exceeds the required job's 20-minute timeout; required CI keeps fast root and changed-scope evidence while full regeneration, classification, edge, workspace-wide, and declared-quality enforcement remains dispatch-only/local.
+- Evidence: [#342](https://github.com/fontanierh/boxology/issues/342) measured a cold explicit-base check at about 30 minutes; exact-main deep runs 31329847692 and 31328401257 measured 27:51 and 28:43. The [S0 amendment](../specs/s0-repo-bootstrap.md) and [S7 amendment](../specs/s7-skill-acceptance-self-hosting.md) record the lost pre-merge guarantee and forbid a policy-only workaround.

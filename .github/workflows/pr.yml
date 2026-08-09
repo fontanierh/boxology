@@ -68,6 +68,7 @@ jobs:
           run_rust=true
           run_workspace_check=false
           run_reaper=false
+          run_fixtures=false
           changed_manifests="$RUNNER_TEMP/boxology-changed-manifests"
           : > "$changed_manifests"
           if test "$EVENT_NAME" = pull_request; then
@@ -78,11 +79,18 @@ jobs:
             if grep -Eq '^ops/process-reaper/' <<<"$changed"; then
               run_reaper=true
             fi
+            if grep -Eq '^(crates/fixtures/|goldens/generated-project/)' <<<"$changed"; then
+              run_fixtures=true
+            fi
             if test "$run_rust" = true; then
               if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$' <<<"$changed"; then
                 run_workspace_check=true
               fi
               while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  crates/fixtures/fixture-tests/*) ;;
+                  crates/fixtures/*|goldens/generated-project/*) continue ;;
+                esac
                 dir="$(dirname "$changed_path")"
                 while test "$dir" != . && test "$dir" != /; do
                   if test -f "$dir/Cargo.toml"; then
@@ -98,6 +106,7 @@ jobs:
           echo "run_rust=$run_rust" | tee -a "$GITHUB_OUTPUT"
           echo "run_workspace_check=$run_workspace_check" | tee -a "$GITHUB_OUTPUT"
           echo "run_reaper=$run_reaper" | tee -a "$GITHUB_OUTPUT"
+          echo "run_fixtures=$run_fixtures" | tee -a "$GITHUB_OUTPUT"
 
       # This catches repository-policy regressions on every code PR and is much
       # cheaper than executing every package's integration suite.
@@ -129,6 +138,10 @@ jobs:
       - name: Check workspace build graph
         if: steps.scope.outputs.run_workspace_check == 'true'
         run: cargo check --workspace --all-features --locked
+
+      - name: Test changed opaque fixtures
+        if: steps.scope.outputs.run_fixtures == 'true'
+        run: cargo xtask ci-fixtures
 
       - name: Test process reaper
         if: steps.scope.outputs.run_reaper == 'true'

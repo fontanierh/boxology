@@ -1,28 +1,25 @@
+use boxology_cli::{cargo_metadata_command, fmt_packages, walk};
+use boxology_workspace::WorkspaceInputs;
 use std::{collections::BTreeSet, fs, path::Path, process::Command};
 
-use toml_edit::{DocumentMut, Item};
+use toml_edit::{DocumentMut, Item, value};
 
 struct FixtureProject {
     root: &'static str,
-    fmt_packages: &'static [&'static str],
 }
 
 const FIXTURE_PROJECTS: &[FixtureProject] = &[
     FixtureProject {
         root: "crates/fixtures/greeter",
-        fmt_packages: &["greeter-implementation"],
     },
     FixtureProject {
         root: "crates/fixtures/hello",
-        fmt_packages: &["hello-implementation"],
     },
     FixtureProject {
         root: "crates/fixtures/ping",
-        fmt_packages: &["ping-implementation"],
     },
     FixtureProject {
         root: "crates/fixtures/ping-app",
-        fmt_packages: &["ping-app"],
     },
 ];
 
@@ -44,10 +41,16 @@ pub(crate) fn run(root: &Path, deep: bool) -> bool {
     let mut passed = check_workspace_membership(root);
     for project in FIXTURE_PROJECTS {
         let manifest = root.join(project.root).join("Cargo.toml");
-        for package in project.fmt_packages {
-            if !run_fmt(root, &manifest, project.root, package) {
+        let packages = match fixture_fmt_packages(root, project.root) {
+            Ok(packages) => packages,
+            Err(error) => {
+                eprintln!("fixture-projects: {error}");
                 passed = false;
+                Vec::new()
             }
+        };
+        if !packages.is_empty() && !run_fmt(root, &manifest, project.root, &packages) {
+            passed = false;
         }
         if !run_test(root, &manifest, project.root) {
             passed = false;
@@ -64,6 +67,94 @@ pub(crate) fn run(root: &Path, deep: bool) -> bool {
     passed
 }
 
+pub(crate) fn generated_style_fails_fmt(root: &Path) -> bool {
+    let output = cargo(root)
+        .args([
+            "fmt",
+            "--check",
+            "--manifest-path",
+            "crates/fixtures/generated-style-fmt/Cargo.toml",
+        ])
+        .output();
+    match output {
+        Ok(output) => generated_style_fmt_result(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+        ),
+        Err(error) => {
+            eprintln!("generated-style-fmt: cannot run cargo fmt: {error}");
+            false
+        }
+    }
+}
+
+fn generated_style_fmt_result(success: bool, stdout: &str) -> bool {
+    !success && stdout.contains("Diff in") && stdout.contains("generated-style-fmt/src/lib.rs")
+}
+
+fn fixture_fmt_packages(root: &Path, project: &str) -> Result<Vec<String>, String> {
+    let project_root = root.join(project);
+    let walked = walk(&project_root).map_err(|error| format!("{project} walk: {error}"))?;
+    let output = cargo_metadata_command(&project_root)
+        .output()
+        .map_err(|error| format!("{project} metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{project} metadata exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let metadata = String::from_utf8(output.stdout)
+        .map_err(|_| format!("{project} metadata returned non-UTF-8"))?;
+    let manifests = walked
+        .manifests()
+        .iter()
+        .map(|(path, bytes)| {
+            if path.as_str() == "boxology.toml" {
+                formatting_manifest(bytes).map(|bytes| (path.clone(), bytes))
+            } else {
+                Ok((path.clone(), bytes.clone()))
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let files = walked
+        .files()
+        .iter()
+        .filter(|entry| entry.path().as_str() != "Cargo.lock")
+        .cloned()
+        .collect();
+    let inputs = WorkspaceInputs::new(files, manifests, &metadata)
+        .map_err(|_| format!("{project} walk returned duplicate paths"))?;
+    let workspace = inputs
+        .check()
+        .map_err(|findings| format!("{project} manifest validation: {findings}"))?;
+    Ok(fmt_packages(&workspace))
+}
+
+fn formatting_manifest(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "fixture manifest is non-UTF-8")?;
+    let mut document = text
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("cannot parse fixture manifest: {error}"))?;
+    document["kind"] = value("platform");
+    document.remove("imports");
+    document.remove("composition");
+    let owned = document["owned"]
+        .as_array_mut()
+        .ok_or_else(|| "fixture manifest has no owned array".to_owned())?;
+    owned.push("Cargo.toml");
+    if let Some(crates) = document
+        .get_mut("crates")
+        .and_then(Item::as_array_of_tables_mut)
+    {
+        for entry in crates.iter_mut() {
+            entry["role"] = value("platform");
+        }
+    }
+    Ok(document.to_string().into_bytes())
+}
+
 fn cargo(root: &Path) -> Command {
     let mut command = Command::new("cargo");
     command
@@ -72,13 +163,15 @@ fn cargo(root: &Path) -> Command {
     command
 }
 
-fn run_fmt(root: &Path, manifest: &Path, project: &str, package: &str) -> bool {
+fn run_fmt(root: &Path, manifest: &Path, project: &str, packages: &[String]) -> bool {
     let mut command = cargo(root);
     command
         .args(["fmt", "--check", "--manifest-path"])
-        .arg(manifest)
-        .args(["-p", package]);
-    run_command(&mut command, &format!("{project} fmt {package}"))
+        .arg(manifest);
+    for package in packages {
+        command.args(["-p", package]);
+    }
+    run_command(&mut command, &format!("{project} fmt"))
 }
 
 fn run_clippy(root: &Path, manifest: &Path, project: &str) -> bool {
@@ -154,17 +247,6 @@ fn workspace_members(path: &Path) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
-fn package_name(path: &Path) -> String {
-    manifest(path)
-        .get("package")
-        .and_then(Item::as_table)
-        .and_then(|package| package.get("name"))
-        .and_then(Item::as_str)
-        .unwrap_or_else(|| panic!("{} has no package name", path.display()))
-        .to_owned()
-}
-
 fn check_workspace_membership(root: &Path) -> bool {
     let root_members: BTreeSet<_> = workspace_members(&root.join("Cargo.toml"))
         .into_iter()
@@ -234,6 +316,7 @@ fn fixture_project_inventory(root: &Path) -> BTreeSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxology_manifest::{CrateRole, Manifest, RelativePath};
 
     #[test]
     fn fixture_project_inventory_is_exact() {
@@ -247,27 +330,39 @@ mod tests {
     #[test]
     fn fmt_selection_covers_exactly_hand_authored_members() {
         for project in FIXTURE_PROJECTS {
-            let project_root = crate::root().join(project.root);
-            let mut hand_authored = BTreeSet::new();
-            for member in workspace_members(&project_root.join("Cargo.toml")) {
-                let package = package_name(&project_root.join(&member).join("Cargo.toml"));
-                if member.starts_with("generated/") {
-                    assert!(
-                        !project.fmt_packages.contains(&package.as_str()),
-                        "generated member {package} is selected for fmt in {}",
-                        project.root
-                    );
-                } else {
-                    hand_authored.insert(package);
-                }
-            }
-            let selected: BTreeSet<_> = project
-                .fmt_packages
+            let selected = fixture_fmt_packages(&crate::root(), project.root).unwrap();
+            let bytes = fs::read(crate::root().join(project.root).join("boxology.toml")).unwrap();
+            let declared =
+                Manifest::parse(RelativePath::new("boxology.toml").unwrap(), &bytes).unwrap();
+            let expected: BTreeSet<_> = declared
+                .crates()
                 .iter()
-                .map(|package| (*package).to_owned())
+                .filter_map(|entry| {
+                    let cargo =
+                        RelativePath::new(format!("{}/Cargo.toml", entry.path().as_str())).unwrap();
+                    let derived = declared
+                        .derived()
+                        .iter()
+                        .any(|output| output.outputs().iter().any(|glob| glob.matches(&cargo)));
+                    assert_eq!(derived, entry.role() == CrateRole::BoxContract);
+                    (!derived).then(|| entry.cargo_package().to_owned())
+                })
                 .collect();
-            assert_eq!(selected, hand_authored, "fmt selection in {}", project.root);
+            assert_eq!(selected.into_iter().collect::<BTreeSet<_>>(), expected);
         }
+    }
+
+    #[test]
+    fn generated_style_requires_an_affirmative_exact_diff() {
+        assert!(generated_style_fmt_result(
+            false,
+            "Diff in generated-style-fmt/src/lib.rs"
+        ));
+        assert!(!generated_style_fmt_result(
+            true,
+            "Diff in generated-style-fmt/src/lib.rs"
+        ));
+        assert!(!generated_style_fmt_result(false, "some other failure"));
     }
 
     #[test]
