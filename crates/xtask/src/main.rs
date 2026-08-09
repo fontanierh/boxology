@@ -1001,13 +1001,15 @@ mod tests {
         assert!(
             scope.contains("crates/fixtures/")
                 && scope.contains("goldens/generated-project/")
-                && scope.contains("ops/process-reaper/"),
-            "opaque fixtures and process-reaper retain broad path gates"
+                && scope.contains("ops/process-reaper/")
+                && scope.contains("ops/delivery-worker/"),
+            "opaque fixtures and process owners retain scoped path gates"
         );
         assert!(!workflow.contains("--bin boxology -- check"));
         assert!(!workflow.contains("cargo xtask ci --base"));
         assert!(workflow.contains("cargo xtask ci-fixtures"));
         assert!(workflow.contains("steps.scope.outputs.run_reaper == 'true'"));
+        assert!(workflow.contains("steps.scope.outputs.run_delivery_worker == 'true'"));
         assert!(workflow.contains("cargo test -p xtask --locked"));
         assert!(workflow.contains("- name: Test changed crates"));
         assert!(workflow.contains("- name: Check workspace build graph"));

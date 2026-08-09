@@ -93,11 +93,12 @@ read_record() {
   local m mp; while IFS= read -r m; do [[ -z "$m" ]] && continue; mp=${m%%:*}; [[ "$m" =~ ^[1-9][0-9]*:[a-f0-9]{64}$ && "$mp" -gt 1 ]] || return 1; done <<<"$R_MEMBERS"
   [[ "$R_STAGE" != term_prepared || -n "$R_MEMBERS" ]] || return 1
   [[ "$R_STAGE" != term_sent || ( -n "$R_TERM" && -n "$R_MEMBERS" ) ]] || return 1
-  local l rest dev ino access mode path
+  local l owner rest dev ino access mode path
   while IFS= read -r l; do
     [[ -z "$l" ]] && continue; rest=${l#*|}; dev=${rest%%:*}; rest=${rest#*:}; ino=${rest%%|*}; rest=${rest#*|}
-    access=${rest%%|*}; rest=${rest#*|}; mode=${rest%%|*}; path=${rest#*|}
-    [[ "$l" =~ ^[1-9][0-9]*\|[0-9]+:[0-9]+\|[rwu?]\|[-RWrwux?]\|/ && "$dev" =~ ^[0-9]+$ && "$ino" =~ ^[0-9]+$ && -n "$path" && "$path" != *'|'* ]] || return 1
+    owner=${l%%|*}; access=${rest%%|*}; rest=${rest#*|}; mode=${rest%%|*}; path=${rest#*|}
+    [[ "$l" =~ ^[1-9][0-9]*\|[0-9]+:[0-9]+\|[rwu?]\|[-RWrwux?]\|/ && "$owner" -gt 1 && "$dev" =~ ^[0-9]+$ && "$ino" =~ ^[0-9]+$ && -n "$path" && "$path" != *'|'* ]] || return 1
+    [[ $'\n'"$R_MEMBERS"$'\n' == *$'\n'"$owner:"* ]] || return 1
   done <<<"$R_LOCKS"
 }
 
