@@ -13,6 +13,25 @@ struct SendRequest {
     dedup_key: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SendCommand {
+    pub(crate) text: String,
+    pub(crate) dedup_key: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SendReceipt {
+    pub(crate) dedup_key: String,
+    pub(crate) message_id: i64,
+    pub(crate) deduplicated: bool,
+}
+
+impl SendReceipt {
+    fn into_value(self) -> Value {
+        delivery_value(self.dedup_key, self.message_id, self.deduplicated)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReplyRequest {
@@ -53,26 +72,44 @@ struct Delivery<'a> {
     ask_id: Option<&'a str>,
 }
 
+struct DeliveryReceipt {
+    message_id: i64,
+    deduplicated: bool,
+}
+
 pub(crate) fn send(input: &[u8]) -> Result<Value, AppError> {
     let request: SendRequest = parse(input)?;
     check_schema(request.schema)?;
-    validate_text(&request.text)?;
-    validate_key(&request.dedup_key)?;
+    send_typed(SendCommand {
+        text: request.text,
+        dedup_key: request.dedup_key,
+    })
+    .map(SendReceipt::into_value)
+}
+
+pub(crate) fn send_typed(command: SendCommand) -> Result<SendReceipt, AppError> {
+    validate_text(&command.text)?;
+    validate_key(&command.dedup_key)?;
     let paths = Paths::from_env()?;
     let chat_id = state::read(&paths)?.pairing.ok_or_else(not_paired)?.chat_id;
-    deliver(
+    let receipt = deliver(
         &paths,
         Delivery {
             kind: "send",
-            dedup_key: &request.dedup_key,
-            text: &request.text,
+            dedup_key: &command.dedup_key,
+            text: &command.text,
             reply_to: None,
             buttons: None,
             chat_id,
             event: None,
             ask_id: None,
         },
-    )
+    )?;
+    Ok(SendReceipt {
+        dedup_key: command.dedup_key,
+        message_id: receipt.message_id,
+        deduplicated: receipt.deduplicated,
+    })
 }
 
 pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
@@ -94,7 +131,7 @@ pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
     let message_id = event_message_id(&event)?;
     let ask_id = event.ask_id.clone();
     let chat_id = state.pairing.ok_or_else(not_paired)?.chat_id;
-    deliver(
+    let receipt = deliver(
         &paths,
         Delivery {
             kind: "reply",
@@ -106,7 +143,12 @@ pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
             event: Some(event),
             ask_id: ask_id.as_deref(),
         },
-    )
+    )?;
+    Ok(delivery_value(
+        request.dedup_key,
+        receipt.message_id,
+        receipt.deduplicated,
+    ))
 }
 
 pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
@@ -165,7 +207,7 @@ pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
     })
 }
 
-fn deliver(paths: &Paths, delivery: Delivery<'_>) -> Result<Value, AppError> {
+fn deliver(paths: &Paths, delivery: Delivery<'_>) -> Result<DeliveryReceipt, AppError> {
     let Delivery {
         kind,
         dedup_key,
@@ -239,9 +281,10 @@ fn deliver(paths: &Paths, delivery: Delivery<'_>) -> Result<Value, AppError> {
         })
     })?;
     if let Start::Existing { message_id } = start {
-        return Ok(
-            json!({"dedup_key": dedup_key, "delivery": "delivered", "message_id": message_id, "deduplicated": true}),
-        );
+        return Ok(DeliveryReceipt {
+            message_id,
+            deduplicated: true,
+        });
     }
     let token = match api::load_token() {
         Ok(token) => token,
@@ -291,9 +334,10 @@ fn deliver(paths: &Paths, delivery: Delivery<'_>) -> Result<Value, AppError> {
         }
         Ok(())
     })?;
-    Ok(
-        json!({"dedup_key": dedup_key, "delivery": "delivered", "message_id": sent.message_id, "deduplicated": matches!(start, Start::Send { deduplicated: true })}),
-    )
+    Ok(DeliveryReceipt {
+        message_id: sent.message_id,
+        deduplicated: matches!(start, Start::Send { deduplicated: true }),
+    })
 }
 
 pub(crate) fn deliver_ask(
@@ -317,15 +361,26 @@ pub(crate) fn deliver_ask(
             ask_id: Some(ask_id),
         },
     )?;
-    if let Some(message_id) = result.get("message_id").and_then(Value::as_i64) {
-        state::update(paths, |state| {
-            if let Some(ask) = state.asks.iter_mut().find(|ask| ask.ask_id == ask_id) {
-                ask.message_id = Some(message_id);
-            }
-            Ok(())
-        })?;
-    }
-    Ok(result)
+    state::update(paths, |state| {
+        if let Some(ask) = state.asks.iter_mut().find(|ask| ask.ask_id == ask_id) {
+            ask.message_id = Some(result.message_id);
+        }
+        Ok(())
+    })?;
+    Ok(delivery_value(
+        dedup_key.to_owned(),
+        result.message_id,
+        result.deduplicated,
+    ))
+}
+
+fn delivery_value(dedup_key: String, message_id: i64, deduplicated: bool) -> Value {
+    json!({
+        "dedup_key": dedup_key,
+        "delivery": "delivered",
+        "message_id": message_id,
+        "deduplicated": deduplicated,
+    })
 }
 
 fn mark_retryable(paths: &Paths, key: &str, error: AppError) -> AppError {

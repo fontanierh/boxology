@@ -316,6 +316,35 @@ fn paired_state(paths: &Paths) {
 }
 
 #[test]
+fn typed_send_seam_returns_exact_delivery_and_replay_receipts() {
+    let mut context = Context::new(vec![]);
+    paired_state(&Paths::from_env().unwrap());
+    context.replace_fake(vec![response(&json!({"message_id": 69}))]);
+    let command = super::outbound::SendCommand {
+        text: "typed notice".into(),
+        dedup_key: "typed-notice-1".into(),
+    };
+
+    assert_eq!(
+        super::outbound::send_typed(command.clone()).unwrap(),
+        super::outbound::SendReceipt {
+            dedup_key: "typed-notice-1".into(),
+            message_id: 69,
+            deduplicated: false,
+        }
+    );
+    assert_eq!(
+        super::outbound::send_typed(command).unwrap(),
+        super::outbound::SendReceipt {
+            dedup_key: "typed-notice-1".into(),
+            message_id: 69,
+            deduplicated: true,
+        }
+    );
+    assert_eq!(context.fake.request_count(), 1);
+}
+
+#[test]
 fn send_deduplication_never_retries_ambiguous_delivery() {
     let mut context = Context::new(vec![]);
     let paths = Paths::from_env().unwrap();
@@ -324,10 +353,16 @@ fn send_deduplication_never_retries_ambiguous_delivery() {
     let request = json!({"schema": SCHEMA, "text": "notice", "dedup_key": "notice-1"});
     let (sent, exit) = run(&["send"], request.clone());
     assert_eq!(exit, ExitClass::Success, "{sent}");
-    assert_eq!(ok(&sent)["message_id"], 70);
+    assert_eq!(
+        sent,
+        r#"{"schema":1,"ok":true,"command":"send","data":{"dedup_key":"notice-1","deduplicated":false,"delivery":"delivered","message_id":70}}"#
+    );
     let (repeat, exit) = run(&["send"], request);
     assert_eq!(exit, ExitClass::Success);
-    assert_eq!(ok(&repeat)["deduplicated"], true);
+    assert_eq!(
+        repeat,
+        r#"{"schema":1,"ok":true,"command":"send","data":{"dedup_key":"notice-1","deduplicated":true,"delivery":"delivered","message_id":70}}"#
+    );
     assert_eq!(context.fake.request_count(), 1);
     drop(context);
 
