@@ -12,6 +12,62 @@ mod pairing;
 mod receive;
 mod state;
 
+boxology::contract! {
+    #[error]
+    pub enum SendTextError {
+        Input,
+        Authorization,
+        Conflict,
+        Local,
+        Policy,
+        Transient,
+        Permanent,
+        Ambiguous,
+        Invariant,
+    }
+
+    #[capability]
+    pub async fn send_text(text: String) -> Result<i64, SendTextError>;
+}
+
+pub struct TelegramService;
+
+#[boxology::implementation]
+impl TelegramService {
+    pub async fn send_text(
+        &self,
+        _context: boxology::CallContext,
+        text: String,
+    ) -> Result<i64, SendTextError> {
+        if !enabled() {
+            return Err(SendTextError::Authorization);
+        }
+        let dedup_key = state::hex(&state::random_bytes::<16>().map_err(map_send_text_error)?);
+        outbound::send_typed(outbound::SendCommand { text, dedup_key })
+            .map(|receipt| receipt.message_id)
+            .map_err(map_send_text_error)
+    }
+}
+
+fn map_send_text_error(error: AppError) -> SendTextError {
+    match error.exit {
+        ExitClass::Success | ExitClass::Invariant => SendTextError::Invariant,
+        ExitClass::Input => SendTextError::Input,
+        ExitClass::Authorization => SendTextError::Authorization,
+        ExitClass::Conflict => SendTextError::Conflict,
+        ExitClass::Local => SendTextError::Local,
+        ExitClass::Policy => SendTextError::Policy,
+        ExitClass::Transient => SendTextError::Transient,
+        ExitClass::Permanent => SendTextError::Permanent,
+        ExitClass::Ambiguous => SendTextError::Ambiguous,
+    }
+}
+
+#[doc(hidden)]
+pub mod generated {
+    include!("../../generated/adapter/adapter.rs");
+}
+
 pub const SCHEMA: u8 = 1;
 pub const ENABLED_VARIABLE: &str = "BOXOLOGY_TELEGRAM_ENABLED";
 const MAX_INPUT: usize = 65_536;
@@ -312,6 +368,27 @@ mod tests {
         unsafe { env::remove_var(ENABLED_VARIABLE) };
         let (_, exit) = execute(&["send".into()], br#"{"schema":1}"#);
         assert_eq!(exit, ExitClass::Authorization);
+    }
+
+    #[test]
+    fn typed_errors_preserve_every_stable_failure_class() {
+        let cases = [
+            (ExitClass::Input, SendTextError::Input),
+            (ExitClass::Authorization, SendTextError::Authorization),
+            (ExitClass::Conflict, SendTextError::Conflict),
+            (ExitClass::Local, SendTextError::Local),
+            (ExitClass::Policy, SendTextError::Policy),
+            (ExitClass::Transient, SendTextError::Transient),
+            (ExitClass::Permanent, SendTextError::Permanent),
+            (ExitClass::Ambiguous, SendTextError::Ambiguous),
+            (ExitClass::Invariant, SendTextError::Invariant),
+        ];
+        for (exit, expected) in cases {
+            assert_eq!(
+                map_send_text_error(AppError::new("test", "test", exit)),
+                expected
+            );
+        }
     }
 }
 

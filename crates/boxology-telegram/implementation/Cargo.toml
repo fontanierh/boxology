@@ -9,6 +9,10 @@ name = "boxology-telegram"
 path = "src/main.rs"
 
 [dependencies]
+boxology.workspace = true
+boxology-contract.workspace = true
+boxology-runtime = { workspace = true, features = ["test-support"] }
+boxology_generated_contract = { package = "telegram-contract", version = "=0.0.0", path = "../generated/contract" }
 getrandom = "=0.4.3"
 reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "native-tls", "json"] }
 serde = { version = "=1.0.229", features = ["derive"] }
