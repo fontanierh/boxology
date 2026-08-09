@@ -103,29 +103,56 @@ impl GenerationPlan {
 }
 /// A stable planning failure with a validated logical path and no filesystem payload.
 #[derive(Debug, Eq, PartialEq)]
-pub struct PlanError(&'static str, RelativePath, &'static str);
+pub struct PlanError {
+    code: &'static str,
+    path: RelativePath,
+    detail: &'static str,
+    source: &'static str,
+}
 impl PlanError {
     /// Returns the stable `BXW####` code.
     pub fn code(&self) -> &'static str {
-        self.0
+        self.code
     }
     /// Returns the validated workspace-relative location of the failure.
     pub fn path(&self) -> &RelativePath {
-        &self.1
+        &self.path
     }
     /// Returns the stable rule detail.
     pub fn detail(&self) -> &'static str {
-        self.2
+        self.detail
+    }
+    /// Returns the normative source of the planning rule.
+    pub fn source(&self) -> &'static str {
+        self.source
+    }
+
+    /// Renders canonical `boxology.plan-error@1` JSON.
+    pub fn render_json(&self) -> String {
+        let quote = |value| serde_json::to_string(value).expect("a string always serializes");
+        format!(
+            "{{\n  \"schema\": \"boxology.plan-error@1\",\n  \"code\": {},\n  \"path\": {},\n  \"detail\": {},\n  \"source\": {}\n}}\n",
+            quote(self.code),
+            quote(self.path.as_str()),
+            quote(self.detail),
+            quote(self.source),
+        )
     }
 
     /// Returns whether this is the invocation-level unknown-package failure.
     pub fn is_unknown_package(&self) -> bool {
-        self.0 == UNKNOWN_PACKAGE.0
+        self.code == UNKNOWN_PACKAGE.0
     }
 }
 impl fmt::Display for PlanError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{} {:?}: {}", self.0, self.1.as_str(), self.2)
+        write!(
+            formatter,
+            "{} {:?}: {}",
+            self.code,
+            self.path.as_str(),
+            self.detail
+        )
     }
 }
 impl std::error::Error for PlanError {}
@@ -318,5 +345,10 @@ fn request_path() -> RelativePath {
 }
 
 fn failure(rule: Rule, path: RelativePath) -> PlanError {
-    PlanError(rule.0, path, rule.1)
+    PlanError {
+        code: rule.0,
+        path,
+        detail: rule.1,
+        source: rule.2,
+    }
 }

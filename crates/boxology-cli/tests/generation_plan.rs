@@ -93,7 +93,14 @@ fn error_is(result: Result<Vec<GenerationPlan>, PlanError>, code: &str, at: &str
     assert_eq!(error.code(), code);
     assert_eq!(error.path().as_str(), at);
     assert_eq!(error.detail(), detail);
+    assert_eq!(error.source(), "specs/s5-manifest-and-validation.md D5");
     assert_eq!(error.to_string(), format!("{code} {at:?}: {detail}"));
+    assert_eq!(
+        error.render_json(),
+        format!(
+            "{{\n  \"schema\": \"boxology.plan-error@1\",\n  \"code\": {code:?},\n  \"path\": {at:?},\n  \"detail\": {detail:?},\n  \"source\": \"specs/s5-manifest-and-validation.md D5\"\n}}\n"
+        )
+    );
 }
 
 fn input_names(plan: &GenerationPlan) -> Vec<&str> { plan.inputs().iter().map(RelativePath::as_str).collect() }
@@ -143,6 +150,33 @@ fn plan_preserves_import_declaration_order() {
     let plans = plan(&workspace, None).unwrap();
     let greeter = plans.iter().find(|plan| plan.package_id().as_str() == "greeter").unwrap();
     assert_eq!(greeter.imports().iter().map(|import| import.package().as_str()).collect::<Vec<_>>(), ["zulu", "alpha"]);
+}
+
+#[test]
+fn plan_error_json_escapes_a_hostile_manifest_path_exactly() {
+    let root = "hostile-\"package";
+    let files = [
+        "Cargo.toml", "Cargo.lock", "boxology.toml", "boxology.toml",
+        "implementation/Cargo.toml", "implementation/src/lib.rs",
+        "generated/contract/Cargo.toml",
+    ];
+    let files = files.into_iter().enumerate().map(|(index, path)| {
+        let name = if index < 3 { path.to_owned() } else { format!("{root}/{path}") };
+        FileEntry::file(RelativePath::new(name).unwrap())
+    }).collect();
+    let manifests = vec![
+        (path("boxology.toml"), ROOT_MANIFEST.as_bytes().to_vec()),
+        (path(&format!("{root}/boxology.toml")), candidate_manifest("ping", "other-tool", true, "implementation", false, false, false).into_bytes()),
+    ];
+    let escaped = root.replace('"', "\\\"");
+    let metadata = metadata(false, true, "implementation", false, false)
+        .replace("/w/ping/", &format!("/w/{escaped}/"));
+    let workspace = WorkspaceInputs::new(files, manifests, &metadata).unwrap().check().unwrap();
+    let error = plan(&workspace, None).unwrap_err();
+    assert_eq!(
+        error.render_json(),
+        "{\n  \"schema\": \"boxology.plan-error@1\",\n  \"code\": \"BXW0064\",\n  \"path\": \"hostile-\\\"package/boxology.toml\",\n  \"detail\": \"only the boxology-contract generator is supported by generate\",\n  \"source\": \"specs/s5-manifest-and-validation.md D5\"\n}\n"
+    );
 }
 
 #[test]

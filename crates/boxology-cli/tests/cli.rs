@@ -36,6 +36,53 @@ const CONTRACT_WITH_GREET: &[u8] = br#"boxology::contract! {
     pub async fn greet(name: String) -> Result<String, HelloError>;
 }"#;
 const USAGE: &str = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n       boxology check --format human|json\n";
+const METADATA_ARGV: &str = "metadata\n--format-version\n1\n--locked\n--no-deps\n";
+const REQUEST_DIAGNOSTICS_JSON: &str = r#"{
+  "schema": "boxology.generator-diagnostics@1",
+  "diagnostics": [
+    {
+      "code": "BXG0003",
+      "path": "implementation/src/lib.rs",
+      "span": {
+        "start": {
+          "line": 1,
+          "column": 1
+        },
+        "end": {
+          "line": 1,
+          "column": 1
+        }
+      },
+      "offending": "input[1] bytes",
+      "rule": "Rust, TOML, and JSON inputs must be valid UTF-8",
+      "rule_source": "specs/s2-contract-generator.md D1"
+    }
+  ]
+}
+"#;
+const MODEL_DIAGNOSTICS_JSON: &str = r#"{
+  "schema": "boxology.generator-diagnostics@1",
+  "diagnostics": [
+    {
+      "code": "BXG0038",
+      "path": "implementation/src/lib.rs",
+      "span": {
+        "start": {
+          "line": 1,
+          "column": 23
+        },
+        "end": {
+          "line": 1,
+          "column": 30
+        }
+      },
+      "offending": "invalid controlled contract syntax",
+      "rule": "contract tokens must satisfy the controlled v0 grammar",
+      "rule_source": "specs/s2-contract-generator.md D3"
+    }
+  ]
+}
+"#;
 const CLEAN_CHECK_JSON: &str = "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"skipped\",\n      \"reason\": \"contract classification skipped: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"skipped\",\n      \"reason\": \"not run: no repository is available\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"passed\"\n}\n";
 const ROOT_MANIFEST: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 const PACKAGE_MANIFEST: &str = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n";
@@ -258,6 +305,43 @@ fn text(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).unwrap()
 }
 
+fn generated_snapshot(fixture: &Fixture) -> Vec<Vec<u8>> {
+    [
+        "generated/adapter/adapter.rs",
+        "generated/contract/Cargo.toml",
+        "generated/contract/src/lib.rs",
+        "generated/schema.json",
+    ]
+    .map(|path| fs::read(fixture.root.join("ping").join(path)).unwrap())
+    .to_vec()
+}
+
+fn assert_check_generator_failure(input: &[u8], json: &str, human_diagnostic: &str) {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let before = generated_snapshot(&fixture);
+    fs::write(fixture.root.join("ping/implementation/src/lib.rs"), input).unwrap();
+
+    let structured = fixture.run(&["check", "--format", "json"]);
+    assert_eq!(structured.status.code(), Some(1));
+    assert!(structured.stdout.is_empty());
+    assert_eq!(text(&structured.stderr), json);
+    assert_eq!(fixture.argv_log(), METADATA_ARGV);
+    assert_eq!(generated_snapshot(&fixture), before);
+
+    let human = fixture.run(&["check"]);
+    assert_eq!(human.status.code(), Some(1));
+    assert!(human.stdout.is_empty());
+    assert_eq!(
+        text(&human.stderr),
+        format!(
+            "BXW0071 \"./ping/implementation/src/lib.rs\": the contract generator returned diagnostics: {human_diagnostic}\n"
+        )
+    );
+    assert_eq!(fixture.argv_log(), METADATA_ARGV);
+    assert_eq!(generated_snapshot(&fixture), before);
+}
+
 fn schema(box_id: &str, capabilities: &[(&str, &str)]) -> Vec<u8> {
     let capabilities = capabilities.iter().map(|(name, exposure)| format!(r#"{{"deprecation":null,"docs":[],"error":"Fault","id":"{box_id}.{name}","idempotency":"none","input":{{"name":"value","type":"String"}},"max_exposure":"{exposure}","name":"{name}","output":{{"type":"String"}},"shape":"unary"}}"#)).collect::<Vec<_>>().join(",");
     format!(r#"{{"box_id":"{box_id}","capabilities":[{capabilities}],"provenance":null,"revision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","schema_format":1,"types":[{{"deprecation":null,"docs":[],"kind":"error","name":"Fault","variants":[{{"deprecation":null,"docs":[],"name":"Failed","payload":"unit"}}]}}]}}"#).into_bytes()
@@ -270,6 +354,7 @@ fn parsing_accepts_only_the_two_generate_forms() {
         vec!["generate", "--package"],
         vec!["generate", "--package", "ping", "extra"],
         vec!["generate", "--package=ping"],
+        vec!["generate", "--format", "json"],
         vec!["generate", "other"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_boxology"))
@@ -280,6 +365,51 @@ fn parsing_accepts_only_the_two_generate_forms() {
         assert!(text(&output.stdout).is_empty());
         assert_eq!(text(&output.stderr), USAGE);
     }
+}
+
+#[test]
+fn check_json_planning_failure_is_exact_and_human_stays_unchanged() {
+    let fixture = Fixture::new(false);
+    fs::write(
+        fixture.root.join("ping/boxology.toml"),
+        PACKAGE_MANIFEST.replace("boxology-contract", "other-tool"),
+    )
+    .unwrap();
+    let json = fixture.run(&["check", "--format", "json"]);
+    assert_eq!(json.status.code(), Some(1));
+    assert!(json.stdout.is_empty());
+    assert_eq!(
+        text(&json.stderr),
+        "{\n  \"schema\": \"boxology.plan-error@1\",\n  \"code\": \"BXW0064\",\n  \"path\": \"ping/boxology.toml\",\n  \"detail\": \"only the boxology-contract generator is supported by generate\",\n  \"source\": \"specs/s5-manifest-and-validation.md D5\"\n}\n"
+    );
+    assert_eq!(fixture.argv_log(), METADATA_ARGV);
+
+    let human = fixture.run(&["check"]);
+    assert_eq!(human.status.code(), Some(1));
+    assert!(human.stdout.is_empty());
+    assert_eq!(
+        text(&human.stderr),
+        "BXW0064 \"ping/boxology.toml\": only the boxology-contract generator is supported by generate\n"
+    );
+    assert_eq!(fixture.argv_log(), METADATA_ARGV);
+}
+
+#[test]
+fn check_json_preserves_request_diagnostics_before_any_later_step() {
+    assert_check_generator_failure(
+        &[0xff],
+        REQUEST_DIAGNOSTICS_JSON,
+        "BXG0003 implementation/src/lib.rs:1:1-1:1 offending=\"input[1] bytes\" rule=\"Rust, TOML, and JSON inputs must be valid UTF-8\" source=\"specs/s2-contract-generator.md D1\"",
+    );
+}
+
+#[test]
+fn check_json_preserves_controlled_contract_diagnostics_before_any_later_step() {
+    assert_check_generator_failure(
+        b"boxology::contract! { private }",
+        MODEL_DIAGNOSTICS_JSON,
+        "BXG0038 implementation/src/lib.rs:1:23-1:30 offending=\"invalid controlled contract syntax\" rule=\"contract tokens must satisfy the controlled v0 grammar\" source=\"specs/s2-contract-generator.md D3\"",
+    );
 }
 
 #[test]
