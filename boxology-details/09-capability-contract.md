@@ -2,7 +2,7 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
-This document defines the canonical contract authored by a native Rust box. It fixes the relationship between its controlled contract declaration, ordinary implementation code, generated language-neutral schema, typed Rust handles, and transport or client bindings.
+This document defines the target canonical contract authored by a native Rust box; that target exceeds the shipped S1-S4 subset. Delivered behavior is defined by [S1](../specs/s1-runtime-core.md), [S2](../specs/s2-contract-generator.md), [S3](../specs/s3-http-binding.md), and [S4](../specs/s4-contract-change-classification.md). Grammar, metadata, interaction shapes, and binding behavior beyond those specifications remain target design.
 
 ## Two authorities, one source of human intent
 
@@ -74,7 +74,7 @@ The implementation site is one non-generic inherent impl for one concrete receiv
 
 ## Boundary types and type lifting
 
-Before the normal application build, the generator reads each declaration and emits the real compiled type into the box-specific generated package. The implementation names that package through the fixed Cargo dependency alias `boxology_generated_contract`. During normal compilation, the source macro imports the type rather than defining another one and requires the generated marker keyed by the shared parser's canonical semantic contract digest. There is therefore one compiled public definition, and stale generated output fails compilation. The author-facing `boxology` facade re-exports the macros and public kernel/runtime names such as `CallContext`; it is distinct from the lower-level `boxology-contract` crate.
+Before the normal application build, the generator reads each declaration and emits the real compiled type into the box-specific generated package. The implementation names that package through the fixed Cargo dependency alias `boxology_generated_contract`. During normal compilation, the source macro imports the type rather than defining another one and requires the generated marker keyed by the shared parser's canonical semantic contract digest. There is therefore one compiled public definition, and stale generated output fails compilation. The author-facing `boxology` facade re-exports exactly the `contract` and `implementation` macros plus `boxology_contract::CallContext` as `boxology::CallContext`; it exposes no wider kernel or runtime APIs.
 
 Every exported type satisfies the generated contract-type model, referred to here as `ContractType`. Standard supported types receive platform implementations; user-defined boundary types and their metadata implementations are generated. Handwritten implementations are not admitted in v0.
 

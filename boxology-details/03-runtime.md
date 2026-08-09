@@ -2,7 +2,7 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
-This document expands the runtime, endpoint, transport, and authentication model discussed during the design interview.
+This document combines delivered and target runtime design. V0 ships the unary Rust runtime and composition subset defined by [S1](../specs/s1-runtime-core.md) and the HTTP binding defined by [S3](../specs/s3-http-binding.md). Authentication and authorization, streaming, generic CLI and generated client bindings, and the broader generator lifecycle remain long-term design unless those delivered specifications explicitly say otherwise.
 
 ## Runtime responsibility
 

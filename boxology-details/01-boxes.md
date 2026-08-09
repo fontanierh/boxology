@@ -2,7 +2,7 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
-This document expands the box model discussed during the design interview. It records the decisions and reasoning from that discussion; it is not yet an implementation specification.
+This document records the long-term box model discussed during the design interview. The delivered V0 behavior is defined by [V0 Streams](11-v0-streams.md) and its linked specifications; broader statements here describe the target model unless those delivered authorities say otherwise.
 
 **Box** is Boxology's product term for the independently owned capability unit. It is not a Rust language module and does not imply a public Rust type named `Box`; native boxes may use any internal Rust organization behind their generated contracts.
 
@@ -40,7 +40,7 @@ The ownership model discussed was:
 - Generated indexes and lockfiles are derived artifacts rather than foreign package source, but shared lockfile impact can require whole-workspace validation and reassessment.
 - Generated clients are published artifacts; a consumer adopts a new version in its own change.
 
-Derived artifacts must remain mechanically reproducible from the base revision plus only the accountable package's complete permitted non-derived diff under the protected workspace toolchain. They cannot hide hand-written semantic changes or weaken protected ownership and quality policy. The common manifest, ownership algorithm, and lockfile rules are defined in [Packages, Providers, and Compositions](02-packages.md#common-ownership-manifest).
+In V0, generated artifacts are regenerated from the candidate's permitted source inputs and checked byte-for-byte, while ownership findings are reported relative to base-revision manifests and schemas. Reconstructing a candidate from immutable base policy and tooling is the future factory-merger protocol, not a shipped V0 guarantee. Derived artifacts cannot hide hand-written semantic changes or weaken protected ownership and quality policy. The common manifest, ownership algorithm, and lockfile rules are defined in [Packages, Providers, and Compositions](02-packages.md#common-ownership-manifest).
 
 ## Why accept more pull requests
 
@@ -92,7 +92,7 @@ The platform can enforce and evolve that declared binding boundary, but it canno
 
 ## Dependency cycles
 
-"Cycle" is not one property. The platform analyzes separate graphs:
+"Cycle" is not one property. V0 mechanically enforces only the Rust/Cargo graph described below. Live invocation, asynchronous event, provider-dependency, and data-flow graph gates remain future factory design. The long-term platform analyzes these separate graphs:
 
 - The **Rust build graph** contains Cargo package and crate dependencies.
 - The **live invocation graph** contains declared calls in which the caller waits for or maintains a live dependency on the callee, including unary request-response, call-scoped streams, and applicable real-time sessions.
@@ -115,7 +115,6 @@ Graph policy is not runtime safety. Deadlines, cancellation and budget propagati
 
 The discussion did not settle:
 
-- The concrete serialization and implementation tooling for the common package manifest contract.
 - The precise granularity at which a large box should be divided.
 - Post-v0 extensions to the fail-closed contract grammar.
 - The internal erased-dispatch implementation behind composition-selected typed handles.
