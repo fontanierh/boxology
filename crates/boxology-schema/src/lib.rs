@@ -56,36 +56,50 @@ use std::collections::BTreeMap;
 /// The schema format this crate models and serializes.
 pub const SCHEMA_FORMAT: u64 = 1;
 
-macro_rules! boundary_leaves {
+macro_rules! type_expressions {
     ($($variant:ident => $spelling:literal,)*) => {
-        /// One canonical boundary leaf of the format-1 type vocabulary (S2 D3). Deliberately
+        /// One canonical boundary type expression of the format-1 vocabulary (S2 D3). Deliberately
         /// crate-local: the identical enumeration in `boxology-contract-syntax` belongs to the
         /// contract parser, which no schema consumer should have to depend on.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        pub enum BoundaryLeaf {
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub enum TypeExpression {
             $(#[doc = concat!("The `", $spelling, "` boundary leaf.")] $variant,)*
+            /// An earlier local structured declaration.
+            Local(String),
+            /// Optional presence around a base or vector expression.
+            Option(Box<Self>),
+            /// A list around a base expression.
+            Vec(Box<Self>),
         }
 
-        impl BoundaryLeaf {
+        impl TypeExpression {
             /// Every leaf in declaration order, so the vocabulary lock is exhaustive by
             /// construction: a leaf added to the macro invocation lands here too.
             #[cfg(test)]
             const ALL: &'static [Self] = &[$(Self::$variant,)*];
 
-            /// Returns the leaf's canonical schema spelling.
-            pub fn canonical_name(self) -> &'static str {
-                match self { $(Self::$variant => $spelling,)* }
+            /// Returns the expression's canonical Rust-like schema spelling.
+            pub fn canonical_name(&self) -> String {
+                match self {
+                    $(Self::$variant => $spelling.to_owned(),)*
+                    Self::Local(name) => name.clone(),
+                    Self::Option(inner) => format!("Option<{}>", inner.canonical_name()),
+                    Self::Vec(inner) => format!("Vec<{}>", inner.canonical_name()),
+                }
             }
         }
     };
 }
 
 #[rustfmt::skip]
-boundary_leaves! {
+type_expressions! {
     Bool => "bool", U8 => "u8", U16 => "u16", U32 => "u32", U64 => "u64",
     I8 => "i8", I16 => "i16", I32 => "i32", I64 => "i64",
     F32 => "f32", F64 => "f64", String => "String", Blob => "Blob",
 }
+
+/// Backward-compatible name for the scalar-only schema vocabulary that preceded structured types.
+pub type BoundaryLeaf = TypeExpression;
 
 /// A capability's declared interaction shape, as format 1 spells it. Format 1's entire shape
 /// vocabulary is `unary`: the controlled grammar rejects every other shape (S2 D3), so no document
@@ -163,6 +177,52 @@ pub struct SchemaCapability {
     pub idempotency: Idempotency,
 }
 
+/// One local data declaration in source order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaDataType {
+    /// The type's declared identifier.
+    pub name: String,
+    /// The doc lines, in declaration order.
+    pub docs: Vec<String>,
+    /// The deprecation note, present exactly when the type is deprecated.
+    pub deprecation: Option<String>,
+    /// The declaration's struct or unit-enum shape.
+    pub shape: SchemaDataShape,
+}
+
+/// The supported local data declaration shapes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaDataShape {
+    /// A named-field struct; the ordered field list may be empty.
+    Struct(Vec<SchemaDataField>),
+    /// A nonempty unit-only enum.
+    Enum(Vec<SchemaDataVariant>),
+}
+
+/// One ordered field in a local struct declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaDataField {
+    /// The field's declared identifier.
+    pub name: String,
+    /// The field's doc lines, in declaration order.
+    pub docs: Vec<String>,
+    /// The deprecation note, present exactly when the field is deprecated.
+    pub deprecation: Option<String>,
+    /// The field's canonical boundary type expression.
+    pub ty: TypeExpression,
+}
+
+/// One unit variant in a local enum declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaDataVariant {
+    /// The variant's declared identifier.
+    pub name: String,
+    /// The variant's doc lines, in declaration order.
+    pub docs: Vec<String>,
+    /// The deprecation note, present exactly when the variant is deprecated.
+    pub deprecation: Option<String>,
+}
+
 /// The ordered metadata of one named field in a named variant payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaField {
@@ -227,6 +287,8 @@ pub struct SchemaDocument {
     pub box_id: BoxId,
     /// The declared capabilities, in declaration order.
     pub capabilities: Vec<SchemaCapability>,
+    /// Local data declarations, in source order and before the domain error on the wire.
+    pub data_types: Vec<SchemaDataType>,
     /// The opaque provenance value.
     pub provenance: Provenance,
     /// The contract revision, spelled `sha256:` followed by 64 lowercase hexadecimal digits.
@@ -261,13 +323,54 @@ impl SchemaDocument {
             .iter()
             .map(|capability| capability.value(&self.box_id))
             .collect::<Vec<_>>();
+        let types = self
+            .data_types
+            .iter()
+            .map(SchemaDataType::value)
+            .chain(self.types.iter().map(SchemaType::value))
+            .collect::<Vec<_>>();
         json!({
             "schema_format": SCHEMA_FORMAT,
             "box_id": self.box_id.as_str(),
             "revision": self.revision,
             "provenance": self.provenance.0,
             "capabilities": capabilities,
-            "types": self.types.iter().map(SchemaType::value).collect::<Vec<_>>(),
+            "types": types,
+        })
+    }
+}
+
+impl SchemaDataType {
+    fn value(&self) -> Value {
+        match &self.shape {
+            SchemaDataShape::Struct(fields) => json!({
+                "kind": "struct", "name": self.name, "docs": self.docs,
+                "deprecation": deprecation(&self.deprecation),
+                "fields": fields.iter().map(SchemaDataField::value).collect::<Vec<_>>(),
+            }),
+            SchemaDataShape::Enum(variants) => json!({
+                "kind": "enum", "name": self.name, "docs": self.docs,
+                "deprecation": deprecation(&self.deprecation),
+                "variants": variants.iter().map(SchemaDataVariant::value).collect::<Vec<_>>(),
+            }),
+        }
+    }
+}
+
+impl SchemaDataField {
+    fn value(&self) -> Value {
+        json!({
+            "name": self.name, "docs": self.docs,
+            "deprecation": deprecation(&self.deprecation), "type": self.ty.canonical_name(),
+        })
+    }
+}
+
+impl SchemaDataVariant {
+    fn value(&self) -> Value {
+        json!({
+            "name": self.name, "docs": self.docs,
+            "deprecation": deprecation(&self.deprecation),
         })
     }
 }
@@ -434,6 +537,7 @@ mod tests {
         SchemaDocument {
             box_id: BoxId::new("hello").unwrap(),
             capabilities: vec![greet],
+            data_types: Vec::new(),
             provenance: Provenance::new(provenance),
             revision: REVISION.to_owned(),
             types: vec![error_type("GreetError", &["EmptyName"])],
@@ -502,6 +606,7 @@ mod tests {
         SchemaDocument {
             box_id: BoxId::new("store").unwrap(),
             capabilities: vec![put, get],
+            data_types: Vec::new(),
             // Provenance is opaque to strictness but not to the encoding. Both levels are authored
             // out of alphabetical order, which is the order `serde_json` emits under
             // `preserve-order` and makes no difference at all under the default `BTreeMap`.
@@ -739,6 +844,68 @@ mod tests {
         assert_eq!(bytes, PINNED_MIXED);
         assert_eq!(SchemaDocument::parse(&bytes).unwrap(), document);
         assert_ne!(SchemaPayload::Unit, SchemaPayload::Named(Vec::new()));
+    }
+
+    #[test]
+    fn structured_declarations_have_exact_kind_specific_json_shapes() {
+        let mut document = hello(json!(null));
+        document.capabilities[0].input.leaf = TypeExpression::Local("Profile".into());
+        document.capabilities[0].output.leaf = TypeExpression::Option(Box::new(
+            TypeExpression::Vec(Box::new(TypeExpression::Local("Mood".into()))),
+        ));
+        document.data_types = vec![
+            SchemaDataType {
+                name: "Empty".into(),
+                docs: vec![],
+                deprecation: None,
+                shape: SchemaDataShape::Struct(vec![]),
+            },
+            SchemaDataType {
+                name: "Mood".into(),
+                docs: vec!["mood".into()],
+                deprecation: None,
+                shape: SchemaDataShape::Enum(vec![SchemaDataVariant {
+                    name: "Calm".into(),
+                    docs: vec![],
+                    deprecation: Some("quiet".into()),
+                }]),
+            },
+            SchemaDataType {
+                name: "Profile".into(),
+                docs: vec![],
+                deprecation: Some("old".into()),
+                shape: SchemaDataShape::Struct(vec![SchemaDataField {
+                    name: "history".into(),
+                    docs: vec!["past".into()],
+                    deprecation: None,
+                    ty: TypeExpression::Option(Box::new(TypeExpression::Vec(Box::new(
+                        TypeExpression::Local("Mood".into()),
+                    )))),
+                }]),
+            },
+        ];
+        let value: Value = serde_json::from_slice(&document.canonical_bytes()).unwrap();
+        assert_eq!(value["schema_format"], 1);
+        assert_eq!(value["capabilities"][0]["input"]["type"], "Profile");
+        assert_eq!(
+            value["capabilities"][0]["output"]["type"],
+            "Option<Vec<Mood>>"
+        );
+        assert_eq!(
+            value["types"],
+            json!([
+                {"kind":"struct","name":"Empty","docs":[],"deprecation":null,"fields":[]},
+                {"kind":"enum","name":"Mood","docs":["mood"],"deprecation":null,"variants":[
+                    {"name":"Calm","docs":[],"deprecation":{"note":"quiet"}}
+                ]},
+                {"kind":"struct","name":"Profile","docs":[],"deprecation":{"note":"old"},"fields":[
+                    {"name":"history","docs":["past"],"deprecation":null,"type":"Option<Vec<Mood>>"}
+                ]},
+                {"kind":"error","name":"GreetError","docs":[],"deprecation":null,"variants":[
+                    {"name":"EmptyName","docs":[],"deprecation":null,"payload":"unit"}
+                ]}
+            ])
+        );
     }
 
     /// Every spelling below is emitted verbatim into documents that other builds of this software

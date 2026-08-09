@@ -1,11 +1,13 @@
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_contract_syntax::{
-    CanonicalType, CapabilityDeclaration, Contract, ErrorVariant, TypeExpression, VariantField,
-    VariantPayload, VariantValue, exposure_spelling, idempotency_spelling,
+    CanonicalType, CapabilityDeclaration, Contract, DataDeclaration, DataShape, ErrorVariant,
+    TypeExpression as ParsedTypeExpression, VariantField, VariantPayload, VariantValue,
+    exposure_spelling, idempotency_spelling,
 };
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
-    SchemaPayload, SchemaType, SchemaVariant, Shape,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDataField,
+    SchemaDataShape, SchemaDataType, SchemaDataVariant, SchemaDocument, SchemaField, SchemaPayload,
+    SchemaType, SchemaVariant, Shape, TypeExpression,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -26,7 +28,7 @@ pub(super) fn descriptor_constructor(leaf: CanonicalType) -> &'static str {
 }
 
 /// Extracts the scalar leaf after the public generation entry point's fail-closed emitter gate.
-pub(super) fn v0_leaf(expression: &TypeExpression) -> CanonicalType {
+pub(super) fn v0_leaf(expression: &ParsedTypeExpression) -> CanonicalType {
     expression
         .leaf()
         .expect("require_v0_emittable admitted only scalar leaves")
@@ -47,6 +49,7 @@ pub(super) fn document(
     SchemaDocument {
         box_id: BoxId::new(box_id).expect("generated box identity is valid"),
         capabilities: contract.capabilities.iter().map(capability).collect(),
+        data_types: contract.data.iter().map(data_type).collect(),
         provenance: Provenance::new(json!({
             "generator": "boxology-generator",
             "generator_version": generator_version,
@@ -70,6 +73,49 @@ pub(super) fn document(
         }],
     }
     .canonical_bytes()
+}
+
+fn data_type(declaration: &DataDeclaration) -> SchemaDataType {
+    let shape = match &declaration.shape {
+        DataShape::Struct(fields) => SchemaDataShape::Struct(
+            fields
+                .iter()
+                .map(|field| SchemaDataField {
+                    name: field.name.clone(),
+                    docs: field.docs.clone(),
+                    deprecation: field.deprecation.clone(),
+                    ty: type_expression(&field.ty),
+                })
+                .collect(),
+        ),
+        DataShape::Enum(variants) => SchemaDataShape::Enum(
+            variants
+                .iter()
+                .map(|variant| SchemaDataVariant {
+                    name: variant.name.clone(),
+                    docs: variant.docs.clone(),
+                    deprecation: variant.deprecation.clone(),
+                })
+                .collect(),
+        ),
+    };
+    SchemaDataType {
+        name: declaration.name.clone(),
+        docs: declaration.docs.clone(),
+        deprecation: declaration.deprecation.clone(),
+        shape,
+    }
+}
+
+fn type_expression(expression: &ParsedTypeExpression) -> TypeExpression {
+    match expression {
+        ParsedTypeExpression::Leaf(value) => leaf(*value),
+        ParsedTypeExpression::Local(name) => TypeExpression::Local(name.clone()),
+        ParsedTypeExpression::Option(inner) => {
+            TypeExpression::Option(Box::new(type_expression(inner)))
+        }
+        ParsedTypeExpression::Vec(inner) => TypeExpression::Vec(Box::new(type_expression(inner))),
+    }
 }
 
 /// Maps a parsed variant payload onto the schema vocabulary.
@@ -115,10 +161,10 @@ fn capability(capability: &CapabilityDeclaration) -> SchemaCapability {
         error: capability.error.clone(),
         input: InputSlot {
             name: capability.input_name.clone(),
-            leaf: leaf(v0_leaf(&capability.input_type)),
+            leaf: type_expression(&capability.input_type),
         },
         output: OutputSlot {
-            leaf: leaf(v0_leaf(&capability.output_type)),
+            leaf: type_expression(&capability.output_type),
         },
         shape: Shape::Unary,
         max_exposure: capability.exposure,
@@ -302,7 +348,32 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
     let mut out = REVISION_DOMAIN.to_vec();
     out.extend_from_slice(&REVISION_VERSION.to_be_bytes());
     string(&mut out, box_id);
-    count(&mut out, 1);
+    count(&mut out, contract.data.len() + 1);
+    for declaration in &contract.data {
+        out.push(match declaration.shape {
+            DataShape::Struct(_) => 0x03,
+            DataShape::Enum(_) => 0x04,
+        });
+        string(&mut out, &declaration.name);
+        metadata(&mut out, &declaration.docs, &declaration.deprecation);
+        match &declaration.shape {
+            DataShape::Struct(fields) => {
+                count(&mut out, fields.len());
+                for field in fields {
+                    string(&mut out, &field.name);
+                    metadata(&mut out, &field.docs, &field.deprecation);
+                    string(&mut out, &field.ty.canonical_spelling());
+                }
+            }
+            DataShape::Enum(variants) => {
+                count(&mut out, variants.len());
+                for variant in variants {
+                    string(&mut out, &variant.name);
+                    metadata(&mut out, &variant.docs, &variant.deprecation);
+                }
+            }
+        }
+    }
     out.push(1); // error declaration
     let error = &contract.error;
     string(&mut out, &error.name);
@@ -342,10 +413,12 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
             string(&mut out, &value);
         }
         metadata(&mut out, &capability.docs, &capability.deprecation);
+        let input_type = capability.input_type.canonical_spelling();
+        let output_type = capability.output_type.canonical_spelling();
         for value in [
             capability.input_name.as_str(),
-            v0_leaf(&capability.input_type).canonical_name(),
-            v0_leaf(&capability.output_type).canonical_name(),
+            input_type.as_str(),
+            output_type.as_str(),
             capability.error.as_str(),
             "unary",
             exposure_spelling(capability.exposure),
@@ -412,6 +485,133 @@ mod tests {
         assert_eq!(pairs.len(), 13);
         for (parsed, wire) in pairs {
             assert_eq!(leaf(parsed), wire);
+        }
+    }
+
+    fn structured() -> Contract {
+        boxology_contract_syntax::parse(
+            r#"
+            #[doc = "mood docs"] pub enum Mood {
+                #[deprecated(note = "quiet")] Calm, Busy
+            }
+            #[deprecated(note = "legacy")] pub struct Profile {
+                #[doc = "name docs"] pub name: String,
+                pub scores: Vec<u32>,
+                pub mood: Option<Mood>,
+                #[deprecated] pub history: Option<Vec<Mood>>
+            }
+            #[error] pub enum Fault { Bad }
+            #[capability(exposure = external)]
+            pub async fn save(input: Profile) -> Result<Option<Vec<Profile>>, Fault>;
+            "#
+            .parse()
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn struct_fields(contract: &mut Contract) -> &mut Vec<boxology_contract_syntax::DataField> {
+        let DataShape::Struct(fields) = &mut contract.data[1].shape else {
+            panic!("struct")
+        };
+        fields
+    }
+
+    fn enum_variants(contract: &mut Contract) -> &mut Vec<boxology_contract_syntax::DataVariant> {
+        let DataShape::Enum(variants) = &mut contract.data[0].shape else {
+            panic!("enum")
+        };
+        variants
+    }
+
+    #[test]
+    fn structured_schema_mapping_projection_and_mutations_are_exact() {
+        let contract = structured();
+        let bytes = document("profiles", &contract, &[7; 32], &[8; 32], "1.2.3");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_format"], 1);
+        assert_eq!(value["capabilities"][0]["input"]["type"], "Profile");
+        assert_eq!(
+            value["capabilities"][0]["output"]["type"],
+            "Option<Vec<Profile>>"
+        );
+        assert_eq!(
+            value["types"],
+            json!([
+                {"kind":"enum","name":"Mood","docs":["mood docs"],"deprecation":null,"variants":[
+                    {"name":"Calm","docs":[],"deprecation":{"note":"quiet"}},
+                    {"name":"Busy","docs":[],"deprecation":null}
+                ]},
+                {"kind":"struct","name":"Profile","docs":[],"deprecation":{"note":"legacy"},"fields":[
+                    {"name":"name","docs":["name docs"],"deprecation":null,"type":"String"},
+                    {"name":"scores","docs":[],"deprecation":null,"type":"Vec<u32>"},
+                    {"name":"mood","docs":[],"deprecation":null,"type":"Option<Mood>"},
+                    {"name":"history","docs":[],"deprecation":{"note":""},"type":"Option<Vec<Mood>>"}
+                ]},
+                {"kind":"error","name":"Fault","docs":[],"deprecation":null,"variants":[
+                    {"name":"Bad","docs":[],"deprecation":null,"payload":"unit"}
+                ]}
+            ])
+        );
+        let baseline_projection = projection("profiles", &contract);
+        assert_eq!(
+            baseline_projection
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            "626f786f6c6f67792e7075626c69632d636f6e74726163742d7265766973696f6e0000000001000000000000000870726f66696c657300000000000000030400000000000000044d6f6f64000000000000000100000000000000096d6f6f6420646f6373000000000000000002000000000000000443616c6d0000000000000000010000000000000005717569657400000000000000044275737900000000000000000003000000000000000750726f66696c6500000000000000000100000000000000066c6567616379000000000000000400000000000000046e616d65000000000000000100000000000000096e616d6520646f6373000000000000000006537472696e67000000000000000673636f72657300000000000000000000000000000000085665633c7533323e00000000000000046d6f6f64000000000000000000000000000000000c4f7074696f6e3c4d6f6f643e0000000000000007686973746f7279000000000000000001000000000000000000000000000000114f7074696f6e3c5665633c4d6f6f643e3e0100000000000000054661756c7400000000000000000000000000000000010000000000000003426164000000000000000000000000000000000001000000000000000d70726f66696c65732e736176650000000000000004736176650000000000000000000000000000000005696e707574000000000000000750726f66696c6500000000000000144f7074696f6e3c5665633c50726f66696c653e3e00000000000000054661756c740000000000000005756e617279000000000000000865787465726e616c00000000000000046e6f6e65"
+        );
+        assert_eq!(
+            hash_spelling(&revision("profiles", &contract)),
+            "sha256:78f1a8009cff2b47cd17309c138c1ad08a43f90fd9c0905a97e9c38d289f89ad"
+        );
+
+        let mutations: &[fn(&mut Contract)] = &[
+            |c| c.data.swap(0, 1),
+            |c| {
+                c.data.push(DataDeclaration {
+                    docs: Vec::new(),
+                    deprecation: None,
+                    name: "Archive".into(),
+                    shape: DataShape::Struct(Vec::new()),
+                });
+            },
+            |c| c.data[0].shape = DataShape::Struct(Vec::new()),
+            |c| c.data[0].name = "Feeling".into(),
+            |c| c.data[0].docs.push("more".into()),
+            |c| c.data[0].deprecation = Some("old".into()),
+            |c| enum_variants(c).swap(0, 1),
+            |c| {
+                enum_variants(c).pop().unwrap();
+            },
+            |c| enum_variants(c)[0].name = "Still".into(),
+            |c| enum_variants(c)[0].docs.push("calm".into()),
+            |c| enum_variants(c)[0].deprecation = None,
+            |c| struct_fields(c).swap(0, 1),
+            |c| {
+                struct_fields(c).pop().unwrap();
+            },
+            |c| struct_fields(c)[0].name = "label".into(),
+            |c| struct_fields(c)[0].docs.push("more".into()),
+            |c| struct_fields(c)[0].deprecation = Some("old".into()),
+            |c| struct_fields(c)[0].ty = CanonicalType::Bool.into(),
+            |c| c.capabilities[0].input_type = CanonicalType::U32.into(),
+            |c| c.capabilities[0].output_type = CanonicalType::Bool.into(),
+        ];
+        let baseline_revision = revision("profiles", &contract);
+        for (index, mutate) in mutations.iter().enumerate() {
+            let mut changed = contract.clone();
+            mutate(&mut changed);
+            assert_ne!(
+                projection("profiles", &changed),
+                baseline_projection,
+                "mutation {index}"
+            );
+            assert_ne!(
+                revision("profiles", &changed),
+                baseline_revision,
+                "mutation {index}"
+            );
         }
     }
 
@@ -551,6 +751,7 @@ mod tests {
                 max_exposure: ExposureLevel::External,
                 idempotency: Idempotency::None,
             }],
+            data_types: Vec::new(),
             provenance: Provenance::new(json!({
                 "generator": "boxology-generator",
                 "generator_version": "1.2.3",
@@ -667,6 +868,7 @@ mod tests {
                 max_exposure: ExposureLevel::External,
                 idempotency: Idempotency::None,
             }],
+            data_types: Vec::new(),
             provenance: Provenance::new(json!({
                 "generator": "boxology-generator",
                 "generator_version": "0.0.0",

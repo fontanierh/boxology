@@ -246,6 +246,7 @@ impl SchemaDocument {
         Ok(Self {
             box_id,
             capabilities,
+            data_types: Vec::new(),
             provenance,
             revision,
             types: types.values,
