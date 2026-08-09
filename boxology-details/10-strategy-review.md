@@ -2,6 +2,12 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
+> **Historical strategy input:** this document is frozen at the 2026-07-18 review. Its risks and
+> rationale remain useful, but stage descriptions and proposals are not current execution
+> instructions. V0 completed on 2026-08-09; see the
+> [completion evidence](../records/2026-08-09-v0-completion-evidence.md) and current
+> [post-V0 roadmap](12-post-v0-self-hosting-roadmap.md).
+
 This document records the strategic review held on 2026-07-18, immediately after the last MVP-spec blockers closed and before specification work began. The review was conducted with Fable 5 (Claude) and was explicitly requested as a brutally honest assessment: is the plan genuinely useful and novel, and does the philosophy hold? The maintainer accepted the assessment in full. This record preserves it so future decisions can be checked against it.
 
 ## What the review affirmed

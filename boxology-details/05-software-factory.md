@@ -2,6 +2,11 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
+> **Design status (2026-08-09):** V0 is complete; see the
+> [shipped evidence](../records/2026-08-09-v0-completion-evidence.md). This document preserves the
+> factory application's design direction, not delivered harness status. The minimum executable
+> harness path is tracked by the [post-V0 roadmap](12-post-v0-self-hosting-roadmap.md).
+
 This document expands the multi-agent coordination, task, merge, and continuous-analysis system discussed during the design interview.
 
 **Scope note:** the factory described here is not part of the Boxology platform. It is the design direction for the Boxology-based factory *application* — the platform's committed flagship consumer. Boxology defines what a safe change is; the factory decides who makes changes and when they merge. The separation decision is recorded in the [design interview](00-design-interview.md#follow-up-the-platform-and-the-factory-are-separate-products).
@@ -20,11 +25,11 @@ An eventual shared factory substrate may supply mechanisms such as agent executi
 
 The governance hierarchy below is a mature direction. The v0 factory is deliberately only the Boxology skill:
 
-1. A developer gives the skill to a compatible coding-agent harness.
+1. A developer gives the skill to a coding-agent harness that can load its content format.
 2. The skill explains Boxology's philosophy, box boundaries, contracts, compatibility rules, and way of working.
 3. The coding agent adopts the lead-agent role and works through whatever tools and human interface its harness provides.
 
-V0 has no Boxology-owned harness, gateway, sandbox, factory service, task or event ledger, GitHub Issues workflow, worker pool, area leads, reviewer, merger, dashboard, or required communication transport. Codex, Claude Code, Pi, Hermes, and other compatible harnesses are equally valid hosts. Hermes with Slack is one possible operator setup, not part of Boxology.
+V0 has no Boxology-owned harness, gateway, sandbox, factory service, task or event ledger, GitHub Issues workflow, worker pool, area leads, reviewer, merger, dashboard, or required communication transport. The accepted portability claim is that the skill uses a portable content format. Boxology has no certification matrix establishing Codex, Claude Code, Pi, Hermes, or any other harness as an equally supported host; those names were design examples. Hermes with Slack is one possible operator setup, not part of Boxology.
 
 The skill does not promise session persistence, frozen execution, stop-and-resume, message catch-up, or recovery. Those properties belong to the chosen harness until a later Boxology-owned execution layer exists. V0 also does not prescribe a GitHub task or pull-request workflow; richer factory behavior is added iteratively after the box model itself is usable.
 
@@ -182,7 +187,7 @@ Passing CI is necessary but may not be sufficient when the target package, impor
 
 The discussion did not settle:
 
-- The implementation of a future Boxology-owned harness or factory execution layer, including its model, provider, tool, gateway, and durability architecture.
+- Factory architecture beyond the minimum harness slice defined by the [post-V0 roadmap](12-post-v0-self-hosting-roadmap.md), including broader model, tool, gateway, and durability choices.
 - Whether a lead-authored checkpoint should be standardized and where it should live.
 - The exact priority model across areas after human overrides.
 - How the merger computes affected work beyond the identified signals.

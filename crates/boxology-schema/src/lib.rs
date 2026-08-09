@@ -2,7 +2,7 @@
 //!
 //! Callers provide every value. This crate consults no filesystem, environment, network, locale,
 //! or clock. Serialization is total over the model, so it has no failure path at all; a coded
-//! failure vocabulary arrives with the strict reader. Format authority stays with S2
+//! failure vocabulary is enforced by the strict reader. Format authority stays with S2
 //! (`specs/s2-contract-generator.md` D3, D4): per `specs/s4-contract-change-classification.md` D1
 //! this is the relocated model the emitter and the classifier share, never a second authority, so
 //! it may only ever spell what S2 already spells.
@@ -39,12 +39,11 @@
 // `boxology-generator-model` attributed to S2 D4 and pinned in that crate's golden; D6 is the
 // better home and is what this crate freezes, leaving one rule with two attributions to reconcile.
 //
-// The lock lands with the inventory rather than after the reader: `ALL_CODES`, the byte-compared
-// rule-text and attribution golden, and the compile-time exhaustiveness scan are all in this
-// slice. Its reachability half — `corpus_covers_every_code`, one minimal document provoking each
-// code — needs something that can parse a document, so it arrives with the reader, and **the
-// reader may not merge without it**. The payload field validators and their two identity/uniqueness
-// codes belong to this slice, while the classifier-reserved range remains outside this reader.
+// `ALL_CODES`, the byte-compared rule-text and attribution golden, and the compile-time
+// exhaustiveness scan lock the inventory. `corpus_covers_every_code` exercises reader reachability
+// with one minimal document per code. The payload field validators and their two
+// identity/uniqueness codes live here, while the classifier-reserved range remains outside this
+// reader.
 mod read;
 
 pub use boxology_contract::{ExposureLevel, Idempotency};

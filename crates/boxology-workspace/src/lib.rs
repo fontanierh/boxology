@@ -25,8 +25,8 @@
 //!
 //! **What the CLI still owns.** A [`FileEntry::symlink`] target is judged *lexically*, against
 //! the link's own parent directory: physical resolution through an intermediate symlinked
-//! directory is a question a pure library cannot answer, and the complementary walk that never
-//! follows a link is T5's CLI-side obligation.
+//! directory is a question a pure library cannot answer. The CLI's complementary filesystem walk
+//! never follows a link.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 

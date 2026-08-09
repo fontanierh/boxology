@@ -1,5 +1,10 @@
 # Boxology: Independent Software Boxes
 
+> **Status (2026-08-09):** V0 is complete; the shipped boundary is recorded in
+> [V0 completion evidence](records/2026-08-09-v0-completion-evidence.md). This paper states the
+> long-term product thesis, not a checklist of delivered features. Current execution follows the
+> [post-V0 self-hosting roadmap](boxology-details/12-post-v0-self-hosting-roadmap.md).
+
 AI makes producing code increasingly cheap. The new bottleneck is safely coordinating many simultaneous changes.
 
 Boxology treats a software system as independent boxes connected only through explicit, typed interfaces. Humans own the box boundaries, contracts, types, data models, and composition. Agents may implement and replace the code hidden inside each box.
@@ -14,11 +19,11 @@ The justification that ages best is oversight. Model capability grows, but human
 
 ## [Product](boxology-details/07-product-contract.md)
 
-Boxology is the platform: the box model, runtime, contract generator, validation tooling, installer, and a harness-neutral skill. It works with any coding-agent harness. The autonomous software factory is not part of Boxology; it is the project's committed flagship application, built with Boxology, and the vehicle for the safe-parallelism thesis. The boundary is crisp: Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge. The platform constrains the blast radius of changes; a factory makes the additional coordination and scaffolding economically practical.
+Boxology is the platform: the box model, runtime, contract generator, validation tooling, installer, and a portable-format skill. The skill's guidance uses a portable content format; Boxology does not certify coding-agent hosts. The autonomous software factory is not part of Boxology; it is the project's committed flagship application, built with Boxology, and the vehicle for the safe-parallelism thesis. The boundary is crisp: Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge. The platform constrains the blast radius of changes; a factory makes the additional coordination and scaffolding economically practical.
 
 Development bootstraps progressively. The Boxology foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
 
-The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It reads one small, declaration-only Rust contract macro, generates its contract crate, and lets normal Rust compilation prove that an ordinary implementation matches. The result is callable both as Rust code and through HTTP. A small, portable skill explains the Boxology principles to the developer's existing coding agent and names it the lead agent. Boxology does not yet supply that agent's harness, gateway, sandbox, persistence, or GitHub workflow. This milestone tests the box model and harness-neutral guidance, not multi-agent parallelism.
+The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It reads one small, declaration-only Rust contract macro, generates its contract crate, and lets normal Rust compilation prove that an ordinary implementation matches. The result is callable both as Rust code and through HTTP. A small, portable skill explains the Boxology principles to the developer's existing coding agent and names it the lead agent. Boxology does not yet supply that agent's harness, gateway, sandbox, persistence, or GitHub workflow. This milestone tests the box model and portable guidance content, not multi-agent parallelism.
 
 ## [Boxes](boxology-details/01-boxes.md)
 
@@ -96,9 +101,9 @@ Client-binding boxes generate TypeScript, Swift, Kotlin, or other SDKs while kee
 
 A top-level lead coordinates the harness and interfaces with humans. Area leads maintain plans and publish prioritized tasks. Worker agents execute tasks independently.
 
-Those roles describe the intended mature organization, not a hard-coded minimum. V0 is only a harness-neutral Boxology skill: the coding agent using it is the human-facing lead. The skill explains the philosophy, boundaries, contracts, compatibility principles, and way of working. It does not yet prescribe GitHub Issues, workers, reviews, merging, or another coordination workflow.
+Those roles describe the intended mature organization, not a hard-coded minimum. V0 is only a portable-format Boxology skill: the coding agent using it is the human-facing lead. The skill explains the philosophy, boundaries, contracts, compatibility principles, and way of working. It does not yet prescribe GitHub Issues, workers, reviews, merging, or another coordination workflow.
 
-Codex, Claude Code, Pi, Hermes, and other compatible harnesses can host that lead. Their communication surfaces, permissions, persistence, and recovery behavior remain their own. Boxology supplies no v0 harness, Slack integration, sandbox, factory image, liveness monitor, message catch-up, or durability guarantee. Those capabilities can be introduced progressively when Boxology owns the execution substrate that can provide them.
+A coding-agent host that can consume the checked-in guidance may supply that lead. This is content-format portability, not a host certification matrix. The host's communication surfaces, permissions, persistence, and recovery behavior remain its own. Boxology supplies no v0 harness, Slack integration, sandbox, factory image, liveness monitor, message catch-up, or durability guarantee. Those capabilities can be introduced progressively when Boxology owns the execution substrate that can provide them.
 
 The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed packages, changed imported contracts, shared dependency-resolution changes, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
 

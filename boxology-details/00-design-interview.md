@@ -2,6 +2,12 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
+> **Historical design input:** this chronological interview is frozen rationale, including
+> proposals later superseded in the interview itself. It is not current implementation status or
+> an instruction queue. V0 completed on 2026-08-09; see the
+> [completion evidence](../records/2026-08-09-v0-completion-evidence.md) and current
+> [post-V0 roadmap](12-post-v0-self-hosting-roadmap.md).
+
 This is a comprehensive chronological record of the substantive Q&A that produced the initial white paper, followed by later decision interviews where identified. It is lightly edited and condensed for readability rather than presented as a verbatim chat transcript. It preserves the ideas, uncertainty, clarifications, and decisions discussed at each stage.
 
 The historical discussion used *module* as the working term for the independently owned capability unit. The accepted product name is **Boxology**, and the canonical product term is now **box**. Historical passages retain the terminology used when those decisions were made; current normative documents use *box*.

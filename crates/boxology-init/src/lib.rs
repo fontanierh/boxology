@@ -3,7 +3,7 @@
 //! The initializer emits the root platform files, the ping box package (manifest, implementation
 //! crate, and embedded S2-generated contract artifacts), the application composition package, and a
 //! Cargo workspace listing those members. It performs no filesystem, runtime environment, network,
-//! clock, or process access; the writer and later project packages are separate work.
+//! clock, or process access; filesystem publication remains a separate boundary.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
