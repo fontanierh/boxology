@@ -297,8 +297,8 @@ fn checker_source(box_id: &str, contract: &Contract) -> String {
     "#
         .replace("__CAPABILITY__", &capability.name)
         .replace("__ERROR__", &error.name)
-        .replace("__INPUT_TY__", rust_value_type(capability.input_type, true))
-        .replace("__OUTPUT_TY__", rust_value_type(capability.output_type, true))
+        .replace("__INPUT_TY__", rust_value_type(schema::v0_leaf(&capability.input_type), true))
+        .replace("__OUTPUT_TY__", rust_value_type(schema::v0_leaf(&capability.output_type), true))
         .replace("__DISPATCH__", &format!("{prefix}Dispatch"));
     }
     // Beyond one capability the macro body is almost entirely braces, so it is assembled by
@@ -309,10 +309,13 @@ fn checker_source(box_id: &str, contract: &Contract) -> String {
     let per_capability = |template: &str, capability: &CapabilityDeclaration| -> String {
         template
             .replace("__CAP__", &capability.name)
-            .replace("__INPUT_TY__", rust_value_type(capability.input_type, true))
+            .replace(
+                "__INPUT_TY__",
+                rust_value_type(schema::v0_leaf(&capability.input_type), true),
+            )
             .replace(
                 "__OUTPUT_TY__",
-                rust_value_type(capability.output_type, true),
+                rust_value_type(schema::v0_leaf(&capability.output_type), true),
             )
             .replace("__ERROR__", error_name)
     };
@@ -418,9 +421,9 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
                 dyn Fn(CallContext, {input_bare}) -> {pascal}Future + Send + Sync + 'static;
 "#,
                 pascal = pascal_case(&capability.name),
-                output_bare = rust_value_type(capability.output_type, false),
+                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
                 error_name = error_name,
-                input_bare = rust_value_type(capability.input_type, false),
+                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
             )
         })
         .collect::<String>();
@@ -453,8 +456,8 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
 
 "#,
                 name = capability.name,
-                input_bare = rust_value_type(capability.input_type, false),
-                output_bare = rust_value_type(capability.output_type, false),
+                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
+                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
                 error_name = error_name,
                 input_name = capability.input_name,
             )
@@ -480,9 +483,10 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
                     Err(error) => Err(ErasedCallError::from_domain(&error)),
                 }}
             }})"#,
-            input_constructor = schema::descriptor_constructor(capability.input_type),
+            input_constructor =
+                schema::descriptor_constructor(schema::v0_leaf(&capability.input_type)),
             input_name = capability.input_name,
-            input_bare = rust_value_type(capability.input_type, false),
+            input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
         )
     };
     // At a single capability the fake keeps today's exact routing so the Hello golden stays
@@ -622,8 +626,9 @@ fn adapter_source(
                         )),
                     }}"#,
             prefix = prefix,
-            input_constructor = schema::descriptor_constructor(capability.input_type),
-            input_qualified = rust_value_type(capability.input_type, true),
+            input_constructor =
+                schema::descriptor_constructor(schema::v0_leaf(&capability.input_type)),
+            input_qualified = rust_value_type(schema::v0_leaf(&capability.input_type), true),
             capability_name = capability.name,
         )
     };
@@ -955,8 +960,8 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
 "#,
                 capability_name = capability.name,
                 input_name = capability.input_name,
-                input_bare = rust_value_type(capability.input_type, false),
-                output_bare = rust_value_type(capability.output_type, false),
+                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
+                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
                 error_name = error_name,
             )
         })
@@ -991,12 +996,13 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
 "#,
                 capability_name = capability.name,
                 input_name = capability.input_name,
-                input_bare = rust_value_type(capability.input_type, false),
-                output_bare = rust_value_type(capability.output_type, false),
+                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
+                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
                 error_name = error_name,
                 capability_static = capability_static_name(box_id, &capability.name),
                 error_static = error_static,
-                output_constructor = schema::descriptor_constructor(capability.output_type),
+                output_constructor =
+                    schema::descriptor_constructor(schema::v0_leaf(&capability.output_type)),
             )
         })
         .collect::<String>();
