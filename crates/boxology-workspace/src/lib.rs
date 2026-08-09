@@ -735,7 +735,7 @@ fn project_value(value: &TomlValue) -> Result<Canonical, ()> {
 /// Empty `changed` passes with no accountable package and no findings. The input is canonicalized
 /// by sorting and deduplicating paths so unsorted or duplicate callers observe exactly the same
 /// classifications, accountable owner, and findings. Successful attributions reuse
-/// [`attribute_path`]; unowned paths are BXW0098 and rival claims BXW0099. The non-derived owner
+/// `attribute_path`; unowned paths are BXW0098 and rival claims BXW0099. The non-derived owner
 /// set must be exactly one package (BXW0100 otherwise). Under a sole accountable package, a derived
 /// output of any other package is BXW0101, except the workspace `Cargo.lock` path which
 /// [`DiffOwnership::lockfile_scope`] judges alone.
