@@ -87,6 +87,8 @@ A Claude primary launches this candidate as a native Claude sub-agent, which inh
 
 Advisory specification and review directives must forbid edits and require a worktree-status audit for unexpected mutation. Launch review in a fresh process and session.
 
+Every planning or advisory directive must explicitly require pragmatism: optimize for the shortest honest path to shipping, prefer minimal reversible work, distinguish V0 requirements from deferrable follow-ups, and avoid speculative scope or ceremony that does not materially reduce risk. Pragmatism never permits fabricated evidence, concealed trade-offs, destructive shortcuts, or overriding explicit user and repository authority.
+
 ### Apply fallback policy
 
 Without an explicit selection, resolve every phase independently from the first candidate. A fallback used during one phase does not change candidate ordering for a later phase. Do not apply this fallback policy to an explicitly selected candidate.
