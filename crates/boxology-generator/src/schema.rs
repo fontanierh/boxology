@@ -1,7 +1,7 @@
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_contract_syntax::{
-    CanonicalType, CapabilityDeclaration, Contract, ErrorVariant, VariantField, VariantPayload,
-    VariantValue, exposure_spelling, idempotency_spelling,
+    CanonicalType, CapabilityDeclaration, Contract, ErrorVariant, TypeExpression, VariantField,
+    VariantPayload, VariantValue, exposure_spelling, idempotency_spelling,
 };
 use boxology_schema::{
     BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
@@ -23,6 +23,13 @@ pub(super) fn descriptor_constructor(leaf: CanonicalType) -> &'static str {
         CanonicalType::Blob => "blob",
         other => other.canonical_name(),
     }
+}
+
+/// Extracts the scalar leaf after the public generation entry point's fail-closed emitter gate.
+pub(super) fn v0_leaf(expression: &TypeExpression) -> CanonicalType {
+    expression
+        .leaf()
+        .expect("require_v0_emittable admitted only scalar leaves")
 }
 
 /// Maps one controlled contract onto the shared schema model and emits its canonical bytes.
@@ -108,10 +115,10 @@ fn capability(capability: &CapabilityDeclaration) -> SchemaCapability {
         error: capability.error.clone(),
         input: InputSlot {
             name: capability.input_name.clone(),
-            leaf: leaf(capability.input_type),
+            leaf: leaf(v0_leaf(&capability.input_type)),
         },
         output: OutputSlot {
-            leaf: leaf(capability.output_type),
+            leaf: leaf(v0_leaf(&capability.output_type)),
         },
         shape: Shape::Unary,
         max_exposure: capability.exposure,
@@ -247,8 +254,8 @@ fn capability_expression(
         "::boxology_contract::CapabilityDescriptor::new(::boxology_contract::CapabilityId::new({box_id_expr}, ::boxology_contract::CapabilityName::new({name:?}).expect(\"generated capability name is valid\")), ::boxology_contract::TypeDescriptor::{input_constructor}(), ::boxology_contract::TypeDescriptor::{output_constructor}(), {error_expr}, ::boxology_contract::CapabilityShape::Unary, {exposure}, {idempotency}, {deprecation},)",
         box_id_expr = box_id_expr,
         name = capability.name,
-        input_constructor = descriptor_constructor(capability.input_type),
-        output_constructor = descriptor_constructor(capability.output_type),
+        input_constructor = descriptor_constructor(v0_leaf(&capability.input_type)),
+        output_constructor = descriptor_constructor(v0_leaf(&capability.output_type)),
         error_expr = error_expr,
         exposure = exposure_token(capability.exposure),
         idempotency = idempotency_token(capability.idempotency),
@@ -337,8 +344,8 @@ pub(super) fn projection(box_id: &str, contract: &Contract) -> Vec<u8> {
         metadata(&mut out, &capability.docs, &capability.deprecation);
         for value in [
             capability.input_name.as_str(),
-            capability.input_type.canonical_name(),
-            capability.output_type.canonical_name(),
+            v0_leaf(&capability.input_type).canonical_name(),
+            v0_leaf(&capability.output_type).canonical_name(),
             capability.error.as_str(),
             "unary",
             exposure_spelling(capability.exposure),
@@ -410,6 +417,7 @@ mod tests {
 
     fn unary(name: &str, exposure: ExposureLevel, idempotency: Idempotency) -> Contract {
         Contract {
+            data: vec![],
             error: ErrorDeclaration {
                 docs: Vec::new(),
                 deprecation: None,
@@ -426,8 +434,8 @@ mod tests {
                 deprecation: None,
                 name: name.to_owned(),
                 input_name: "n".to_owned(),
-                input_type: CanonicalType::String,
-                output_type: CanonicalType::String,
+                input_type: CanonicalType::String.into(),
+                output_type: CanonicalType::String.into(),
                 error: "E".to_owned(),
                 exposure,
                 idempotency,
@@ -493,6 +501,7 @@ mod tests {
     #[test]
     fn document_bytes_are_the_model_bytes() {
         let contract = Contract {
+            data: vec![],
             error: ErrorDeclaration {
                 docs: vec!["Why storing fails.".to_owned()],
                 deprecation: Some("use StoreFault".to_owned()),
@@ -517,8 +526,8 @@ mod tests {
                 deprecation: Some("use insert".to_owned()),
                 name: "put".to_owned(),
                 input_name: "value".to_owned(),
-                input_type: CanonicalType::U32,
-                output_type: CanonicalType::Bool,
+                input_type: CanonicalType::U32.into(),
+                output_type: CanonicalType::Bool.into(),
                 error: "StoreError".to_owned(),
                 exposure: ExposureLevel::External,
                 idempotency: Idempotency::None,
@@ -579,6 +588,7 @@ mod tests {
     #[test]
     fn document_maps_every_payload_shape() {
         let contract = Contract {
+            data: vec![],
             error: ErrorDeclaration {
                 docs: Vec::new(),
                 deprecation: None,
@@ -632,8 +642,8 @@ mod tests {
                 deprecation: None,
                 name: "inspect".to_owned(),
                 input_name: "name".to_owned(),
-                input_type: CanonicalType::String,
-                output_type: CanonicalType::String,
+                input_type: CanonicalType::String.into(),
+                output_type: CanonicalType::String.into(),
                 error: "PayloadError".to_owned(),
                 exposure: ExposureLevel::External,
                 idempotency: Idempotency::None,

@@ -7,16 +7,60 @@ use proc_macro2::TokenStream;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use syn::{
-    Attribute, Expr, FnArg, ItemEnum, Lit, Meta, ReturnType, Token, Type, parse::Parse,
+    Attribute, Expr, FnArg, ItemEnum, Lit, Meta, ReturnType, Token, Type, Visibility, parse::Parse,
     parse::ParseStream, spanned::Spanned,
 };
 /// A controlled contract block, independent of source spelling and location.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Contract {
+    /// Local structured data declarations in source order.
+    pub data: Vec<DataDeclaration>,
     /// The domain-error declaration.
     pub error: ErrorDeclaration,
     /// The exported capability declarations in source order; always at least one.
     pub capabilities: Vec<CapabilityDeclaration>,
+}
+/// One local structured declaration and its source-ordered members.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataDeclaration {
+    /// Decoded documentation lines in source order.
+    pub docs: Vec<String>,
+    /// Optional decoded deprecation note.
+    pub deprecation: Option<String>,
+    /// Ordinary Rust identifier.
+    pub name: String,
+    /// Struct or unit-enum shape.
+    pub shape: DataShape,
+}
+/// The supported local structured declaration shapes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataShape {
+    /// A named-field struct; the ordered field list may be empty.
+    Struct(Vec<DataField>),
+    /// A nonempty unit-only enum.
+    Enum(Vec<DataVariant>),
+}
+/// One public named struct field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataField {
+    /// Decoded documentation lines in source order.
+    pub docs: Vec<String>,
+    /// Optional decoded deprecation note.
+    pub deprecation: Option<String>,
+    /// Ordinary Rust identifier.
+    pub name: String,
+    /// Validated boundary type expression.
+    pub ty: TypeExpression,
+}
+/// One unit enum variant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataVariant {
+    /// Decoded documentation lines in source order.
+    pub docs: Vec<String>,
+    /// Optional decoded deprecation note.
+    pub deprecation: Option<String>,
+    /// Ordinary Rust identifier.
+    pub name: String,
 }
 /// A controlled domain-error enum. Raw identifiers are rejected.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,10 +136,10 @@ pub struct CapabilityDeclaration {
     pub name: String,
     /// Input name.
     pub input_name: String,
-    /// Canonical scalar leaf accepted as the single input.
-    pub input_type: CanonicalType,
-    /// Canonical scalar leaf produced on success.
-    pub output_type: CanonicalType,
+    /// Canonical boundary type accepted as the single input.
+    pub input_type: TypeExpression,
+    /// Canonical boundary type produced on success.
+    pub output_type: TypeExpression,
     /// Directly named in-block error type.
     pub error: String,
     /// Declared maximum exposure.
@@ -132,6 +176,49 @@ pub enum CanonicalType {
     String,
     /// The `Blob` leaf.
     Blob,
+}
+/// One validated, owned boundary type expression.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TypeExpression {
+    /// An existing canonical scalar leaf.
+    Leaf(CanonicalType),
+    /// An earlier local structured declaration.
+    Local(String),
+    /// Optional presence around a base or vector expression.
+    Option(Box<TypeExpression>),
+    /// A list around a base expression.
+    Vec(Box<TypeExpression>),
+}
+impl TypeExpression {
+    /// Returns the scalar when this expression is exactly one leaf.
+    pub fn leaf(&self) -> Option<CanonicalType> {
+        match self {
+            Self::Leaf(value) => Some(*value),
+            _ => None,
+        }
+    }
+    /// Returns whether `Blob` occurs anywhere in the expression.
+    pub fn contains_blob(&self) -> bool {
+        match self {
+            Self::Leaf(value) => value.is_blob(),
+            Self::Local(_) => false,
+            Self::Option(inner) | Self::Vec(inner) => inner.contains_blob(),
+        }
+    }
+    /// Returns the canonical Rust-like spelling used by semantic encoding.
+    pub fn canonical_spelling(&self) -> String {
+        match self {
+            Self::Leaf(value) => value.canonical_name().into(),
+            Self::Local(name) => name.clone(),
+            Self::Option(inner) => format!("Option<{}>", inner.canonical_spelling()),
+            Self::Vec(inner) => format!("Vec<{}>", inner.canonical_spelling()),
+        }
+    }
+}
+impl From<CanonicalType> for TypeExpression {
+    fn from(value: CanonicalType) -> Self {
+        Self::Leaf(value)
+    }
 }
 impl CanonicalType {
     /// Returns the exact Rust identifier naming the leaf.
@@ -185,7 +272,35 @@ pub fn idempotency_spelling(value: Idempotency) -> &'static str {
 pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
     let mut out = b"boxology.contract-semantics\0".to_vec();
     out.extend_from_slice(&SEMANTIC_ENCODING_VERSION.to_be_bytes());
-    count(&mut out, 1 + contract.capabilities.len());
+    count(
+        &mut out,
+        contract.data.len() + 1 + contract.capabilities.len(),
+    );
+    for declaration in &contract.data {
+        out.push(match declaration.shape {
+            DataShape::Struct(_) => 3,
+            DataShape::Enum(_) => 4,
+        });
+        encode_metadata(&mut out, &declaration.docs, &declaration.deprecation);
+        string(&mut out, &declaration.name);
+        match &declaration.shape {
+            DataShape::Struct(fields) => {
+                count(&mut out, fields.len());
+                for field in fields {
+                    encode_metadata(&mut out, &field.docs, &field.deprecation);
+                    string(&mut out, &field.name);
+                    string(&mut out, &field.ty.canonical_spelling());
+                }
+            }
+            DataShape::Enum(variants) => {
+                count(&mut out, variants.len());
+                for variant in variants {
+                    encode_metadata(&mut out, &variant.docs, &variant.deprecation);
+                    string(&mut out, &variant.name);
+                }
+            }
+        }
+    }
     out.push(1);
     encode_metadata(&mut out, &contract.error.docs, &contract.error.deprecation);
     string(&mut out, &contract.error.name);
@@ -220,8 +335,8 @@ pub fn canonical_semantic_bytes(contract: &Contract) -> Vec<u8> {
         for value in [
             capability.name.as_str(),
             capability.input_name.as_str(),
-            capability.input_type.canonical_name(),
-            capability.output_type.canonical_name(),
+            &capability.input_type.canonical_spelling(),
+            &capability.output_type.canonical_spelling(),
             capability.error.as_str(),
             exposure_spelling(capability.exposure),
             idempotency_spelling(capability.idempotency),
@@ -276,13 +391,42 @@ pub fn parse(tokens: TokenStream) -> syn::Result<Contract> {
 
 impl Parse for Contract {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let attrs = Attribute::parse_outer(input)?;
-        let error = parse_error(&attrs, &input.parse()?)?;
+        let mut data = Vec::new();
+        let mut data_names = BTreeSet::new();
+        let error = loop {
+            if input.is_empty() {
+                return Err(input
+                    .error("a contract requires one #[error] enum and at least one capability"));
+            }
+            let attrs = Attribute::parse_outer(input)?;
+            if attrs.iter().any(|attr| attr.path().is_ident("error")) {
+                let item: ItemEnum = input.parse()?;
+                let error = parse_error(&attrs, &item)?;
+                if data_names.contains(&error.name) {
+                    return Err(error_at(
+                        &item.ident,
+                        "contract data and error names must be unique",
+                    ));
+                }
+                break error;
+            }
+            let ahead = input.fork();
+            let _: Visibility = ahead.parse()?;
+            let declaration = if ahead.peek(Token![struct]) {
+                parse_data_struct(&attrs, &input.parse()?, &data_names)?
+            } else if ahead.peek(Token![enum]) {
+                parse_data_enum(&attrs, &input.parse()?, &data_names)?
+            } else {
+                return Err(input.error("expected a local data declaration or #[error] enum"));
+            };
+            debug_assert!(data_names.insert(declaration.name.clone()));
+            data.push(declaration);
+        };
         let mut capabilities = Vec::new();
         let mut names = BTreeSet::new();
         while !input.is_empty() {
             let attrs = Attribute::parse_outer(input)?;
-            let capability = parse_capability(&attrs, input)?;
+            let capability = parse_capability(&attrs, input, &data_names)?;
             if capability.error != error.name {
                 return Err(
                     input.error("capability error must directly name an in-block #[error] enum")
@@ -299,10 +443,125 @@ impl Parse for Contract {
             );
         }
         Ok(Self {
+            data,
             error,
             capabilities,
         })
     }
+}
+
+fn parse_data_struct(
+    attrs: &[Attribute],
+    item: &syn::ItemStruct,
+    locals: &BTreeSet<String>,
+) -> syn::Result<DataDeclaration> {
+    let (docs, deprecation, marker) = metadata(attrs, "")?;
+    if marker.is_some()
+        || !matches!(item.vis, Visibility::Public(_))
+        || !item.generics.params.is_empty()
+        || item.generics.where_clause.is_some()
+    {
+        return Err(error_at(
+            item,
+            "local structs must be public and non-generic",
+        ));
+    }
+    let fields = match &item.fields {
+        syn::Fields::Named(fields) => fields,
+        syn::Fields::Unnamed(_) => {
+            return Err(error_at(
+                &item.fields,
+                "local structs must use named fields",
+            ));
+        }
+        syn::Fields::Unit => {
+            return Err(error_at(&item.ident, "local structs must use named fields"));
+        }
+    };
+    let mut names = BTreeSet::new();
+    let mut output = Vec::with_capacity(fields.named.len());
+    for field in &fields.named {
+        if !matches!(field.vis, Visibility::Public(_)) {
+            return Err(error_at(
+                field.ident.as_ref().expect("named fields have identifiers"),
+                "local struct fields must be public",
+            ));
+        }
+        let (docs, deprecation, _) = metadata(&field.attrs, "")?;
+        let ident = field.ident.as_ref().expect("named fields have identifiers");
+        let name = identifier(ident)?;
+        if !names.insert(name.clone()) {
+            return Err(error_at(ident, "local struct field names must be unique"));
+        }
+        output.push(DataField {
+            docs,
+            deprecation,
+            name,
+            ty: type_expression(&field.ty, locals)?,
+        });
+    }
+    let name = data_name(&item.ident, locals)?;
+    Ok(DataDeclaration {
+        docs,
+        deprecation,
+        name,
+        shape: DataShape::Struct(output),
+    })
+}
+
+fn parse_data_enum(
+    attrs: &[Attribute],
+    item: &ItemEnum,
+    locals: &BTreeSet<String>,
+) -> syn::Result<DataDeclaration> {
+    let (docs, deprecation, marker) = metadata(attrs, "")?;
+    if marker.is_some()
+        || !matches!(item.vis, Visibility::Public(_))
+        || !item.generics.params.is_empty()
+        || item.generics.where_clause.is_some()
+        || item.variants.is_empty()
+    {
+        return Err(error_at(
+            item,
+            "local enums must be public, non-generic, and nonempty",
+        ));
+    }
+    let mut names = BTreeSet::new();
+    let mut output = Vec::with_capacity(item.variants.len());
+    for variant in &item.variants {
+        if !matches!(variant.fields, syn::Fields::Unit) || variant.discriminant.is_some() {
+            return Err(error_at(
+                variant,
+                "local enum variants must be unit-only without discriminants",
+            ));
+        }
+        let (docs, deprecation, _) = metadata(&variant.attrs, "")?;
+        let name = identifier(&variant.ident)?;
+        if name == "Unknown" {
+            return Err(error_at(
+                &variant.ident,
+                "local enum variant name `Unknown` is reserved",
+            ));
+        }
+        if !names.insert(name.clone()) {
+            return Err(error_at(
+                &variant.ident,
+                "local enum variant names must be unique",
+            ));
+        }
+        output.push(DataVariant {
+            docs,
+            deprecation,
+            name,
+        });
+    }
+    let name = data_name(&item.ident, locals)?;
+    Ok(DataDeclaration {
+        docs,
+        deprecation,
+        name,
+        shape: DataShape::Enum(output),
+    })
 }
 
 fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclaration> {
@@ -434,9 +693,22 @@ fn parse_error(attrs: &[Attribute], item: &ItemEnum) -> syn::Result<ErrorDeclara
     })
 }
 
+#[rustfmt::skip]
+fn data_name(ident: &syn::Ident, locals: &BTreeSet<String>) -> syn::Result<String> {
+    let name = identifier(ident)?;
+    if locals.contains(&name) {
+        return Err(error_at(ident, "local data declaration names must be unique"));
+    }
+    if matches!(name.as_str(), "bool" | "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64" | "String" | "Blob") {
+        return Err(error_at(ident, "local data declaration names must not shadow canonical leaves"));
+    }
+    Ok(name)
+}
+
 fn parse_capability(
     attrs: &[Attribute],
     input: ParseStream<'_>,
+    locals: &BTreeSet<String>,
 ) -> syn::Result<CapabilityDeclaration> {
     let (docs, deprecation, marker) = metadata(attrs, "capability")?;
     let Some(marker) = marker else {
@@ -472,13 +744,11 @@ fn parse_capability(
     {
         return Err(error(&arg.pat, "input must be an undecorated identifier"));
     }
-    let Some(input_type) = leaf(&arg.ty) else {
-        return Err(error(&arg.ty, "input type must be a canonical scalar leaf"));
-    };
-    let Some((output_type, error_name)) = result_error(&output)? else {
+    let input_type = type_expression(&arg.ty, locals)?;
+    let Some((output_type, error_name)) = result_error(&output, locals)? else {
         return Err(error(
             &output,
-            "output must be unqualified Result<Leaf, Error>",
+            "output must be unqualified Result<Type, Error>",
         ));
     };
     Ok(CapabilityDeclaration {
@@ -660,7 +930,98 @@ fn leaf(ty: &Type) -> Option<CanonicalType> {
         _ => return None,
     })
 }
-fn result_error(ty: &Type) -> syn::Result<Option<(CanonicalType, String)>> {
+fn type_expression(ty: &Type, locals: &BTreeSet<String>) -> syn::Result<TypeExpression> {
+    fn base(ty: &Type, locals: &BTreeSet<String>) -> syn::Result<TypeExpression> {
+        if let Some(value) = leaf(ty) {
+            return Ok(value.into());
+        }
+        let Type::Path(path) = ty else {
+            return Err(error_at(
+                ty,
+                "boundary type must use the controlled type-expression grammar",
+            ));
+        };
+        let Some(ident) = path.path.get_ident().filter(|_| path.qself.is_none()) else {
+            return Err(error_at(
+                ty,
+                "boundary type must be an unqualified scalar or earlier local declaration",
+            ));
+        };
+        let name = identifier(ident)?;
+        if !locals.contains(&name) {
+            return Err(error_at(
+                ty,
+                "boundary type must name a scalar or earlier local declaration",
+            ));
+        }
+        Ok(TypeExpression::Local(name))
+    }
+    if let Ok(value) = base(ty, locals) {
+        return Ok(value);
+    }
+    let Type::Path(path) = ty else {
+        return Err(error_at(ty, "unsupported boundary type expression"));
+    };
+    let Some(segment) = path.path.segments.first() else {
+        return Err(error_at(ty, "unsupported boundary type expression"));
+    };
+    if path.qself.is_some() || path.path.leading_colon.is_some() || path.path.segments.len() != 1 {
+        return Err(error_at(ty, "boundary type wrappers must be unqualified"));
+    }
+    let wrapper = identifier(&segment.ident)?;
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Err(error_at(
+            ty,
+            "boundary wrapper requires exactly one type argument",
+        ));
+    };
+    if arguments.colon2_token.is_some() || arguments.args.len() != 1 {
+        return Err(error_at(
+            ty,
+            "boundary wrapper requires exactly one type argument",
+        ));
+    }
+    let Some(syn::GenericArgument::Type(inner)) = arguments.args.first() else {
+        return Err(error_at(
+            ty,
+            "boundary wrapper requires exactly one type argument",
+        ));
+    };
+    match wrapper.as_str() {
+        "Vec" => Ok(TypeExpression::Vec(Box::new(base(inner, locals)?))),
+        "Option" => {
+            let value = if let Type::Path(path) = inner
+                && path.qself.is_none()
+                && path.path.leading_colon.is_none()
+                && path.path.segments.len() == 1
+                && path.path.segments[0].ident == "Vec"
+            {
+                let segment = &path.path.segments[0];
+                let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+                    return Err(error_at(inner, "Vec requires exactly one base type"));
+                };
+                if arguments.colon2_token.is_some() || arguments.args.len() != 1 {
+                    return Err(error_at(inner, "Vec requires exactly one base type"));
+                }
+                let Some(syn::GenericArgument::Type(base_ty)) = arguments.args.first() else {
+                    return Err(error_at(inner, "Vec requires exactly one base type"));
+                };
+                TypeExpression::Vec(Box::new(base(base_ty, locals)?))
+            } else {
+                base(inner, locals)?
+            };
+            Ok(TypeExpression::Option(Box::new(value)))
+        }
+        _ => Err(error_at(
+            ty,
+            "only Option and Vec are supported boundary wrappers",
+        )),
+    }
+}
+fn result_error(
+    ty: &Type,
+    locals: &BTreeSet<String>,
+) -> syn::Result<Option<(TypeExpression, String)>> {
     let Type::Path(result) = ty else {
         return Ok(None);
     };
@@ -689,9 +1050,7 @@ fn result_error(ty: &Type) -> syn::Result<Option<(CanonicalType, String)>> {
     let Some(name) = error.path.get_ident() else {
         return Ok(None);
     };
-    let Some(output_type) = leaf(ok) else {
-        return Ok(None);
-    };
+    let output_type = type_expression(ok, locals)?;
     if error.qself.is_some() {
         return Ok(None);
     }
@@ -699,6 +1058,9 @@ fn result_error(ty: &Type) -> syn::Result<Option<(CanonicalType, String)>> {
 }
 fn error(node: &impl Spanned, message: &str) -> syn::Error {
     syn::Error::new(node.span(), message)
+}
+fn error_at(node: &impl Spanned, message: &str) -> syn::Error {
+    error(node, message)
 }
 fn identifier(ident: &syn::Ident) -> syn::Result<String> {
     let value = ident.to_string();
@@ -749,6 +1111,30 @@ mod tests {
         .unwrap();
         assert_eq!(metadata.error.docs, ["greet"]);
         assert_eq!(metadata.error.deprecation.as_deref(), Some(""));
+    }
+    const STRUCTURED: &str = r#"
+        pub struct Empty {}
+        pub enum Mood { Calm, Busy }
+        pub struct Profile {
+            pub name: String,
+            pub scores: Vec<u32>,
+            pub mood: Option<Mood>,
+            pub history: Option<Vec<Mood>>,
+        }
+        #[error] pub enum Fault { Bad }
+        #[capability] pub async fn save(input: Profile)->Result<Option<Vec<Profile>>,Fault>;
+    "#;
+    #[test]
+    #[rustfmt::skip]
+    fn structured_subset_is_owned_ordered_and_semantically_pinned() {
+        let contract = parse(STRUCTURED.parse().unwrap()).unwrap();
+        assert_eq!(contract.data.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(), ["Empty", "Mood", "Profile"]);
+        let DataShape::Struct(fields) = &contract.data[2].shape else { panic!("profile shape") };
+        assert_eq!(fields.iter().map(|field| (&*field.name, field.ty.canonical_spelling())).collect::<Vec<_>>(), [("name", "String".into()), ("scores", "Vec<u32>".into()), ("mood", "Option<Mood>".into()), ("history", "Option<Vec<Mood>>".into())]);
+        assert_eq!(contract.capabilities[0].input_type, TypeExpression::Local("Profile".into()));
+        assert_eq!(contract.capabilities[0].output_type.canonical_spelling(), "Option<Vec<Profile>>");
+        assert_eq!(hex(&canonical_semantic_bytes(&contract)), "626f786f6c6f67792e636f6e74726163742d73656d616e7469637300000000010000000000000005030000000000000000000000000000000005456d70747900000000000000000400000000000000000000000000000000044d6f6f640000000000000002000000000000000000000000000000000443616c6d00000000000000000000000000000000044275737903000000000000000000000000000000000750726f66696c65000000000000000400000000000000000000000000000000046e616d650000000000000006537472696e67000000000000000000000000000000000673636f72657300000000000000085665633c7533323e00000000000000000000000000000000046d6f6f64000000000000000c4f7074696f6e3c4d6f6f643e0000000000000000000000000000000007686973746f727900000000000000114f7074696f6e3c5665633c4d6f6f643e3e0100000000000000000000000000000000054661756c740000000000000001000000000000000000000000000000000003426164020000000000000000000000000000000004736176650000000000000005696e707574000000000000000750726f66696c6500000000000000144f7074696f6e3c5665633c50726f66696c653e3e00000000000000054661756c740000000000000009636f64655f6f6e6c7900000000000000046e6f6e65");
+        assert_eq!(hex(&semantic_digest(&contract)), "ed88106d788c4813320fa9ce00584a95bbc2ffd79385a83713954fd242c1c111");
     }
     #[test]
     fn capability_metadata_accept_matrix() {
@@ -898,8 +1284,6 @@ mod tests {
             "{error}"
         );
         for boundary in [
-            "Vec<u8>",
-            "Option<u8>",
             "BTreeMap<String,u8>",
             "Field<u8>",
             "Secret<u8>",
@@ -928,21 +1312,27 @@ mod tests {
         }
     }
     #[test]
-    fn non_leaf_input_type_has_a_stable_diagnostic() {
-        let source = format!("{ERROR} {}", CAP.replace("name:String", "name:Vec<u8>"));
+    fn unsupported_nested_input_type_has_a_stable_diagnostic() {
+        let source = format!(
+            "{ERROR} {}",
+            CAP.replace("name:String", "name:Vec<Option<u8>>")
+        );
         let diagnostic = parse(source.parse().unwrap()).unwrap_err();
         assert_eq!(
             diagnostic.to_string(),
-            "input type must be a canonical scalar leaf"
+            "boundary type must be an unqualified scalar or earlier local declaration"
         );
     }
     #[test]
-    fn non_leaf_output_type_has_a_stable_diagnostic() {
-        let source = format!("{ERROR} {}", CAP.replace("Result<String", "Result<Vec<u8>"));
+    fn unsupported_nested_output_type_has_a_stable_diagnostic() {
+        let source = format!(
+            "{ERROR} {}",
+            CAP.replace("Result<String", "Result<Vec<Option<u8>>")
+        );
         let diagnostic = parse(source.parse().unwrap()).unwrap_err();
         assert_eq!(
             diagnostic.to_string(),
-            "output must be unqualified Result<Leaf, Error>"
+            "boundary type must be an unqualified scalar or earlier local declaration"
         );
     }
     #[test]
@@ -961,8 +1351,11 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert_eq!(input.capabilities[0].input_type.canonical_name(), name);
-            assert_eq!(input.capabilities[0].output_type.canonical_name(), "String");
+            assert_eq!(input.capabilities[0].input_type.canonical_spelling(), name);
+            assert_eq!(
+                input.capabilities[0].output_type.canonical_spelling(),
+                "String"
+            );
             let output = parse(
                 format!(
                     "{ERROR} {}",
@@ -972,8 +1365,14 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert_eq!(output.capabilities[0].output_type.canonical_name(), name);
-            assert_eq!(output.capabilities[0].input_type.canonical_name(), "String");
+            assert_eq!(
+                output.capabilities[0].output_type.canonical_spelling(),
+                name
+            );
+            assert_eq!(
+                output.capabilities[0].input_type.canonical_spelling(),
+                "String"
+            );
         }
     }
     #[test]
@@ -987,8 +1386,14 @@ mod tests {
                 .replace("Result<String", "Result<bool")
         );
         let contract = parse(source.parse().unwrap()).unwrap();
-        assert_eq!(contract.capabilities[0].input_type, CanonicalType::U32);
-        assert_eq!(contract.capabilities[0].output_type, CanonicalType::Bool);
+        assert_eq!(
+            contract.capabilities[0].input_type,
+            CanonicalType::U32.into()
+        );
+        assert_eq!(
+            contract.capabilities[0].output_type,
+            CanonicalType::Bool.into()
+        );
         assert_eq!(hex(&canonical_semantic_bytes(&contract)), NON_STRING_BYTES);
         assert_eq!(hex(&semantic_digest(&contract)), NON_STRING_DIGEST);
     }
@@ -1007,8 +1412,14 @@ mod tests {
         assert_eq!(contract.capabilities.len(), 2);
         assert_eq!(contract.capabilities[0].name, "get");
         assert_eq!(contract.capabilities[1].name, "put");
-        assert_eq!(contract.capabilities[0].output_type, CanonicalType::String);
-        assert_eq!(contract.capabilities[1].output_type, CanonicalType::Bool);
+        assert_eq!(
+            contract.capabilities[0].output_type,
+            CanonicalType::String.into()
+        );
+        assert_eq!(
+            contract.capabilities[1].output_type,
+            CanonicalType::Bool.into()
+        );
         assert_eq!(hex(&canonical_semantic_bytes(&contract)), MULTI_BYTES);
         assert_eq!(hex(&semantic_digest(&contract)), MULTI_DIGEST);
         let swapped = parse(format!("{STORE_ERROR} {PUT} {GET}").parse().unwrap()).unwrap();
@@ -1073,8 +1484,9 @@ mod tests {
         let diagnostic = parse(source.parse().unwrap()).unwrap_err();
         assert_eq!(
             diagnostic.to_string(),
-            "output must be unqualified Result<Leaf, Error>"
+            "contract identifiers must be ordinary non-raw Rust identifiers"
         );
+        assert_eq!(&source[diagnostic.span().byte_range()], "gen");
     }
     #[test]
     fn shared_identifier_validator_is_the_final_gate_after_syn_lexing() {

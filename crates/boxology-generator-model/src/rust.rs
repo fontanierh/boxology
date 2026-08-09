@@ -50,6 +50,7 @@ const CONTROLLED_SITE_RULE: &str =
     "exact boxology::contract! invocations must appear once at reachable module scope";
 const CONTROLLED_PARSE_RULE: &str = "contract tokens must satisfy the controlled v0 grammar";
 const CONTROLLED_PARSE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
+const STRUCTURED_EMITTABLE_RULE: &str = "structured data declarations and boundary type expressions are parsed and modelled but require the later structured emitter slice";
 const EMITTABLE_RULE: &str = "the `Blob` capability boundary or value-payload leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.";
 const EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3,D5";
 const PAYLOAD_EMITTABLE_RULE: &str = "named-field payloads require contract-emitter support";
@@ -138,24 +139,33 @@ impl ControlledContract {
     /// Fails closed when parsed semantics are not yet supported by the v0 emitter.
     ///
     /// Scalar leaves and `String` are emittable, including as one-value error payloads; the plain
-    /// parse path still returns the full `Blob` and named-payload models so later tasks can consume
-    /// them, while this guard prevents honest parsing from silently emitting unsupported artifacts.
+    /// parse path still returns structured, `Blob`, and named-payload models so later tasks can
+    /// consume them, while this guard prevents silently emitting unsupported artifacts.
     /// Contracts holding any number of capabilities are emittable; the guard checks every
     /// capability's boundary leaves and every value-payload leaf.
     ///
     /// # Errors
-    /// Returns at most one `BXG0040` for a `Blob` capability or value-payload leaf and at most one
-    /// `BXG0048` for any named-field error variant, both at the contract-invocation span.
+    /// Returns at most one diagnostic per unsupported family at the contract-invocation span.
     pub fn require_v0_emittable(&self) -> Result<(), Diagnostics> {
-        let has_blob_boundary =
-            self.model.capabilities.iter().any(|capability| {
-                capability.input_type.is_blob() || capability.output_type.is_blob()
-            }) || self.model.error.variants.iter().any(|variant| {
-                matches!(
-                    &variant.payload,
-                    boxology_contract_syntax::VariantPayload::Value(value) if value.ty.is_blob()
-                )
+        let has_structured = !self.model.data.is_empty()
+            || self.model.capabilities.iter().any(|capability| {
+                capability.input_type.leaf().is_none() || capability.output_type.leaf().is_none()
             });
+        let has_blob_boundary = self.model.capabilities.iter().any(|capability| {
+            capability.input_type.contains_blob() || capability.output_type.contains_blob()
+        }) || self.model.data.iter().any(|declaration| match &declaration
+            .shape
+        {
+            boxology_contract_syntax::DataShape::Struct(fields) => {
+                fields.iter().any(|field| field.ty.contains_blob())
+            }
+            boxology_contract_syntax::DataShape::Enum(_) => false,
+        }) || self.model.error.variants.iter().any(|variant| {
+            matches!(
+                &variant.payload,
+                boxology_contract_syntax::VariantPayload::Value(value) if value.ty.is_blob()
+            )
+        });
         let has_named_payload = self.model.error.variants.iter().any(|variant| {
             matches!(
                 &variant.payload,
@@ -163,6 +173,16 @@ impl ControlledContract {
             )
         });
         let mut diagnostics = Vec::new();
+        if has_structured {
+            diagnostics.push(Diagnostic {
+                path: self.source.clone(),
+                span: self.span,
+                code: DiagnosticCode::Bxg0038,
+                offending: "structured contract model not yet emittable".into(),
+                rule: STRUCTURED_EMITTABLE_RULE,
+                rule_source: CONTROLLED_PARSE_RULE_SOURCE,
+            });
+        }
         if has_blob_boundary {
             diagnostics.push(Diagnostic {
                 path: self.source.clone(),
@@ -2434,6 +2454,55 @@ mod tests {
             &invalid[diagnostic.span().start().column() - 1..diagnostic.span().end().column() - 1],
             "Vec<u8>"
         );
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn structured_contract_diagnostics_and_emitter_gate_are_exact() {
+        const VALID: &str = "boxology::contract! { pub struct A { pub x: String } pub enum Kind { One } #[error] pub enum Fault { Bad } #[capability] pub async fn go(input:A)->Result<Option<Vec<A>>,Fault>; }";
+        let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", VALID)])).unwrap();
+        let model = parsed.controlled_contract().unwrap();
+        assert_eq!(model.model().data.len(), 2);
+        let gate = model.require_v0_emittable().unwrap_err();
+        assert_eq!(gate.as_slice().iter().map(|item| item.code()).collect::<Vec<_>>(), ["BXG0038"]);
+        let mutations = [
+            ("pub struct A { pub x: String }", "struct A { pub x: String }", "struct A { pub x: String }"),
+            ("{ pub x: String }", "(pub String);", "(pub String)"), ("{ pub x: String }", ";", "A"),
+            ("pub x: String", "x: String", "x"), ("One", "One(String)", "One(String)"),
+            ("{ One }", "{}", "pub enum Kind {}"), ("One", "One = 1", "One = 1"), ("One", "Unknown", "Unknown"),
+            ("pub enum Kind", "pub struct A {} pub enum Kind", "A"),
+            ("pub x: String", "pub x: String, pub x: u8", "x"), ("One", "One, One", "One"),
+            ("x: String", "x: A", "A"), ("x: String", "x: Kind", "Kind"),
+            ("x: String", "x: Missing", "Missing"), ("x: String", "x: Fault", "Fault"),
+            ("x: String", "x: crate::A", "crate::A"), ("x: String", "x: foreign::A", "foreign::A"),
+            ("pub struct A { pub x: String }", "pub type A = String;", "pub"),
+            ("String", "(String,String)", "(String,String)"), ("String", "&String", "&String"),
+            ("String", "BTreeMap<String,String>", "BTreeMap<String,String>"),
+            ("String", "Field<String>", "Field<String>"), ("String", "Secret<String>", "Secret<String>"),
+            ("String", "Box<String>", "Box<String>"), ("String", "Option<String,u8>", "Option<String,u8>"),
+            ("String", "Vec<String,u8>", "Vec<String,u8>"), ("String", "Option<>", "Option<>"),
+            ("String", "option<String>", "option<String>"), ("String", "Option<Option<String>>", "Option<String>"),
+            ("String", "Vec<Option<String>>", "Option<String>"), ("String", "Vec<Vec<String>>", "Vec<String>"),
+            ("String", "Option<Vec<Vec<String>>>", "Vec<String>"),
+            ("struct A", "struct r#A", "r#A"), ("pub x", "pub r#x", "r#x"), ("One", "r#One", "r#One"),
+        ];
+        for (from, to, expected) in mutations {
+            let source = VALID.replacen(from, to, 1);
+            let failure = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &source)])).unwrap().controlled_contract().err().expect("mutant must be rejected");
+            assert_eq!(failure.as_slice().len(), 1, "{to}");
+            let diagnostic = &failure.as_slice()[0];
+            assert_eq!(diagnostic.code(), "BXG0038", "{to}");
+            assert_eq!(&source[diagnostic.span().start().column() - 1..diagnostic.span().end().column() - 1], expected, "{to}");
+        }
+        for leaf in ["bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "String", "Blob"] {
+            let source = VALID.replacen("struct A", &format!("struct {leaf}"), 1);
+            let failure = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &source)])).unwrap().controlled_contract().err().expect("leaf-shadow mutant must be rejected");
+            let diagnostic = &failure.as_slice()[0];
+            assert_eq!((diagnostic.code(), &source[diagnostic.span().start().column() - 1..diagnostic.span().end().column() - 1]), ("BXG0038", leaf));
+        }
+        let blob = VALID.replace("Option<Vec<A>>", "Option<Vec<Blob>>");
+        let model = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &blob)])).unwrap().controlled_contract().unwrap();
+        assert_eq!(model.require_v0_emittable().unwrap_err().as_slice().iter().map(|item| item.code()).collect::<Vec<_>>(), ["BXG0038", "BXG0040"]);
     }
 
     fn assert_metadata_error(attributes: &str, code: &str, expected_span: &str) {
