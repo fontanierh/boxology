@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
 use boxology_cli::{
-    BaseInputsError, BaseSchemasError, ClassifyStepError, CompareDifference, DefaultBase,
-    ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError, base_diff_inputs,
-    base_package_schemas, cargo_metadata_command, classify_step, compare_plans, composition_step,
-    execute_plans, plan, resolve_base, resolve_default_base, run_clippy_step, run_command,
-    run_fmt_step, run_lock_step, run_quality_step, run_test_step, walk,
+    BaseInputsError, BaseSchemasError, ClassifyStepError, CompareDifference, CompareStepError,
+    DefaultBase, ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError,
+    base_diff_inputs, base_package_schemas, cargo_metadata_command, classify_step, compare_plans,
+    composition_step, execute_plans, plan, resolve_base, resolve_default_base, run_clippy_step,
+    run_command, run_fmt_step, run_lock_step, run_quality_step, run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -27,6 +27,7 @@ const METADATA_TEXT: &str =
     "cargo metadata could not be executed or did not return valid workspace metadata";
 const METADATA: Rule = ("BXW0075", METADATA_TEXT, METADATA_SOURCE);
 
+#[derive(Clone, Copy)]
 enum CheckFormat {
     Human,
     Json,
@@ -110,13 +111,13 @@ fn run_generate(
 ) -> u8 {
     let plans = match plan(&workspace, package.as_ref()) {
         Ok(plans) => plans,
-        Err(error) => return report_plan_failure(error, stderr),
+        Err(error) => return report_plan_failure(error, CheckFormat::Human, stderr),
     };
     let mut changed = false;
     for step in execute_plans(root, &plans) {
         let (generation, outcome) = match step {
             Ok(step) => step,
-            Err(error) => return report_execute_failure(error, stderr),
+            Err(error) => return report_execute_failure(error, CheckFormat::Human, stderr),
         };
         changed |= !outcome.is_unchanged();
         let state = if outcome.is_unchanged() {
@@ -158,17 +159,19 @@ fn run_check(
 ) -> u8 {
     let plans = match plan(&workspace, None) {
         Ok(plans) => plans,
-        Err(error) => return report_plan_failure(error, stderr),
+        Err(error) => return report_plan_failure(error, format, stderr),
     };
     let discovery = match composition_step(root, &workspace, &plans) {
         Ok(discovery) => discovery,
-        Err(error) => return report_execute_failure(error, stderr),
+        Err(error) => return report_execute_failure(error, format, stderr),
     };
     let differences = match compare_plans(root, &workspace, &plans) {
         Ok(differences) => differences,
-        Err(error) => {
-            let _ = writeln!(stderr, "{error}");
-            return 1;
+        Err(CompareStepError::Plan(error)) => {
+            return report_plan_failure(error, format, stderr);
+        }
+        Err(CompareStepError::Execute(error)) => {
+            return report_execute_failure(error, format, stderr);
         }
     };
     let regeneration = if differences.is_empty() {
@@ -453,13 +456,27 @@ fn report_metadata_failure(error: MetadataFailure, stderr: &mut dyn Write) -> u8
     2
 }
 
-fn report_plan_failure(error: PlanError, stderr: &mut dyn Write) -> u8 {
-    let _ = writeln!(stderr, "{error}");
+fn report_plan_failure(error: PlanError, format: CheckFormat, stderr: &mut dyn Write) -> u8 {
+    match format {
+        CheckFormat::Human => {
+            let _ = writeln!(stderr, "{error}");
+        }
+        CheckFormat::Json => {
+            let _ = write!(stderr, "{}", error.render_json());
+        }
+    }
     if error.is_unknown_package() { 2 } else { 1 }
 }
 
-fn report_execute_failure(error: ExecuteError, stderr: &mut dyn Write) -> u8 {
-    let _ = writeln!(stderr, "{error}");
+fn report_execute_failure(error: ExecuteError, format: CheckFormat, stderr: &mut dyn Write) -> u8 {
+    match (format, error.diagnostics()) {
+        (CheckFormat::Json, Some(diagnostics)) => {
+            let _ = write!(stderr, "{}", diagnostics.render_json());
+        }
+        _ => {
+            let _ = writeln!(stderr, "{error}");
+        }
+    }
     1
 }
 
