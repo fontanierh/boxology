@@ -1,14 +1,20 @@
 # S7 foundation acceptance runbook
 
-This runbook executes the one gating run required by [S7 D2–D3](../specs/s7-skill-acceptance-self-hosting.md#d2--the-skills-acceptance-contract-is-behavioral) and the [foundation milestone](../boxology-details/07-product-contract.md#first-end-to-end-foundation-milestone). It is an evidence protocol, not extra Boxology guidance for the lead agent. Every run, including a failed or intervened run, produces its own dated record under [`records/`](../records/README.md).
+> **Status:** the clean S7 gate already passed in the
+> [2026-08-03 acceptance record](../records/2026-08-03-foundation-acceptance-clean.md), and V0
+> completed on 2026-08-09 with [shipped evidence](../records/2026-08-09-v0-completion-evidence.md).
+> This runbook remains the repeatable evidence protocol; it does not reopen either milestone.
+> Current execution is separate in the [post-V0 roadmap](../boxology-details/12-post-v0-self-hosting-roadmap.md).
+
+This runbook preserves the behavioral evidence protocol required by [S7 D2–D3](../specs/s7-skill-acceptance-self-hosting.md#d2--the-skills-acceptance-contract-is-behavioral) and the [foundation milestone](../boxology-details/07-product-contract.md#first-end-to-end-foundation-milestone). It is not extra Boxology guidance for the lead agent. Every replay, including a failed or intervened run, produces its own dated record under [`records/`](../records/README.md).
 
 ## Roles and success rule
 
-- One compatible coding agent is the **lead agent** for the entire run. Start one fresh session, disable delegation and subagents, and keep that same session through initialization and evolution.
+- One coding agent able to load the checked-in skill is the **lead agent** for the entire run. Start one fresh session, disable delegation and subagents, and keep that same session through initialization and evolution.
 - The maintainer is the **developer role**. The developer sends only the exact asks and permitted answers below.
 - The operator may prepare the empty repository, create evidence commits, and rerun commands after the lead stops. Operator observations stay out of the lead's context.
 - The checked-in [Boxology onboarding skill](../.agents/skills/boxology/SKILL.md) is the lead's only Boxology-specific guidance. Do not supply this repository's instructions, specs, tests, issues, history, or implementation as guidance, and do not edit the skill during the run.
-- One run is clean only when every success check in this document passes with no intervention. Extra runs with other agents are optional evidence and never substitute for this run.
+- A replay is clean only when every success check in this document passes with no intervention. Replays with other agents are optional additional evidence and do not replace the original clean record.
 
 ## Pin the run
 
@@ -181,4 +187,4 @@ cargo xtask records
 cargo xtask records --base origin/main
 ```
 
-A failed or intervened record is evidence and remains historical. Revise the defective product artifact in a separate PR, start a new target and fresh lead session, and create a new run record. The milestone gates only on one later record satisfying every clean-run condition above.
+A failed or intervened replay record is evidence and remains historical. Revise any defective product artifact in a separate PR, start a new target and fresh lead session, and create a new run record. The original milestone remains closed by its clean record; later replays add evidence without reopening it.

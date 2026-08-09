@@ -2,6 +2,11 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
+> **Status (2026-08-09):** this contract preserves long-term product intent and the delivered
+> foundation boundary; future surfaces are not thereby shipped. V0's current evidence is the
+> [completion record](../records/2026-08-09-v0-completion-evidence.md), and current execution follows
+> the [post-V0 self-hosting roadmap](12-post-v0-self-hosting-roadmap.md).
+
 This document separates the long-term product direction from the first falsifiable foundation milestone. It resolves the product-boundary questions without pretending that the eventual market, agent implementation, or deployment ecosystem is already known.
 
 ## The platform and the factory
@@ -12,9 +17,9 @@ Boxology, the product, is the platform:
 - The Rust runtime crates.
 - The deterministic contract generator and `boxology check`.
 - The installer CLI.
-- The harness-neutral skill that teaches any compatible coding agent to act as a lead.
+- The portable Agent Skills-format guidance that teaches a coding agent to act as a lead.
 
-The autonomous software factory is deliberately **not** part of the Boxology product. It is the project's committed flagship application: built with Boxology, dogfooding it, and serving as the vehicle for the safe-parallelism thesis. The factory is customer number one of the platform, so platform deficiencies surface as a customer's complaints rather than internal compromises. Boxology works with any coding-agent harness — a property the v0 scope demonstrated rather than merely permitted.
+The autonomous software factory is deliberately **not** part of the Boxology product. It is the project's committed flagship application: built with Boxology, dogfooding it, and serving as the vehicle for the safe-parallelism thesis. The factory is customer number one of the platform, so platform deficiencies surface as a customer's complaints rather than internal compromises. V0 exercised the checked-in guidance through its acceptance run; portability is a content-format claim, not certification of a coding-agent harness matrix.
 
 The boundary is: **Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge.** The merge-discipline substrate — validation, contract-change classification, ownership and edge rules, protected-artifact identification — is platform, because any factory consumes it. Orchestration — roles, queues, gateways, coordination — is factory.
 
@@ -39,7 +44,7 @@ The transition from the single-lead bootstrap to a box-built factory is governed
 
 ## Primary v1 operator and operating envelope
 
-The primary v1 operator is an individual developer or very small Rust team starting a greenfield backend with a skill-compatible coding agent.
+The primary v1 operator is an individual developer or very small Rust team starting a greenfield backend with a coding agent able to consume the checked-in skill.
 
 This is the person able to evaluate the foundation milestone, not a claim about the eventual market. Early operators will probably be hobbyists and other experimenters. The long-term ambition is much broader: to become an excellent general way to produce software.
 
@@ -67,11 +72,11 @@ The foundation has no Boxology factory service, gateway, or sandbox. The product
 
 Installation begins through the developer's existing coding agent.
 
-The project supplies a portable Boxology skill following the shared Agent Skills format. The same core guidance should be usable by compatible hosts such as Codex, Claude Code, Cursor, Pi, Hermes, and other agents that support skills. Host-specific packaging may differ, but the product does not make one coding-agent application part of its architecture.
+The project supplies a portable Boxology skill following the shared Agent Skills format. Its core guidance is content-format portable; Boxology does not certify host behavior or maintain a compatibility matrix. Host-specific packaging may differ, and the product does not make one coding-agent application part of its architecture.
 
 The v0 skill is intentionally small. It explains Boxology's philosophy, box boundaries, contracts, compatibility principles, and way of working, and names the coding agent using it the **lead agent**. A deterministic, versioned installer owns project-generation mutations. The expected flow is:
 
-1. The developer installs or gives the onboarding skill to a compatible coding agent.
+1. The developer installs or gives the onboarding skill to a coding agent that can load it.
 2. The agent explains the setup and asks the minimum necessary questions.
 3. The agent obtains and runs the project CLI.
 4. The CLI creates the Rust workspace, box, composition, and repository configuration.
@@ -93,7 +98,7 @@ It does not include a Boxology agent harness, communication gateway, factory ima
 
 ## Harness and deployment neutrality
 
-V0 runs inside the coding-agent harness selected by the user. Codex with local or remote control, Claude Code, Pi, Hermes with Slack, and other setups are examples rather than Boxology components or conformance targets. Boxology does not build, fork, vendor, publish, or require Hermes and does not select Slack or another communication transport.
+V0 runs inside the coding-agent harness selected by the user. Named harnesses and operator setups are examples rather than Boxology components, certified hosts, or conformance targets. Boxology does not build, fork, vendor, publish, or require Hermes and does not select Slack or another communication transport.
 
 The operator may run that harness directly, in a container, on a managed sandbox, or on another target. Docker and Kubernetes remain useful deployment options for chosen harnesses and future Boxology-owned services, but neither belongs to the v0 product contract.
 
@@ -164,15 +169,15 @@ Kubernetes is an important future target for any application built with Boxology
 
 The foundation milestone is successful when this complete scenario works:
 
-1. A developer starts from a greenfield repository and invokes the onboarding skill through a compatible coding agent.
+1. A developer starts from a greenfield repository and invokes the onboarding skill through a coding agent that can load it.
 2. The installer creates the database-free Rust Hello World project.
 3. The capability works through both an in-process Rust call and HTTP.
-4. The skill explains the Boxology model and identifies the coding agent using it as the lead agent, regardless of which compatible harness hosts it.
+4. The skill explains the Boxology model and identifies the coding agent using it as the lead agent.
 5. The developer asks that lead to add the backward-compatible `greet(name)` capability, for which `greet("Ada")` returns `Hello, Ada!`.
 6. The resulting repository state touches no foreign package source, contains only permitted deterministic artifacts outside the Hello box, and behaves consistently through Rust and HTTP.
 7. `boxology check` passes using the same visible validation path available to local development and generated CI.
 
-This scenario proves installation, box definition, two bindings, one box-local evolution, deterministic validation, and harness-neutral lead guidance. It does not test remote execution, persistence, communication delivery, pull-request policy, or multi-agent parallelism.
+This scenario proves installation, box definition, two bindings, one box-local evolution, deterministic validation, and portable lead-guidance content. It does not certify hosts or test remote execution, persistence, communication delivery, pull-request policy, or multi-agent parallelism.
 
 ## Explicit foundation-milestone non-goals
 
