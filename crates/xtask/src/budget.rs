@@ -211,6 +211,7 @@ fn derived_output_patterns(root: &Path) -> Result<Vec<DerivedPattern>, String> {
     let root_path = PathBuf::from("boxology.toml");
     let root_manifest = read_manifest(root, &root_path)?;
     let mut manifests = BTreeSet::from([root_path]);
+    discover_workspace_member_manifests(root, root, &root.join("Cargo.toml"), &mut manifests)?;
     for fixture in root_manifest.fixtures() {
         let Some(project_name) = fixture.as_str().strip_suffix("/**") else {
             continue;
@@ -222,33 +223,7 @@ fn derived_output_patterns(root: &Path) -> Result<Vec<DerivedPattern>, String> {
             continue;
         }
         manifests.insert(PathBuf::from(project_name).join("boxology.toml"));
-        for member in cargo_workspace_members(&cargo_path)? {
-            let member = Path::new(&member);
-            if member.is_absolute()
-                || member
-                    .components()
-                    .any(|component| matches!(component, std::path::Component::ParentDir))
-            {
-                return Err(format!(
-                    "invalid workspace member in {}",
-                    cargo_path.display()
-                ));
-            }
-            let mut directory = project.join(member);
-            loop {
-                let candidate = directory.join("boxology.toml");
-                if candidate.is_file() {
-                    let relative = candidate.strip_prefix(root).map_err(|_| {
-                        format!("manifest escaped repository: {}", candidate.display())
-                    })?;
-                    manifests.insert(relative.to_owned());
-                    break;
-                }
-                if directory == project || !directory.pop() || !directory.starts_with(&project) {
-                    break;
-                }
-            }
-        }
+        discover_workspace_member_manifests(root, &project, &cargo_path, &mut manifests)?;
     }
     let mut patterns = Vec::new();
     for path in manifests {
@@ -268,6 +243,42 @@ fn derived_output_patterns(root: &Path) -> Result<Vec<DerivedPattern>, String> {
         }
     }
     Ok(patterns)
+}
+
+fn discover_workspace_member_manifests(
+    root: &Path,
+    workspace: &Path,
+    cargo_path: &Path,
+    manifests: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    for member in cargo_workspace_members(cargo_path)? {
+        let member = Path::new(&member);
+        if member.is_absolute()
+            || member
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "invalid workspace member in {}",
+                cargo_path.display()
+            ));
+        }
+        let mut directory = workspace.join(member);
+        loop {
+            let candidate = directory.join("boxology.toml");
+            if candidate.is_file() {
+                let relative = candidate
+                    .strip_prefix(root)
+                    .map_err(|_| format!("manifest escaped repository: {}", candidate.display()))?;
+                manifests.insert(relative.to_owned());
+                break;
+            }
+            if directory == workspace || !directory.pop() || !directory.starts_with(workspace) {
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn read_manifest(root: &Path, path: &Path) -> Result<Manifest, String> {
@@ -520,6 +531,52 @@ mod tests {
                 .is_some_and(|entry| !entry.excluded)
         );
         assert!(report.total() > 600);
+    }
+    #[test]
+    fn non_fixture_root_member_uses_nearest_nested_manifest() {
+        let repo = Repo::new();
+        repo.write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/service/implementation\", \"crates/service/generated/contract\"]\n",
+        );
+        repo.write(
+            "crates/service/boxology.toml",
+            concat!(
+                "schema = 1\nid = \"service\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n",
+                "[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\n",
+                "inputs = [\"boxology.toml\"]\noutputs = [\"generated/**\"]\n"
+            ),
+        );
+        repo.write(
+            "crates/service/implementation/Cargo.toml",
+            "[package]\nname = \"service\"\nversion = \"0.0.0\"\n",
+        );
+        repo.write(
+            "crates/service/generated/contract/Cargo.toml",
+            "[package]\nname = \"service-contract\"\nversion = \"0.0.0\"\n",
+        );
+        let base = repo.commit("base");
+        let derived_path = "crates/service/generated/contract/src/lib.rs";
+        repo.write(derived_path, lines(601));
+        repo.write("crates/service/implementation/src/lib.rs", "authored\n");
+        repo.commit("nested package output");
+
+        let report = compute(&repo.0, &base).unwrap();
+        assert_eq!(report.total(), 1);
+        assert!(
+            report
+                .entries
+                .iter()
+                .find(|entry| entry.path == derived_path)
+                .is_some_and(|entry| entry.excluded)
+        );
+        assert!(
+            report
+                .entries
+                .iter()
+                .find(|entry| entry.path == "crates/service/implementation/src/lib.rs")
+                .is_some_and(|entry| !entry.excluded)
+        );
     }
     #[test]
     fn rename_lock_binary_and_errors_are_handled() {
