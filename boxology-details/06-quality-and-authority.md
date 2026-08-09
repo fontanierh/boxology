@@ -104,7 +104,15 @@ The agreed default guidance was:
 
 > CI and quality-policy files are protected control-plane artifacts. Changing them requires human approval by default.
 
-In the foundation, "protected" means that Boxology identifies these artifacts, the shipped skill tells the lead to flag their changes for human review, and `boxology check` evaluates the base revision's policy rather than letting a candidate authorize itself. Boxology does not enforce approval or configure branch protection. Operators can add GitHub required checks, branch protection, review ownership, or harness policy when they want a machine-enforced boundary. The lead is still permitted to create, modify, and run GitHub Actions when its supplied credentials allow it.
+In the foundation, "protected" means that Boxology identifies these artifacts and the shipped
+skill tells the lead to flag their changes for human review. With `--base`, `boxology check` reads
+base manifests and schemas to attribute changed paths and classify contract differences; that is
+reporting under base declarations, not execution of immutable base policy. The candidate owns the
+checker and workflow, and Boxology ships no merger replay, branch protection, enforced approval,
+or separation of duties. Operators can add required checks, branch protection, review ownership,
+or harness policy when they want a stronger boundary. Semantic self-protection remains
+[#17](https://github.com/fontanierh/boxology/issues/17). The lead is still permitted to create,
+modify, and run GitHub Actions when its supplied credentials allow it.
 
 Teams may deliberately choose a more permissive or highly autonomous policy. The platform should make the safer configuration easy and provide consistent defaults, but it should not impose one universal risk posture on every user.
 

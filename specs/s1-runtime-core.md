@@ -1,12 +1,12 @@
 # S1 Spec — Runtime Core and Composition Assembly
 
-[Stream definition](../boxology-details/11-v0-streams.md#s1--runtime-core-and-composition-assembly) · Status: **accepted at merge** (two review rounds addressed; cross-stream contract in issue #85)
+[Stream definition](../boxology-details/11-v0-streams.md#s1--runtime-core-and-composition-assembly) · Status: **delivered in V0** · [Completion evidence](../records/2026-08-09-v0-completion-evidence.md)
 
-S1 builds the kernel crates: the contract-type model, the descriptor ABI, the call context, the error model, the handle machinery, the composition assembly and lifecycle API, and the in-process binding. Normative input: [Canonical Capability Contract](../boxology-details/09-capability-contract.md); this spec makes implementation decisions, it does not reopen that contract.
+S1 delivers the kernel crates: the contract-type model, descriptor ABI, call context, error model, handle machinery, composition assembly/lifecycle API, and in-process binding. Normative input: [Canonical Capability Contract](../boxology-details/09-capability-contract.md); this spec records the delivered baseline and does not reopen that contract.
 
 ## Purpose
 
-Every later stream consumes S1. It owns the descriptor ABI (S2 generates values, S3 decodes against them), the presence and opacity representations, the invocation and error ABI, and the composition lifecycle that transports plug into. Its fixtures are hand-written in exactly the shape S2 must emit and become S2's golden targets.
+Every later stream consumes S1. It owns the descriptor ABI (S2 generates values, S3 decodes against them), the presence and opacity representations, the invocation and error ABI, and the composition lifecycle that transports plug into. Its fixture surfaces match S2's emitted shape, and their checked-in generated artifacts are S2 golden targets.
 
 ## Non-goals
 
@@ -23,7 +23,7 @@ Every later stream consumes S1. It owns the descriptor ABI (S2 generates values,
 - **`boxology-contract`**: value model, `ContractType`/`ContractError`, presence and opacity types, descriptor types, `CallContext`, `CallError`, `Deadline`, `CancelToken`, `TraceContext`, the erased dispatch ABI. No I/O, no server; one async-adjacent dependency (`tokio-util` for `CancellationToken`, recorded and replaceable).
 - **`boxology-runtime`**: composition builder, import resolution, exposure, validation, lifecycle, in-process binding, `TransportBinding`.
 
-S2 later adds an author-facing `boxology` facade that re-exports macros and public kernel/runtime authoring names, including `CallContext`; it owns no competing ABI. Generated contract crates still depend on `boxology-contract` only. Each implementation uses the facade and aliases its box-specific generated package to the fixed dependency name `boxology_generated_contract`.
+The author-facing `boxology` facade re-exports exactly the `contract` and `implementation` macros plus `boxology_contract::CallContext`; it does not re-export the wider kernel or runtime APIs and owns no competing ABI. Generated contract crates depend on `boxology-contract` only. Each implementation uses the facade and aliases its box-specific generated package to the fixed dependency name `boxology_generated_contract`.
 
 ### D2 — Value model: `ContractValue`, `SlotValue`, and presence at every position
 
@@ -117,9 +117,7 @@ crates/fixtures/<name>/
     schema.json                       # hand-written golden schema (provenance placeholder token)
 ```
 
-The architecture-proof task atomically consolidates the current temporary `authoring/` source fixture into this implementation source and removes the duplicate handwritten method copy. Until that task lands, the repository fixture remains a hand-modeled S1 bootstrap rather than evidence that the final authoring topology already works.
-
-The required S1 v0 fixtures are exactly **`hello`** and **`greeter`**. `hello` proves one generated scalar/unit-error box; `greeter` imports `hello` through a resolved import, proving injection end to end. The S6/S7 `ping` and `ping-app` projects complete the [v0 evidence corpus](../boxology-details/11-v0-streams.md#the-v0-evidence-corpus). The `kitchen-sink` full-grammar fixture is a post-v0 residual ([#100](https://github.com/fontanierh/boxology/issues/100)); S1's presence-grid and sensitivity acceptance evidence lives in the kernel's descriptor-level suites and never depended on that fixture. Golden evolution stays atomic per task PR; provenance normalization per S2's protocol.
+The required S1 v0 fixtures are exactly **`hello`** and **`greeter`**. `hello` proves one generated scalar/unit-error box; `greeter` imports `hello` through a resolved import, proving injection end to end. The S6/S7 `ping` and `ping-app` projects complete the [v0 evidence corpus](../boxology-details/11-v0-streams.md#the-v0-evidence-corpus). The `kitchen-sink` full-grammar fixture is a post-v0 residual ([#100](https://github.com/fontanierh/boxology/issues/100)); S1's presence-grid and sensitivity acceptance evidence lives in the kernel's descriptor-level suites and never depended on that fixture. Fixture and golden evolution stays atomic, with provenance normalized by S2's protocol.
 
 ## Acceptance criteria
 
@@ -132,28 +130,8 @@ The required S1 v0 fixtures are exactly **`hello`** and **`greeter`**. `hello` p
 7. In-process semantics: expired deadline (zero invocations), caller-input violation (zero invocations), provider-output `InvalidResponse`, panic → `Internal` at the dispatch boundary, cooperative cancellation observation.
 8. A synthetic reserved non-unary descriptor is constructible and rejected by the stub transport's conformance hook (S3 reuses this pattern).
 9. Structural demonstration of generated-surface policy, labeled as such (mechanical criterion owned by S5).
-10. Green under S0 validation on both platforms.
-
-## Task list
-
-| Task | Content | Est. PRs |
-| --- | --- | --- |
-| T1 | `ContractValue`/`SlotValue`, constructors, invariants, visitors, sensitive node | 2 |
-| T2 | Presence wrappers + roles + `OpaqueTree`/`OpaquePayload` | 2 |
-| T3 | `ContractType`/`ContractError` (fallible encode), platform impls | 2 |
-| T4 | Descriptor types with the outward/implementation split | 1 |
-| T5 | Invocation ABI: context, child, errors, `ErasedTarget` | 2 |
-| T6 | Builder, factories/injection, fallible start, transport lifecycle, tracker, in-process binding | 3 |
-| T7 | Fixtures per D13 (hello, greeter) + suites | 3 |
+10. Green in final exact-main native macOS ARM64 V0 validation; cross-platform re-proof is owned by [#525](https://github.com/fontanierh/boxology/issues/525).
 
 ## Matters left open
 
 *(None load-bearing for v0.)* `Caller` shape (auth cluster); hidden calling-surface graduation; token-dependency replacement. Post-v0 residuals recorded with the corpus decision: extended `kitchen-sink` fixture ([#100](https://github.com/fontanierh/boxology/issues/100)); `Blob`/`Secret` end-to-end fixture paths and generated structured/container fixture coverage ([#100](https://github.com/fontanierh/boxology/issues/100), [#104](https://github.com/fontanierh/boxology/issues/104)).
-
-## Tracker notes
-
-#6 narrowing as previously recorded, now additionally: composition lifecycle/shutdown and transport start hooks are decided here; #6 retains discovery, placement, routing, multi-version topology, overload. Issue #85's remaining S1 items (presence/opacity ABI, descriptor split, injection path, fallible lifecycle, adapter golden, panic ownership) are resolved in this revision.
-
-**Amendment of 2026-08-04** (maintainer corpus-acceleration decision): D13/T7 drop the phantom `kitchen-sink` v0 obligation; required S1 fixtures are `hello` and `greeter`; kernel presence/sensitivity/opacity evidence is unchanged. Operator reconciliation updates [#100](https://github.com/fontanierh/boxology/issues/100) and names it in [#343](https://github.com/fontanierh/boxology/issues/343)'s residual ledger.
-
-**Amendment of 2026-08-04 (#522 reconciliation).** AC10's "both platforms" V0 evidence reads as native macOS ARM64 V0 evidence; cross-platform re-proof is owned by [#525](https://github.com/fontanierh/boxology/issues/525).

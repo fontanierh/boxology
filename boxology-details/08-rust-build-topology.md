@@ -22,7 +22,7 @@ boxes/customer/
 
 The exact directory and crate names are tooling choices. The semantic distinction is not: another box may compile against the contract crate but never against the implementation crate.
 
-The future author-facing `boxology` facade crate is distinct from today's kernel crate, `boxology-contract`. `boxology-contract` continues to own the value/descriptor ABI. The facade re-exports the contract and implementation macros plus public authoring names from the kernel/runtime, including `CallContext`, so examples use one stable `boxology::...` path.
+The author-facing `boxology` facade crate is distinct from the kernel crate, `boxology-contract`. `boxology-contract` owns the value/descriptor ABI. The delivered facade re-exports exactly the `contract` and `implementation` macros plus `boxology_contract::CallContext`; it does not re-export the wider kernel or runtime APIs.
 
 Inside each implementation `Cargo.toml`, `boxology_generated_contract` is a fixed dependency **alias**, not a global package name. The generated package remains box-specific and workspace-unique:
 
@@ -240,15 +240,21 @@ The foundation `boxology check` baseline is:
 
 An intentional contract change is authored in Rust and followed by `boxology generate`; its generated diff and semantic classification are reviewed together. An accidental stale or hand-edited artifact fails `boxology check` with the regeneration command needed to repair it. The checker never hides an incompatible change merely because generated files match.
 
-The initializer emits a repository-owned GitHub Actions workflow that runs the same `boxology check --base <pull-request-base>` command on Linux. Developers and the lead can run `boxology check` through their ordinary workflow. The platform does not create branch-protection or required-check settings; the operator decides whether to make that visible GitHub check a merge requirement. There is no hidden factory-only validation layer.
+The initializer emits golden-pinned repository-owned GitHub Actions workflow bytes for
+`ubuntu-latest` and `boxology check --base <pull-request-base>`. V0 proved those emitted bytes and
+anchors, not execution of the source-provisioned Linux workflow. Its first execution is deferred
+to [#525](https://github.com/fontanierh/boxology/issues/525) at the first pinned external release.
+Developers and the lead can run `boxology check` through their ordinary workflow. The platform
+does not create branch-protection or required-check settings; the operator decides whether to make
+a visible check a merge requirement. There is no hidden factory-only validation layer.
 
 Package quality commands are trusted repository code and run with the sandbox's full ambient access, as defined by the [foundation threat boundary](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
 
-The supported foundation execution matrix is Linux for generated CI, with local `boxology` command support on Linux and macOS. A chosen lead harness may run anywhere it supports; Boxology makes no harness-host claim. Other Boxology CLI hosts are not claimed until they enter the tested matrix.
-
-The generator's own conformance suite runs on Linux and macOS and compares derived output across both platforms. Platform-dependent ordering, paths, line endings, timestamps, or other byte differences fail there rather than being delegated to generated projects.
-
-Continuous cross-platform generator conformance is deferred to [#525](https://github.com/fontanierh/boxology/issues/525) for V0's lean native-macOS gate and is required before the first pinned external release.
+The current evidenced execution platform is native macOS ARM64. A chosen lead harness may run
+anywhere it supports, but Boxology makes no harness-host or additional CLI-host support claim.
+Generator outputs remain required to be platform-independent; Linux execution and wider
+cross-platform comparison are [#525](https://github.com/fontanierh/boxology/issues/525) evidence
+required before the first pinned external release.
 
 ## Foundation milestone
 
