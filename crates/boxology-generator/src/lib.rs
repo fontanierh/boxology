@@ -258,7 +258,7 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                         "{}pub {}: {},",
                         attributes(&field.docs, &field.deprecation),
                         field.name,
-                        rust_type_expression(&field.ty)
+                        rust_type_expression(&field.ty, "", true)
                     )
                 })
                 .collect::<String>();
@@ -284,7 +284,7 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                 .map(|field| format!(
                     "{field}: <{ty} as ::boxology_contract::ContractType>::decode_field(fields.get({field:?})).map_err(|error| error.under(::boxology_contract::PathSegment::Field({field:?}.into())))?,",
                     field = field.name,
-                    ty = rust_type_expression(&field.ty)
+                    ty = rust_type_expression(&field.ty, "", true)
                 ))
                 .collect::<String>();
             format!(
@@ -322,7 +322,12 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                 .collect::<String>();
             let encoders = variants
                 .iter()
-                .map(|variant| format!("Self::{name} => {name:?},", name = variant.name))
+                .map(|variant| {
+                    format!(
+                        "Self::{name} => ({name:?}.into(), ::boxology_contract::SlotValue::Null),",
+                        name = variant.name
+                    )
+                })
                 .collect::<String>();
             let decoders = variants
                 .iter()
@@ -333,11 +338,14 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                 .collect::<String>();
             format!(
                 r#"
-                {attrs}#[derive(Debug, Clone, PartialEq)] pub enum {name} {{ {definitions} }}
+                {attrs}#[derive(Debug, Clone, PartialEq)] pub enum {name} {{ {definitions} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }} }}
                 impl ::boxology_contract::ContractType for {name} {{
                     fn encode_value(&self) -> ::core::result::Result<::boxology_contract::ContractValue, ::boxology_contract::EncodeError> {{
-                        let tag = match self {{ {encoders} }};
-                        Ok(::boxology_contract::ContractValue::enum_value(tag, ::boxology_contract::SlotValue::Null))
+                        let (tag, payload) = match self {{
+                            {encoders}
+                            Self::Unknown {{ tag, payload }} => (tag.clone(), ::boxology_contract::SlotValue::Value(::boxology_contract::ContractValue::opaque(payload.forward()))),
+                        }};
+                        Ok(::boxology_contract::ContractValue::enum_value(tag, payload))
                     }}
                     fn decode_value(value: &::boxology_contract::ContractValue) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {{
                         let ::boxology_contract::ValueRef::Enum {{ tag, payload }} = value.view() else {{
@@ -345,7 +353,13 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                         }};
                         match tag {{
                             {decoders}
-                            _ => Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnknownVariant(tag.into())).under(::boxology_contract::PathSegment::Variant(tag.into()))),
+                            _ => match payload {{
+                                ::boxology_contract::SlotValue::Value(value) => match value.view() {{
+                                    ::boxology_contract::ValueRef::Opaque(payload) => Ok(Self::Unknown {{ tag: tag.into(), payload: payload.forward() }}),
+                                    _ => Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnknownVariant(tag.into())).under(::boxology_contract::PathSegment::Variant(tag.into()))),
+                                }},
+                                _ => Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnknownVariant(tag.into())).under(::boxology_contract::PathSegment::Variant(tag.into()))),
+                            }},
                         }}
                     }}
                 }}
@@ -355,16 +369,41 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
     }
 }
 
-fn rust_type_expression(expression: &TypeExpression) -> String {
+fn rust_type_expression(
+    expression: &TypeExpression,
+    local_prefix: &str,
+    qualified_leaves: bool,
+) -> String {
     match expression {
-        TypeExpression::Leaf(leaf) => rust_value_type(*leaf, true).into(),
-        TypeExpression::Local(name) => name.clone(),
+        TypeExpression::Leaf(leaf) => rust_value_type(*leaf, qualified_leaves).into(),
+        TypeExpression::Local(name) => format!("{local_prefix}{name}"),
         TypeExpression::Option(inner) => {
-            format!("::core::option::Option<{}>", rust_type_expression(inner))
+            format!(
+                "::core::option::Option<{}>",
+                rust_type_expression(inner, local_prefix, qualified_leaves)
+            )
         }
         TypeExpression::Vec(inner) => {
-            format!("::std::vec::Vec<{}>", rust_type_expression(inner))
+            format!(
+                "::std::vec::Vec<{}>",
+                rust_type_expression(inner, local_prefix, qualified_leaves)
+            )
         }
+    }
+}
+
+/// Emits a decode call without changing the frozen scalar spelling. Structured values use UFCS so
+/// nested generic and qualified local paths are unambiguous at every generated site.
+fn decode_call(
+    expression: &TypeExpression,
+    rust_type: &str,
+    contract_type: &str,
+    value: &str,
+) -> String {
+    if expression.leaf().is_some() {
+        format!("{rust_type}::decode({value})")
+    } else {
+        format!("<{rust_type} as {contract_type}>::decode({value})")
     }
 }
 
@@ -431,8 +470,14 @@ fn checker_source(box_id: &str, contract: &Contract) -> String {
     "#
         .replace("__CAPABILITY__", &capability.name)
         .replace("__ERROR__", &error.name)
-        .replace("__INPUT_TY__", rust_value_type(schema::v0_leaf(&capability.input_type), true))
-        .replace("__OUTPUT_TY__", rust_value_type(schema::v0_leaf(&capability.output_type), true))
+        .replace(
+            "__INPUT_TY__",
+            &rust_type_expression(&capability.input_type, "$crate::", true),
+        )
+        .replace(
+            "__OUTPUT_TY__",
+            &rust_type_expression(&capability.output_type, "$crate::", true),
+        )
         .replace("__DISPATCH__", &format!("{prefix}Dispatch"));
     }
     // Beyond one capability the macro body is almost entirely braces, so it is assembled by
@@ -445,11 +490,11 @@ fn checker_source(box_id: &str, contract: &Contract) -> String {
             .replace("__CAP__", &capability.name)
             .replace(
                 "__INPUT_TY__",
-                rust_value_type(schema::v0_leaf(&capability.input_type), true),
+                &rust_type_expression(&capability.input_type, "$crate::", true),
             )
             .replace(
                 "__OUTPUT_TY__",
-                rust_value_type(schema::v0_leaf(&capability.output_type), true),
+                &rust_type_expression(&capability.output_type, "$crate::", true),
             )
             .replace("__ERROR__", error_name)
     };
@@ -555,9 +600,9 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
                 dyn Fn(CallContext, {input_bare}) -> {pascal}Future + Send + Sync + 'static;
 "#,
                 pascal = pascal_case(&capability.name),
-                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
+                output_bare = rust_type_expression(&capability.output_type, "super::", false),
                 error_name = error_name,
-                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
+                input_bare = rust_type_expression(&capability.input_type, "super::", false),
             )
         })
         .collect::<String>();
@@ -590,8 +635,8 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
 
 "#,
                 name = capability.name,
-                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
-                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
+                input_bare = rust_type_expression(&capability.input_type, "super::", false),
+                output_bare = rust_type_expression(&capability.output_type, "super::", false),
                 error_name = error_name,
                 input_name = capability.input_name,
             )
@@ -600,14 +645,21 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
     // The per-capability decode/dispatch/encode body is identical between the single- and
     // multi-capability `call` shapes; only the routing envelope around it differs.
     let async_body = |capability: &CapabilityDeclaration| -> String {
+        let input_bare = rust_type_expression(&capability.input_type, "super::", false);
+        let input_decode = decode_call(
+            &capability.input_type,
+            &input_bare,
+            "ContractType",
+            "&input",
+        );
         format!(
             r#"Box::pin(async move {{
-                let input = TypeDescriptor::{input_constructor}()
+                let input = {input_descriptor}
                     .conform(DecodeRole::ProviderInput, input)
                     .map_err(|error| {{
                         ErasedCallError::ContractViolation(conversion_detail("input_decode", error))
                     }})?;
-                let {input_name} = {input_bare}::decode(&input).map_err(|error| {{
+                let {input_name} = {input_decode}.map_err(|error| {{
                     ErasedCallError::ContractViolation(conversion_detail("input_decode", error))
                 }})?;
                 match responder(context, {input_name}).await {{
@@ -617,10 +669,9 @@ fn test_support_source(box_id: &str, contract: &Contract) -> String {
                     Err(error) => Err(ErasedCallError::from_domain(&error)),
                 }}
             }})"#,
-            input_constructor =
-                schema::descriptor_constructor(schema::v0_leaf(&capability.input_type)),
+            input_descriptor = schema::type_descriptor_source(contract, &capability.input_type, ""),
             input_name = capability.input_name,
-            input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
+            input_decode = input_decode,
         )
     };
     // At a single capability the fake keeps today's exact routing so the Hello golden stays
@@ -727,8 +778,19 @@ fn adapter_source(
     // The per-capability decode/dispatch/encode body is identical between the single- and
     // multi-capability `call` shapes; only the routing envelope around it differs.
     let async_body = |capability: &CapabilityDeclaration| -> String {
+        let input_qualified = rust_type_expression(
+            &capability.input_type,
+            "::boxology_generated_contract::",
+            true,
+        );
+        let input_decode = decode_call(
+            &capability.input_type,
+            &input_qualified,
+            "::boxology_contract::ContractType",
+            "&input",
+        );
         format!(
-            r#"let input = ::boxology_contract::TypeDescriptor::{input_constructor}()
+            r#"let input = {input_descriptor}
                         .conform(
                             ::boxology_contract::DecodeRole::ProviderInput,
                             input,
@@ -738,7 +800,7 @@ fn adapter_source(
                                 conversion_detail("input_decode", error),
                             )
                         }})?;
-                    let input = {input_qualified}::decode(&input).map_err(|error| {{
+                    let input = {input_decode}.map_err(|error| {{
                         ::boxology_contract::ErasedCallError::ContractViolation(
                             conversion_detail("input_decode", error),
                         )
@@ -760,9 +822,12 @@ fn adapter_source(
                         )),
                     }}"#,
             prefix = prefix,
-            input_constructor =
-                schema::descriptor_constructor(schema::v0_leaf(&capability.input_type)),
-            input_qualified = rust_value_type(schema::v0_leaf(&capability.input_type), true),
+            input_descriptor = schema::type_descriptor_source(
+                contract,
+                &capability.input_type,
+                "::boxology_contract::",
+            ),
+            input_decode = input_decode,
             capability_name = capability.name,
         )
     };
@@ -1094,8 +1159,8 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
 "#,
                 capability_name = capability.name,
                 input_name = capability.input_name,
-                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
-                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
+                input_bare = rust_type_expression(&capability.input_type, "", false),
+                output_bare = rust_type_expression(&capability.output_type, "", false),
                 error_name = error_name,
             )
         })
@@ -1104,6 +1169,14 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
         .capabilities
         .iter()
         .map(|capability| {
+            let input_bare = rust_type_expression(&capability.input_type, "", false);
+            let output_bare = rust_type_expression(&capability.output_type, "", false);
+            let output_decode = decode_call(
+                &capability.output_type,
+                &output_bare,
+                "ContractType",
+                "&output",
+            );
             format!(
                 r#"            pub async fn {capability_name}(
                 &self,
@@ -1119,24 +1192,25 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
                     .call(&{capability_static}, context, input)
                     .await
                     .map_err(|error| error.into_typed::<{error_name}>(&{error_static}))?;
-                let output = TypeDescriptor::{output_constructor}()
+                let output = {output_descriptor}
                     .conform(DecodeRole::ConsumerOutput, output)
                     .map_err(|error| conversion_detail("output_decode", error))
                     .map_err(CallError::InvalidResponse)?;
-                {output_bare}::decode(&output)
+                {output_decode}
                     .map_err(|error| conversion_detail("output_decode", error))
                     .map_err(CallError::InvalidResponse)
             }}
 "#,
                 capability_name = capability.name,
                 input_name = capability.input_name,
-                input_bare = rust_value_type(schema::v0_leaf(&capability.input_type), false),
-                output_bare = rust_value_type(schema::v0_leaf(&capability.output_type), false),
+                input_bare = input_bare,
+                output_bare = output_bare,
                 error_name = error_name,
                 capability_static = capability_static_name(box_id, &capability.name),
                 error_static = error_static,
-                output_constructor =
-                    schema::descriptor_constructor(schema::v0_leaf(&capability.output_type)),
+                output_descriptor =
+                    schema::type_descriptor_source(contract, &capability.output_type, ""),
+                output_decode = output_decode,
             )
         })
         .collect::<String>();
@@ -3459,7 +3533,7 @@ macro_rules! __boxology_check_implementation {
             #[capability] pub async fn save(input: Profile) -> Result<Profile, Fault>;
         }"#;
         const SOURCE_SHA256: &str =
-            "ca03278d59798f1fd62b0c2b29785d92318e6c21b3abd2237647481de4e9b822";
+            "f79a534e98f19c22ccbc0510c6389b117aaa93ef23f34fa4702abca0c4ec5878";
         let contract = scalar_model(SOURCE);
         let source = structured_types_source(contract.model());
         assert_eq!(source, structured_types_source(contract.model()));
@@ -3483,8 +3557,11 @@ macro_rules! __boxology_check_implementation {
             "pub scores: ::std::vec::Vec<u32>",
             "pub mood: ::core::option::Option<Mood>",
             "pub history: ::core::option::Option<::std::vec::Vec<Mood>>",
-            "Self::Calm => \"Calm\"",
-            "Self::Busy => \"Busy\"",
+            "Self::Calm => (\"Calm\".into()",
+            "Self::Busy => (\"Busy\".into()",
+            "Unknown {",
+            "OpaquePayload",
+            "ValueRef::Opaque(payload)",
             "::boxology_contract::ContractValue::enum_value(",
             "::boxology_contract::SlotValue::Null",
             "DecodeErrorKind::UnexpectedPayload",
@@ -3510,6 +3587,97 @@ macro_rules! __boxology_check_implementation {
                 .collect::<Vec<_>>(),
             ["BXG0038"]
         );
+    }
+
+    #[test]
+    fn structured_descriptors_and_dormant_call_glue_are_recursive_and_site_qualified() {
+        const SOURCE: &str = r#"boxology::contract! {
+            pub enum Mood { Calm, #[deprecated(note = "avoid")] Busy }
+            pub struct Profile {
+                pub name: String,
+                #[deprecated] pub mood: Option<Mood>,
+            }
+            #[error] pub enum Fault { Bad }
+            #[capability] pub async fn save(input: Profile) -> Result<Option<Vec<Profile>>, Fault>;
+        }"#;
+        let parsed = scalar_model(SOURCE);
+        let contract = parsed.model();
+        let output = &contract.capabilities[0].output_type;
+        assert_eq!(
+            schema::type_descriptor_source(contract, output, "::boxology_contract::"),
+            concat!(
+                "::boxology_contract::TypeDescriptor::optional(",
+                "::boxology_contract::TypeDescriptor::list(",
+                "::boxology_contract::TypeDescriptor::structure([",
+                "::boxology_contract::FieldDescriptor::new(\"name\", ::boxology_contract::TypeDescriptor::string(), None),",
+                "::boxology_contract::FieldDescriptor::new(\"mood\", ",
+                "::boxology_contract::TypeDescriptor::optional(",
+                "::boxology_contract::TypeDescriptor::enumeration([",
+                "::boxology_contract::VariantDescriptor::new(\"Calm\", ::boxology_contract::VariantPayload::Unit, None),",
+                "::boxology_contract::VariantDescriptor::new(\"Busy\", ::boxology_contract::VariantPayload::Unit, ",
+                "Some(::boxology_contract::Deprecation::new(Some(\"avoid\".into())))),",
+                "]).expect(\"generated enum descriptor is valid\")",
+                ").expect(\"generated optional descriptor is valid\"), ",
+                "Some(::boxology_contract::Deprecation::new(None))),",
+                "]).expect(\"generated struct descriptor is valid\")",
+                ").expect(\"generated list descriptor is valid\")",
+                ").expect(\"generated optional descriptor is valid\")",
+            )
+        );
+
+        let descriptor = schema::descriptor_source(
+            "profiles",
+            contract,
+            &schema::revision("profiles", contract),
+        );
+        let checker = checker_source("profiles", contract);
+        let dispatch = dispatch_source("profiles", contract);
+        let fake = test_support_source("profiles", contract);
+        let adapter = adapter_source("profiles", contract, &[]);
+        for source in [&descriptor, &checker, &dispatch, &fake, &adapter] {
+            syn::parse_file(source).unwrap_or_else(|error| panic!("{error}: {source}"));
+        }
+        for expected in [
+            "$crate::Profile",
+            "::core::option::Option<::std::vec::Vec<$crate::Profile>>",
+        ] {
+            assert!(
+                checker.contains(expected),
+                "missing `{expected}` in {checker}"
+            );
+        }
+        for expected in [
+            "input: Profile",
+            "Result<::core::option::Option<::std::vec::Vec<Profile>>, Fault>",
+            "<::core::option::Option<::std::vec::Vec<Profile>> as ContractType>::decode(&output)",
+        ] {
+            assert!(
+                dispatch.contains(expected),
+                "missing `{expected}` in {dispatch}"
+            );
+        }
+        for expected in [
+            "Fn(CallContext, super::Profile)",
+            "Result<::core::option::Option<::std::vec::Vec<super::Profile>>, Fault>",
+            "<super::Profile as ContractType>::decode(&input)",
+        ] {
+            assert!(fake.contains(expected), "missing `{expected}` in {fake}");
+        }
+        assert!(adapter.contains(
+            "<::boxology_generated_contract::Profile as ::boxology_contract::ContractType>::decode(&input)"
+        ));
+        assert!(descriptor.contains("generated optional descriptor is valid"));
+
+        let diagnostics = generate(request(SOURCE, false, OUTPUTS.to_vec())).unwrap_err();
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(|diagnostic| diagnostic.code())
+                .collect::<Vec<_>>(),
+            ["BXG0038"]
+        );
+        // `cold_hello_bytes_are_exact_and_parseable` remains the byte lock for scalar output.
     }
 
     #[test]
@@ -3547,7 +3715,7 @@ macro_rules! __boxology_check_implementation {
             root.join("src/main.rs"),
             format!(
                 r#"{generated}
-                use boxology_contract::{{ContractType, ContractValue, DecodeErrorKind, PathSegment, SlotValue}};
+                use boxology_contract::{{ConformanceErrorKind, ContractType, ContractValue, DecodeErrorKind, DecodeRole, FieldDescriptor, OpaqueTree, PathSegment, SlotValue, TypeDescriptor, VariantDescriptor, VariantPayload}};
                 fn main() {{
                     let empty = Empty {{}};
                     assert_eq!(empty.encode_value().unwrap(), ContractValue::object(Vec::<(String, ContractValue)>::new()).unwrap());
@@ -3559,6 +3727,49 @@ macro_rules! __boxology_check_implementation {
                         ("mood".into(), ContractValue::enum_value("Calm", SlotValue::Null)),
                     ]).unwrap());
                     assert_eq!(Profile::decode_value(&encoded).unwrap(), profile);
+                    const SENTINEL: &str = "unknown-generated-mood-payload";
+                    let mood_descriptor = TypeDescriptor::enumeration([
+                        VariantDescriptor::new("Calm", VariantPayload::Unit, None),
+                        VariantDescriptor::new("Busy", VariantPayload::Unit, None),
+                    ]).unwrap();
+                    let future_mood = SlotValue::Value(ContractValue::enum_value(
+                        "Future",
+                        SlotValue::Value(ContractValue::string(SENTINEL)),
+                    ));
+                    let provider_error = mood_descriptor.conform(DecodeRole::ProviderInput, future_mood.clone()).unwrap_err();
+                    assert_eq!(provider_error.kind(), &ConformanceErrorKind::UnknownVariant("Future".into()));
+                    assert_eq!(provider_error.path(), &[PathSegment::Variant("Future".into())]);
+                    assert!(!format!("{{provider_error:?}} {{provider_error}}").contains(SENTINEL));
+                    let normalized_mood = mood_descriptor.conform(DecodeRole::ConsumerOutput, future_mood.clone()).unwrap();
+                    let unknown_mood = Mood::decode(&normalized_mood).unwrap();
+                    let Mood::Unknown {{ tag, payload }} = &unknown_mood else {{ panic!() }};
+                    assert_eq!(tag, "Future");
+                    assert_eq!(payload.reveal(), &OpaqueTree::String(SENTINEL.into()));
+                    assert_eq!(format!("{{payload:?}}"), "OpaquePayload(<redacted>)");
+                    assert!(!format!("{{unknown_mood:?}}").contains(SENTINEL));
+                    assert_eq!(unknown_mood.encode().unwrap(), normalized_mood);
+
+                    let profile_descriptor = TypeDescriptor::structure([
+                        FieldDescriptor::new("name", TypeDescriptor::string(), None),
+                        FieldDescriptor::new("scores", TypeDescriptor::list(TypeDescriptor::u32()).unwrap(), None),
+                        FieldDescriptor::new("mood", TypeDescriptor::optional(mood_descriptor.clone()).unwrap(), None),
+                        FieldDescriptor::new("history", TypeDescriptor::optional(TypeDescriptor::list(mood_descriptor).unwrap()).unwrap(), None),
+                    ]).unwrap();
+                    let future_profile = SlotValue::Value(ContractValue::object([
+                        ("name".into(), ContractValue::string("Ada")),
+                        ("scores".into(), ContractValue::list([ContractValue::u64(3)])),
+                        ("mood".into(), ContractValue::enum_value("Future", SlotValue::Value(ContractValue::string(SENTINEL)))),
+                    ]).unwrap());
+                    let provider_error = profile_descriptor.conform(DecodeRole::ProviderInput, future_profile.clone()).unwrap_err();
+                    assert_eq!(provider_error.kind(), &ConformanceErrorKind::UnknownVariant("Future".into()));
+                    assert_eq!(provider_error.path(), &[PathSegment::Field("mood".into()), PathSegment::Variant("Future".into())]);
+                    let normalized_profile = profile_descriptor.conform(DecodeRole::ConsumerOutput, future_profile).unwrap();
+                    let profile = Profile::decode(&normalized_profile).unwrap();
+                    let Some(Mood::Unknown {{ tag, payload }}) = &profile.mood else {{ panic!() }};
+                    assert_eq!(tag, "Future");
+                    assert_eq!(payload.reveal(), &OpaqueTree::String(SENTINEL.into()));
+                    assert!(!format!("{{profile:?}}").contains(SENTINEL));
+                    assert_eq!(profile.encode().unwrap(), normalized_profile);
                     let unknown = ContractValue::object([("extra".into(), ContractValue::bool(true))]).unwrap();
                     let error = Empty::decode_value(&unknown).unwrap_err();
                     assert_eq!(error.kind(), &DecodeErrorKind::UnknownField("extra".into()));

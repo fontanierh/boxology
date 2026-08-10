@@ -27,11 +27,89 @@ pub(super) fn descriptor_constructor(leaf: CanonicalType) -> &'static str {
     }
 }
 
-/// Extracts the scalar leaf after the public generation entry point's fail-closed emitter gate.
-pub(super) fn v0_leaf(expression: &ParsedTypeExpression) -> CanonicalType {
-    expression
-        .leaf()
-        .expect("require_v0_emittable admitted only scalar leaves")
+/// Recursively lowers a validated boundary expression into generated descriptor source.
+///
+/// Local names expand to their declaration shape because runtime descriptors are structural. The
+/// controlled grammar admits references only to earlier declarations, so expansion is acyclic.
+/// `runtime_prefix` preserves each emitter site's established `TypeDescriptor` spelling.
+pub(super) fn type_descriptor_source(
+    contract: &Contract,
+    expression: &ParsedTypeExpression,
+    runtime_prefix: &str,
+) -> String {
+    match expression {
+        ParsedTypeExpression::Leaf(leaf) => format!(
+            "{runtime_prefix}TypeDescriptor::{}()",
+            descriptor_constructor(*leaf)
+        ),
+        ParsedTypeExpression::Local(name) => {
+            let declaration = contract
+                .data
+                .iter()
+                .find(|declaration| declaration.name == *name)
+                .expect("validated local type reference names a declaration");
+            data_descriptor_source(contract, declaration, runtime_prefix)
+        }
+        ParsedTypeExpression::Option(inner) => format!(
+            "{runtime_prefix}TypeDescriptor::optional({}).expect(\"generated optional descriptor is valid\")",
+            type_descriptor_source(contract, inner, runtime_prefix)
+        ),
+        ParsedTypeExpression::Vec(inner) => format!(
+            "{runtime_prefix}TypeDescriptor::list({}).expect(\"generated list descriptor is valid\")",
+            type_descriptor_source(contract, inner, runtime_prefix)
+        ),
+    }
+}
+
+fn data_descriptor_source(
+    contract: &Contract,
+    declaration: &DataDeclaration,
+    runtime_prefix: &str,
+) -> String {
+    match &declaration.shape {
+        DataShape::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "::boxology_contract::FieldDescriptor::new({name:?}, {descriptor}, {deprecation}),",
+                        name = field.name,
+                        descriptor = type_descriptor_source(contract, &field.ty, runtime_prefix),
+                        deprecation = descriptor_deprecation(&field.deprecation),
+                    )
+                })
+                .collect::<String>();
+            format!(
+                "{runtime_prefix}TypeDescriptor::structure([{fields}]).expect(\"generated struct descriptor is valid\")"
+            )
+        }
+        DataShape::Enum(variants) => {
+            let variants = variants
+                .iter()
+                .map(|variant| {
+                    format!(
+                        "::boxology_contract::VariantDescriptor::new({name:?}, ::boxology_contract::VariantPayload::Unit, {deprecation}),",
+                        name = variant.name,
+                        deprecation = descriptor_deprecation(&variant.deprecation),
+                    )
+                })
+                .collect::<String>();
+            format!(
+                "{runtime_prefix}TypeDescriptor::enumeration([{variants}]).expect(\"generated enum descriptor is valid\")"
+            )
+        }
+    }
+}
+
+fn descriptor_deprecation(note: &Option<String>) -> String {
+    match note {
+        None => "None".into(),
+        Some(note) if note.is_empty() => "Some(::boxology_contract::Deprecation::new(None))".into(),
+        Some(note) => format!(
+            "Some(::boxology_contract::Deprecation::new(Some({note:?}.into())))",
+            note = note,
+        ),
+    }
 }
 
 /// Maps one controlled contract onto the shared schema model and emits its canonical bytes.
@@ -239,7 +317,8 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
             format!(
                 "let {binding} = {expression};",
                 binding = binding,
-                expression = capability_expression("box_id.clone()", capability, error_expr),
+                expression =
+                    capability_expression(contract, "box_id.clone()", capability, error_expr),
             )
         })
         .collect::<String>();
@@ -292,16 +371,19 @@ pub(super) fn descriptor_source(box_id: &str, contract: &Contract, revision: &[u
 /// descriptor emitted before generalization. `box_id_expr` names the moved-or-cloned box identity and
 /// `error_expr` names the error descriptor (a move at one capability, a clone when several share it).
 fn capability_expression(
+    contract: &Contract,
     box_id_expr: &str,
     capability: &CapabilityDeclaration,
     error_expr: &str,
 ) -> String {
     format!(
-        "::boxology_contract::CapabilityDescriptor::new(::boxology_contract::CapabilityId::new({box_id_expr}, ::boxology_contract::CapabilityName::new({name:?}).expect(\"generated capability name is valid\")), ::boxology_contract::TypeDescriptor::{input_constructor}(), ::boxology_contract::TypeDescriptor::{output_constructor}(), {error_expr}, ::boxology_contract::CapabilityShape::Unary, {exposure}, {idempotency}, {deprecation},)",
+        "::boxology_contract::CapabilityDescriptor::new(::boxology_contract::CapabilityId::new({box_id_expr}, ::boxology_contract::CapabilityName::new({name:?}).expect(\"generated capability name is valid\")), {input_descriptor}, {output_descriptor}, {error_expr}, ::boxology_contract::CapabilityShape::Unary, {exposure}, {idempotency}, {deprecation},)",
         box_id_expr = box_id_expr,
         name = capability.name,
-        input_constructor = descriptor_constructor(v0_leaf(&capability.input_type)),
-        output_constructor = descriptor_constructor(v0_leaf(&capability.output_type)),
+        input_descriptor =
+            type_descriptor_source(contract, &capability.input_type, "::boxology_contract::"),
+        output_descriptor =
+            type_descriptor_source(contract, &capability.output_type, "::boxology_contract::"),
         error_expr = error_expr,
         exposure = exposure_token(capability.exposure),
         idempotency = idempotency_token(capability.idempotency),
