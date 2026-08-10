@@ -109,7 +109,7 @@ their crate changes: `boxology-cli`'s `cli` and `surface_lock`, `boxology-worksp
 crates and the existing deep-only `boxology-init` born-valid case still run library/binary tests,
 an explicit doctest command, and every other integration target. `boxology-generator` also skips
 only `tests::generated_multi_capability_box_compiles_and_routes_both_capabilities` and
-`tests::generated_import_adapter_sealed_import_routes_to_real_provider_end_to_end`; its other unit
+`tests::structured_import_routes_through_provider_owned_alias_end_to_end`; its other unit
 tests, binaries, doctests, and integration targets remain required. Ordinary directly changed
 crates retain an unfiltered `cargo test`.
 
@@ -130,7 +130,7 @@ hygiene and invariants green before changed-generator testing. The trace reached
 completion about 52.5 seconds into the suite, then spent about 81.4 additional seconds reaching the
 sealed-import completion; 81.4 seconds is not a standalone sealed-test duration. The other 41
 generator unit tests finished in about 1.3 seconds, so the trace directly supports about 134 seconds
-of expected savings for that shape. This is baseline evidence only; the revised CI PR supplies the
+of expected savings for that shape. This is baseline evidence only; PR #601 below supplies the
 first post-change GitHub timing.
 
 PR #601 passed on generic slot 3 in 5m29. Docs-only PR #602 then landed on the base runner in 5m41,
@@ -148,7 +148,8 @@ crate routing so directly changed crates again use the existing unfiltered `carg
 integrity guards unless their authority returns elsewhere. To roll back affinity, restore generic
 PR routing before unloading the primary registration.
 Root dependency/toolchain, opaque fixture/golden, and process-reaper work retain their respective
-conditional scopes. Required PR CI runs zero product commands.
+conditional scopes. Required PR CI does not invoke `boxology check`; it does run the hygiene and
+conditional scoped tests described above.
 
 [`deep-validation.yml`](../../.github/workflows/deep-validation.yml) is manual, non-required, and
 native-Mac-only. Its sole validation command is:

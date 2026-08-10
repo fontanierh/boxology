@@ -95,7 +95,8 @@ Three execution contexts are intentionally distinct:
 - generated projects receive a golden-pinned `ubuntu-latest` workflow with explicit
   `boxology check --base <pull-request-base>`; V0 did not execute that source-provisioned workflow,
   and its first run is deferred to #525 at the first pinned external release;
-- this repository's required PR job runs no product command;
+- this repository's required PR job runs hygiene and conditional scoped tests, but does not invoke
+  `boxology check`;
 - local/deep `cargo xtask ci` owns exactly one complete product check.
 
 ### D5 — Determinism and CI absorption

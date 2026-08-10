@@ -75,7 +75,8 @@ nested-Cargo end-to-end unit tests to deep validation. `cargo xtask ci --no-budg
 non-ignored exclusions once through product workspace tests; integrity-only source/body/list guards bind all seven new exclusions without duplicate Cargo execution. A root `Cargo.toml`, `Cargo.lock`, or toolchain change
 conditionally checks the complete workspace build graph; opaque fixture/golden changes
 conditionally run `ci-fixtures`; process-reaper changes run that fixture suite. The required job
-runs **zero product commands**. It therefore does not claim pre-merge full regeneration,
+does **not** invoke `boxology check`; it does run the hygiene and conditional scoped tests above.
+It therefore does not claim pre-merge full regeneration,
 classification, Cargo-edge, workspace-wide, declared-quality, mutation-lock, or CLI end-to-end
 enforcement.
 
@@ -139,8 +140,8 @@ inputs, `persist-credentials: false`, bounded concurrency, and fail-closed clean
 
 1. The workspace, toolchain, formatting, links, records, budget, dependency, and determinism
    checks are implemented and exercised by xtask tests.
-2. Required PR validation is one lean native-Mac job with conditional positive scopes and zero
-   product commands; workflow invariant tests pin that topology.
+2. Required PR validation is one lean native-Mac job with conditional positive scopes and no
+   `boxology check` invocation; workflow invariant tests pin that topology.
 3. Each canonical `ci` aggregate invokes one product check; the deleted commands and bootstrap
    registries are absent, with manifest-derived selection pinned by tests.
 4. Exact-main native-macOS V0 proof is preserved by the completion record; PR #571 and closed

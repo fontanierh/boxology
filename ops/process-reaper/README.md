@@ -5,7 +5,10 @@ whose canonical cwd proves ownership by a Boxology review scratch worktree under
 `/Users/jim/.codex/reviews`, with a gitfile pointing into
 `/Users/jim/module-based-engineering/.git/worktrees`.
 
-This tree is inert until an operator installs it. Default mode is dry-run.
+The checked-in files are inert until an operator installs them, and the checked-in plist defaults
+to dry-run. On the project Mac, the source-identical script is currently installed under
+`/Users/jim/.codex/process-reaper`, its launch agent runs every five minutes, and the installed
+plist deliberately sets `REAPER_DRY_RUN=0` (verified 2026-08-10).
 
 ## Safety gates
 
@@ -44,7 +47,8 @@ launchctl print "gui/$(id -u)/com.fontanierh.boxology-review-reaper"
 
 ## Enforcement flip
 
-Edit the installed plist `REAPER_DRY_RUN` to `0`, then:
+For an installation still using the checked-in dry-run default, edit the installed plist
+`REAPER_DRY_RUN` to `0`, then:
 
 ```sh
 launchctl bootout "gui/$(id -u)/com.fontanierh.boxology-review-reaper"
