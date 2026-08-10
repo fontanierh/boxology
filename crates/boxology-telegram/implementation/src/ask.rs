@@ -1,53 +1,8 @@
 use crate::outbound;
 use crate::state::{self, AskRecord, ChoiceRecord, Paths};
-use crate::{AppError, AskAlternative, AskReceipt, AskRequest, ExitClass, SCHEMA, parse};
-use serde::Deserialize;
+use crate::{AppError, AskAlternative, AskReceipt, AskRequest, ExitClass};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonAskRequest {
-    schema: u8,
-    summary: String,
-    recommendation: String,
-    alternatives: Option<Vec<JsonAskAlternative>>,
-    lifecycle_key: String,
-    dedup_key: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonAskAlternative {
-    key: String,
-    label: String,
-    text: String,
-}
-pub(crate) fn run(input: &[u8]) -> Result<Value, AppError> {
-    let request: JsonAskRequest = parse(input)?;
-    if request.schema != SCHEMA {
-        return Err(AppError::input("unsupported_schema", "unsupported schema"));
-    }
-    let receipt = run_typed(AskRequest {
-        summary: request.summary,
-        recommendation: request.recommendation,
-        alternatives: request.alternatives.map(|alternatives| {
-            alternatives
-                .into_iter()
-                .map(|alternative| AskAlternative {
-                    key: alternative.key,
-                    label: alternative.label,
-                    text: alternative.text,
-                })
-                .collect()
-        }),
-        lifecycle_key: request.lifecycle_key,
-        dedup_key: request.dedup_key,
-    })?;
-    Ok(
-        json!({"ask_id": receipt.ask_id, "lifecycle_key": receipt.lifecycle_key, "dedup_key": receipt.delivery.dedup_key, "delivery": "delivered", "message_id": receipt.delivery.message_id, "deduplicated": receipt.delivery.deduplicated}),
-    )
-}
 
 pub(crate) fn run_typed(request: AskRequest) -> Result<AskReceipt, AppError> {
     validate_summary(&request.summary)?;

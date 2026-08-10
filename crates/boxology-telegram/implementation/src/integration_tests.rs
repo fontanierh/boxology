@@ -1566,6 +1566,17 @@ fn send_deduplication_never_retries_ambiguous_delivery() {
     assert_eq!(exit, ExitClass::Ambiguous);
     let (_, exit) = run(&["send"], request.clone());
     assert_eq!(exit, ExitClass::Ambiguous);
+    let before = fs::read(ambiguous.root.join("state.json")).unwrap();
+    let (future, exit) = run(
+        &["resolve-send"],
+        json!({"schema": SCHEMA, "dedup_key": "notice-2", "resolution": {"kind": "future"}}),
+    );
+    assert_eq!(exit, ExitClass::Input);
+    assert_eq!(
+        future,
+        r#"{"schema":1,"ok":false,"command":"resolve-send","error":{"code":"invalid_resolution","message":"delivery resolution is invalid","retryable":false}}"#
+    );
+    assert_eq!(fs::read(ambiguous.root.join("state.json")).unwrap(), before);
     let (resolved, exit) = run(
         &["resolve-send"],
         json!({"schema": SCHEMA, "dedup_key": "notice-2", "resolution": {"kind": "not_delivered"}}),
