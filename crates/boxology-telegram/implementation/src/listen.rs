@@ -86,7 +86,7 @@ pub(crate) fn run(input: &[u8], output: &mut dyn Write) -> ExitClass {
             if emitted.insert(event.event_id.clone())
                 && emit(
                     output,
-                    json!({"kind": "event", "event": receive::event_value(&event, &state)}),
+                    json!({"kind": "event", "event": receive::event_value(&event)}),
                 )
                 .is_err()
             {

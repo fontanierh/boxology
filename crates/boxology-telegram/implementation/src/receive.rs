@@ -6,14 +6,14 @@ use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PollRequest {
+struct JsonPollRequest {
     schema: u8,
     timeout_seconds: Option<u64>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AckRequest {
+struct JsonAckRequest {
     schema: u8,
     event_id: String,
 }
@@ -27,9 +27,36 @@ pub(crate) fn poll_locked(input: &[u8]) -> Result<Value, AppError> {
 }
 
 fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
-    let request: PollRequest = parse(input)?;
+    let request: JsonPollRequest = parse(input)?;
     check_schema(request.schema)?;
-    let timeout = request.timeout_seconds.unwrap_or(30);
+    poll_command(
+        PollCommand {
+            timeout_seconds: request.timeout_seconds,
+        },
+        acquire_consumer,
+    )
+    .map(poll_result)
+}
+
+pub(crate) struct PollCommand {
+    pub(crate) timeout_seconds: Option<u64>,
+}
+
+pub(crate) struct PollResult {
+    pub(crate) event: Option<EventRecord>,
+    pub(crate) fetched: bool,
+    pub(crate) telegram_confirmed: Option<bool>,
+    pub(crate) next_offset: i64,
+    pub(crate) telegram_confirmed_before: i64,
+    pub(crate) callback_warning: bool,
+}
+
+pub(crate) fn poll_typed(command: PollCommand) -> Result<PollResult, AppError> {
+    poll_command(command, true)
+}
+
+fn poll_command(command: PollCommand, acquire_consumer: bool) -> Result<PollResult, AppError> {
+    let timeout = command.timeout_seconds.unwrap_or(30);
     if timeout > 50 {
         return Err(AppError::input(
             "invalid_timeout",
@@ -52,7 +79,7 @@ fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
         current = state::read(&paths)?;
     }
     if let Some(event) = oldest_unhandled(&current) {
-        return Ok(poll_result(Some(event), false, &current, false));
+        return Ok(poll_receipt(Some(event), false, &current, false));
     }
     if inbox_full(&current) {
         return Err(AppError::new(
@@ -110,7 +137,7 @@ fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
         .iter()
         .any(|callback_id| api.answer_callback(callback_id).is_err());
     let state = state::read(&paths)?;
-    Ok(poll_result(
+    Ok(poll_receipt(
         oldest_unhandled(&state),
         true,
         &state,
@@ -119,8 +146,27 @@ fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
 }
 
 pub(crate) fn ack(input: &[u8]) -> Result<Value, AppError> {
-    let request: AckRequest = parse(input)?;
+    let request: JsonAckRequest = parse(input)?;
     check_schema(request.schema)?;
+    ack_typed(AckCommand {
+        event_id: request.event_id,
+    })
+    .map(|receipt| {
+        json!({"event_id": receipt.event_id, "handled": receipt.handled, "already_handled": receipt.already_handled})
+    })
+}
+
+pub(crate) struct AckCommand {
+    pub(crate) event_id: String,
+}
+
+pub(crate) struct AckReceipt {
+    pub(crate) event_id: String,
+    pub(crate) handled: bool,
+    pub(crate) already_handled: bool,
+}
+
+pub(crate) fn ack_typed(request: AckCommand) -> Result<AckReceipt, AppError> {
     if request.event_id.is_empty()
         || request.event_id.len() > 128
         || !request.event_id.starts_with("tg:")
@@ -148,9 +194,11 @@ pub(crate) fn ack(input: &[u8]) -> Result<Value, AppError> {
             ask.state = "answered".into();
         }
         state.prune_handled();
-        Ok(
-            json!({"event_id": request.event_id, "handled": true, "already_handled": already_handled}),
-        )
+        Ok(AckReceipt {
+            event_id: request.event_id,
+            handled: true,
+            already_handled,
+        })
     })
 }
 
@@ -271,30 +319,44 @@ pub(crate) fn oldest_unhandled(state: &State) -> Option<EventRecord> {
     state.events.iter().find(|event| !event.handled).cloned()
 }
 
-fn poll_result(
+fn poll_receipt(
     event: Option<EventRecord>,
     fetched: bool,
     state: &State,
     callback_warning: bool,
-) -> Value {
+) -> PollResult {
+    let telegram_confirmed = event
+        .as_ref()
+        .map(|event| event.update_id < state.confirmed_before);
+    PollResult {
+        event,
+        fetched,
+        telegram_confirmed,
+        next_offset: state.next_offset,
+        telegram_confirmed_before: state.confirmed_before,
+        callback_warning,
+    }
+}
+
+fn poll_result(result: PollResult) -> Value {
     let receipt = json!({
-        "fetched": fetched,
-        "next_offset": state.next_offset,
-        "telegram_confirmed_before": state.confirmed_before
+        "fetched": result.fetched,
+        "next_offset": result.next_offset,
+        "telegram_confirmed_before": result.telegram_confirmed_before
     });
-    let mut result = match event {
+    let mut value = match result.event {
         Some(event) => {
-            json!({"event": event_value(&event, state), "receipt": {"locally_durable": true, "telegram_confirmed": event.update_id < state.confirmed_before, "fetched": fetched}})
+            json!({"event": event_value(&event), "receipt": {"locally_durable": true, "telegram_confirmed": result.telegram_confirmed.expect("event confirmation"), "fetched": result.fetched}})
         }
         None => json!({"event": Value::Null, "receipt": receipt}),
     };
-    if callback_warning {
-        result["warnings"] = json!(["callback was stored but its Telegram UI receipt failed"]);
+    if result.callback_warning {
+        value["warnings"] = json!(["callback was stored but its Telegram UI receipt failed"]);
     }
-    result
+    value
 }
 
-pub(crate) fn event_value(event: &EventRecord, _state: &State) -> Value {
+pub(crate) fn event_value(event: &EventRecord) -> Value {
     let mut value = json!({
         "event_id": event.event_id,
         "kind": event.kind,
