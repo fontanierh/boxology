@@ -26,6 +26,7 @@ macro_rules! declare_backend {($($method:ident($request:ty) -> $outcome:ty;)*) =
     #[doc(hidden)] pub trait Backend {$(fn $method(&self, request: $request) -> Result<$outcome, AppError>;)*}
 }}
 backend_methods!(declare_backend);
+#[cfg(test)]
 pub(crate) use backend_methods;
 
 macro_rules! requests {
@@ -251,7 +252,9 @@ fn poll(r: contract::PollResult) -> Result<Value, ()> {
     Ok(value)
 }
 
-fn event_value(e: contract::InboundEvent) -> Result<Value, ()> {
+#[doc(hidden)]
+#[allow(clippy::result_unit_err)]
+pub fn event_value(e: contract::InboundEvent) -> Result<Value, ()> {
     let reply = e
         .reply_to
         .map(|r| json!({"ask_id": r.ask_id, "outbound_message_id": r.outbound_message_id}))
@@ -291,7 +294,8 @@ fn status_value(probe: bool, r: contract::StatusResult) -> Result<Value, ()> {
     }
 }
 
-fn operation_failure(command: &str, error: contract::OperationError) -> (String, ExitClass) {
+#[doc(hidden)]
+pub fn operation_failure(command: &str, error: contract::OperationError) -> (String, ExitClass) {
     let exit = match error.class {
         contract::FailureClass::Input => ExitClass::Input,
         contract::FailureClass::Authorization => ExitClass::Authorization,

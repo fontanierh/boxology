@@ -1,7 +1,7 @@
 use std::env;
-use std::io;
 use std::sync::Mutex;
 
+#[cfg(test)]
 use boxology_generated_contract as contract;
 
 #[allow(dead_code)]
@@ -9,6 +9,8 @@ mod api;
 mod ask;
 #[doc(hidden)]
 pub mod cli;
+#[cfg(test)]
+#[allow(clippy::collapsible_if)]
 mod listen;
 mod outbound;
 mod pairing;
@@ -658,6 +660,7 @@ impl TelegramService {
     }
 }
 
+#[cfg(test)]
 macro_rules! direct_backend {
     ($($method:ident($request:ty) -> $outcome:ty;)*) => {
         impl cli::Backend for TelegramService {$(
@@ -668,8 +671,10 @@ macro_rules! direct_backend {
     };
 }
 
+#[cfg(test)]
 cli::backend_methods!(direct_backend);
 
+#[cfg(test)]
 fn call_context() -> boxology_contract::CallContext {
     boxology_contract::CallContext::new(
         boxology_contract::Caller::Anonymous,
@@ -680,6 +685,7 @@ fn call_context() -> boxology_contract::CallContext {
     )
 }
 
+#[cfg(test)]
 fn direct<T>(
     future: impl std::future::Future<Output = Result<T, boxology_generated_contract::SendTextError>>,
 ) -> Result<T, AppError> {
@@ -895,6 +901,7 @@ impl AppError {
     }
 }
 
+#[cfg(test)]
 pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
     cli::execute(&TelegramService::default(), enabled(), args, input)
 }
@@ -968,12 +975,6 @@ pub(crate) fn enabled() -> bool {
     env::var(ENABLED_VARIABLE).is_ok_and(|value| value == "1")
 }
 
-pub fn run_listen(input: &[u8]) -> ExitClass {
-    let stdout = io::stdout();
-    let mut output = io::BufWriter::new(stdout.lock());
-    listen::run(input, &mut output)
-}
-
 pub(crate) fn api_error(error: api::ApiError) -> AppError {
     AppError {
         code: error.code,
@@ -989,6 +990,7 @@ pub(crate) fn api_error(error: api::ApiError) -> AppError {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse<T: for<'de> serde::Deserialize<'de>>(input: &[u8]) -> Result<T, AppError> {
     cli::parse(input)
 }

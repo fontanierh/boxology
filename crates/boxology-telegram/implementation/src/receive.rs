@@ -1,6 +1,7 @@
 use crate::api;
 use crate::state::{self, ChoiceRecord, EventRecord, Paths, ReplyTarget, State};
 use crate::{AppError, ExitClass, api_error};
+#[cfg(test)]
 use serde_json::{Value, json};
 
 pub(crate) struct PollCommand {
@@ -296,6 +297,7 @@ fn poll_receipt(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn event_value(event: &EventRecord) -> Value {
     let mut value = json!({
         "event_id": event.event_id,

@@ -60,18 +60,20 @@ one complete product check, while the required PR path remains deliberately lean
 That merged state, not the record's then-future residual list, is current truth.
 
 The repository is already governed by Boxology manifests and `boxology check`.
-`crates/boxology-telegram` is a tested handwritten service and JSON CLI. T0
+`crates/boxology-telegram` is a tested service whose installed CLI is now owned by
+the governed `boxology-cli` composition. T0
 dogfood landed through [PR #583](https://github.com/fontanierh/boxology/pull/583):
 it now has a generated scalar contract, implementation-local adapter, and real
-assembled handle/runtime proof. It does not yet have the governed CLI composition
-required for full self-hosting. Its typed, inherently idempotent `send` and
+assembled handle/runtime proof. The installed CLI is now owned by `boxology-cli`,
+assembles every Telegram exposure, and drives substantive behavior only through
+the generated handle. Its typed, inherently idempotent `send` and
 structured `ask` capabilities cover the first substantive command slice; typed
 `reply` and `resolve_send` preserve its outbound recovery lifecycle, and typed
 pairing, polling, acknowledgement, local/probed status, and listener startup now
 cross generated handles. The listener-start handle retains the exclusive consumer
-lease across same-service polling. The one-shot JSON projection is backend-neutral
-and uses generated request/outcome types, but the installed binary and listener
-still call the implementation directly.
+lease across same-service polling. The backend-neutral one-shot projection and
+composition-owned listener use generated request/outcome types without direct
+implementation state or network access.
 
 ## Dependency order and milestones
 
@@ -82,7 +84,7 @@ still call the implementation directly.
 | T1a — typed send and ask | Continue [#573](https://github.com/fontanierh/boxology/issues/573) with inherently idempotent `send` and structured `ask` over the existing production seams | Generated handles preserve send replay without a second write, ask alternatives and durable lifecycle state, and structured disabled-state failures; the scalar handle and JSON CLI remain unchanged |
 | T1b — typed reply and send resolution | Continue [#573](https://github.com/fontanierh/boxology/issues/573) across the shared outbound ambiguity/recovery state machine | Generated handles preserve reply correlation and replay, safe failures, non-retrying ambiguity, both explicit resolution paths, and independent disabled gates; the JSON CLI remains unchanged |
 | T2a — typed pairing lifecycle | Continue [#573](https://github.com/fontanierh/boxology/issues/573) with pairing begin, complete, and revoke over the existing production seams | Generated handles preserve private matching, durable offset and pending state, ambiguity, exclusive consumer ownership, disabled gates, and local sensitive-state revocation; the JSON CLI remains unchanged |
-| T2 — remaining Telegram composition | Continue [#573](https://github.com/fontanierh/boxology/issues/573) with governed CLI/listen composition over the delivered typed operations, listener lease, and pure JSON projection | The implementation is a box, the CLI is a binding/composition, and substantive operations cross generated handles; `listen` orchestrates typed polling; parity, cold generation, classification, and check evidence pass |
+| T2 — governed Telegram composition | Deliver the composition slice for [#573](https://github.com/fontanierh/boxology/issues/573) with governed CLI/listen assembly over the delivered typed operations, listener lease, and pure JSON projection | The implementation is a box, the CLI is a binding/composition, and substantive operations cross generated handles; `listen` orchestrates typed startup, polling, and local status; parity and deterministic fake evidence pass |
 | T3 — useful Boxology tools | [#575](https://github.com/fontanierh/boxology/issues/575): classifier, `check`, generator, and installer use-case entrypoints | Each selected entrypoint has a real typed contract and composition consumer; #575 records the checked-in generator bootstrap boundary without claiming prior-release regeneration. The first pinned release later supplies that proof |
 | H0 — minimum Pi-like harness | [#576](https://github.com/fontanierh/boxology/issues/576): `model-completion` application box, tool runner, session store, agent loop, and stdio JSON/RPC composition | A deterministic fake-model turn, a small live-model task in an isolated worktree, resume plus compaction, and generated-handle traversal all pass |
 | H1 — Prime-like durability | Only capabilities demanded by an operating consumer | Each accepted capability is an application box or composition with its own recovery evidence; there is no blanket platform expansion |
@@ -93,8 +95,7 @@ delivered. Generated structured types/codecs are also delivered under #574; desc
 and complete checker/dispatch/handle/fake/adapter wiring are now delivered as well.
 Typed send/ask/reply/resolve-send, pairing, poll, acknowledgement, local/probed
 status, and listener startup consume that boundary. The backend-neutral one-shot CLI
-projection is also extracted; governed installed CLI/listen assembly follows in a
-bounded slice.
+projection and governed installed CLI/listen composition are delivered.
 Once the E3 generated-handle proof exists, classifier and `check`
 work under #575 may proceed in parallel with Telegram composition; they do not
 wait for Telegram parity. The first such T3 slice governs the classifier as a box:
@@ -115,32 +116,30 @@ The current-support column describes the existing service and CLI behavior on th
 baseline. Generated-handle progress is called out separately; “first dogfood
 evidence” does not claim that command parity already exists.
 
-The one-shot JSON projection now maps generated request and outcome types behind a
-backend-neutral seam. That extraction preserves the installed behavior, but it is
-not the governed composition: the installed backend and listener remain direct on
-this baseline.
+The installed JSON binding maps generated request and outcome types behind the
+backend-neutral seam. Its composition-owned listener orchestrates generated
+`listen_start`, `poll`, and local `status` calls.
 
 | Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
 | --- | --- | --- | --- | --- |
-| Pairing: begin | JSON CLI and typed generated handle create a bounded pending private-pair request in durable local state | Governed CLI composition parity | Generated-handle fake API/state lifecycle observes the digest, salt, expiry, and bot fingerprint but not the nonce | Rich authentication/backend policy |
-| Pairing: complete | JSON CLI and typed generated handle poll for the matching private user/chat and confirm it | Governed CLI composition parity | Generated-handle lifecycle rejects ineligible updates, advances the durable offset, persists the exact receipt, and preserves ambiguous confirmation | General identity or multi-user model |
-| Pairing: revoke | JSON CLI and typed generated handle explicitly clear local pairing and sensitive collections | Governed CLI composition parity | Generated handle revokes pairing, pending state, inbox, asks, and outbound state without a Telegram call while retaining bot/offset state | Remote credential revocation protocol |
-| Send | Idempotent handwritten command and typed generated handle send text to the paired chat and track ambiguity | Governed CLI composition parity | Inherent-idempotency request/outcome crosses a generated handle; replay returns the durable receipt without a second API write | Attachments, formatting, `Blob`, `Secret`, and generic outbound backends |
-| Reply | Handwritten command and typed generated handle resolve an event and send a reply with a deduplication key | Governed CLI composition parity | Generated-handle reply preserves event correlation, handling state, safe failures, and replay without a second write | Cross-backend reply abstraction |
-| Poll | JSON CLI and typed generated handle import authorized updates into the durable inbox | Governed CLI/listen composition parity | Fake updates cross the handle with stable ordering, offset/durability receipts, callback warnings, and restart replay | Streaming transport |
-| Ack | JSON CLI and typed generated handle mark one inbox event handled | Governed CLI composition parity | Typed ack changes exactly the selected durable event and correlated ask state without a Telegram call | Batch ack |
-| Ask | Handwritten command and structured generated handle send a recommendation and optional alternatives and track lifecycle state | Governed CLI composition parity | Typed fake-API ask preserves alternatives, the delivery receipt, and durable lifecycle state | General interactive-form framework |
-| Resolve-send | Handwritten command and typed generated handle resolve an ambiguous outbound record | Governed CLI composition parity | Typed delivered/not-delivered recovery updates only the selected record, while invalid tuples leave state byte-unchanged | Generic distributed transaction semantics |
-| Local status | JSON CLI and typed generated handle report enablement, pairing, offsets, consumer lock, inbox, asks, outbound, pairing-pending, and last-receive/error state without a Telegram call | Governed CLI composition parity | Disabled generated-handle fixture proves every public field, exact legacy JSON bytes, consumer-lock evidence, zero API calls, and byte-unchanged state | Observability platform |
-| Probed status | JSON CLI and typed generated handle call Telegram `getMe` and webhook info only under explicit enablement, returning a structured report or safe operation error | Governed CLI composition parity | Fake API proves matching and mismatching bots, both webhook branches, disabled authorization before token/state/network work, and redacted retryable failure without state mutation | General health-check framework |
-| Listen | Handwritten binding owns the loop, heartbeat, and event output; typed `listen_start` owns the startup snapshot and retained consumer lease | Governed composition orchestration over typed `listen_start`, `poll`, and `status`; no streaming platform feature | Generated handles retain one lease across startup and same-service polling, reject a competing consumer, and release on service drop | Native streaming capability |
+| Pairing: begin | Governed CLI and typed generated handle create a bounded pending private-pair request in durable local state | None for Telegram self-hosting | Generated-handle fake API/state lifecycle observes the digest, salt, expiry, and bot fingerprint but not the nonce | Rich authentication/backend policy |
+| Pairing: complete | Governed CLI and typed generated handle poll for the matching private user/chat and confirm it | None for Telegram self-hosting | Generated-handle lifecycle rejects ineligible updates, advances the durable offset, persists the exact receipt, and preserves ambiguous confirmation | General identity or multi-user model |
+| Pairing: revoke | Governed CLI and typed generated handle explicitly clear local pairing and sensitive collections | None for Telegram self-hosting | Generated handle revokes pairing, pending state, inbox, asks, and outbound state without a Telegram call while retaining bot/offset state | Remote credential revocation protocol |
+| Send | Governed idempotent command sends text through the typed generated handle and tracks ambiguity | None for Telegram self-hosting | Inherent-idempotency request/outcome crosses a generated handle; replay returns the durable receipt without a second API write | Attachments, formatting, `Blob`, `Secret`, and generic outbound backends |
+| Reply | Governed command resolves an event and replies through the typed generated handle | None for Telegram self-hosting | Generated-handle reply preserves event correlation, handling state, safe failures, and replay without a second write | Cross-backend reply abstraction |
+| Poll | Governed CLI imports authorized updates through the typed generated handle | None for Telegram self-hosting | Fake updates cross the handle with stable ordering, offset/durability receipts, callback warnings, and restart replay | Streaming transport |
+| Ack | Governed CLI marks one inbox event handled through the typed generated handle | None for Telegram self-hosting | Typed ack changes exactly the selected durable event and correlated ask state without a Telegram call | Batch ack |
+| Ask | Governed CLI sends a recommendation and alternatives through the structured generated handle | None for Telegram self-hosting | Typed fake-API ask preserves alternatives, the delivery receipt, and durable lifecycle state | General interactive-form framework |
+| Resolve-send | Governed CLI resolves an ambiguous outbound record through the typed generated handle | None for Telegram self-hosting | Typed delivered/not-delivered recovery updates only the selected record, while invalid tuples leave state byte-unchanged | Generic distributed transaction semantics |
+| Local status | Governed CLI reports local state through the typed generated handle without a Telegram call | None for Telegram self-hosting | Disabled generated-handle fixture proves every public field, exact legacy JSON bytes, consumer-lock evidence, zero API calls, and byte-unchanged state | Observability platform |
+| Probed status | Governed CLI calls Telegram probes through the typed generated handle only under explicit enablement | None for Telegram self-hosting | Fake API proves matching and mismatching bots, both webhook branches, disabled authorization before token/state/network work, and redacted retryable failure without state mutation | General health-check framework |
+| Listen | Governed composition owns the bounded loop, lease, heartbeat, and event output over generated `listen_start`, `poll`, and local `status` calls | None for Telegram self-hosting | Deterministic generated-fake evidence preserves listener ordering, retries, deduplication, heartbeat, fatal stop, and redaction | Native streaming capability |
 
 T0's code-only scalar seam remains first and stable, while T1a/T1b/T2a and the poll/ack slice add the current
 CLI's idempotent `send`, structured `ask`, `reply`, and `resolve-send` semantics as
-generated capabilities plus its private pairing and inbound lifecycle. These slices do not establish a governed CLI composition, so this is not full
-self-hosting. The one-shot projection is extracted, but the installed binary and
-listener remain direct. T2 makes the CLI a composition/binding; every
-substantive CLI operation must then cross a generated handle.
+generated capabilities plus its private pairing and inbound lifecycle. T2 makes
+the service implementation a governed box and the installed CLI a composition/binding;
+every substantive CLI operation crosses a generated handle.
 
 Live bot credentials and real pairing, polling, listening, or sending remain a
 separate operational authorization under
@@ -151,7 +150,7 @@ does not enable Telegram or grant permission to contact it.
 
 | Crate/category | Disposition | First useful proof |
 | --- | --- | --- |
-| `boxology-telegram` | Migrate use-case entrypoints; retain working implementation behavior and handwritten binding during the transition | T0 scalar send; T1a typed send/ask; T1b typed reply/resolve-send; T2a typed pairing; typed poll/ack/status/listener lease; pure CLI projection; then governed CLI/listen assembly |
+| `boxology-telegram` | Self-hosted use-case entrypoints with the working implementation retained behind a governed binding | T0 scalar send; T1a typed send/ask; T1b typed reply/resolve-send; T2a typed pairing; typed poll/ack/status/listener lease; pure CLI projection; governed CLI/listen assembly |
 | `boxology-classifier` | Box the classify use case, not every parsing helper | Typed old/new schema input to findings report under #575 |
 | `boxology-cli` | Keep as a binding; route substantive self-hosted commands through generated handles | `check` and installer compositions under #575 |
 | `boxology-generator-model`, `boxology-generator-writer`, `boxology-generator` | Box the generation entrypoint and keep model/writer internals ordinary; #575 records the current checked-in bootstrap boundary, while the first pinned release later proves prior-release regeneration | Typed generation plan/result under #575 |
@@ -290,7 +289,7 @@ still requires its own authorization.
 | Issue | Role and dependency |
 | --- | --- |
 | [#572](https://github.com/fontanierh/boxology/issues/572) | Epic and current-roadmap owner; closes only after its accepted child scope is completed or transferred explicitly |
-| [#573](https://github.com/fontanierh/boxology/issues/573) | Telegram product self-hosting; scalar dogfood, typed send/ask/reply/resolve-send/pairing/poll/ack/status/listener startup, and the pure CLI projection are delivered; T2 retains governed installed CLI/listen assembly and closeout evidence |
+| [#573](https://github.com/fontanierh/boxology/issues/573) | Telegram product self-hosting: scalar and structured capabilities plus the governed CLI/listen composition are delivered; only final merged closeout evidence remains |
 | [#574](https://github.com/fontanierh/boxology/issues/574) | Delivered minimum structured Telegram boundary; bounded slices from #102/#104 with fixture coordination under #100 |
 | [#575](https://github.com/fontanierh/boxology/issues/575) | Classifier/check/generator/installer use-case entrypoints; classifier and `check` branch from E3 generated-handle proof and may run parallel with Telegram composition, while later dependencies remain use-case-driven; advances #74 |
 | [#576](https://github.com/fontanierh/boxology/issues/576) | Minimum Pi-like harness; follows generated-handle dogfood and models completion as an application box rather than inventing a provider package kind or new kernel feature |
