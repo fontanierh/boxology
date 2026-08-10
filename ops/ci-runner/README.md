@@ -8,8 +8,8 @@ separately below; it is not part of current health, capacity, or support claims.
 
 One base supervisor and one three-child slot supervisor expose four runners with the generic
 `[self-hosted, macOS, ARM64, boxology-macos-pr]` capability. The checked-in base configuration
-also assigns `boxology-macos-pr-primary`. The two-step rollout below makes the required PR
-workflow select it for stable warm-cache affinity while slots 2–4 remain generic capacity for
+also assigns `boxology-macos-pr-primary`. The required PR workflow selects that primary label for
+stable warm-cache affinity while slots 2–4 remain generic capacity for
 deep, advisory, smoke, and overflow work. Each JIT runner receives a fresh APFS clone and
 disposable checkout. Each slot keeps its own Cargo target/cache outside the checkout and uses
 `CARGO_BUILD_JOBS=4` and `RUST_TEST_THREADS=4`. Four slots are the host's concurrency ceiling;
@@ -63,8 +63,8 @@ overwrite a live installed topology without first draining jobs and taking a res
 checksummed snapshot. The base service is `com.fontanierh.boxology-ci-macos-runner`; the slot
 service is `com.fontanierh.boxology-ci-macos-runner-slots` and launches slots 2–4.
 
-The rollout is intentionally two-step because a workflow cannot dispatch on a label that is not
-live yet:
+Primary routing is active after PR #605. After a rollback or runner replacement, reactivate it in
+this order because a workflow cannot dispatch on a label that is not live yet:
 
 1. Merge the supervisor/configuration/tests change while `pr.yml` still uses the generic label.
 2. Drain current jobs, snapshot installed bytes and checksums, install the merged
@@ -95,10 +95,10 @@ after installation or a host/runner change. It verifies native `macOS`/`ARM64`,
 
 ## Current CI routing
 
-Pull requests have one required `pr.yml` `validation` job. The support PR uses the generic native
-label; phase B of the rollout above changes that route and its paired integrity expectation to
-`boxology-macos-pr-primary`, which is the steady-state target. The job always runs
-`cargo xtask ci-hygiene --base <event base SHA>`. Code PRs add directly changed-crate tests.
+Pull requests have one required `pr.yml` `validation` job. It selects
+`boxology-macos-pr-primary`, paired with the same exact integrity expectation in xtask. The job
+always runs `cargo xtask ci-hygiene --base <event base SHA>`. Code PRs add directly changed-crate
+tests.
 The complete xtask unit suite runs only when xtask, workflow, runner-ops, or the embedded Boxology
 skill source changes. Its path inventory disables rename detection so moving an authority file
 still exposes both its old and new paths. Deep validation owns that redundant pass for ordinary
@@ -135,10 +135,13 @@ first post-change GitHub timing.
 
 PR #601 passed on generic slot 3 in 5m29. Docs-only PR #602 then landed on the base runner in 5m41,
 with 5m03 spent in hygiene despite skipping every Rust test step. Warm-slot PR #603 still spent
-2m20 in hygiene and then entered the 158-test xtask suite for a non-xtask product change. These
-runs show both cache-island variance and an avoidable unconditional repository-unit pass. The
-exact xtask authority selector lands in phase A; primary routing follows only after the label is
-verified live. Neither change claims a speedup before post-deployment Actions timing exists.
+2m20 in hygiene and took 11m20 overall after entering the 158-test xtask suite for a non-xtask
+product change. PR #604 made that suite authority-selective and added fail-closed primary-label
+support; its required run passed in 2m12. After deployment, native smoke run 31360839565 passed in
+1m10, and PR #605 atomically activated the primary route and integrity expectation in 2m24. The
+first ordinary product evidence, Telegram PR #606, ran hygiene plus changed-crate tests while
+skipping authority-only xtask invariants and passed in 1m50. This is the steady-state timing
+evidence for #593, not a projected speedup.
 
 To roll back test selection, restore the unconditional xtask unit pass and remove the special-case
 crate routing so directly changed crates again use the existing unfiltered `cargo test`; keep the
