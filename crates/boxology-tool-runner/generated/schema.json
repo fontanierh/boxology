@@ -1,0 +1,275 @@
+{
+  "box_id": "tool-runner",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "ExecuteError",
+      "id": "tool-runner.execute",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "ExecuteRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "execute",
+      "output": {
+        "type": "ExecuteOutcome"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "generator": "boxology-generator",
+    "generator_version": "0.0.0",
+    "semantic_digest": "sha256:004bee1dabbe8c770d3207bf7a05d9f77507c887ec4b96fad2853891a72ca9f8"
+  },
+  "revision": "sha256:6802e140ef409a595b79a8e5b0771e610feec2858cf82fbbf0bb3961dfbcbdbf",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "path",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "ReadRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "content",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "WriteRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "read",
+          "type": "Option<ReadRequest>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "write",
+          "type": "Option<WriteRequest>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ExecuteRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "FileOperation",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Read"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Write"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "operation",
+          "type": "FileOperation"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "content",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "bytes",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "changed",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "FileResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "file",
+          "type": "Option<FileResult>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ExecuteResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "ToolFailureClass",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Input"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Boundary"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Missing"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Conflict"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Resource"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Local"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Cancelled"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Deadline"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "class",
+          "type": "ToolFailureClass"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "code",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "message",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "retryable",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "side_effect_possible",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "ToolFailure"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "result",
+          "type": "Option<ExecuteResult>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "failure",
+          "type": "Option<ToolFailure>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ExecuteOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "ExecuteError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Internal",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}
