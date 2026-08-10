@@ -297,7 +297,10 @@ fn assemble(
             })
         })
         .collect::<Result<Vec<_>, PlanError>>()?;
-    let raw_root = format!("{}/src/lib.rs", implementations[0].path().as_str());
+    let raw_root = implementations[0].path().nested().map_or_else(
+        || "src/lib.rs".to_owned(),
+        |path| format!("{}/src/lib.rs", path.as_str()),
+    );
     let Some(crate_root) = RelativePath::new(raw_root).ok() else {
         return Err(failure(
             IMPLEMENTATION_ROOT,

@@ -842,11 +842,20 @@ fn ownership_finding(
 /// `cargo_package` names a member but whose `path` locates another directory therefore matches
 /// nothing, and the member is unmapped rather than adopted by the half that agreed. The entry's
 /// path is package-relative, so the member's directory re-anchors at the declaring package's own
-/// root — as every pattern of that manifest does — and a member outside the package, at the
-/// workspace root, or at the package's own root re-anchors to nothing.
+/// root — as every pattern of that manifest does. `.` matches that root exactly; every nested path
+/// retains the ordinary relative-path match.
 fn maps(package: &Package, entry: &CrateEntry, member: &CargoMember) -> bool {
-    let at = member.crate_dir().and_then(|dir| package.relative(dir));
-    entry.cargo_package() == member.cargo_package() && at.as_ref() == Some(entry.path())
+    let path_matches = match entry.path().nested() {
+        None => member.crate_dir() == package.root(),
+        Some(path) => {
+            member
+                .crate_dir()
+                .and_then(|dir| package.relative(dir))
+                .as_ref()
+                == Some(path)
+        }
+    };
+    entry.cargo_package() == member.cargo_package() && path_matches
 }
 /// Names one claiming entry: its package identity, its declaring manifest, and the package-relative
 /// directory it spells — three grammar-validated values, and no byte of the metadata document.
@@ -865,8 +874,7 @@ fn spell(package: &Package, entry: &CrateEntry) -> String {
 /// is therefore BXW0051 — not exempt, which would leave Cargo graph nodes with no role — until S7
 /// D4's T4 migration takes fixture crates out of this workspace's membership, which is how that spec
 /// resolves it. The owning platform package is *no* escape hatch: its kind hosts only `platform`, so
-/// mapping a fixture box implementation declares a false role. A member at the workspace root, or at
-/// a declaring package's own root, is likewise unmatchable: no `[[crates]].path` is empty or `.`.
+/// mapping a fixture box implementation declares a false role.
 ///
 /// The [`Mapped`] list is the other half of the answer: the association this function already
 /// computes, returned instead of discarded, because the edge policy judges roles and a role exists
@@ -919,8 +927,8 @@ fn map<'a>(packages: &'a [Package], members: &'a [CargoMember]) -> (Vec<Mapped<'
 /// (BXW0051), one two entries claim (BXW0053), and one whose entry declares a role its package kind
 /// cannot host (BXW0054) each yield **none** of these: every one of them is already a located
 /// finding naming the document to change, and an edge verdict about it would rest on a role that
-/// does not exist. The workspace-root member is the permanent case — no `[[crates]].path` spells it
-/// — so the edge policy never assumes role coverage and is total over whatever subset mapped.
+/// does not exist. A workspace-root member is mapped only by `path = "."` in the root package, so
+/// the edge policy remains total over whatever subset mapped.
 struct Mapped<'a> {
     member: &'a CargoMember,
     package: &'a Package,
@@ -1580,9 +1588,8 @@ impl CargoMember {
     fn edges(&self) -> &[DeclaredEdge] {
         &self.edges
     }
-    /// Returns the crate's workspace-relative directory. `None` is the workspace root itself, which
-    /// no [`RelativePath`] can spell — and which no `[[crates]]` path can spell either, so a Cargo
-    /// package sitting there is unmatchable and the next slice codes it.
+    /// Returns the crate's workspace-relative directory. `None` is the workspace root itself;
+    /// a root package's `[[crates]] path = "."` entry can match it.
     pub fn crate_dir(&self) -> Option<&RelativePath> {
         self.directory.as_ref()
     }
@@ -5274,10 +5281,40 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         let sorted = "deep-contract deep-impl fixture-impl tool twin twin";
         assert_eq!(seen.join(" "), sorted);
     }
+    #[test]
+    fn package_root_crate_paths_match_root_members_exactly() {
+        let root = crates(
+            owning("root", "platform", &[MANIFEST], &[]),
+            &[("root-member", ".", "platform")],
+        );
+        let nested = crates(
+            owning("nested", "box", &[MANIFEST], &[]),
+            &[("nested-impl", ".", "box-implementation")],
+        );
+        let held = vec![(MANIFEST, root), ("pkg/boxology.toml", nested)];
+        let checked = mapped(
+            held,
+            &[],
+            &metadata(&[("", "root-member"), ("pkg", "nested-impl")], &[]),
+        )
+        .check()
+        .expect("each dot path maps its declaring package root");
+        let seen = checked
+            .cargo_members()
+            .iter()
+            .map(|member| {
+                (
+                    member.cargo_package(),
+                    member.crate_dir().map(RelativePath::as_str),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(seen, [("nested-impl", Some("pkg")), ("root-member", None)]);
+    }
     /// BXW0051 codes a Cargo member no entry maps, BXW0052 an entry no member matches. The six
     /// unmapped members fail for five distinct reasons: `plain` is declared nowhere; the member at
-    /// the workspace root and the one at the `deep` package's own root can be spelled by no entry at
-    /// all; `right/dir` is named by an entry whose path disagrees and `spelled` is located by an
+    /// the workspace root and the one at the `deep` package's own root have no `.` entry;
+    /// `right/dir` is named by an entry whose path disagrees and `spelled` is located by an
     /// entry whose name disagrees, so each reports **both** codes — the pair rule failing one half at
     /// a time, which a name-only or a path-only rule would answer with silence; and `fix/crate/impl`
     /// is mapped only by a manifest *inside* the pruned fixture subtree. The `ghost` entry is
@@ -5957,9 +5994,9 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
     /// exist. All three ways of lacking one are here — a member no entry maps (BXW0051), one two
     /// entries claim (BXW0053), and one whose declared role its package kind cannot host (BXW0054)
     /// — and each is the source of an edge that would be forbidden under the role it is denied
-    /// *and* the target of one. The member at the workspace root is the permanent fourth: no
-    /// `[[crates]].path` spells it, so it is unroled by
-    /// construction, so its edge is skipped; the final non-member edges are BXW0060.
+    /// *and* the target of one. The member at the workspace root is the fourth: this fixture has no
+    /// `path = "."` entry, so it is unroled and its edge is skipped; the final non-member edges are
+    /// BXW0060.
     #[test]
     fn unroled_members_produce_no_edge_findings() {
         let outer: [(&str, &str, &str); 2] = [

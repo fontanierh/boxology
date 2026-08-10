@@ -38,7 +38,7 @@ const GOLDEN: &str = include_str!("bxw.golden");
 const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086 BXW0091 BXW0092 BXW0093 BXW0094 BXW0095 BXW0096 BXW0097 BXW0103 BXW0104 BXW0105 BXW0106 BXW0107";
 const LIB_HASH: u64 = 10_011_101_472_945_035_346;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
-const GENERATE_HASH: u64 = 13_242_114_621_375_273_805;
+const GENERATE_HASH: u64 = 5_898_066_629_614_279_057;
 const EXECUTE_HASH: u64 = 15_138_597_921_723_061_807;
 const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
@@ -61,7 +61,7 @@ const HASHES: [u64; 10] = [
     MAIN_HASH,
 ];
 const ANCHORS: &str = "symlink_metadata(root).is_ok_and\nsymlink_metadata(&cargo).is_ok_and\nentry.file_name() == \".git\"\nentry.file_name() == \"target\"\nlogical_path(root, &physical)?\nkind.is_symlink()\nfs::read_link(&physical)\nentry.file_name() == MANIFEST\nread_manifest(&physical, |path| fs::read(path))?\nfiles.sort_unstable_by\nmanifests.sort_unstable_by";
-const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.generator() == CONTRACT_GENERATOR\ntarget.id() == import.package()\nclassification.package() == package.id()\nclassification.derived_output().is_none()\nentry.role() == CrateRole::BoxImplementation\npackage.relative(classification.path())?\nserde_json::to_string(value)";
+const GENERATE_ANCHORS: &str = "output.generator() == CARGO_GENERATOR\noutput.generator() == CONTRACT_GENERATOR\ntarget.id() == import.package()\nclassification.package() == package.id()\nclassification.derived_output().is_none()\nentry.role() == CrateRole::BoxImplementation\npackage.relative(classification.path())?\nserde_json::to_string(value)\nlet raw_root = implementations[0].path().nested().map_or_else(\n|| \"src/lib.rs\".to_owned(),\n|path| format!(\"{}/src/lib.rs\", path.as_str()),";
 const EXECUTE_ANCHORS: &str = "fs::symlink_metadata(&path)\npattern.matches(&output)\nOUTPUTS.iter().map(|path| (*path).to_owned()).collect()\nboxology_generator_writer::write(&package_dir, &tree, plan.outputs())\nfor import in plan.imports()\nguarded(root, schema.as_str(), true)\nimport.package().clone()\nread_optional_file(root, plan.schema_path())\nfile.path() == package_schema_path(plan)";
 const EXECUTE_PUBLIC: &str = "Outcome written removed is_unchanged base_schema submitted_schema ExecuteError code location path detail diagnostics write_error ExecutePlans execute_plans execute";
 const COMPARE_ANCHORS: &str = "plan(workspace, None)\nclassification.derived_output() == Some(plan.derived_output_id())\npackage_relative(plan, classification.path())\nDifferenceKind::Stale\ndifferences.sort_by\nread_optional_file(root, plan.schema_path())\nworkspace.check_compositions(&schemas)\nBXW0083";
@@ -340,11 +340,26 @@ fn source_surface_is_exact_and_mutation_resistant() {
             "classification.derived_output().is_none()",
             "classification.derived_output().is_some()",
         ),
+        (
+            r#"implementations[0].path().nested().map_or_else(
+        || "src/lib.rs".to_owned(),
+        |path| format!("{}/src/lib.rs", path.as_str()),
+    )"#,
+            r#"format!("{}/src/lib.rs", implementations[0].path().as_str())"#,
+        ),
     ] {
         let changed = GENERATE.replace(anchor, replacement);
         rejects(
             [LIB, WALK, &changed, EXECUTE, CLASSIFY, CHECK, MAIN],
-            HASHES,
+            [
+                LIB_HASH,
+                WALK_HASH,
+                hash(&changed),
+                EXECUTE_HASH,
+                CLASSIFY_HASH,
+                CHECK_HASH,
+                MAIN_HASH,
+            ],
         );
     }
     for (needle, replacement) in [

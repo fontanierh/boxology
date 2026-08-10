@@ -1,4 +1,6 @@
-use crate::{D2_SOURCE, Diagnostic, Diagnostics, GlobPattern, LineColumn, RelativePath, Span};
+use crate::{
+    CratePath, D2_SOURCE, Diagnostic, Diagnostics, GlobPattern, LineColumn, RelativePath, Span,
+};
 use boxology_contract::{BoxId, CapabilityId, CapabilityName};
 use std::ops::Range;
 use toml_edit::{Document, Item, TableLike, Value};
@@ -68,13 +70,13 @@ impl CrateRole {
 #[derive(Debug, Eq, PartialEq)]
 pub struct CrateEntry {
     cargo_package: String,
-    path: RelativePath,
+    path: CratePath,
     role: CrateRole,
 }
 impl CrateEntry {
     ref_getters! {
         #[doc = "Returns the declared Cargo package name."] cargo_package: &str = cargo_package;
-        #[doc = "Returns the crate's literal package-relative directory."] path: &RelativePath = path;
+        #[doc = "Returns the crate's package-root or nested directory."] path: &CratePath = path;
     }
     copy_getters! {
         #[doc = "Returns the declared crate role."] role: CrateRole = role;
@@ -567,7 +569,7 @@ impl Parser<'_> {
             });
             let path = self.field(table, "path", whole).and_then(|text| {
                 let literal = !text.starts_with('!') && !text.contains(['*', '?', '[']);
-                let path = RelativePath::new(text).ok().filter(|_| literal);
+                let path = CratePath::new(text).ok().filter(|_| literal);
                 self.check(table, "path", "BXW0028", path)
             });
             let role = self
@@ -795,7 +797,7 @@ fn rule_of(code: Code) -> Code {
         "BXW0025" => "declared import packages must be unique",
         "BXW0026" => "a quality command must be non-blank text",
         "BXW0027" => ROLES,
-        "BXW0028" => "crate paths must be literal relative paths",
+        "BXW0028" => "crate paths must be `.` or literal relative paths",
         "BXW0029" => "crate paths and cargo package names must be unique",
         "BXW0030" => "cargo package names must be non-empty identifiers",
         "BXW0031" => "derived output ids must match [a-z][a-z0-9-]*",
@@ -1026,7 +1028,7 @@ BXW0024 boxology.toml:7:1-7:9 offending="manifest key contract" rule="v1 imports
 BXW0025 boxology.toml:9:1-9:8 offending="manifest key package" rule="declared import packages must be unique" source="specs/s5-manifest-and-validation.md D2"
 BXW0026 boxology.toml:6:12-6:14 offending="manifest key commands" rule="a quality command must be non-blank text" source="specs/s5-manifest-and-validation.md D2"
 BXW0027 boxology.toml:8:1-8:5 offending="manifest key role" rule="a crate role must be box-implementation, box-contract, composition, or platform" source="boxology-details/02-packages.md"
-BXW0028 boxology.toml:7:1-7:5 offending="manifest key path" rule="crate paths must be literal relative paths" source="specs/s5-manifest-and-validation.md D2"
+BXW0028 boxology.toml:7:1-7:5 offending="manifest key path" rule="crate paths must be `.` or literal relative paths" source="specs/s5-manifest-and-validation.md D2"
 BXW0029 boxology.toml:10:1-10:14 offending="manifest key cargo_package" rule="crate paths and cargo package names must be unique" source="specs/s5-manifest-and-validation.md D2"
 BXW0030 boxology.toml:6:1-6:14 offending="manifest key cargo_package" rule="cargo package names must be non-empty identifiers" source="specs/s5-manifest-and-validation.md D2"
 BXW0031 boxology.toml:6:1-6:3 offending="manifest key id" rule="derived output ids must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
@@ -1653,8 +1655,20 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         for role in ["box-implementation", "composition", "platform"] {
             assert!(parse(&one("a", "a", role)).is_ok(), "{role}");
         }
-        // A crate path is a literal directory: no metacharacter, no escape, no absolute path.
-        for path in ["g/*", "g?", "g[a]", "!g", "../x", "/a", "a/./b", "a/", ""] {
+        let root = parse(&one("root", ".", "platform")).expect("package-root crate");
+        assert_eq!(
+            (
+                root.crates()[0].path().as_str(),
+                root.crates()[0].path().nested()
+            ),
+            (".", None)
+        );
+        // Apart from exact `.`, a crate path is a literal nested directory: no wildcard, escape,
+        // absolute path, empty/dot segment, or traversal.
+        for path in [
+            "g/*", "g?", "g[a]", "!g", "./", "..", "../x", "a/../b", "/a", "c:/a", "a\\b", "a/./b",
+            "a/", "",
+        ] {
             assert_eq!(codes(&one("a", path, "platform")), ["BXW0028"], "{path}");
         }
         for name in ["", "bad name", "bad.name", "béta"] {

@@ -97,6 +97,30 @@ fn has_drive_prefix(bytes: &[u8]) -> bool {
 fn is_forbidden_byte(byte: u8) -> bool {
     byte == b'\\' || byte.is_ascii_control()
 }
+/// A Cargo crate directory anchored at its declaring package.
+///
+/// `.` denotes the package root. Every other spelling is an ordinary [`RelativePath`], so this
+/// type adds exactly one value without broadening any other manifest path grammar.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CratePath(Option<RelativePath>);
+impl CratePath {
+    /// Parses `.` as the package root and otherwise applies [`RelativePath`] unchanged.
+    pub fn new(value: impl Into<String>) -> Result<Self, PathError> {
+        let value = value.into();
+        match value.as_str() {
+            "." => Ok(Self(None)),
+            _ => RelativePath::new(value).map(|path| Self(Some(path))),
+        }
+    }
+    /// Returns the exact manifest spelling.
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref().map_or(".", RelativePath::as_str)
+    }
+    /// Returns the nested package-relative directory, or `None` for the package root.
+    pub fn nested(&self) -> Option<&RelativePath> {
+        self.0.as_ref()
+    }
+}
 /// A source coordinate with one-based line and character-column units.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct LineColumn {
@@ -370,12 +394,30 @@ mod tests {
         assert_eq!(path("a/b").as_str(), "a/b");
     }
     #[test]
+    fn crate_path_adds_only_the_exact_package_root_marker() {
+        let root = CratePath::new(".").expect("package root");
+        assert_eq!((root.as_str(), root.nested()), (".", None));
+
+        let nested = CratePath::new("implementation").expect("nested crate");
+        assert_eq!(
+            (nested.as_str(), nested.nested().map(RelativePath::as_str)),
+            ("implementation", Some("implementation"))
+        );
+
+        for rejected in [
+            "", "./", "..", "../x", "a/../b", "a/./b", "/a", "c:/a", "a\\b",
+        ] {
+            assert_eq!(CratePath::new(rejected), Err(PathError), "{rejected:?}");
+        }
+        assert_eq!(RelativePath::new("."), Err(PathError));
+    }
+    #[test]
     fn public_seam_is_send_sync_static() {
         fn bounds<T: Send + Sync + 'static>() {}
         bounds::<(RelativePath, PathError, GlobPattern)>();
         bounds::<(LineColumn, Span, Diagnostic, Diagnostics)>();
         bounds::<(Kind, Manifest)>();
-        bounds::<(CrateEntry, CrateRole, DerivedOutput, Import)>();
+        bounds::<(CrateEntry, CratePath, CrateRole, DerivedOutput, Import)>();
         bounds::<(Binding, Composition, Exposure, Transport)>();
     }
 }
