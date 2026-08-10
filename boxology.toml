@@ -15,8 +15,9 @@ owned = [
     "boxology-details/**",
     "boxology-whitepaper.md",
     "boxology.toml",
-    "crates/boxology-classifier/**",
-    "crates/boxology-cli/**",
+    "crates/boxology-classifier/Cargo.toml",
+    "crates/boxology-classifier/src/**",
+    "crates/boxology-classifier/tests/**",
     "crates/boxology-cli-core/**",
     "crates/boxology-contract-syntax/**",
     "crates/boxology-contract/**",
@@ -68,11 +69,6 @@ role = "platform"
 [[crates]]
 cargo_package = "boxology-classifier"
 path = "crates/boxology-classifier"
-role = "platform"
-
-[[crates]]
-cargo_package = "boxology-cli"
-path = "crates/boxology-cli"
 role = "platform"
 
 [[crates]]

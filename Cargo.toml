@@ -19,6 +19,8 @@ members = [
     "crates/boxology-init",
     "crates/boxology-schema",
     "crates/boxology-classifier",
+    "crates/boxology-classifier/implementation",
+    "crates/boxology-classifier/generated/contract",
     "crates/boxology-workspace",
     "crates/boxology-cli",
     "crates/boxology-cli-core",

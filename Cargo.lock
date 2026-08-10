@@ -55,8 +55,11 @@ dependencies = [
  "boxology-cli-core",
  "boxology-contract",
  "boxology-manifest",
+ "boxology-runtime",
  "boxology-schema",
  "boxology-workspace",
+ "classifier-contract",
+ "classifier-implementation",
  "serde_json",
  "syn 3.0.0",
 ]
@@ -283,6 +286,25 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "classifier-contract"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
+
+[[package]]
+name = "classifier-implementation"
+version = "0.0.0"
+dependencies = [
+ "boxology",
+ "boxology-classifier",
+ "boxology-contract",
+ "boxology-runtime",
+ "boxology-schema",
+ "classifier-contract",
+]
 
 [[package]]
 name = "core-foundation"
