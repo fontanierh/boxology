@@ -38,6 +38,11 @@ invalid workspace-relative globs, and impossible role combinations fail closed. 
 bindings select an exact capability or a nonempty `<box>.*` expansion and use `in-process` or
 `http` transport without exceeding declared exposure.
 
+Each `[[crates]].path` is package-relative. Exact `.` names a Cargo crate at the declaring package
+root; every other accepted value is one literal relative directory. Wildcards, absolute paths,
+empty or dot segments, and traversal fail closed. A root entry matches only a Cargo member at that
+package root; Cargo package name and normalized path must still match together.
+
 A platform package may declare fixture-opaque owned subtrees. Nested manifests in those trees are
 data, not discovered packages. Platform-only `protected` declarations identify control-plane
 paths, but their V0 strength is reporting only.
@@ -54,6 +59,8 @@ Generation candidates and inputs come from manifests, including declared importe
 CLI regenerates into temporary output, compares bytes, writes only changed packages through the
 generator's confined per-file atomic publication, refreshes provenance, and attaches the S4
 classification unmodified. `--package` selects one package; a byte-identical run writes nothing.
+For a `box-implementation` crate, path `.` projects to package-root `src/lib.rs`; a nested crate path
+projects to `<path>/src/lib.rs`.
 
 V0 assumes the source-tree generator is one byte-stable version. A published generator that
 changes representation for unchanged source must add the provenance-compatible historical skip

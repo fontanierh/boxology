@@ -63,7 +63,8 @@ The repository is already governed by Boxology manifests and `boxology check`.
 `crates/boxology-telegram` is a tested handwritten service and JSON CLI. T0
 dogfood landed through [PR #583](https://github.com/fontanierh/boxology/pull/583):
 it now has a generated scalar contract, implementation-local adapter, and real
-composition proof. Structured command breadth is the next self-hosting gap.
+assembled handle/runtime proof. It does not yet have the governed CLI composition
+required for full self-hosting. Structured command breadth is the next gap.
 
 ## Dependency order and milestones
 
@@ -76,23 +77,25 @@ composition proof. Structured command breadth is the next self-hosting gap.
 | H0 — minimum Pi-like harness | [#576](https://github.com/fontanierh/boxology/issues/576): `model-completion` application box, tool runner, session store, agent loop, and stdio JSON/RPC composition | A deterministic fake-model turn, a small live-model task in an isolated worktree, resume plus compaction, and generated-handle traversal all pass |
 | H1 — Prime-like durability | Only capabilities demanded by an operating consumer | Each accepted capability is an application box or composition with its own recovery evidence; there is no blanket platform expansion |
 
-Do not start by cloning Pi or Prime. T0 is intentionally one PR. The expected
-stack shape—not a calendar promise—is one PR for first dogfood, three to five
-PRs for the structured vocabulary, and three to four PRs for Telegram parity and
-evidence. Every PR remains at or below 600 hand-authored lines.
+Do not start by cloning Pi or Prime. T0 landed as one small PR. For T1, syntax/model,
+schema writing/reading, raw reachability, and role-specific classifier mapping are
+delivered. Generated structured types/codecs are in flight under #574, followed by
+descriptors and complete checker/dispatch/handle/fake/adapter wiring. Telegram command
+parity and its governed composition follow that emitter boundary. Every PR remains at
+or below 600 hand-authored lines.
 
 ## Telegram migration matrix
 
-The current column describes the handwritten `boxology-telegram` crate on this
-baseline. “First dogfood evidence” describes the first honest generated-handle
-proof, not a claim that command parity already exists.
+The current-support column describes the existing service and CLI behavior on this
+baseline. Generated-handle progress is called out separately; “first dogfood
+evidence” does not claim that command parity already exists.
 
 | Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
 | --- | --- | --- | --- | --- |
 | Pairing: begin | JSON CLI creates a bounded pending private-pair request in durable local state | Structured request/result contract and generated handle | Fake API/state test invokes the typed capability through composition and observes the pending pair | Rich authentication/backend policy |
 | Pairing: complete | JSON CLI polls for the matching private user/chat and confirms it | Structured update/result shapes and generated handle | Typed composition completes a fake private pairing and persists the same state transition | General identity or multi-user model |
 | Pairing: revoke | JSON CLI explicitly clears local pairing | Typed result and generated handle | Typed call revokes a fixture pairing and returns its result | Remote credential revocation protocol |
-| Send | Idempotent handwritten command sends text to the paired chat and tracks ambiguity | T0 scalar handle first; structured idempotency/result state for parity later | `send_text(String) -> Result<i64, SendTextError>` uses the existing service/fake API through an in-process generated-handle seam | Attachments, formatting, `Blob`, `Secret`, and generic outbound backends |
+| Send | Idempotent handwritten command sends text to the paired chat and tracks ambiguity | Structured idempotency/result state and governed composition parity; the T0 scalar handle is delivered | `send_text(String) -> Result<i64, SendTextError>` uses the existing service/fake API through an in-process generated-handle seam | Attachments, formatting, `Blob`, `Secret`, and generic outbound backends |
 | Reply | Handwritten command resolves an event and sends a reply with a deduplication key | Structured event reference/request plus generated handle | Fake paired update is polled, then replied to through typed composition | Cross-backend reply abstraction |
 | Poll | Handwritten long-poll imports authorized updates into the durable inbox | Structured event batch, optional timeout, and generated handle | Fake updates cross a typed poll handle with stable event ordering | Streaming transport |
 | Ack | Handwritten command marks one inbox event handled | Structured event identifier/result and generated handle | Typed ack changes exactly the selected fixture event | Batch ack |
@@ -251,7 +254,7 @@ still requires its own authorization.
 | Issue | Role and dependency |
 | --- | --- |
 | [#572](https://github.com/fontanierh/boxology/issues/572) | Epic and current-roadmap owner; closes only after its accepted child scope is completed or transferred explicitly |
-| [#573](https://github.com/fontanierh/boxology/issues/573) | Telegram product self-hosting; T0 starts now, while structured command parity depends on #574 |
+| [#573](https://github.com/fontanierh/boxology/issues/573) | Telegram product self-hosting; T0 is delivered, while structured command parity and the governed CLI composition remain after #574 |
 | [#574](https://github.com/fontanierh/boxology/issues/574) | Minimum structured Telegram boundary; bounded slices from #102/#104 with fixture coordination under #100 |
 | [#575](https://github.com/fontanierh/boxology/issues/575) | Classifier/check/generator/installer use-case entrypoints; follows proven Telegram handles and advances the stage-3 forcing function in #74 |
 | [#576](https://github.com/fontanierh/boxology/issues/576) | Minimum Pi-like harness; follows generated-handle dogfood and models completion as an application box rather than inventing a provider package kind or new kernel feature |

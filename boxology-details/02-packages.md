@@ -89,6 +89,22 @@ inputs = ["boxology.toml", "implementation/src/**", "../customer/generated/schem
 outputs = ["generated/contract/**", "generated/adapter/**", "generated/schema.json"]
 ```
 
+A `[[crates]].path` is relative to its declaring package. The exact spelling `.` denotes a Cargo
+crate rooted beside that package's `boxology.toml`; every other accepted spelling is one literal
+relative directory. For example, a platform package that is itself a Cargo crate declares:
+
+```toml
+[[crates]]
+cargo_package = "tool-core"
+path = "."
+role = "platform"
+```
+
+The role must still match the package kind. For generation, a root `box-implementation` projects to
+`src/lib.rs`; a nested `implementation` entry projects to `implementation/src/lib.rs`. The root
+marker does not relax the ordinary path grammar: wildcards, absolute paths, empty or dot segments,
+and traversal remain invalid.
+
 The generator value is a logical workspace-tool identity, not a per-box version pin. The current workspace tool resolves the executable; generated outputs record its resolved version as provenance.
 
 Declared generation inputs are complete and fail closed. The generator must fail if it attempts to read semantic input outside the manifest's `inputs` patterns; otherwise byte reproducibility would not prove that the declared inputs determine the output.
