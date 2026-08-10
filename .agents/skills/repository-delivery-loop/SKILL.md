@@ -31,7 +31,7 @@ Each candidate names a `harness`, `model`, and `effort`. Treat all three as exac
 
 ### Use the advisor sparingly
 
-Resolve the configured `advisor` role only for a critical decision that could materially change architecture, product scope, safety, irreversible migration, or the V0/release path and is not settled by repository authority plus the normal specification and review phases. Advisory work is read-only and is not a routine delivery-loop phase. Do not invoke it for ordinary task planning, implementation choices, review findings, or low-cost reversible decisions.
+Resolve the configured `advisor` role only for a critical decision that could materially change architecture, product scope, safety, irreversible migration, or the current milestone/release path and is not settled by repository authority plus the normal specification and review phases. Advisory work is read-only and is not a routine delivery-loop phase. Do not invoke it for ordinary task planning, implementation choices, review findings, or low-cost reversible decisions.
 
 ### Select a candidate
 
@@ -65,7 +65,7 @@ Pass configuration to every external CLI as direct process environment and argv 
 
 Advisory specification and review directives must forbid edits and require a worktree-status audit for unexpected mutation. Launch review in a fresh process and session.
 
-Every planning or advisory directive must explicitly require pragmatism: optimize for the shortest honest path to shipping, prefer minimal reversible work, distinguish V0 requirements from deferrable follow-ups, and avoid speculative scope or ceremony that does not materially reduce risk. Pragmatism never permits fabricated evidence, concealed trade-offs, destructive shortcuts, or overriding explicit user and repository authority.
+Every planning or advisory directive must explicitly require pragmatism: optimize for the shortest honest path to shipping, prefer minimal reversible work, distinguish current acceptance requirements from deferrable follow-ups, and avoid speculative scope or ceremony that does not materially reduce risk. Pragmatism never permits fabricated evidence, concealed trade-offs, destructive shortcuts, or overriding explicit user and repository authority.
 
 ### Apply fallback policy
 

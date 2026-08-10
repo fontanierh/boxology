@@ -43,7 +43,7 @@ The compatibility authority as its own deliverable: consuming S2's schemas, diff
 
 ## S6 — Installer and generated project
 
-The deterministic initializer: creating the Cargo workspace, the Hello box (implementation and generated contract), the application composition with in-process and HTTP bindings, the root platform package, all manifests, and repository CI — ending in the working database-free Hello World invocable through Rust and HTTP. Normative inputs: [Product Contract](07-product-contract.md) and the outputs of S1–S5. Depends on all of S1–S5 producing usable artifacts. Spec: [S6 — Installer and Generated Project](../specs/s6-installer-and-generated-project.md).
+The deterministic initializer: creating the Cargo workspace, the `ping` box (implementation and generated contract), the `ping-app` composition with in-process and HTTP bindings, the root platform package, all manifests, and repository CI — ending in the working database-free Hello World scenario invocable through Rust and HTTP. Normative inputs: [Product Contract](07-product-contract.md) and the outputs of S1–S5. Depends on all of S1–S5 producing usable artifacts. Spec: [S6 — Installer and Generated Project](../specs/s6-installer-and-generated-project.md).
 
 ## S7 — Skill, acceptance, and stage-2 self-hosting
 
