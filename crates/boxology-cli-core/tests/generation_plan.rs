@@ -1,4 +1,4 @@
-use boxology_cli::{GenerationPlan, PlanError, plan};
+use boxology_cli_core::{GenerationPlan, PlanError, plan};
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
 use boxology_workspace::{FileEntry, Workspace, WorkspaceInputs};

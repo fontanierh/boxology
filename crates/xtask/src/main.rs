@@ -578,7 +578,7 @@ fn run_root_fmt() -> bool {
     run_cargo(&[
         "test",
         "-p",
-        "boxology-cli",
+        "boxology-cli-core",
         "--test",
         "runner",
         "real_root_fmt_selection_excludes_standalone_fixture_and_passes",

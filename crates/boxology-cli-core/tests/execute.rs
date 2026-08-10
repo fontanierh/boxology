@@ -1,4 +1,4 @@
-use boxology_cli::{GenerationPlan, execute, execute_plans, plan};
+use boxology_cli_core::{GenerationPlan, execute, execute_plans, plan};
 use boxology_generator::{GeneratedTree, OUTPUTS, generate};
 use boxology_generator_model::GenerationRequest;
 use boxology_manifest::RelativePath;

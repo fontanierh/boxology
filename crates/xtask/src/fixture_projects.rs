@@ -1,4 +1,4 @@
-use boxology_cli::{cargo_metadata_command, fmt_packages, walk};
+use boxology_cli_core::{cargo_metadata_command, fmt_packages, walk};
 use boxology_workspace::WorkspaceInputs;
 use std::{collections::BTreeSet, fs, path::Path, process::Command};
 

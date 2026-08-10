@@ -52,6 +52,20 @@ name = "boxology-cli"
 version = "0.0.0"
 dependencies = [
  "boxology-classifier",
+ "boxology-cli-core",
+ "boxology-contract",
+ "boxology-manifest",
+ "boxology-schema",
+ "boxology-workspace",
+ "serde_json",
+ "syn 3.0.0",
+]
+
+[[package]]
+name = "boxology-cli-core"
+version = "0.0.0"
+dependencies = [
+ "boxology-classifier",
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",
@@ -60,7 +74,6 @@ dependencies = [
  "boxology-schema",
  "boxology-workspace",
  "serde_json",
- "syn 3.0.0",
 ]
 
 [[package]]
@@ -1518,7 +1531,7 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "boxology-classifier",
- "boxology-cli",
+ "boxology-cli-core",
  "boxology-contract",
  "boxology-generator",
  "boxology-generator-model",

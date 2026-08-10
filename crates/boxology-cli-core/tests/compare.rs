@@ -1,4 +1,4 @@
-use boxology_cli::{
+use boxology_cli_core::{
     CompareDifference, DifferenceKind, GenerationPlan, compare_plans, compare_step, plan,
 };
 use boxology_contract::BoxId;
