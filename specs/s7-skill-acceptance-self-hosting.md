@@ -55,8 +55,8 @@ control and [#17](https://github.com/fontanierh/boxology/issues/17) owns stronge
 self-protection.
 
 Stage-2 product proof is the adopted manifests plus the complete exact-main native-Mac check cited
-by the completion record. Required PR CI currently runs zero product commands; it provides lean
-hygiene and changed-scope evidence instead. Continuous Linux/cross-platform proof is not claimed
+by the completion record. Required PR CI currently omits `boxology check`; it provides lean
+hygiene and conditional changed-scope tests instead. Continuous Linux/cross-platform proof is not claimed
 and remains [#525](https://github.com/fontanierh/boxology/issues/525) scope.
 
 ### D5 — The absorption, immediately post-v0
@@ -65,7 +65,7 @@ PR #571 completed [#342](https://github.com/fontanierh/boxology/issues/342). Eve
 `cargo xtask ci` aggregate now owns exactly one `boxology check`; xtask retains only distinctly
 named repository semantics the product baseline does not cover. The bootstrap derived-output and
 format-selection registries are deleted and their selection is manifest-derived. The required PR
-lane stays product-free because full checks exceeded its time budget.
+lane stays free of `boxology check` because full checks exceeded its time budget.
 
 ### D6 — Friction remains durable evidence
 

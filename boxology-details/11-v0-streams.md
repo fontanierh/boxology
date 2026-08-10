@@ -18,7 +18,8 @@ The dependency ordering below is historical; current work follows the
 The infrastructure every other stream stands on: the Cargo workspace scaffold, pinned toolchain,
 determinism harness, and repository validation. PR #571 completed #342: `cargo xtask ci` owns one
 full `boxology check`, while required PR validation is one lean native Apple-silicon Mac job with
-no product command. Continuous Linux/x86/cross-platform proof is not claimed; #525 owns it before
+hygiene and conditional scoped tests but no `boxology check` invocation. Continuous
+Linux/x86/cross-platform proof is not claimed; #525 owns it before
 the first pinned external release. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
 
 ## S1 — Runtime core and composition assembly
