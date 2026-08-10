@@ -29,7 +29,8 @@ const INTEGRITY: Code = "specs/s4-contract-change-classification.md D6";
 pub const CLASSIFIER_RESERVED_CODES: &[&str] = &[
     "BXC0026", "BXC0027", "BXC0028", "BXC0031", "BXC0032", "BXC0033", "BXC0034", "BXC0035",
     "BXC0036", "BXC0039", "BXC0040", "BXC0041", "BXC0042", "BXC0043", "BXC0044", "BXC0045",
-    "BXC0046", "BXC0047", "BXC0048", "BXC0049", "BXC0050", "BXC0051", "BXC0052",
+    "BXC0046", "BXC0047", "BXC0048", "BXC0049", "BXC0050", "BXC0051", "BXC0052", "BXC0063",
+    "BXC0064", "BXC0065", "BXC0066", "BXC0067", "BXC0068", "BXC0069",
 ];
 
 /// Where in a schema document a diagnostic points: a JSON-pointer-style path such as
@@ -1006,7 +1007,7 @@ BXC0062 local data declaration names must not shadow canonical leaves specs/s2-c
         // Dense from BXC0001, with the classifier's reserved range represented explicitly rather
         // than assigned reader rule text. An ascending reader-only list would miss this gap.
         let spell = |n| format!("BX{}{n:04}", 'C');
-        let dense: Vec<String> = (1..=62).map(spell).collect();
+        let dense: Vec<String> = (1..=69).map(spell).collect();
         assert_eq!(
             allocated
                 .iter()

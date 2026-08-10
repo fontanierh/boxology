@@ -1,8 +1,9 @@
 use boxology_classifier::classify;
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
-    SchemaPayload, SchemaType, SchemaVariant, Shape,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDataField,
+    SchemaDataShape, SchemaDataType, SchemaDataVariant, SchemaDocument, SchemaField, SchemaPayload,
+    SchemaType, SchemaVariant, Shape, TypeExpression,
 };
 use serde_json::json;
 use std::fs;
@@ -187,7 +188,7 @@ fn assert_constructor_inventory(source: &str) {
     let file = syn::parse_file(source).unwrap();
     let mut lock = FindingConstructorLock::default();
     lock.visit_file(&file);
-    assert_eq!(lock.count, 27, "exact Finding constructor inventory");
+    assert_eq!(lock.count, 28, "exact Finding constructor inventory");
     assert!(!lock.missing_kind, "every Finding constructor has kind");
 
     let missing = source.replacen("kind: KIND_CONTRACT_INTRODUCED,", "", 1);
@@ -356,6 +357,13 @@ fn document(box_id: &str) -> SchemaDocument {
         }],
     }
 }
+
+#[rustfmt::skip]
+fn structured_type(name: &str, shape: SchemaDataShape) -> SchemaDataType { SchemaDataType { name: name.to_owned(), docs: Vec::new(), deprecation: None, shape } }
+#[rustfmt::skip]
+fn structured_field(name: &str, ty: TypeExpression) -> SchemaDataField { SchemaDataField { name: name.to_owned(), docs: Vec::new(), deprecation: None, ty } }
+#[rustfmt::skip]
+fn structured_variant(name: &str) -> SchemaDataVariant { SchemaDataVariant { name: name.to_owned(), docs: Vec::new(), deprecation: None } }
 
 #[test]
 fn surface_and_live_evasions_are_locked() {
@@ -531,6 +539,13 @@ fn production_inventory_and_code_anchors_are_fail_closed() {
         ("BXC0050", "\"BXC0050\""),
         ("BXC0051", "\"BXC0051\""),
         ("BXC0052", "\"BXC0052\""),
+        ("BXC0063", "\"BXC0063\""),
+        ("BXC0064", "\"BXC0064\""),
+        ("BXC0065", "\"BXC0065\""),
+        ("BXC0066", "\"BXC0066\""),
+        ("BXC0067", "\"BXC0067\""),
+        ("BXC0068", "\"BXC0068\""),
+        ("BXC0069", "\"BXC0069\""),
         ("BXC0036 condition", "\"unknown-variant tolerance\""),
         (
             "BXC0037",
@@ -815,6 +830,38 @@ fn every_classifier_code_is_reachable() {
     variant_addition.revision = OTHER_REVISION.to_owned();
     let conditional = classify(Some(&document("hello")), Some(&variant_addition)).unwrap();
 
+    let mut structured_base = document("hello");
+    structured_base.capabilities[0].input.leaf = TypeExpression::Local("Payload".to_owned());
+    structured_base.capabilities[0].output.leaf = TypeExpression::Local("Payload".to_owned());
+    structured_base.data_types = vec![
+        structured_type(
+            "Mood",
+            SchemaDataShape::Enum(vec![structured_variant("Old")]),
+        ),
+        structured_type("Switch", SchemaDataShape::Struct(Vec::new())),
+        structured_type(
+            "Payload",
+            SchemaDataShape::Struct(vec![
+                structured_field("old", TypeExpression::String),
+                structured_field("changed", TypeExpression::String),
+                structured_field("mood", TypeExpression::Local("Mood".to_owned())),
+                structured_field("switch", TypeExpression::Local("Switch".to_owned())),
+            ]),
+        ),
+    ];
+    let mut structured_submitted = structured_base.clone();
+    structured_submitted.data_types[0].shape =
+        SchemaDataShape::Enum(vec![structured_variant("New")]);
+    structured_submitted.data_types[1].shape =
+        SchemaDataShape::Enum(vec![structured_variant("On")]);
+    if let SchemaDataShape::Struct(fields) = &mut structured_submitted.data_types[2].shape {
+        fields.remove(0);
+        fields[0].ty = TypeExpression::Bool;
+        fields.push(structured_field("new", TypeExpression::Bool));
+    }
+    structured_submitted.revision = OTHER_REVISION.to_owned();
+    let structured = classify(Some(&structured_base), Some(&structured_submitted)).unwrap();
+
     let mut equal_revision_diff = document("hello");
     equal_revision_diff.types[0].variants.push(SchemaVariant {
         name: "Other".to_owned(),
@@ -857,6 +904,7 @@ fn every_classifier_code_is_reachable() {
         &deprecation,
         &variant_removed,
         &conditional,
+        &structured,
     ] {
         reached.extend(report.findings().iter().map(|finding| finding.code()));
     }
