@@ -2,7 +2,10 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use boxology_contract_syntax::{CanonicalType, CapabilityDeclaration, Contract, VariantPayload};
+use boxology_contract_syntax::{
+    CanonicalType, CapabilityDeclaration, Contract, DataDeclaration, DataShape, TypeExpression,
+    VariantPayload,
+};
 use boxology_generator_model::{Diagnostics, GenerationRequest, ImportModel, ParsedRustInputs};
 
 mod schema;
@@ -73,6 +76,7 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
         "[package]\nname = \"{}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ workspace = true }}\n",
         request.box_id().as_str()
     );
+    let data_types = structured_types_source(contract.model());
     let error = &contract.model().error;
     let error_attrs = attributes(&error.docs, &error.deprecation);
     let variants = error
@@ -194,7 +198,7 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
     let test_support = test_support_source(request.box_id().as_str(), contract.model());
     let adapter = adapter_source(request.box_id().as_str(), contract.model(), &imports);
     let syntax = syn::parse_file(&format!(
-        "{descriptor} {dispatch} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
+        "{descriptor} {dispatch} {data_types} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
         error.name
     ))
     .expect("validated names and fixed generator template must parse");
@@ -232,6 +236,136 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     Ok(GeneratedTree(files))
+}
+
+/// Emits the public definitions and exact transport-neutral codecs for the accepted structured
+/// declaration subset. Normal generation still calls `require_v0_emittable` before reaching this
+/// template; the later integration slice will remove that gate after descriptors and call glue
+/// also understand these types.
+fn structured_types_source(contract: &Contract) -> String {
+    contract.data.iter().map(structured_type_source).collect()
+}
+
+fn structured_type_source(declaration: &DataDeclaration) -> String {
+    let attrs = attributes(&declaration.docs, &declaration.deprecation);
+    let name = &declaration.name;
+    match &declaration.shape {
+        DataShape::Struct(fields) => {
+            let definitions = fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "{}pub {}: {},",
+                        attributes(&field.docs, &field.deprecation),
+                        field.name,
+                        rust_type_expression(&field.ty)
+                    )
+                })
+                .collect::<String>();
+            let encoders = fields
+                .iter()
+                .map(|field| format!(
+                    "if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.{field}).map_err(|error| error.under(::boxology_contract::PathSegment::Field({field:?}.into())))? {{ fields.push(({field:?}.into(), value)); }}",
+                    field = field.name
+                ))
+                .collect::<String>();
+            let known_fields = fields
+                .iter()
+                .map(|field| format!("{:?}", field.name))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            let known_arm = if known_fields.is_empty() {
+                String::new()
+            } else {
+                format!("{known_fields} => {{}},")
+            };
+            let decoders = fields
+                .iter()
+                .map(|field| format!(
+                    "{field}: <{ty} as ::boxology_contract::ContractType>::decode_field(fields.get({field:?})).map_err(|error| error.under(::boxology_contract::PathSegment::Field({field:?}.into())))?,",
+                    field = field.name,
+                    ty = rust_type_expression(&field.ty)
+                ))
+                .collect::<String>();
+            format!(
+                r#"
+                {attrs}#[derive(Debug, Clone, PartialEq)] pub struct {name} {{ {definitions} }}
+                impl ::boxology_contract::ContractType for {name} {{
+                    fn encode_value(&self) -> ::core::result::Result<::boxology_contract::ContractValue, ::boxology_contract::EncodeError> {{
+                        let mut fields = ::std::vec::Vec::new();
+                        {encoders}
+                        ::boxology_contract::ContractValue::object(fields).map_err(|_| unreachable!("validated generated field identities are unique"))
+                    }}
+                    fn decode_value(value: &::boxology_contract::ContractValue) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {{
+                        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {{
+                            return Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::KindMismatch));
+                        }};
+                        for (field, _) in fields.entries() {{
+                            match field {{ {known_arm}_ => return Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnknownField(field.into())).under(::boxology_contract::PathSegment::Field(field.into()))) }}
+                        }}
+                        Ok(Self {{ {decoders} }})
+                    }}
+                }}
+            "#
+            )
+        }
+        DataShape::Enum(variants) => {
+            let definitions = variants
+                .iter()
+                .map(|variant| {
+                    format!(
+                        "{}{},",
+                        attributes(&variant.docs, &variant.deprecation),
+                        variant.name
+                    )
+                })
+                .collect::<String>();
+            let encoders = variants
+                .iter()
+                .map(|variant| format!("Self::{name} => {name:?},", name = variant.name))
+                .collect::<String>();
+            let decoders = variants
+                .iter()
+                .map(|variant| format!(r#"
+                    {name:?} if matches!(payload, ::boxology_contract::SlotValue::Null) => Ok(Self::{name}),
+                    {name:?} => Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnexpectedPayload).under(::boxology_contract::PathSegment::Variant(tag.into()))),
+                "#, name = variant.name))
+                .collect::<String>();
+            format!(
+                r#"
+                {attrs}#[derive(Debug, Clone, PartialEq)] pub enum {name} {{ {definitions} }}
+                impl ::boxology_contract::ContractType for {name} {{
+                    fn encode_value(&self) -> ::core::result::Result<::boxology_contract::ContractValue, ::boxology_contract::EncodeError> {{
+                        let tag = match self {{ {encoders} }};
+                        Ok(::boxology_contract::ContractValue::enum_value(tag, ::boxology_contract::SlotValue::Null))
+                    }}
+                    fn decode_value(value: &::boxology_contract::ContractValue) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {{
+                        let ::boxology_contract::ValueRef::Enum {{ tag, payload }} = value.view() else {{
+                            return Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::KindMismatch));
+                        }};
+                        match tag {{
+                            {decoders}
+                            _ => Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnknownVariant(tag.into())).under(::boxology_contract::PathSegment::Variant(tag.into()))),
+                        }}
+                    }}
+                }}
+            "#
+            )
+        }
+    }
+}
+
+fn rust_type_expression(expression: &TypeExpression) -> String {
+    match expression {
+        TypeExpression::Leaf(leaf) => rust_value_type(*leaf, true).into(),
+        TypeExpression::Local(name) => name.clone(),
+        TypeExpression::Option(inner) => {
+            format!("::core::option::Option<{}>", rust_type_expression(inner))
+        }
+        TypeExpression::Vec(inner) => {
+            format!("::std::vec::Vec<{}>", rust_type_expression(inner))
+        }
+    }
 }
 
 /// Emits the generated implementation-checker `macro_rules! __boxology_check_implementation`.
@@ -3308,6 +3442,148 @@ macro_rules! __boxology_check_implementation {
         ] {
             assert!(rust.contains(expected), "missing {expected} in {rust}");
         }
+    }
+
+    #[test]
+    fn structured_type_template_is_public_ordered_and_byte_locked() {
+        const SOURCE: &str = r#"boxology::contract! {
+            pub struct Empty {}
+            #[doc = "mood"] pub enum Mood { Calm, #[deprecated(note = "avoid")] Busy }
+            #[deprecated] pub struct Profile {
+                #[doc = "name"] pub name: String,
+                pub scores: Vec<u32>,
+                pub mood: Option<Mood>,
+                pub history: Option<Vec<Mood>>,
+            }
+            #[error] pub enum Fault { Bad }
+            #[capability] pub async fn save(input: Profile) -> Result<Profile, Fault>;
+        }"#;
+        const SOURCE_SHA256: &str =
+            "ca03278d59798f1fd62b0c2b29785d92318e6c21b3abd2237647481de4e9b822";
+        let contract = scalar_model(SOURCE);
+        let source = structured_types_source(contract.model());
+        assert_eq!(source, structured_types_source(contract.model()));
+        let printed = prettyplease::unparse(&syn::parse_file(&source).unwrap());
+        assert_eq!(
+            format!("{:x}", Sha256::digest(printed.as_bytes())),
+            SOURCE_SHA256
+        );
+
+        let positions = ["pub struct Empty", "pub enum Mood", "pub struct Profile"].map(|text| {
+            printed
+                .find(text)
+                .unwrap_or_else(|| panic!("missing `{text}` in {printed}"))
+        });
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        for expected in [
+            "#[derive(Debug, Clone, PartialEq)]\npub struct Empty {}",
+            "///mood\n#[derive(Debug, Clone, PartialEq)]\npub enum Mood",
+            "#[deprecated]\n#[derive(Debug, Clone, PartialEq)]\npub struct Profile",
+            "///name\n    pub name: ::std::string::String",
+            "pub scores: ::std::vec::Vec<u32>",
+            "pub mood: ::core::option::Option<Mood>",
+            "pub history: ::core::option::Option<::std::vec::Vec<Mood>>",
+            "Self::Calm => \"Calm\"",
+            "Self::Busy => \"Busy\"",
+            "::boxology_contract::ContractValue::enum_value(",
+            "::boxology_contract::SlotValue::Null",
+            "DecodeErrorKind::UnexpectedPayload",
+            "DecodeErrorKind::UnknownVariant(",
+            "DecodeErrorKind::UnknownField(",
+            "\"name\" | \"scores\" | \"mood\" | \"history\" => {}",
+        ] {
+            assert!(
+                printed.contains(expected),
+                "missing `{expected}` in {printed}"
+            );
+        }
+        let field_order = ["&self.name", "&self.scores", "&self.mood", "&self.history"]
+            .map(|text| printed.find(text).unwrap());
+        assert!(field_order.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let diagnostics = generate(request(SOURCE, false, OUTPUTS.to_vec())).unwrap_err();
+        assert_eq!(
+            diagnostics
+                .as_slice()
+                .iter()
+                .map(|diagnostic| diagnostic.code())
+                .collect::<Vec<_>>(),
+            ["BXG0038"]
+        );
+    }
+
+    #[test]
+    #[ignore = "deep nested-Cargo codec proof runs explicitly and in main-push --no-budget CI"]
+    fn structured_type_template_compiles_and_round_trips() {
+        use std::{fs, process::Command};
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let source = r#"boxology::contract! {
+            pub struct Empty {}
+            pub enum Mood { Calm, Busy }
+            pub struct Profile { pub name: String, pub scores: Vec<u32>, pub mood: Option<Mood>, pub history: Option<Vec<Mood>> }
+            #[error] pub enum Fault { Bad }
+            #[capability] pub async fn save(input: Profile) -> Result<Profile, Fault>;
+        }"#;
+        let generated = structured_types_source(scalar_model(source).model());
+        let root = std::env::temp_dir().join(format!(
+            "boxology-structured-codec-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("boxology-contract");
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname=\"structured-codec-proof\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology-contract={{path={contract:?}}}\n\n[workspace]\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/main.rs"),
+            format!(
+                r#"{generated}
+                use boxology_contract::{{ContractType, ContractValue, DecodeErrorKind, PathSegment, SlotValue}};
+                fn main() {{
+                    let empty = Empty {{}};
+                    assert_eq!(empty.encode_value().unwrap(), ContractValue::object(Vec::<(String, ContractValue)>::new()).unwrap());
+                    let profile = Profile {{ name: "Ada".into(), scores: vec![3, 5], mood: Some(Mood::Calm), history: None }};
+                    let encoded = profile.encode_value().unwrap();
+                    assert_eq!(encoded, ContractValue::object([
+                        ("name".into(), ContractValue::string("Ada")),
+                        ("scores".into(), ContractValue::list([ContractValue::u64(3), ContractValue::u64(5)])),
+                        ("mood".into(), ContractValue::enum_value("Calm", SlotValue::Null)),
+                    ]).unwrap());
+                    assert_eq!(Profile::decode_value(&encoded).unwrap(), profile);
+                    let unknown = ContractValue::object([("extra".into(), ContractValue::bool(true))]).unwrap();
+                    let error = Empty::decode_value(&unknown).unwrap_err();
+                    assert_eq!(error.kind(), &DecodeErrorKind::UnknownField("extra".into()));
+                    assert_eq!(error.path(), &[PathSegment::Field("extra".into())]);
+                    assert_eq!(Mood::decode_value(&Mood::Busy.encode_value().unwrap()).unwrap(), Mood::Busy);
+                    let payload = ContractValue::enum_value("Calm", SlotValue::Value(ContractValue::bool(true)));
+                    let error = Mood::decode_value(&payload).unwrap_err();
+                    assert_eq!(error.kind(), &DecodeErrorKind::UnexpectedPayload);
+                    assert_eq!(error.path(), &[PathSegment::Variant("Calm".into())]);
+                }}
+                "#
+            ),
+        )
+        .unwrap();
+        let output = Command::new("cargo")
+            .args(["run", "--offline", "--quiet", "--manifest-path"])
+            .arg(root.join("Cargo.toml"))
+            .output()
+            .unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

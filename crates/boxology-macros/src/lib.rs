@@ -7,27 +7,39 @@ use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Type, visit::Visit};
 
-/// Validates a controlled contract and exposes its generated public error type.
+/// Validates a controlled contract and exposes its generated public boundary types.
 #[proc_macro]
 pub fn contract(input: TokenStream) -> TokenStream {
-    let model = match boxology_contract_syntax::parse(input.into()) {
-        Ok(model) => model,
-        Err(error) => return error.into_compile_error().into(),
-    };
+    contract_expansion(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn contract_expansion(input: TokenStream2) -> syn::Result<TokenStream2> {
+    let model = boxology_contract_syntax::parse(input)?;
+    let data = model
+        .data
+        .iter()
+        .map(|declaration| Ident::new(&declaration.name, Span::call_site()))
+        .collect::<Vec<_>>();
     let error = Ident::new(&model.error.name, Span::call_site());
+    let facade = if data.is_empty() {
+        quote!(pub use ::boxology_generated_contract::#error;)
+    } else {
+        quote!(pub use ::boxology_generated_contract::{#(#data,)* #error};)
+    };
     let expected = boxology_contract_syntax::semantic_digest(&model);
     let comparisons = expected.iter().enumerate().map(|(index, byte)| {
         quote!(::boxology_generated_contract::__BOXOLOGY_SEMANTIC_DIGEST[#index] == #byte)
     });
-    quote! {
-        pub use ::boxology_generated_contract::#error;
+    Ok(quote! {
+        #facade
         const _: () = {
             if !(#(#comparisons)&&*) {
                 panic!("Boxology generated contract is stale");
             }
         };
-    }
-    .into()
+    })
 }
 
 /// Preserves one ordinary inherent implementation and asks generated glue to check its contract.
@@ -126,5 +138,38 @@ impl<'ast> Visit<'ast> for ImplTraitFinder {
             self.0 = true;
         }
         syn::visit::visit_type(self, node);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contract_facade_reexports_structured_types_in_declaration_order() {
+        let expanded = contract_expansion(quote! {
+            pub struct Empty {}
+            pub enum Mood { Calm }
+            pub struct Profile { pub mood: Mood }
+            #[error] pub enum Fault { Bad }
+            #[capability] pub async fn save(input: Profile) -> Result<Profile, Fault>;
+        })
+        .unwrap()
+        .to_string();
+        let positions = ["Empty", "Mood", "Profile", "Fault"].map(|name| {
+            expanded
+                .find(name)
+                .unwrap_or_else(|| panic!("missing facade name {name}: {expanded}"))
+        });
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(expanded.matches("pub use").count(), 1);
+
+        let scalar = contract_expansion(quote! {
+            #[error] pub enum Fault { Bad }
+            #[capability] pub async fn save(input: String) -> Result<String, Fault>;
+        })
+        .unwrap()
+        .to_string();
+        assert!(scalar.starts_with("pub use :: boxology_generated_contract :: Fault ;"));
     }
 }
