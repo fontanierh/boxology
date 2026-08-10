@@ -13,6 +13,67 @@ mod receive;
 mod state;
 
 boxology::contract! {
+    pub struct SendRequest {
+        pub text: String,
+        pub dedup_key: String,
+    }
+
+    pub struct AskAlternative {
+        pub key: String,
+        pub label: String,
+        pub text: String,
+    }
+
+    pub struct AskRequest {
+        pub summary: String,
+        pub recommendation: String,
+        pub alternatives: Option<Vec<AskAlternative>>,
+        pub lifecycle_key: String,
+        pub dedup_key: String,
+    }
+
+    pub enum FailureClass {
+        Input,
+        Authorization,
+        Conflict,
+        Local,
+        Policy,
+        Transient,
+        Permanent,
+        Ambiguous,
+        Invariant,
+    }
+
+    pub struct OperationError {
+        pub code: String,
+        pub message: String,
+        pub retryable: bool,
+        pub retry_after_seconds: Option<u64>,
+        pub class: FailureClass,
+    }
+
+    pub struct DeliveryReceipt {
+        pub dedup_key: String,
+        pub message_id: i64,
+        pub deduplicated: bool,
+    }
+
+    pub struct DeliveryOutcome {
+        pub delivery: Option<DeliveryReceipt>,
+        pub error: Option<OperationError>,
+    }
+
+    pub struct AskReceipt {
+        pub ask_id: String,
+        pub lifecycle_key: String,
+        pub delivery: DeliveryReceipt,
+    }
+
+    pub struct AskOutcome {
+        pub ask: Option<AskReceipt>,
+        pub error: Option<OperationError>,
+    }
+
     #[error]
     pub enum SendTextError {
         Input,
@@ -28,6 +89,12 @@ boxology::contract! {
 
     #[capability]
     pub async fn send_text(text: String) -> Result<i64, SendTextError>;
+
+    #[capability(idempotency = inherent)]
+    pub async fn send(request: SendRequest) -> Result<DeliveryOutcome, SendTextError>;
+
+    #[capability(idempotency = inherent)]
+    pub async fn ask(request: AskRequest) -> Result<AskOutcome, SendTextError>;
 }
 
 pub struct TelegramService;
@@ -46,6 +113,83 @@ impl TelegramService {
         outbound::send_typed(outbound::SendCommand { text, dedup_key })
             .map(|receipt| receipt.message_id)
             .map_err(map_send_text_error)
+    }
+
+    pub async fn send(
+        &self,
+        _context: boxology::CallContext,
+        request: SendRequest,
+    ) -> Result<DeliveryOutcome, SendTextError> {
+        let result = if enabled() {
+            outbound::send_typed(outbound::SendCommand {
+                text: request.text,
+                dedup_key: request.dedup_key,
+            })
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => DeliveryOutcome {
+                delivery: Some(receipt.into()),
+                error: None,
+            },
+            Err(error) => DeliveryOutcome {
+                delivery: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn ask(
+        &self,
+        _context: boxology::CallContext,
+        request: AskRequest,
+    ) -> Result<AskOutcome, SendTextError> {
+        let result = if enabled() {
+            ask::run_typed(request)
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => AskOutcome {
+                ask: Some(receipt),
+                error: None,
+            },
+            Err(error) => AskOutcome {
+                ask: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+}
+
+impl From<outbound::SendReceipt> for DeliveryReceipt {
+    fn from(receipt: outbound::SendReceipt) -> Self {
+        Self {
+            dedup_key: receipt.dedup_key,
+            message_id: receipt.message_id,
+            deduplicated: receipt.deduplicated,
+        }
+    }
+}
+
+fn operation_error(error: AppError) -> OperationError {
+    OperationError {
+        code: error.code.into(),
+        message: error.message.into(),
+        retryable: error.retryable,
+        retry_after_seconds: error.retry_after,
+        class: match error.exit {
+            ExitClass::Success | ExitClass::Invariant => FailureClass::Invariant,
+            ExitClass::Input => FailureClass::Input,
+            ExitClass::Authorization => FailureClass::Authorization,
+            ExitClass::Conflict => FailureClass::Conflict,
+            ExitClass::Local => FailureClass::Local,
+            ExitClass::Policy => FailureClass::Policy,
+            ExitClass::Transient => FailureClass::Transient,
+            ExitClass::Permanent => FailureClass::Permanent,
+            ExitClass::Ambiguous => FailureClass::Ambiguous,
+        },
     }
 }
 
@@ -373,20 +517,67 @@ mod tests {
     #[test]
     fn typed_errors_preserve_every_stable_failure_class() {
         let cases = [
-            (ExitClass::Input, SendTextError::Input),
-            (ExitClass::Authorization, SendTextError::Authorization),
-            (ExitClass::Conflict, SendTextError::Conflict),
-            (ExitClass::Local, SendTextError::Local),
-            (ExitClass::Policy, SendTextError::Policy),
-            (ExitClass::Transient, SendTextError::Transient),
-            (ExitClass::Permanent, SendTextError::Permanent),
-            (ExitClass::Ambiguous, SendTextError::Ambiguous),
-            (ExitClass::Invariant, SendTextError::Invariant),
+            (ExitClass::Input, SendTextError::Input, FailureClass::Input),
+            (
+                ExitClass::Authorization,
+                SendTextError::Authorization,
+                FailureClass::Authorization,
+            ),
+            (
+                ExitClass::Conflict,
+                SendTextError::Conflict,
+                FailureClass::Conflict,
+            ),
+            (ExitClass::Local, SendTextError::Local, FailureClass::Local),
+            (
+                ExitClass::Policy,
+                SendTextError::Policy,
+                FailureClass::Policy,
+            ),
+            (
+                ExitClass::Transient,
+                SendTextError::Transient,
+                FailureClass::Transient,
+            ),
+            (
+                ExitClass::Permanent,
+                SendTextError::Permanent,
+                FailureClass::Permanent,
+            ),
+            (
+                ExitClass::Ambiguous,
+                SendTextError::Ambiguous,
+                FailureClass::Ambiguous,
+            ),
+            (
+                ExitClass::Invariant,
+                SendTextError::Invariant,
+                FailureClass::Invariant,
+            ),
         ];
-        for (exit, expected) in cases {
+        for (index, (exit, send_error, failure_class)) in cases.into_iter().enumerate() {
             assert_eq!(
                 map_send_text_error(AppError::new("test", "test", exit)),
-                expected
+                send_error
+            );
+            let retryable = exit == ExitClass::Transient;
+            let retry_after = retryable.then_some(17);
+            assert_eq!(
+                operation_error(AppError {
+                    code: "exact_code",
+                    message: "exact message",
+                    retryable,
+                    exit,
+                    retry_after,
+                }),
+                OperationError {
+                    code: "exact_code".into(),
+                    message: "exact message".into(),
+                    retryable,
+                    retry_after_seconds: retry_after,
+                    class: failure_class,
+                },
+                "failure projection case {index}"
             );
         }
     }

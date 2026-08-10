@@ -1,33 +1,55 @@
 use crate::outbound;
 use crate::state::{self, AskRecord, ChoiceRecord, Paths};
-use crate::{AppError, ExitClass, SCHEMA, parse};
+use crate::{AppError, AskAlternative, AskReceipt, AskRequest, ExitClass, SCHEMA, parse};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AskRequest {
+struct JsonAskRequest {
     schema: u8,
     summary: String,
     recommendation: String,
-    alternatives: Option<Vec<Alternative>>,
+    alternatives: Option<Vec<JsonAskAlternative>>,
     lifecycle_key: String,
     dedup_key: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Alternative {
+struct JsonAskAlternative {
     key: String,
     label: String,
     text: String,
 }
 pub(crate) fn run(input: &[u8]) -> Result<Value, AppError> {
-    let request: AskRequest = parse(input)?;
+    let request: JsonAskRequest = parse(input)?;
     if request.schema != SCHEMA {
         return Err(AppError::input("unsupported_schema", "unsupported schema"));
     }
+    let receipt = run_typed(AskRequest {
+        summary: request.summary,
+        recommendation: request.recommendation,
+        alternatives: request.alternatives.map(|alternatives| {
+            alternatives
+                .into_iter()
+                .map(|alternative| AskAlternative {
+                    key: alternative.key,
+                    label: alternative.label,
+                    text: alternative.text,
+                })
+                .collect()
+        }),
+        lifecycle_key: request.lifecycle_key,
+        dedup_key: request.dedup_key,
+    })?;
+    Ok(
+        json!({"ask_id": receipt.ask_id, "lifecycle_key": receipt.lifecycle_key, "dedup_key": receipt.delivery.dedup_key, "delivery": "delivered", "message_id": receipt.delivery.message_id, "deduplicated": receipt.delivery.deduplicated}),
+    )
+}
+
+pub(crate) fn run_typed(request: AskRequest) -> Result<AskReceipt, AppError> {
     validate_summary(&request.summary)?;
     validate_text(&request.recommendation, 1_024, "recommendation")?;
     validate_key(&request.lifecycle_key, 128, "lifecycle key")?;
@@ -124,11 +146,13 @@ pub(crate) fn run(input: &[u8]) -> Result<Value, AppError> {
         chat_id,
         &ask_id,
     )?;
-    Ok(
-        json!({"ask_id": ask_id, "lifecycle_key": request.lifecycle_key, "dedup_key": request.dedup_key, "delivery": delivery["delivery"], "message_id": delivery.get("message_id"), "deduplicated": delivery.get("deduplicated")}),
-    )
+    Ok(AskReceipt {
+        ask_id,
+        lifecycle_key: request.lifecycle_key,
+        delivery: delivery.into(),
+    })
 }
-fn choices(ask_id: &str, alternatives: &[Alternative]) -> Result<Vec<ChoiceRecord>, AppError> {
+fn choices(ask_id: &str, alternatives: &[AskAlternative]) -> Result<Vec<ChoiceRecord>, AppError> {
     let salt = state::random_bytes::<16>()?;
     let mut choices = vec![choice(ask_id, "recommendation", None, &salt)];
     choices.extend(
@@ -157,14 +181,14 @@ pub(crate) fn token(ask_id: &str, kind: &str, key: Option<&str>) -> String {
     hasher.update(key.unwrap_or_default().as_bytes());
     format!("tg1:{}", state::hex(&hasher.finalize()[..24]))
 }
-fn buttons(ask_id: &str, alternatives: &[Alternative]) -> Value {
+fn buttons(ask_id: &str, alternatives: &[AskAlternative]) -> Value {
     let rows = std::iter::once(json!([{"text": "Recommendation", "callback_data": token(ask_id, "recommendation", None)}]))
         .chain(alternatives.iter().map(|alternative| json!([{"text": alternative.label, "callback_data": token(ask_id, "alternative", Some(&alternative.key))}])))
         .chain(std::iter::once(json!([{"text": "Need context", "callback_data": token(ask_id, "need_context", None)}])))
         .collect::<Vec<_>>();
     json!({"inline_keyboard": rows})
 }
-fn render(summary: &str, recommendation: &str, alternatives: &[Alternative]) -> String {
+fn render(summary: &str, recommendation: &str, alternatives: &[AskAlternative]) -> String {
     let mut text = format!("{summary}\n\nRecommendation: {recommendation}");
     if !alternatives.is_empty() {
         text.push_str("\n\nAlternatives:");
