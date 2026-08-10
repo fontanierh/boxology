@@ -1556,6 +1556,266 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
         ::boxology_contract::Idempotency::Inherent,
         None,
     );
+    let capability_10 = ::boxology_contract::CapabilityDescriptor::new(
+        ::boxology_contract::CapabilityId::new(
+            box_id.clone(),
+            ::boxology_contract::CapabilityName::new("status")
+                .expect("generated capability name is valid"),
+        ),
+        ::boxology_contract::TypeDescriptor::structure([
+                ::boxology_contract::FieldDescriptor::new(
+                    "probe",
+                    ::boxology_contract::TypeDescriptor::bool(),
+                    None,
+                ),
+            ])
+            .expect("generated struct descriptor is valid"),
+        ::boxology_contract::TypeDescriptor::structure([
+                ::boxology_contract::FieldDescriptor::new(
+                    "status",
+                    ::boxology_contract::TypeDescriptor::optional(
+                            ::boxology_contract::TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "local",
+                                        ::boxology_contract::TypeDescriptor::optional(
+                                                ::boxology_contract::TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "enabled",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "paired",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "next_offset",
+                                                            ::boxology_contract::TypeDescriptor::i64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "telegram_confirmed_before",
+                                                            ::boxology_contract::TypeDescriptor::i64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "consumer_locked",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "inbox",
+                                                            ::boxology_contract::TypeDescriptor::structure([
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "unhandled",
+                                                                        ::boxology_contract::TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "bytes",
+                                                                        ::boxology_contract::TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "full",
+                                                                        ::boxology_contract::TypeDescriptor::bool(),
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated struct descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "asks",
+                                                            ::boxology_contract::TypeDescriptor::structure([
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "active",
+                                                                        ::boxology_contract::TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "total",
+                                                                        ::boxology_contract::TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated struct descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "outbound",
+                                                            ::boxology_contract::TypeDescriptor::structure([
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "ambiguous",
+                                                                        ::boxology_contract::TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "total",
+                                                                        ::boxology_contract::TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated struct descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "pending_pair",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "last_receive_at",
+                                                            ::boxology_contract::TypeDescriptor::optional(
+                                                                    ::boxology_contract::TypeDescriptor::i64(),
+                                                                )
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "last_error_code",
+                                                            ::boxology_contract::TypeDescriptor::optional(
+                                                                    ::boxology_contract::TypeDescriptor::string(),
+                                                                )
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "probe",
+                                        ::boxology_contract::TypeDescriptor::optional(
+                                                ::boxology_contract::TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "api_reachable",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "bot_matches",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "webhook_configured",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "get_updates_compatible",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
+                    None,
+                ),
+                ::boxology_contract::FieldDescriptor::new(
+                    "error",
+                    ::boxology_contract::TypeDescriptor::optional(
+                            ::boxology_contract::TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "code",
+                                        ::boxology_contract::TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "message",
+                                        ::boxology_contract::TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "retryable",
+                                        ::boxology_contract::TypeDescriptor::bool(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "retry_after_seconds",
+                                        ::boxology_contract::TypeDescriptor::optional(
+                                                ::boxology_contract::TypeDescriptor::u64(),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "class",
+                                        ::boxology_contract::TypeDescriptor::enumeration([
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Input",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Authorization",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Conflict",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Local",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Policy",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Transient",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Permanent",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Ambiguous",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Invariant",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                            ])
+                                            .expect("generated enum descriptor is valid"),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
+                    None,
+                ),
+            ])
+            .expect("generated struct descriptor is valid"),
+        error.clone(),
+        ::boxology_contract::CapabilityShape::Unary,
+        ::boxology_contract::ExposureLevel::CodeOnly,
+        ::boxology_contract::Idempotency::None,
+        None,
+    );
     ::boxology_contract::ContractDescriptor::new(
             box_id,
             [
@@ -1569,9 +1829,10 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
                 capability_7,
                 capability_8,
                 capability_9,
+                capability_10,
             ],
             ::boxology_contract::ContractRevision::new(
-                    "sha256:e904f754d564a2781c5d086ed240f0ccc1a2e8d48d292a34928e03611f736f01",
+                    "sha256:a70ad698d94adbb88fe9328bb3f068bfa44af5480deee485d16c411db4a16587",
                 )
                 .expect("generated contract revision is non-empty"),
         )
@@ -1651,6 +1912,11 @@ pub trait TelegramDispatch: Send + Sync + 'static {
         context: CallContext,
         request: AckRequest,
     ) -> Pin<Box<dyn Future<Output = Result<AckOutcome, SendTextError>> + Send + 'a>>;
+    fn status<'a>(
+        &'a self,
+        context: CallContext,
+        request: StatusRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<StatusOutcome, SendTextError>> + Send + 'a>>;
 }
 #[derive(Clone)]
 pub struct TelegramHandle {
@@ -3072,6 +3338,263 @@ impl TelegramHandle {
             .map_err(|error| conversion_detail("output_decode", error))
             .map_err(CallError::InvalidResponse)
     }
+    pub async fn status(
+        &self,
+        context: CallContext,
+        request: StatusRequest,
+    ) -> Result<StatusOutcome, CallError<SendTextError>> {
+        let input = request
+            .encode()
+            .map_err(|error| conversion_detail("input_encode", error))
+            .map_err(CallError::ContractViolation)?;
+        let output = self
+            .target
+            .call(&TELEGRAM_STATUS, context, input)
+            .await
+            .map_err(|error| {
+                error.into_typed::<SendTextError>(&SEND_TEXT_ERROR_DESCRIPTOR)
+            })?;
+        let output = TypeDescriptor::structure([
+                ::boxology_contract::FieldDescriptor::new(
+                    "status",
+                    TypeDescriptor::optional(
+                            TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "local",
+                                        TypeDescriptor::optional(
+                                                TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "enabled",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "paired",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "next_offset",
+                                                            TypeDescriptor::i64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "telegram_confirmed_before",
+                                                            TypeDescriptor::i64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "consumer_locked",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "inbox",
+                                                            TypeDescriptor::structure([
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "unhandled",
+                                                                        TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "bytes",
+                                                                        TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "full",
+                                                                        TypeDescriptor::bool(),
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated struct descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "asks",
+                                                            TypeDescriptor::structure([
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "active",
+                                                                        TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "total",
+                                                                        TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated struct descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "outbound",
+                                                            TypeDescriptor::structure([
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "ambiguous",
+                                                                        TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::FieldDescriptor::new(
+                                                                        "total",
+                                                                        TypeDescriptor::u64(),
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated struct descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "pending_pair",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "last_receive_at",
+                                                            TypeDescriptor::optional(TypeDescriptor::i64())
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "last_error_code",
+                                                            TypeDescriptor::optional(TypeDescriptor::string())
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "probe",
+                                        TypeDescriptor::optional(
+                                                TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "api_reachable",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "bot_matches",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "webhook_configured",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "get_updates_compatible",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
+                    None,
+                ),
+                ::boxology_contract::FieldDescriptor::new(
+                    "error",
+                    TypeDescriptor::optional(
+                            TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "code",
+                                        TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "message",
+                                        TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "retryable",
+                                        TypeDescriptor::bool(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "retry_after_seconds",
+                                        TypeDescriptor::optional(TypeDescriptor::u64())
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "class",
+                                        TypeDescriptor::enumeration([
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Input",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Authorization",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Conflict",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Local",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Policy",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Transient",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Permanent",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Ambiguous",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Invariant",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                            ])
+                                            .expect("generated enum descriptor is valid"),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
+                    None,
+                ),
+            ])
+            .expect("generated struct descriptor is valid")
+            .conform(DecodeRole::ConsumerOutput, output)
+            .map_err(|error| conversion_detail("output_decode", error))
+            .map_err(CallError::InvalidResponse)?;
+        <StatusOutcome as ContractType>::decode(&output)
+            .map_err(|error| conversion_detail("output_decode", error))
+            .map_err(CallError::InvalidResponse)
+    }
 }
 static TELEGRAM_SEND_TEXT: LazyLock<CapabilityId> = LazyLock::new(|| {
     CapabilityId::new(
@@ -3131,6 +3654,12 @@ static TELEGRAM_ACK: LazyLock<CapabilityId> = LazyLock::new(|| {
     CapabilityId::new(
         BoxId::new("telegram").expect("generated box identity is valid"),
         CapabilityName::new("ack").expect("generated capability name is valid"),
+    )
+});
+static TELEGRAM_STATUS: LazyLock<CapabilityId> = LazyLock::new(|| {
+    CapabilityId::new(
+        BoxId::new("telegram").expect("generated box identity is valid"),
+        CapabilityName::new("status").expect("generated capability name is valid"),
     )
 });
 static SEND_TEXT_ERROR_DESCRIPTOR: LazyLock<TypeDescriptor> = LazyLock::new(|| {
@@ -6707,6 +7236,857 @@ impl ::boxology_contract::ContractType for AckOutcome {
     }
 }
 #[derive(Debug, Clone, PartialEq)]
+pub struct StatusRequest {
+    pub probe: bool,
+}
+impl ::boxology_contract::ContractType for StatusRequest {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.probe)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("probe".into()))
+            })?
+        {
+            fields.push(("probe".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "probe" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            probe: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("probe"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("probe".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboxStatus {
+    pub unhandled: u64,
+    pub bytes: u64,
+    pub full: bool,
+}
+impl ::boxology_contract::ContractType for InboxStatus {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.unhandled,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("unhandled".into()))
+            })?
+        {
+            fields.push(("unhandled".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.bytes)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("bytes".into()))
+            })?
+        {
+            fields.push(("bytes".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.full)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("full".into()))
+            })?
+        {
+            fields.push(("full".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "unhandled" | "bytes" | "full" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            unhandled: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("unhandled"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("unhandled".into()),
+                        )
+                })?,
+            bytes: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("bytes"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("bytes".into()))
+                })?,
+            full: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("full"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("full".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct AskStatus {
+    pub active: u64,
+    pub total: u64,
+}
+impl ::boxology_contract::ContractType for AskStatus {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.active,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("active".into()))
+            })?
+        {
+            fields.push(("active".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.total)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("total".into()))
+            })?
+        {
+            fields.push(("total".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "active" | "total" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            active: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("active"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("active".into()))
+                })?,
+            total: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("total"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("total".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutboundStatus {
+    pub ambiguous: u64,
+    pub total: u64,
+}
+impl ::boxology_contract::ContractType for OutboundStatus {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.ambiguous,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("ambiguous".into()))
+            })?
+        {
+            fields.push(("ambiguous".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.total)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("total".into()))
+            })?
+        {
+            fields.push(("total".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "ambiguous" | "total" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            ambiguous: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("ambiguous"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("ambiguous".into()),
+                        )
+                })?,
+            total: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("total"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("total".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalStatus {
+    pub enabled: bool,
+    pub paired: bool,
+    pub next_offset: i64,
+    pub telegram_confirmed_before: i64,
+    pub consumer_locked: bool,
+    pub inbox: InboxStatus,
+    pub asks: AskStatus,
+    pub outbound: OutboundStatus,
+    pub pending_pair: bool,
+    pub last_receive_at: ::core::option::Option<i64>,
+    pub last_error_code: ::core::option::Option<::std::string::String>,
+}
+impl ::boxology_contract::ContractType for LocalStatus {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.enabled,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("enabled".into()))
+            })?
+        {
+            fields.push(("enabled".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.paired,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("paired".into()))
+            })?
+        {
+            fields.push(("paired".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.next_offset,
+            )
+            .map_err(|error| {
+                error
+                    .under(::boxology_contract::PathSegment::Field("next_offset".into()))
+            })?
+        {
+            fields.push(("next_offset".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.telegram_confirmed_before,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field(
+                            "telegram_confirmed_before".into(),
+                        ),
+                    )
+            })?
+        {
+            fields.push(("telegram_confirmed_before".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.consumer_locked,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field("consumer_locked".into()),
+                    )
+            })?
+        {
+            fields.push(("consumer_locked".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.inbox)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("inbox".into()))
+            })?
+        {
+            fields.push(("inbox".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.asks)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("asks".into()))
+            })?
+        {
+            fields.push(("asks".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.outbound,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("outbound".into()))
+            })?
+        {
+            fields.push(("outbound".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.pending_pair,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field("pending_pair".into()),
+                    )
+            })?
+        {
+            fields.push(("pending_pair".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.last_receive_at,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field("last_receive_at".into()),
+                    )
+            })?
+        {
+            fields.push(("last_receive_at".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.last_error_code,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field("last_error_code".into()),
+                    )
+            })?
+        {
+            fields.push(("last_error_code".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "enabled" | "paired" | "next_offset" | "telegram_confirmed_before"
+                | "consumer_locked" | "inbox" | "asks" | "outbound" | "pending_pair"
+                | "last_receive_at" | "last_error_code" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            enabled: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("enabled"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(::boxology_contract::PathSegment::Field("enabled".into()))
+                })?,
+            paired: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("paired"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("paired".into()))
+                })?,
+            next_offset: <i64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("next_offset"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("next_offset".into()),
+                        )
+                })?,
+            telegram_confirmed_before: <i64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("telegram_confirmed_before"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "telegram_confirmed_before".into(),
+                            ),
+                        )
+                })?,
+            consumer_locked: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("consumer_locked"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "consumer_locked".into(),
+                            ),
+                        )
+                })?,
+            inbox: <InboxStatus as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("inbox"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("inbox".into()))
+                })?,
+            asks: <AskStatus as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("asks"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("asks".into()))
+                })?,
+            outbound: <OutboundStatus as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("outbound"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("outbound".into()),
+                        )
+                })?,
+            pending_pair: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("pending_pair"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "pending_pair".into(),
+                            ),
+                        )
+                })?,
+            last_receive_at: <::core::option::Option<
+                i64,
+            > as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("last_receive_at"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "last_receive_at".into(),
+                            ),
+                        )
+                })?,
+            last_error_code: <::core::option::Option<
+                ::std::string::String,
+            > as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("last_error_code"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "last_error_code".into(),
+                            ),
+                        )
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeStatus {
+    pub api_reachable: bool,
+    pub bot_matches: bool,
+    pub webhook_configured: bool,
+    pub get_updates_compatible: bool,
+}
+impl ::boxology_contract::ContractType for ProbeStatus {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.api_reachable,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field("api_reachable".into()),
+                    )
+            })?
+        {
+            fields.push(("api_reachable".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.bot_matches,
+            )
+            .map_err(|error| {
+                error
+                    .under(::boxology_contract::PathSegment::Field("bot_matches".into()))
+            })?
+        {
+            fields.push(("bot_matches".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.webhook_configured,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field(
+                            "webhook_configured".into(),
+                        ),
+                    )
+            })?
+        {
+            fields.push(("webhook_configured".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.get_updates_compatible,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field(
+                            "get_updates_compatible".into(),
+                        ),
+                    )
+            })?
+        {
+            fields.push(("get_updates_compatible".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "api_reachable" | "bot_matches" | "webhook_configured"
+                | "get_updates_compatible" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            api_reachable: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("api_reachable"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "api_reachable".into(),
+                            ),
+                        )
+                })?,
+            bot_matches: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("bot_matches"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("bot_matches".into()),
+                        )
+                })?,
+            webhook_configured: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("webhook_configured"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "webhook_configured".into(),
+                            ),
+                        )
+                })?,
+            get_updates_compatible: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("get_updates_compatible"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "get_updates_compatible".into(),
+                            ),
+                        )
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusResult {
+    pub local: ::core::option::Option<LocalStatus>,
+    pub probe: ::core::option::Option<ProbeStatus>,
+}
+impl ::boxology_contract::ContractType for StatusResult {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.local)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("local".into()))
+            })?
+        {
+            fields.push(("local".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.probe)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("probe".into()))
+            })?
+        {
+            fields.push(("probe".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "local" | "probe" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            local: <::core::option::Option<
+                LocalStatus,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("local"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("local".into()))
+                })?,
+            probe: <::core::option::Option<
+                ProbeStatus,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("probe"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("probe".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusOutcome {
+    pub status: ::core::option::Option<StatusResult>,
+    pub error: ::core::option::Option<OperationError>,
+}
+impl ::boxology_contract::ContractType for StatusOutcome {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.status,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("status".into()))
+            })?
+        {
+            fields.push(("status".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.error)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("error".into()))
+            })?
+        {
+            fields.push(("error".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "status" | "error" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            status: <::core::option::Option<
+                StatusResult,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("status"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("status".into()))
+                })?,
+            error: <::core::option::Option<
+                OperationError,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("error"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("error".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
 pub enum SendTextError {
     Input,
     Authorization,
@@ -6928,8 +8308,8 @@ pub mod test_support {
     use super::{
         SendTextError, TELEGRAM_SEND_TEXT, TELEGRAM_SEND, TELEGRAM_ASK, TELEGRAM_REPLY,
         TELEGRAM_RESOLVE_SEND, TELEGRAM_PAIR_BEGIN, TELEGRAM_PAIR_COMPLETE,
-        TELEGRAM_PAIR_REVOKE, TELEGRAM_POLL, TELEGRAM_ACK, TelegramHandle,
-        conversion_detail,
+        TELEGRAM_PAIR_REVOKE, TELEGRAM_POLL, TELEGRAM_ACK, TELEGRAM_STATUS,
+        TelegramHandle, conversion_detail,
     };
     type SendTextFuture = Pin<
         Box<dyn Future<Output = Result<i64, SendTextError>> + Send + 'static>,
@@ -7037,6 +8417,17 @@ pub mod test_support {
         CallContext,
         super::AckRequest,
     ) -> AckFuture + Send + Sync + 'static;
+    type StatusFuture = Pin<
+        Box<
+            dyn Future<
+                Output = Result<super::StatusOutcome, SendTextError>,
+            > + Send + 'static,
+        >,
+    >;
+    type StatusResponder = dyn Fn(
+        CallContext,
+        super::StatusRequest,
+    ) -> StatusFuture + Send + Sync + 'static;
     #[derive(Clone, Default)]
     pub struct TelegramFake {
         send_text: Option<Arc<SendTextResponder>>,
@@ -7049,6 +8440,7 @@ pub mod test_support {
         pair_revoke: Option<Arc<PairRevokeResponder>>,
         poll: Option<Arc<PollResponder>>,
         ack: Option<Arc<AckResponder>>,
+        status: Option<Arc<StatusResponder>>,
     }
     impl TelegramFake {
         pub fn new() -> Self {
@@ -7176,6 +8568,19 @@ pub mod test_support {
                 + 'static,
         {
             self.ack = Some(
+                Arc::new(move |context, request| {
+                    Box::pin(responder(context, request))
+                }),
+            );
+            self
+        }
+        pub fn with_status<F, Fut>(mut self, responder: F) -> Self
+        where
+            F: Fn(CallContext, super::StatusRequest) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<super::StatusOutcome, SendTextError>> + Send
+                + 'static,
+        {
+            self.status = Some(
                 Arc::new(move |context, request| {
                     Box::pin(responder(context, request))
                 }),
@@ -7671,6 +9076,45 @@ pub mod test_support {
                     }
                 });
             }
+            if capability == &*TELEGRAM_STATUS {
+                let Some(responder) = self.status.clone() else {
+                    return Box::pin(ready(Err(unprogrammed())));
+                };
+                return Box::pin(async move {
+                    let input = TypeDescriptor::structure([
+                            ::boxology_contract::FieldDescriptor::new(
+                                "probe",
+                                TypeDescriptor::bool(),
+                                None,
+                            ),
+                        ])
+                        .expect("generated struct descriptor is valid")
+                        .conform(DecodeRole::ProviderInput, input)
+                        .map_err(|error| {
+                            ErasedCallError::ContractViolation(
+                                conversion_detail("input_decode", error),
+                            )
+                        })?;
+                    let request = <super::StatusRequest as ContractType>::decode(&input)
+                        .map_err(|error| {
+                            ErasedCallError::ContractViolation(
+                                conversion_detail("input_decode", error),
+                            )
+                        })?;
+                    match responder(context, request).await {
+                        Ok(output) => {
+                            output
+                                .encode()
+                                .map_err(|error| {
+                                    ErasedCallError::InvalidResponse(
+                                        conversion_detail("output_encode", error),
+                                    )
+                                })
+                        }
+                        Err(error) => Err(ErasedCallError::from_domain(&error)),
+                    }
+                });
+            }
             Box::pin(ready(Err(unprogrammed())))
         }
     }
@@ -7680,8 +9124,8 @@ pub mod test_support {
 }
 #[doc(hidden)]
 pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [
-    136, 188, 240, 236, 115, 219, 117, 159, 183, 22, 218, 110, 43, 81, 241, 144, 252, 61,
-    221, 206, 105, 22, 28, 12, 125, 221, 171, 183, 186, 158, 44, 250,
+    60, 165, 217, 209, 32, 229, 177, 177, 235, 166, 50, 194, 250, 186, 9, 210, 118, 8,
+    184, 9, 74, 69, 205, 208, 212, 230, 239, 221, 73, 228, 165, 13,
 ];
 #[doc(hidden)]
 #[macro_export]
@@ -7699,9 +9143,10 @@ macro_rules! __boxology_check_implementation {
         $crate::__boxology_check_implementation!(@ find_pair_revoke $receiver; $($method
         $validity;)*); $crate::__boxology_check_implementation!(@ find_poll $receiver;
         $($method $validity;)*); $crate::__boxology_check_implementation!(@ find_ack
-        $receiver; $($method $validity;)*); impl $crate::TelegramDispatch for $receiver {
-        fn send_text <'a > (&'a self, context : ::boxology::CallContext, input :
-        ::std::string::String,) -> ::std::pin::Pin < ::std::boxed::Box < dyn
+        $receiver; $($method $validity;)*); $crate::__boxology_check_implementation!(@
+        find_status $receiver; $($method $validity;)*); impl $crate::TelegramDispatch for
+        $receiver { fn send_text <'a > (&'a self, context : ::boxology::CallContext,
+        input : ::std::string::String,) -> ::std::pin::Pin < ::std::boxed::Box < dyn
         ::core::future::Future < Output = ::core::result::Result < i64,
         $crate::SendTextError >, > + ::core::marker::Send + 'a, >, > {
         ::std::boxed::Box::pin(self.send_text(context, input)) } fn send <'a > (&'a self,
@@ -7746,7 +9191,12 @@ macro_rules! __boxology_check_implementation {
         $crate::AckRequest,) -> ::std::pin::Pin < ::std::boxed::Box < dyn
         ::core::future::Future < Output = ::core::result::Result <$crate::AckOutcome,
         $crate::SendTextError >, > + ::core::marker::Send + 'a, >, > {
-        ::std::boxed::Box::pin(self.ack(context, input)) } }
+        ::std::boxed::Box::pin(self.ack(context, input)) } fn status <'a > (&'a self,
+        context : ::boxology::CallContext, input : $crate::StatusRequest,) ->
+        ::std::pin::Pin < ::std::boxed::Box < dyn ::core::future::Future < Output =
+        ::core::result::Result <$crate::StatusOutcome, $crate::SendTextError >, > +
+        ::core::marker::Send + 'a, >, > { ::std::boxed::Box::pin(self.status(context,
+        input)) } }
     };
     (@ find_send_text $receiver:ty; send_text valid; $($rest:tt)*) => {
         const _ : () = { fn require_service < T : ::core::marker::Send +
@@ -7929,6 +9379,24 @@ macro_rules! __boxology_check_implementation {
         $crate::__boxology_check_implementation!(@ find_ack $receiver; $($rest)*);
     };
     (@ find_ack $receiver:ty;) => {
+        compile_error!("Boxology capability implementation is missing");
+    };
+    (@ find_status $receiver:ty; status valid; $($rest:tt)*) => {
+        const _ : () = { fn require_service < T : ::core::marker::Send +
+        ::core::marker::Sync + 'static > () {} fn require_future < F :
+        ::core::future::Future < Output = ::core::result::Result <$crate::StatusOutcome,
+        $crate::SendTextError >> + ::core::marker::Send > (_ : F) {} fn check(receiver :
+        &$receiver, context : ::boxology::CallContext, input : $crate::StatusRequest) {
+        require_service::<$receiver > (); require_future(receiver.status(context,
+        input)); } };
+    };
+    (@ find_status $receiver:ty; status invalid; $($rest:tt)*) => {
+        compile_error!("Boxology capability has an invalid structural signature");
+    };
+    (@ find_status $receiver:ty; $other:ident $validity:ident; $($rest:tt)*) => {
+        $crate::__boxology_check_implementation!(@ find_status $receiver; $($rest)*);
+    };
+    (@ find_status $receiver:ty;) => {
         compile_error!("Boxology capability implementation is missing");
     };
 }

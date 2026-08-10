@@ -1,5 +1,7 @@
 use super::api;
-use super::state::{self, BotFingerprint, EventRecord, Pairing, Paths};
+use super::state::{
+    self, AskRecord, BotFingerprint, ChoiceRecord, EventRecord, OutboundRecord, Pairing, Paths,
+};
 use super::{ENABLED_VARIABLE, ExitClass, SCHEMA, TelegramService, generated, test_guard};
 use boxology_contract::{
     BoxId, CallContext, Caller, CancelToken, CapabilityId, ErasedCallError, ErasedCallTarget,
@@ -598,6 +600,60 @@ fn unhandled_event(paths: &Paths, event_id: &str, update_id: i64) {
             lifecycle_key: None,
             choice: None,
         });
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn status_fixture(paths: &Paths) {
+    paired_state(paths);
+    state::update(paths, |state| {
+        state.next_offset = 12;
+        state.confirmed_before = 10;
+        state.events.push(EventRecord {
+            event_id: "tg:11:1".into(),
+            update_id: 11,
+            kind: "text".into(),
+            text: "status fixture".into(),
+            received_at: 71,
+            handled: false,
+            reply_to: None,
+            ask_id: None,
+            lifecycle_key: None,
+            choice: None,
+        });
+        state.asks.push(AskRecord {
+            ask_id: format!("ask:{}", "a".repeat(32)),
+            lifecycle_key: "status-lifecycle".into(),
+            dedup_key: "status-ask".into(),
+            message_id: Some(91),
+            state: "open".into(),
+            choices: vec![
+                ChoiceRecord {
+                    kind: "recommendation".into(),
+                    key: None,
+                    token_digest: "b".repeat(64),
+                    salt: "c".repeat(32),
+                },
+                ChoiceRecord {
+                    kind: "need_context".into(),
+                    key: None,
+                    token_digest: "d".repeat(64),
+                    salt: "e".repeat(32),
+                },
+            ],
+        });
+        state.outbound.push(OutboundRecord {
+            dedup_key: "status-outbound".into(),
+            kind: "send".into(),
+            payload_hash: "f".repeat(64),
+            state: "ambiguous".into(),
+            message_id: None,
+            event_id: None,
+            ask_id: None,
+        });
+        state.last_receive_at = Some(71);
+        state.last_error_code = Some("telegram_rate_limited".into());
         Ok(())
     })
     .unwrap();
@@ -1471,20 +1527,193 @@ fn ask_callbacks_and_custom_replies_are_correlated() {
 }
 
 #[test]
-fn status_probe_is_constrained_and_listener_requires_lease() {
+fn generated_local_status_is_complete_non_network_and_preserves_legacy_bytes() {
+    let context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    status_fixture(&paths);
+    let durable = state::read(&paths).unwrap();
+    let inbox_bytes = u64::try_from(serde_json::to_vec(&durable.events).unwrap().len()).unwrap();
+    let before = fs::read(context.root.join("state.json")).unwrap();
+    let lock = state::ConsumerLock::acquire(&paths).unwrap();
+    unsafe { std::env::remove_var(ENABLED_VARIABLE) };
+    let (_composition, telegram) = assembled_telegram(&["status"]);
+
+    let outcome = run_ready(telegram.status(
+        call_context(),
+        boxology_generated_contract::StatusRequest { probe: false },
+    ))
+    .unwrap();
+    assert_eq!(outcome.error, None);
+    let result = outcome.status.unwrap();
+    assert_eq!(result.probe, None);
+    let local = result.local.unwrap();
+    assert!(!local.enabled);
+    assert!(local.paired);
+    assert_eq!(
+        (local.next_offset, local.telegram_confirmed_before),
+        (12, 10)
+    );
+    assert!(local.consumer_locked);
+    assert_eq!(
+        local.inbox,
+        boxology_generated_contract::InboxStatus {
+            unhandled: 1,
+            bytes: inbox_bytes,
+            full: false,
+        }
+    );
+    assert_eq!(
+        local.asks,
+        boxology_generated_contract::AskStatus {
+            active: 1,
+            total: 1,
+        }
+    );
+    assert_eq!(
+        local.outbound,
+        boxology_generated_contract::OutboundStatus {
+            ambiguous: 1,
+            total: 1,
+        }
+    );
+    assert!(!local.pending_pair);
+    assert_eq!(local.last_receive_at, Some(71));
+    assert_eq!(
+        local.last_error_code.as_deref(),
+        Some("telegram_rate_limited")
+    );
+
+    let (legacy, exit) = run(&["status"], json!({"schema": SCHEMA, "probe": false}));
+    assert_eq!(exit, ExitClass::Success);
+    assert_eq!(
+        legacy,
+        format!(
+            r#"{{"schema":1,"ok":true,"command":"status","data":{{"asks":{{"active":1,"total":1}},"consumer_locked":true,"enabled":false,"inbox":{{"bytes":{inbox_bytes},"full":false,"unhandled":1}},"last_error_code":"telegram_rate_limited","last_receive_at":71,"next_offset":12,"outbound":{{"ambiguous":1,"total":1}},"paired":true,"pending_pair":false,"probe":false,"telegram_confirmed_before":10}}}}"#
+        )
+    );
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
+    assert_eq!(context.fake.request_count(), 0);
+    drop(lock);
+}
+
+#[test]
+fn generated_status_gates_disabled_probe_before_token_state_and_network() {
+    let context = Context::new(vec![]);
+    let state_path = context.root.join("state.json");
+    fs::write(&state_path, b"intentionally invalid state").unwrap();
+    let before = fs::read(&state_path).unwrap();
+    unsafe {
+        std::env::remove_var(ENABLED_VARIABLE);
+        std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN");
+    }
+    let (_composition, telegram) = assembled_telegram(&["status"]);
+
+    let outcome = run_ready(telegram.status(
+        call_context(),
+        boxology_generated_contract::StatusRequest { probe: true },
+    ))
+    .unwrap();
+    assert_eq!(outcome.status, None);
+    assert_eq!(
+        outcome.error,
+        Some(contract_error(
+            "telegram_disabled",
+            "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1",
+            boxology_generated_contract::FailureClass::Authorization,
+            false,
+            None,
+        ))
+    );
+    assert_eq!(fs::read(state_path).unwrap(), before);
+    assert_eq!(context.fake.request_count(), 0);
+}
+
+#[test]
+fn generated_status_probe_reports_bot_and_webhook_branches_without_mutation() {
     let mut context = Context::new(vec![
         response(&json!({"id": 7, "is_bot": true, "username": "fake_bot"})),
         response(&json!({"url": ""})),
     ]);
-    let (status, exit) = run(&["status"], json!({"schema": SCHEMA, "probe": true}));
-    assert_eq!(exit, ExitClass::Success, "{status}");
-    assert_eq!(ok(&status)["api_reachable"], true);
-    assert_eq!(ok(&status)["get_updates_compatible"], true);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    let before = fs::read(context.root.join("state.json")).unwrap();
+    let (_composition, telegram) = assembled_telegram(&["status"]);
+    let outcome = run_ready(telegram.status(
+        call_context(),
+        boxology_generated_contract::StatusRequest { probe: true },
+    ))
+    .unwrap();
+    assert_eq!(outcome.error, None);
+    let result = outcome.status.unwrap();
+    assert_eq!(result.local, None);
+    assert_eq!(
+        result.probe,
+        Some(boxology_generated_contract::ProbeStatus {
+            api_reachable: true,
+            bot_matches: true,
+            webhook_configured: false,
+            get_updates_compatible: true,
+        })
+    );
     assert_eq!(context.fake.request_count(), 2);
-    assert!(!status.contains("fake-token"));
-    unsafe {
-        std::env::remove_var(ENABLED_VARIABLE);
-    }
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
+
+    context.replace_fake(vec![
+        response(&json!({"id": 8, "is_bot": true, "username": "other_bot"})),
+        response(&json!({"url": "https://example.invalid/hook"})),
+    ]);
+    let outcome = run_ready(telegram.status(
+        call_context(),
+        boxology_generated_contract::StatusRequest { probe: true },
+    ))
+    .unwrap();
+    assert_eq!(outcome.error, None);
+    assert_eq!(
+        outcome.status.unwrap().probe,
+        Some(boxology_generated_contract::ProbeStatus {
+            api_reachable: true,
+            bot_matches: false,
+            webhook_configured: true,
+            get_updates_compatible: false,
+        })
+    );
+    assert_eq!(context.fake.request_count(), 2);
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
+}
+
+#[test]
+fn generated_status_probe_projects_redacted_retryable_api_failure() {
+    let context = Context::new(vec![raw(
+        r#"{"ok":false,"error_code":429,"description":"secret probe detail","parameters":{"retry_after":4}}"#,
+    )]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    let before = fs::read(context.root.join("state.json")).unwrap();
+    let (_composition, telegram) = assembled_telegram(&["status"]);
+    let outcome = run_ready(telegram.status(
+        call_context(),
+        boxology_generated_contract::StatusRequest { probe: true },
+    ))
+    .unwrap();
+    assert_eq!(outcome.status, None);
+    assert_eq!(
+        outcome.error,
+        Some(contract_error(
+            "telegram_rate_limited",
+            "Telegram is temporarily unavailable",
+            boxology_generated_contract::FailureClass::Transient,
+            true,
+            Some(4),
+        ))
+    );
+    assert_eq!(context.fake.request_count(), 1);
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
+}
+
+#[test]
+fn listener_requires_the_enablement_lease() {
+    let context = Context::new(vec![]);
+    unsafe { std::env::remove_var(ENABLED_VARIABLE) };
     let mut output = Vec::new();
     let exit = super::listen::run(
         br#"{"schema":1,"long_poll_seconds":1,"heartbeat_seconds":10}"#,
@@ -1492,7 +1721,7 @@ fn status_probe_is_constrained_and_listener_requires_lease() {
     );
     assert_eq!(exit, ExitClass::Authorization);
     assert!(!String::from_utf8_lossy(&output).contains("fake-token"));
-    context.replace_fake(vec![]);
+    assert_eq!(context.fake.request_count(), 0);
 }
 
 #[test]
