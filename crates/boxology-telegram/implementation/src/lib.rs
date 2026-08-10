@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 use std::io;
+use std::sync::Mutex;
 
 #[allow(dead_code)]
 mod api;
@@ -209,6 +210,18 @@ boxology::contract! {
         pub error: Option<OperationError>,
     }
 
+    pub struct ListenStartRequest {}
+
+    pub struct ListenStartReceipt {
+        pub next_offset: i64,
+        pub unhandled: u64,
+    }
+
+    pub struct ListenStartOutcome {
+        pub startup: Option<ListenStartReceipt>,
+        pub error: Option<OperationError>,
+    }
+
     pub struct AckRequest {
         pub event_id: String,
     }
@@ -315,6 +328,9 @@ boxology::contract! {
     #[capability]
     pub async fn poll(request: PollRequest) -> Result<PollOutcome, SendTextError>;
 
+    #[capability]
+    pub async fn listen_start(request: ListenStartRequest) -> Result<ListenStartOutcome, SendTextError>;
+
     #[capability(idempotency = inherent)]
     pub async fn ack(request: AckRequest) -> Result<AckOutcome, SendTextError>;
 
@@ -322,7 +338,10 @@ boxology::contract! {
     pub async fn status(request: StatusRequest) -> Result<StatusOutcome, SendTextError>;
 }
 
-pub struct TelegramService;
+#[derive(Default)]
+pub struct TelegramService {
+    consumer: Mutex<Option<state::ConsumerLock>>,
+}
 
 #[boxology::implementation]
 impl TelegramService {
@@ -545,9 +564,19 @@ impl TelegramService {
         request: PollRequest,
     ) -> Result<PollOutcome, SendTextError> {
         let result = if enabled() {
-            receive::poll_typed(receive::PollCommand {
+            let command = receive::PollCommand {
                 timeout_seconds: request.timeout_seconds,
-            })
+            };
+            let consumer = self
+                .consumer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if consumer.is_some() {
+                receive::poll_typed_locked(command)
+            } else {
+                drop(consumer);
+                receive::poll_typed(command)
+            }
         } else {
             Err(AppError::authorization())
         };
@@ -558,6 +587,24 @@ impl TelegramService {
             },
             Err(error) => PollOutcome {
                 result: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn listen_start(
+        &self,
+        _context: boxology::CallContext,
+        _request: ListenStartRequest,
+    ) -> Result<ListenStartOutcome, SendTextError> {
+        let result = listen_start_typed(&self.consumer);
+        Ok(match result {
+            Ok(startup) => ListenStartOutcome {
+                startup: Some(startup),
+                error: None,
+            },
+            Err(error) => ListenStartOutcome {
+                startup: None,
                 error: Some(operation_error(error)),
             },
         })
@@ -607,6 +654,45 @@ impl TelegramService {
             },
         })
     }
+}
+
+fn listen_start_typed(
+    slot: &Mutex<Option<state::ConsumerLock>>,
+) -> Result<ListenStartReceipt, AppError> {
+    if !enabled() {
+        return Err(AppError::authorization());
+    }
+    let mut slot = slot.lock().unwrap_or_else(|error| error.into_inner());
+    if slot.is_some() {
+        return Err(AppError::new(
+            "consumer_locked",
+            "another local consumer holds the lock",
+            ExitClass::Conflict,
+        ));
+    }
+    let paths = state::Paths::from_env()?;
+    let consumer = state::ConsumerLock::acquire(&paths)?;
+    let current = state::read(&paths)?;
+    if current.pairing.is_none() {
+        return Err(AppError::new(
+            "not_paired",
+            "Telegram pairing is required",
+            ExitClass::Policy,
+        ));
+    }
+    let unhandled = u64::try_from(current.events.iter().filter(|event| !event.handled).count())
+        .map_err(|_| {
+            AppError::new(
+                "listen_count_overflow",
+                "listener event count exceeds its supported range",
+                ExitClass::Invariant,
+            )
+        })?;
+    *slot = Some(consumer);
+    Ok(ListenStartReceipt {
+        next_offset: current.next_offset,
+        unhandled,
+    })
 }
 
 fn typed_poll_result(result: receive::PollResult) -> PollResult {
