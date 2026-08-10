@@ -275,8 +275,8 @@ still requires its own authorization.
 
 - Do not box the runtime, contract machinery, facade, syntax, bindings, evidence
   packages, or repository operations merely for symmetry.
-- Do not rewrite the working Telegram service before one generated handle proves
-  the boundary, and do not change its CLI in the scalar T0 slice.
+- Do not rewrite the working Telegram service merely for boxification; extend it
+  through existing production seams and replace its CLI only with a governed composition.
 - Do not conflate generated Telegram code with authorization to use live Telegram.
 - Do not clone Pi's extension ecosystem or Prime's durable-agent surface before
   the minimum Telegram and harness consumers expose a concrete need.
