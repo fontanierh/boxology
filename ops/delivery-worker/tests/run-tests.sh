@@ -37,10 +37,22 @@ ok '[[ $RC -ne 0 && $LIVE -ne 0 && $LEFT -eq 0 ]]' 'record-write failure aborts 
 # Interrupt only the fixture supervisor, then TERM the exact owned fixture group.
 new; /bin/bash "$S" run --run-id term --phase repair --harness codex --worktree "$WT" --cwd "$WT" -- /bin/sleep 30 >"$B/run.out" 2>&1 & SUP=$!
 track_pid "$SUP"; wait_record term || exit 1; read PID PGID < <(/usr/bin/awk -F= '/^pid=/{p=$2}/^pgid=/{g=$2}END{print p,g}' "$DW_STATE_DIR/term.record"); track_group "$PID"
-PST=$(/bin/ps -p "$PID" -o pid=,pgid=); /bin/kill -TERM "$SUP"; wait "$SUP" 2>/dev/null
-OUT=$(/bin/bash "$S" reap --run-id term); RC=$?
-ok '[[ $PST == *"$PID"*"$PGID"* && $PID == "$PGID" ]]' 'guardian PID equals PGID'
+PST=$(/bin/ps -p "$PID" -o pid=,pgid=,state=); SESSION=$(/usr/bin/awk -F= '/^session=/{print $2}' "$DW_STATE_DIR/term.record")
+JOIN="$B/join"; /usr/bin/perl -MPOSIX -e '$SIG{TERM}=sub{exit 0}; $r=POSIX::setpgid(0,0+$ARGV[0]); $ok=defined($r); open(F, ">", $ARGV[1]) or exit 2; print F ($ok ? "1\n" : "0\n"); close(F); sleep 300' "$PID" "$JOIN" & SIB=$!; track_pid "$SIB"
+for i in $(jot 100); do [[ -f "$JOIN" ]] && break; /bin/sleep .01; done; [[ -f "$JOIN" ]] || exit 1; JOINED=$(<"$JOIN"); SIB_PGID=$(/bin/ps -p "$SIB" -o pgid= | /usr/bin/awk '{print $1}')
+/bin/kill -TERM "$SUP"; wait "$SUP" 2>/dev/null; OUT=$(/bin/bash "$S" reap --run-id term); RC=$?; /bin/kill -0 "$SIB" 2>/dev/null; SIB_LIVE=$?; /bin/kill -TERM "$SIB"; wait "$SIB" 2>/dev/null
+ok '[[ $PST == *"$PID"*"$PGID"*s* && $PID == "$PGID" && $SESSION == "$PID" ]]' 'guardian is the recorded process-group and session leader'
+ok '[[ $JOINED == 0 && $SIB_PGID != "$PID" && $SIB_LIVE -eq 0 ]]' 'outside sibling cannot join the guardian session group and survives its TERM'
 ok '[[ $RC -eq 0 && "$OUT" == *"action=clear reason=term"* && ! -e "$DW_STATE_DIR/term.record" ]]' 'TERM empties fixture group'
+
+# A disappeared non-TTY launcher and normal owned child churn remain safely reapable.
+new; /bin/bash "$S" run --run-id churn --phase validation --harness codex --worktree "$WT" --cwd "$WT" -- /bin/bash -c 'while :; do /bin/sleep .03 & /bin/sleep .01; done' >"$B/run.out" 2>&1 & SUP=$!
+track_pid "$SUP"; wait_record churn || exit 1; PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/churn.record"); track_group "$PID"; /bin/kill -TERM "$SUP"; wait "$SUP" 2>/dev/null
+PPID_NOW=; for i in $(jot 100); do PPID_NOW=$(/bin/ps -p "$PID" -o ppid= | /usr/bin/awk '{print $1}'); [[ "$PPID_NOW" == 1 ]] && break; /bin/sleep .01; done
+OUT=$(/bin/bash "$S" reap --run-id churn --dry-run); RC=$?; LIVE=$(/bin/ps -axo pgid= | /usr/bin/awk -v g="$PID" '$1==g {n++} END {print n+0}')
+ok '[[ $RC -eq 0 && "$PPID_NOW" == 1 && "$LIVE" -gt 1 && "$OUT" == *"action=would-term reason=verified"* ]]' 'reparented guardian with churning descendants passes dry-run proof'
+OUT=$(/bin/bash "$S" reap --run-id churn); RC=$?; LEFT=$(/bin/ps -axo pgid= | /usr/bin/awk -v g="$PID" '$1==g {print}')
+ok '[[ $RC -eq 0 && -z "$LEFT" && "$OUT" == *"action=clear reason=term"* && ! -e "$DW_STATE_DIR/churn.record" ]]' 'reparented guardian with churning descendants is reaped as its owned group'
 
 # TERM-resistant fixture reaches KILL; the unrelated same-name sleep survives.
 new; /bin/sleep 300 & OTHER=$!
@@ -96,6 +108,9 @@ ok '[[ $RC -eq 70 && $LIVE -eq 0 && "$OUT" == *"reason=ambiguous"* ]]' 'deleted 
 cp "$B/bad.saved" "$DW_STATE_DIR/bad.record"; /usr/bin/awk '/^lstart=/{print "lstart=Mon Jan  1 00:00:00 2001"; next}{print}' "$B/bad.saved" >"$DW_STATE_DIR/bad.record"
 OUT=$(/bin/bash "$S" reap --run-id bad --dry-run 2>&1); RC=$?; /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
 ok '[[ $RC -eq 70 && $LIVE -eq 0 && "$OUT" == *"reason=ambiguous"* ]]' 'stale guardian birth identity fails closed without signaling'
+cp "$B/bad.saved" "$DW_STATE_DIR/bad.record"; /usr/bin/awk '/^schema=/{print "schema=1"; next}{print}' "$B/bad.saved" >"$DW_STATE_DIR/bad.record"
+OUT=$(/bin/bash "$S" reap --run-id bad --dry-run 2>&1); RC=$?; /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
+ok '[[ $RC -eq 70 && $LIVE -eq 0 && "$OUT" == *"reason=legacy_shared_session"* ]]' 'legacy live group is inspectable but never group-signaled'
 cp "$B/bad.saved" "$DW_STATE_DIR/bad.record"
 /bin/chmod 644 "$DW_STATE_DIR/bad.record"; OUT=$(/bin/bash "$S" reap --run-id bad 2>&1); RC=$?; /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
 ok '[[ $RC -ne 0 && $LIVE -eq 0 && "$OUT" == *"reason=unsafe_record"* ]]' 'permissive record fails closed'

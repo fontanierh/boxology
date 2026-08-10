@@ -3,7 +3,8 @@
 `supervise.sh` is the opt-in, fail-closed launcher for Boxology delivery-loop
 implementation, repair, and validation commands on the project Mac. It is
 separate from `ops/process-reaper`: that tool considers old individual review
-processes, while this one owns a process group created for one named run.
+processes, while this one owns an exclusive POSIX session and process group
+created for one named run.
 
 ## Interface
 
@@ -24,8 +25,9 @@ The caller supplies an argv vector, and secrets stay in the worker environment.
 
 ## Ownership and state
 
-The launcher gates the command until it has created a dedicated process-group
-guardian and atomically written a private record beneath
+The launcher gates the command until its guardian has used the macOS system
+Perl's `POSIX::setsid` to become both session and process-group leader, then
+atomically writes a private record beneath
 `/Users/jim/.codex/boxology-delivery-worker/runs` (`0700` directory, `0600`
 records). The record contains the run, phase, harness, guardian PID/PGID,
 session, UID, start fingerprint, canonical worktree/cwd, reciprocal Git
@@ -51,8 +53,11 @@ ops/delivery-worker/supervise.sh reap --run-id ISSUE-PHASE --dry-run
 If the dry-run proves the recorded group, run `reap` without `--dry-run`.
 Immediately before TERM and KILL the tool revalidates worktree identity,
 guardian/member birth fingerprints, session, ancestry, cwd, and group
-membership. TERM gets a bounded grace period; KILL applies only to surviving
-pre-TERM fingerprints. `term_prepared` and `term_sent` records are resumable.
+membership. The exclusive session prevents an outside process from joining the
+owned process group. Verified descendants may naturally exit or spawn while
+the TERM roster is prepared; the last proven roster is persisted without
+requiring a quiescent group. TERM gets a bounded grace period; KILL applies only to
+surviving pre-TERM fingerprints. `term_prepared` and `term_sent` records are resumable.
 Ambiguity, stale identity, tool failure, or a changed member retains state and
 signals nothing further. Never replace a refusal with `kill`, `pkill`, or
 `killall`; inspect the retained evidence and fix the proof failure.
@@ -73,7 +78,9 @@ actions, reasons, and the classification above.
 
 ## Limits and rollback
 
-This is a macOS/Bash 3.2 operator primitive, not a daemon. It cannot recover a
+This is a macOS/Bash 3.2 operator primitive, not a daemon. A schema-1 record
+created before exclusive sessions remains inspectable but is never group-signaled
+while its group is live; it clears normally once empty. The tool cannot recover a
 command that bypassed the wrapper, prove a lock that was never observed, or
 decide an ambiguous reused identity. Removing delivery-loop adoption returns
 launching to the previous behavior; retained records can be inspected and then
