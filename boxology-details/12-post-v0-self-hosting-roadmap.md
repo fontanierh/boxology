@@ -79,10 +79,10 @@ required for full self-hosting. Structured command breadth is the next gap.
 
 Do not start by cloning Pi or Prime. T0 landed as one small PR. For T1, syntax/model,
 schema writing/reading, raw reachability, and role-specific classifier mapping are
-delivered. Generated structured types/codecs are in flight under #574, followed by
-descriptors and complete checker/dispatch/handle/fake/adapter wiring. Telegram command
-parity and its governed composition follow that emitter boundary. Every PR remains at
-or below 600 hand-authored lines.
+delivered. Generated structured types/codecs are also delivered under #574; descriptors
+and complete checker/dispatch/handle/fake/adapter wiring remain before the gate lifts.
+Telegram command parity and its governed composition follow that emitter boundary.
+Every PR remains at or below 600 hand-authored lines.
 
 ## Telegram migration matrix
 
