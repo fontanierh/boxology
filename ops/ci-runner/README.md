@@ -75,8 +75,40 @@ after installation or a host/runner change. It verifies native `macOS`/`ARM64`,
 
 Pull requests have one required `pr.yml` `validation` job on the native label. It always runs
 `cargo xtask ci-hygiene --base <event base SHA>`. Code PRs add xtask invariants and directly
-changed-crate tests; root dependency/toolchain, opaque fixture/golden, and process-reaper work add
-their respective conditional scopes. Required PR CI runs zero product commands.
+changed-crate tests. Five redundant, expensive targets are deliberately dispatch-only even when
+their crate changes: `boxology-cli`'s `cli` and `surface_lock`, `boxology-workspace` and
+`boxology-classifier`'s `surface_lock`, and `boxology-generator-model`'s `purity_lock`. Those four
+crates and the existing deep-only `boxology-init` born-valid case still run library/binary tests,
+an explicit doctest command, and every other integration target. `boxology-generator` also skips
+only `tests::generated_multi_capability_box_compiles_and_routes_both_capabilities` and
+`tests::generated_import_adapter_sealed_import_routes_to_real_provider_end_to_end`; its other unit
+tests, binaries, doctests, and integration targets remain required. Ordinary directly changed
+crates retain an unfiltered `cargo test`.
+
+This trades pre-merge mutation/end-to-end evidence for a shorter required path; it is not a claim
+that relevant source changes no longer need those tests. Dispatch-only `cargo xtask ci --no-budget`
+executes every non-ignored exclusion exactly once through its product `boxology check` workspace
+test pass. Its separate registries are integrity-only: they pin the exact integration source, body,
+and test inventories plus both exact live generator unit bodies, and reject missing, renamed, or
+ignored targets without re-running them. The generator deep-test command runs only ignored tests.
+PR #592's GitHub log measured 74.59 seconds for the 52-case CLI end-to-end target, 5.64 seconds for
+the CLI surface target, and 45.56 seconds for the workspace surface mutation. A controlled local
+run on the post-CLI-core tree measured test-body times of 76.03, 9.34, 41.71, 1.24, and 0.67 seconds
+for the five targets respectively; those are local measurements, not GitHub before/after evidence.
+The fresh pre-change baseline is [PR #597](https://github.com/fontanierh/boxology/pull/597): its
+generator-plus-macros change completed required native-Mac validation in 5m53 in
+[Actions run 31350831322](https://github.com/fontanierh/boxology/actions/runs/31350831322), with
+hygiene and invariants green before changed-generator testing. The trace reached the multi-capability
+completion about 52.5 seconds into the suite, then spent about 81.4 additional seconds reaching the
+sealed-import completion; 81.4 seconds is not a standalone sealed-test duration. The other 41
+generator unit tests finished in about 1.3 seconds, so the trace directly supports about 134 seconds
+of expected savings for that shape. This is baseline evidence only; the revised CI PR supplies the
+first post-change GitHub timing.
+
+To roll back, remove the special-case routing so directly changed crates again use the existing
+unfiltered `cargo test`; keep the integrity guards unless their authority returns elsewhere.
+Root dependency/toolchain, opaque fixture/golden, and process-reaper work retain their respective
+conditional scopes. Required PR CI runs zero product commands.
 
 [`deep-validation.yml`](../../.github/workflows/deep-validation.yml) is manual, non-required, and
 native-Mac-only. Its sole validation command is:

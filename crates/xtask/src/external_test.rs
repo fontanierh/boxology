@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Component, Path},
-    process::Command,
 };
 
 use proc_macro2::TokenTree;
@@ -20,6 +19,9 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) source: &'static str,
     pub(crate) default_source: &'static str,
     pub(crate) tests: &'static [&'static str],
+    /// Optional exact manifest pin for packages whose legitimate explicit
+    /// target topology is broader than the default lock shape.
+    pub(crate) manifest_digest: Option<&'static str>,
     /// SHA-256 over the exact bytes of the pinned test source file. Checked before
     /// `body_digest` so enforcement helpers outside the test closure stay pinned.
     pub(crate) source_digest: &'static str,
@@ -29,11 +31,39 @@ pub(crate) struct ExternalTestSpec {
     pub(crate) body_digest: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LiveTestSpec {
+    pub(crate) manifest: &'static str,
+    pub(crate) manifest_digest: &'static str,
+    pub(crate) source: &'static str,
+    pub(crate) tests: &'static [&'static str],
+    pub(crate) body_digest: &'static str,
+}
+
+pub(crate) fn check_external_test_integrity(
+    root: &Path,
+    spec: &ExternalTestSpec,
+) -> Result<(), String> {
+    check_external_test_integrity_inner(root, spec)
+}
+
+#[cfg(test)]
 pub(crate) fn require_external_tests(
     root: &Path,
     mut run: impl FnMut(&[&str]) -> Option<(bool, Vec<u8>)>,
     spec: &ExternalTestSpec,
 ) -> Result<(), String> {
+    check_external_test_integrity_inner(root, spec)?;
+    if !execute(&mut run, spec) {
+        return Err(format!(
+            "{}: cargo list/run mismatch or cargo failed",
+            spec.package
+        ));
+    }
+    Ok(())
+}
+
+fn check_external_test_integrity_inner(root: &Path, spec: &ExternalTestSpec) -> Result<(), String> {
     let pkg = spec.package;
     if spec.tests.is_empty() {
         return Err(format!("{pkg}: empty tests list"));
@@ -47,8 +77,11 @@ pub(crate) fn require_external_tests(
     if build_script_exists(root, spec.manifest) {
         return Err(format!("{pkg}: build script is forbidden"));
     }
-    let Ok(manifest) = fs::read_to_string(root.join(spec.manifest)) else {
+    let Ok(manifest_bytes) = fs::read(root.join(spec.manifest)) else {
         return Err(format!("{pkg}: cannot read manifest"));
+    };
+    let Ok(manifest) = std::str::from_utf8(&manifest_bytes) else {
+        return Err(format!("{pkg}: manifest is not UTF-8"));
     };
     let Ok(source_bytes) = fs::read(root.join(spec.source)) else {
         return Err(format!("{pkg}: cannot read source"));
@@ -56,17 +89,34 @@ pub(crate) fn require_external_tests(
     let Ok(source) = std::str::from_utf8(&source_bytes).map(str::to_owned) else {
         return Err(format!("{pkg}: source is not UTF-8"));
     };
-    if !manifest_is_exact(&manifest, spec) {
+    if let Some(digest) = spec.manifest_digest {
+        source_matches_digest(&manifest_bytes, digest)
+            .map_err(|error| format!("{pkg}: manifest {error}"))?;
+    } else if !manifest_is_exact(manifest, spec) {
         return Err(format!("{pkg}: manifest does not match pinned controls"));
     }
     source_matches_digest(&source_bytes, spec.source_digest)
         .map_err(|error| format!("{pkg}: {error}"))?;
     bodies_match_digest(&source, spec.tests, spec.body_digest)
         .map_err(|error| format!("{pkg}: {error}"))?;
-    if !execute(&mut run, spec) {
-        return Err(format!("{pkg}: cargo list/run mismatch or cargo failed"));
-    }
     Ok(())
+}
+
+pub(crate) fn check_live_test_integrity(root: &Path, spec: &LiveTestSpec) -> Result<(), String> {
+    if spec.tests.is_empty() {
+        return Err("empty tests list".to_string());
+    }
+    for path in [spec.manifest, spec.source] {
+        if !regular_file(root, path) {
+            return Err(format!("{path}: missing or not a regular file"));
+        }
+    }
+    let manifest = fs::read(root.join(spec.manifest)).map_err(|_| "cannot read manifest")?;
+    source_matches_digest(&manifest, spec.manifest_digest)
+        .map_err(|error| format!("manifest {error}"))?;
+    let source = fs::read_to_string(root.join(spec.source))
+        .map_err(|_| "cannot read UTF-8 source".to_string())?;
+    live_bodies_match_digest(&source, spec.tests, spec.body_digest)
 }
 
 fn source_matches_digest(bytes: &[u8], expected: &str) -> Result<(), String> {
@@ -82,7 +132,14 @@ fn source_matches_digest(bytes: &[u8], expected: &str) -> Result<(), String> {
 /// Digest listed `#[test]` blocks plus each test's transitive file-level closure.
 /// Refresh pins by copying `observed`.
 fn bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(), String> {
-    let observed = body_digest(source, tests)?;
+    digest_matches(body_digest(source, tests)?, expected)
+}
+
+fn live_bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(), String> {
+    digest_matches(policy_digest(source, tests, true)?, expected)
+}
+
+fn digest_matches(observed: String, expected: &str) -> Result<(), String> {
     if observed != expected {
         return Err(format!(
             "body digest mismatch: expected {expected}, observed {observed}"
@@ -92,20 +149,25 @@ fn bodies_match_digest(source: &str, tests: &[&str], expected: &str) -> Result<(
 }
 
 fn body_digest(source: &str, tests: &[&str]) -> Result<String, String> {
+    policy_digest(source, tests, false)
+}
+
+fn policy_digest(source: &str, tests: &[&str], strict: bool) -> Result<String, String> {
     if tests.is_empty() {
         return Err("empty tests list".to_string());
     }
     let file = syn::parse_file(source).map_err(|_| "source parse failed".to_string())?;
-    let index = index_file_level_defs(&file);
     let mut hasher = Sha256::new();
     for name in tests {
-        let Some(defs) = index.get(*name) else {
+        let (items, leaf) = test_scope(&file.items, name, strict)?;
+        let index = index_defs(items);
+        let Some(defs) = index.get(leaf) else {
             return Err(format!("missing listed test `{name}`"));
         };
         let item = match defs.as_slice() {
-            [FileDef::Fn(item)] if is_bare_test(item) => *item,
+            [FileDef::Fn(item)] if accepted_test(item, strict) => *item,
             _ => {
-                return Err(format!("listed name `{name}` is not a unique #[test]"));
+                return Err(format!("listed name `{name}` is not a unique live #[test]"));
             }
         };
         hash_part(
@@ -124,6 +186,51 @@ fn body_digest(source: &str, tests: &[&str]) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn test_scope<'ast, 'name>(
+    root: &'ast [syn::Item],
+    qualified: &'name str,
+    strict_modules: bool,
+) -> Result<(&'ast [syn::Item], &'name str), String> {
+    let mut parts = qualified.split("::").collect::<Vec<_>>();
+    let Some(leaf) = parts.pop().filter(|part| !part.is_empty()) else {
+        return Err(format!("invalid listed test `{qualified}`"));
+    };
+    let mut items = root;
+    for (depth, part) in parts.into_iter().enumerate() {
+        if part.is_empty() {
+            return Err(format!("invalid listed test `{qualified}`"));
+        }
+        let modules = items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Mod(module) if module.ident == part => Some(module),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [module] = modules.as_slice() else {
+            return Err(format!("missing or ambiguous module in `{qualified}`"));
+        };
+        if strict_modules
+            && ((depth == 0 && !is_exact_test_module(module))
+                || (depth != 0 && !module.attrs.is_empty()))
+        {
+            return Err(format!(
+                "listed test module attributes changed in `{qualified}`"
+            ));
+        }
+        let Some((_, nested)) = &module.content else {
+            return Err(format!("listed test module is not inline in `{qualified}`"));
+        };
+        items = nested;
+    }
+    Ok((items, leaf))
+}
+
+fn is_exact_test_module(module: &syn::ItemMod) -> bool {
+    matches!(module.attrs.as_slice(), [attribute]
+        if attribute.meta.to_token_stream().to_string() == "cfg (test)")
+}
+
 fn hash_part(hasher: &mut Sha256, kind: &str, name: &str, tokens: &str) {
     hasher.update(kind.as_bytes());
     hasher.update(b"\0");
@@ -133,10 +240,38 @@ fn hash_part(hasher: &mut Sha256, kind: &str, name: &str, tokens: &str) {
     hasher.update(b"\0");
 }
 
-fn is_bare_test(item: &ItemFn) -> bool {
+fn is_live_test(item: &ItemFn) -> bool {
     item.attrs
         .iter()
-        .any(|attribute| attribute.path().is_ident("test"))
+        .filter(|attribute| attribute.path().is_ident("test"))
+        .count()
+        == 1
+        && !item.attrs.iter().any(|attribute| {
+            let mut idents = Vec::new();
+            collect_idents_from_tokens(attribute.meta.to_token_stream(), &mut idents);
+            attribute.path().is_ident("ignore")
+                || attribute.path().is_ident("cfg_attr")
+                    && idents.iter().any(|ident| ident == "ignore")
+        })
+}
+
+fn accepted_test(item: &ItemFn, strict: bool) -> bool {
+    is_live_test(item) && (!strict || is_exact_live_test(item))
+}
+
+fn is_exact_live_test(item: &ItemFn) -> bool {
+    matches!(item.attrs.as_slice(), [attribute]
+        if matches!(&attribute.meta, syn::Meta::Path(path) if path.is_ident("test")))
+        && matches!(item.vis, syn::Visibility::Inherited)
+        && item.sig.constness.is_none()
+        && item.sig.asyncness.is_none()
+        && matches!(item.sig.safety, syn::Safety::Default)
+        && item.sig.abi.is_none()
+        && item.sig.generics.params.is_empty()
+        && item.sig.generics.where_clause.is_none()
+        && item.sig.inputs.is_empty()
+        && item.sig.variadic.is_none()
+        && matches!(item.sig.output, syn::ReturnType::Default)
 }
 
 fn bare_call_ident(call: &ExprCall) -> Option<String> {
@@ -154,9 +289,9 @@ fn bare_path_name(path: &ExprPath) -> Option<String> {
     }
 }
 
-fn index_file_level_defs(file: &syn::File) -> HashMap<String, Vec<FileDef<'_>>> {
+fn index_defs(items: &[syn::Item]) -> HashMap<String, Vec<FileDef<'_>>> {
     let mut by_name = HashMap::<String, Vec<FileDef<'_>>>::new();
-    for item in &file.items {
+    for item in items {
         let (name, def) = match item {
             syn::Item::Fn(item) => (item.sig.ident.to_string(), FileDef::Fn(item)),
             syn::Item::Const(item) => (item.ident.to_string(), FileDef::Const(item)),
@@ -268,21 +403,13 @@ impl<'ast> Visit<'ast> for RefCollector {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn run_with_cargo(
     root: &Path,
     spec: &ExternalTestSpec,
     run: impl FnMut(&[&str]) -> Option<(bool, Vec<u8>)>,
 ) -> Result<(), String> {
     require_external_tests(root, run, spec)
-}
-
-pub(crate) fn cargo(root: &Path, args: &[&str]) -> Option<(bool, Vec<u8>)> {
-    let output = Command::new("cargo")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .ok()?;
-    Some((output.status.success(), output.stdout))
 }
 
 fn build_script_exists(root: &Path, manifest: &str) -> bool {
@@ -383,6 +510,7 @@ fn test_table_is_exact(table: &Table, spec: &ExternalTestSpec) -> bool {
         && table.get("required-features").is_none()
 }
 
+#[cfg(test)]
 fn execute(
     mut run: impl FnMut(&[&str]) -> Option<(bool, Vec<u8>)>,
     spec: &ExternalTestSpec,
@@ -411,6 +539,7 @@ fn execute(
     }
 }
 
+#[cfg(test)]
 fn names(output: &[u8], prefix: &str, suffix: &str) -> Option<Vec<String>> {
     let text = std::str::from_utf8(output).ok()?;
     let mut names = Vec::new();
@@ -430,6 +559,7 @@ fn names(output: &[u8], prefix: &str, suffix: &str) -> Option<Vec<String>> {
     Some(names)
 }
 
+#[cfg(test)]
 fn exact(actual: Option<Vec<String>>, expected: &[&str]) -> bool {
     let Some(actual) = actual else { return false };
     !expected.is_empty()
@@ -460,6 +590,7 @@ mod tests {
         source: "tests/client_lock.rs",
         default_source: "tests/client_lock.rs",
         tests: &["a", "b"],
+        manifest_digest: None,
         source_digest: LIVE_AB_SOURCE_DIGEST,
         body_digest: LIVE_AB_DIGEST,
     };
@@ -641,6 +772,64 @@ mod tests {
         assert!(!execute(|_| None, &spec));
     }
 
+    #[test]
+    fn qualified_live_binding_rejects_missing_renamed_and_ignored_tests() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("xtask-live-test-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let live = "#[cfg(test)] mod tests { #[test] fn subject() { helper(); } fn helper() { assert!(true); } }\n";
+        fs::write(root.join("Cargo.toml"), BASE_MANIFEST).unwrap();
+        fs::write(root.join("subject.rs"), live).unwrap();
+        let digest = Box::leak(
+            policy_digest(live, &["tests::subject"], true)
+                .unwrap()
+                .into_boxed_str(),
+        );
+        let manifest_digest =
+            Box::leak(format!("{:x}", Sha256::digest(BASE_MANIFEST.as_bytes())).into_boxed_str());
+        let spec = LiveTestSpec {
+            manifest: "Cargo.toml",
+            manifest_digest,
+            source: "subject.rs",
+            tests: &["tests::subject"],
+            body_digest: digest,
+        };
+        assert!(check_live_test_integrity(&root, &spec).is_ok());
+        for mutant in [
+            "#[cfg(test)] mod tests { #[test] fn renamed() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] #[ignore] fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] #[cfg_attr(any(), ignore)] fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] #[cfg(any())] fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] #[should_panic] fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] async fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] unsafe fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] fn subject<T>() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] fn subject(_: ()) { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] mod tests { #[test] fn subject() -> () { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(any())] mod tests { #[test] fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(not(test))] mod tests { #[test] fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+            "#[cfg(test)] #[allow(dead_code)] mod tests { #[test] fn subject() { helper(); } fn helper() { assert!(true); } }\n",
+        ] {
+            fs::write(root.join("subject.rs"), mutant).unwrap();
+            assert!(
+                check_live_test_integrity(&root, &spec).is_err(),
+                "mutation survived: {mutant}"
+            );
+        }
+        fs::write(
+            root.join("Cargo.toml"),
+            format!("{BASE_MANIFEST}[lib]\npath = \"other.rs\"\n"),
+        )
+        .unwrap();
+        fs::write(root.join("subject.rs"), live).unwrap();
+        assert!(check_live_test_integrity(&root, &spec).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn regular_paths_and_build_scripts_are_checked_on_disk() {
@@ -720,22 +909,17 @@ mod tests {
     }
 
     #[test]
-    fn production_binder_and_cargo_runner_are_pinned_once() {
+    fn production_integrity_binder_is_pinned_once() {
         let production = include_str!("external_test.rs")
             .split_once("#[cfg(test)]")
             .unwrap()
             .0;
         assert_eq!(
             production
-                .match_indices("require_external_tests(root, run, spec)")
+                .match_indices("check_external_test_integrity_inner(root, spec)")
                 .count(),
             1
         );
-        let result = cargo(
-            &crate::root(),
-            &["boxology-441-deliberately-invalid-subcommand"],
-        );
-        assert!(matches!(result, Some((false, _))));
     }
 
     #[test]

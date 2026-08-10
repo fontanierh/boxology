@@ -59,11 +59,18 @@ but no active workflow currently compares platforms.
 `[self-hosted, macOS, ARM64, boxology-macos-pr]`, with a 20-minute timeout and no Actions cache.
 It always runs `ci-hygiene` against the pull-request base. Markdown-only changes stop there.
 
-Code changes run the xtask invariant suite and tests for directly changed crates. A root
-`Cargo.toml`, `Cargo.lock`, or toolchain change conditionally checks the complete workspace build
-graph; opaque fixture/golden changes conditionally run `ci-fixtures`; process-reaper changes run
-that fixture suite. The required job runs **zero product commands**. It therefore does not claim
-pre-merge full regeneration, classification, Cargo-edge, workspace-wide, or declared-quality
+Code changes run the xtask invariant suite and ordinary tests for directly changed crates. The CLI
+end-to-end target, CLI/workspace/classifier surface locks, and generator-model purity lock are
+dispatch-only regardless of the changed path; their four crates retain library/binary tests,
+explicit doctests, and every other integration target in required CI. `boxology-init` likewise
+retains those tests around its existing deep-only born-valid exclusion. `boxology-generator`
+retains ordinary unit, binary, doctest, and integration coverage but sends its two named
+nested-Cargo end-to-end unit tests to deep validation. `cargo xtask ci --no-budget` executes the
+non-ignored exclusions once through product workspace tests; integrity-only source/body/list guards bind all seven new exclusions without duplicate Cargo execution. A root `Cargo.toml`, `Cargo.lock`, or toolchain change
+conditionally checks the complete workspace build graph; opaque fixture/golden changes
+conditionally run `ci-fixtures`; process-reaper changes run that fixture suite. The required job
+runs **zero product commands**. It therefore does not claim pre-merge full regeneration,
+classification, Cargo-edge, workspace-wide, declared-quality, mutation-lock, or CLI end-to-end
 enforcement.
 
 `.github/workflows/deep-validation.yml` is dispatch-only, non-required, and native-Mac-only. It
