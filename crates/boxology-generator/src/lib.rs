@@ -239,9 +239,8 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
 }
 
 /// Emits the public definitions and exact transport-neutral codecs for the accepted structured
-/// declaration subset. Normal generation still calls `require_v0_emittable` before reaching this
-/// template; the later integration slice will remove that gate after descriptors and call glue
-/// also understand these types.
+/// declaration subset. `require_v0_emittable` still gates residual `Blob` and named error payload
+/// shapes before this template runs.
 fn structured_types_source(contract: &Contract) -> String {
     contract.data.iter().map(structured_type_source).collect()
 }
@@ -3578,19 +3577,12 @@ macro_rules! __boxology_check_implementation {
             .map(|text| printed.find(text).unwrap());
         assert!(field_order.windows(2).all(|pair| pair[0] < pair[1]));
 
-        let diagnostics = generate(request(SOURCE, false, OUTPUTS.to_vec())).unwrap_err();
-        assert_eq!(
-            diagnostics
-                .as_slice()
-                .iter()
-                .map(|diagnostic| diagnostic.code())
-                .collect::<Vec<_>>(),
-            ["BXG0038"]
-        );
+        generate(request(SOURCE, false, OUTPUTS.to_vec()))
+            .expect("the accepted structured subset generates");
     }
 
     #[test]
-    fn structured_descriptors_and_dormant_call_glue_are_recursive_and_site_qualified() {
+    fn structured_descriptors_and_call_glue_are_recursive_and_site_qualified() {
         const SOURCE: &str = r#"boxology::contract! {
             pub enum Mood { Calm, #[deprecated(note = "avoid")] Busy }
             pub struct Profile {
@@ -3668,125 +3660,217 @@ macro_rules! __boxology_check_implementation {
         ));
         assert!(descriptor.contains("generated optional descriptor is valid"));
 
-        let diagnostics = generate(request(SOURCE, false, OUTPUTS.to_vec())).unwrap_err();
-        assert_eq!(
-            diagnostics
-                .as_slice()
-                .iter()
-                .map(|diagnostic| diagnostic.code())
-                .collect::<Vec<_>>(),
-            ["BXG0038"]
-        );
+        generate(request(SOURCE, false, OUTPUTS.to_vec()))
+            .expect("structured descriptors and call glue generate together");
         // `cold_hello_bytes_are_exact_and_parseable` remains the byte lock for scalar output.
     }
 
     #[test]
-    #[ignore = "deep nested-Cargo codec proof runs explicitly and in main-push --no-budget CI"]
-    fn structured_type_template_compiles_and_round_trips() {
+    #[ignore = "deep cold structured generation proof runs explicitly and in main-push --no-budget CI"]
+    fn generated_structured_contract_routes_and_preserves_unknown_outputs() {
         use std::{fs, process::Command};
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let source = r#"boxology::contract! {
             pub struct Empty {}
             pub enum Mood { Calm, Busy }
-            pub struct Profile { pub name: String, pub scores: Vec<u32>, pub mood: Option<Mood>, pub history: Option<Vec<Mood>> }
+            pub struct Profile { pub name: String, pub mood: Mood, pub history: Option<Vec<Mood>> }
             #[error] pub enum Fault { Bad }
-            #[capability] pub async fn save(input: Profile) -> Result<Profile, Fault>;
+            #[capability(exposure=external)] pub async fn echo_mood(input: Mood) -> Result<Mood, Fault>;
+            #[capability(exposure=external)] pub async fn echo_profiles(input: Option<Vec<Profile>>) -> Result<Option<Vec<Profile>>, Fault>;
         }"#;
-        let generated = structured_types_source(scalar_model(source).model());
+        let generated = generate(request_for("shapes", source)).unwrap();
+        assert_eq!(generated, generate(request_for("shapes", source)).unwrap());
+        let schema = SchemaDocument::parse(file(&generated, "generated/schema.json").bytes())
+            .expect("generated structured schema must read");
+        let empty = schema
+            .data_types
+            .iter()
+            .find(|item| item.name == "Empty")
+            .unwrap();
+        assert_eq!(
+            empty.shape,
+            boxology_schema::SchemaDataShape::Struct(Vec::new())
+        );
+        let mood = schema
+            .data_types
+            .iter()
+            .find(|item| item.name == "Mood")
+            .unwrap();
+        let boxology_schema::SchemaDataShape::Enum(variants) = &mood.shape else {
+            panic!("Mood must be a schema enum")
+        };
+        assert_eq!(
+            variants
+                .iter()
+                .map(|variant| variant.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Calm", "Busy"]
+        );
+        assert_eq!(
+            schema.types[0]
+                .variants
+                .iter()
+                .map(|variant| variant.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Bad"]
+        );
         let root = std::env::temp_dir().join(format!(
-            "boxology-structured-codec-{}-{}",
+            "boxology-structured-e2e-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("src")).unwrap();
-        let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        for file in generated.files() {
+            let path = root.join(file.path());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, file.bytes()).unwrap();
+        }
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .unwrap()
-            .join("boxology-contract");
+            .unwrap();
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[package]\nname=\"structured-codec-proof\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology-contract={{path={contract:?}}}\n\n[workspace]\n"
+                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.0.0\",path={:?}}}\nboxology-runtime={{version=\"=0.0.0\",path={:?},features=[\"test-support\"]}}\n",
+                workspace.join("boxology"),
+                workspace.join("boxology-contract"),
+                workspace.join("boxology-runtime"),
             ),
+        )
+        .unwrap();
+        let implementation = root.join("implementation");
+        fs::create_dir_all(implementation.join("src")).unwrap();
+        fs::write(
+            implementation.join("Cargo.toml"),
+            "[package]\nname=\"shapes-implementation\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology={workspace=true}\nboxology-contract={workspace=true}\nboxology-runtime={workspace=true}\nboxology_generated_contract={package=\"shapes-contract\",path=\"../generated/contract\",features=[\"test-support\"]}\n",
         )
         .unwrap();
         fs::write(
-            root.join("src/main.rs"),
-            format!(
-                r#"{generated}
-                use boxology_contract::{{ConformanceErrorKind, ContractType, ContractValue, DecodeErrorKind, DecodeRole, FieldDescriptor, OpaqueTree, PathSegment, SlotValue, TypeDescriptor, VariantDescriptor, VariantPayload}};
-                fn main() {{
-                    let empty = Empty {{}};
-                    assert_eq!(empty.encode_value().unwrap(), ContractValue::object(Vec::<(String, ContractValue)>::new()).unwrap());
-                    let profile = Profile {{ name: "Ada".into(), scores: vec![3, 5], mood: Some(Mood::Calm), history: None }};
-                    let encoded = profile.encode_value().unwrap();
-                    assert_eq!(encoded, ContractValue::object([
-                        ("name".into(), ContractValue::string("Ada")),
-                        ("scores".into(), ContractValue::list([ContractValue::u64(3), ContractValue::u64(5)])),
-                        ("mood".into(), ContractValue::enum_value("Calm", SlotValue::Null)),
-                    ]).unwrap());
-                    assert_eq!(Profile::decode_value(&encoded).unwrap(), profile);
-                    const SENTINEL: &str = "unknown-generated-mood-payload";
-                    let mood_descriptor = TypeDescriptor::enumeration([
-                        VariantDescriptor::new("Calm", VariantPayload::Unit, None),
-                        VariantDescriptor::new("Busy", VariantPayload::Unit, None),
-                    ]).unwrap();
-                    let future_mood = SlotValue::Value(ContractValue::enum_value(
-                        "Future",
-                        SlotValue::Value(ContractValue::string(SENTINEL)),
-                    ));
-                    let provider_error = mood_descriptor.conform(DecodeRole::ProviderInput, future_mood.clone()).unwrap_err();
-                    assert_eq!(provider_error.kind(), &ConformanceErrorKind::UnknownVariant("Future".into()));
-                    assert_eq!(provider_error.path(), &[PathSegment::Variant("Future".into())]);
-                    assert!(!format!("{{provider_error:?}} {{provider_error}}").contains(SENTINEL));
-                    let normalized_mood = mood_descriptor.conform(DecodeRole::ConsumerOutput, future_mood.clone()).unwrap();
-                    let unknown_mood = Mood::decode(&normalized_mood).unwrap();
-                    let Mood::Unknown {{ tag, payload }} = &unknown_mood else {{ panic!() }};
-                    assert_eq!(tag, "Future");
-                    assert_eq!(payload.reveal(), &OpaqueTree::String(SENTINEL.into()));
-                    assert_eq!(format!("{{payload:?}}"), "OpaquePayload(<redacted>)");
-                    assert!(!format!("{{unknown_mood:?}}").contains(SENTINEL));
-                    assert_eq!(unknown_mood.encode().unwrap(), normalized_mood);
+            implementation.join("src/main.rs"),
+            r#"
+use std::future::{ready, Future};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll, Waker};
+use boxology_contract::{CallContext, CallError, Caller, CancelToken, CapabilityId, ContractType, ContractValue, DecodeErrorKind, DescriptorRef, ErasedCallError, ErasedCallTarget, ExposureLevel, OpaqueTree, PathSegment, SlotValue, TraceContext};
+use boxology_runtime::{CompositionBuilder, test_support::StubTransport};
+use boxology_generated_contract::{Empty, Fault, Mood, Profile, ShapesHandle, test_support::ShapesFake};
 
-                    let profile_descriptor = TypeDescriptor::structure([
-                        FieldDescriptor::new("name", TypeDescriptor::string(), None),
-                        FieldDescriptor::new("scores", TypeDescriptor::list(TypeDescriptor::u32()).unwrap(), None),
-                        FieldDescriptor::new("mood", TypeDescriptor::optional(mood_descriptor.clone()).unwrap(), None),
-                        FieldDescriptor::new("history", TypeDescriptor::optional(TypeDescriptor::list(mood_descriptor).unwrap()).unwrap(), None),
-                    ]).unwrap();
-                    let future_profile = SlotValue::Value(ContractValue::object([
-                        ("name".into(), ContractValue::string("Ada")),
-                        ("scores".into(), ContractValue::list([ContractValue::u64(3)])),
-                        ("mood".into(), ContractValue::enum_value("Future", SlotValue::Value(ContractValue::string(SENTINEL)))),
-                    ]).unwrap());
-                    let provider_error = profile_descriptor.conform(DecodeRole::ProviderInput, future_profile.clone()).unwrap_err();
-                    assert_eq!(provider_error.kind(), &ConformanceErrorKind::UnknownVariant("Future".into()));
-                    assert_eq!(provider_error.path(), &[PathSegment::Field("mood".into()), PathSegment::Variant("Future".into())]);
-                    let normalized_profile = profile_descriptor.conform(DecodeRole::ConsumerOutput, future_profile).unwrap();
-                    let profile = Profile::decode(&normalized_profile).unwrap();
-                    let Some(Mood::Unknown {{ tag, payload }}) = &profile.mood else {{ panic!() }};
-                    assert_eq!(tag, "Future");
-                    assert_eq!(payload.reveal(), &OpaqueTree::String(SENTINEL.into()));
-                    assert!(!format!("{{profile:?}}").contains(SENTINEL));
-                    assert_eq!(profile.encode().unwrap(), normalized_profile);
-                    let unknown = ContractValue::object([("extra".into(), ContractValue::bool(true))]).unwrap();
-                    let error = Empty::decode_value(&unknown).unwrap_err();
-                    assert_eq!(error.kind(), &DecodeErrorKind::UnknownField("extra".into()));
-                    assert_eq!(error.path(), &[PathSegment::Field("extra".into())]);
-                    assert_eq!(Mood::decode_value(&Mood::Busy.encode_value().unwrap()).unwrap(), Mood::Busy);
-                    let payload = ContractValue::enum_value("Calm", SlotValue::Value(ContractValue::bool(true)));
-                    let error = Mood::decode_value(&payload).unwrap_err();
-                    assert_eq!(error.kind(), &DecodeErrorKind::UnexpectedPayload);
-                    assert_eq!(error.path(), &[PathSegment::Variant("Calm".into())]);
-                }}
-                "#
-            ),
+pub struct ShapesService;
+
+#[boxology::implementation]
+impl ShapesService {
+    pub async fn echo_mood(&self, context: CallContext, input: Mood) -> Result<Mood, Fault> { let _ = context; Ok(input) }
+    pub async fn echo_profiles(&self, context: CallContext, input: Option<Vec<Profile>>) -> Result<Option<Vec<Profile>>, Fault> { let _ = context; Ok(input) }
+}
+
+mod generated { include!("../../generated/adapter/adapter.rs"); }
+
+#[derive(Clone)]
+struct Target(SlotValue);
+impl ErasedCallTarget for Target {
+    fn call<'a>(&'a self, _: &'a CapabilityId, _: CallContext, _: SlotValue) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
+        Box::pin(ready(Ok(self.0.clone())))
+    }
+}
+
+fn context() -> CallContext {
+    CallContext::new(Caller::Anonymous, None, CancelToken::new(), TraceContext::empty(), None)
+}
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    loop { if let Poll::Ready(output) = future.as_mut().poll(&mut TaskContext::from_waker(Waker::noop())) { return output; } }
+}
+fn handle(output: SlotValue) -> ShapesHandle { ShapesHandle::from_erased(Arc::new(Target(output))) }
+
+fn main() {
+    const SENTINEL: &str = "unknown-generated-mood-payload";
+    let empty = Empty {};
+    assert_eq!(empty.encode().unwrap(), SlotValue::Value(ContractValue::object(Vec::<(String, ContractValue)>::new()).unwrap()));
+    assert_eq!(Empty::decode(&empty.encode().unwrap()).unwrap(), empty);
+    let descriptor = boxology_generated_contract::contract_descriptor();
+    let DescriptorRef::Enum(direct) = descriptor.capabilities()[0].output().view() else { panic!() };
+    assert_eq!(direct.iter().map(|variant| variant.tag()).collect::<Vec<_>>(), ["Calm", "Busy"]);
+    let DescriptorRef::Enum(errors) = descriptor.capabilities()[0].error().view() else { panic!() };
+    assert_eq!(errors.iter().map(|variant| variant.tag()).collect::<Vec<_>>(), ["Bad"]);
+    let DescriptorRef::Optional(list) = descriptor.capabilities()[1].output().view() else { panic!() };
+    let DescriptorRef::List(profile) = list.view() else { panic!() };
+    let DescriptorRef::Struct(fields) = profile.view() else { panic!() };
+    let DescriptorRef::Enum(nested) = fields.iter().find(|field| field.name() == "mood").unwrap().descriptor().view() else { panic!() };
+    assert_eq!(nested.iter().map(|variant| variant.tag()).collect::<Vec<_>>(), ["Calm", "Busy"]);
+
+    let profile = Profile { name: "Ada".into(), mood: Mood::Calm, history: Some(vec![Mood::Busy]) };
+    let fake = ShapesFake::new()
+        .with_echo_mood(|_, input| async move { Ok(input) })
+        .with_echo_profiles(|_, input| async move { Ok(input) });
+    assert_eq!(block_on(fake.handle().echo_mood(context(), Mood::Busy)), Ok(Mood::Busy));
+    assert_eq!(block_on(fake.handle().echo_profiles(context(), Some(vec![profile.clone()]))), Ok(Some(vec![profile.clone()])));
+
+    let direct_capability = descriptor.capabilities()[0].id().clone();
+    let nested_capability = descriptor.capabilities()[1].id().clone();
+    let transport = Arc::new(StubTransport::new());
+    let mut builder = CompositionBuilder::new();
+    builder.add_box(generated::implementation_descriptor(), |imports| generated::factory(ShapesService, imports));
+    builder.expose(boxology_contract::BoxId::new("shapes").unwrap(), direct_capability, transport.clone(), ExposureLevel::External);
+    builder.expose(boxology_contract::BoxId::new("shapes").unwrap(), nested_capability, transport.clone(), ExposureLevel::External);
+    let composition = builder.start().unwrap();
+    let runtime = transport.runtime().unwrap();
+    let exposures = runtime.exposures();
+    let direct = exposures.iter().find(|item| item.descriptor().id().to_string() == "shapes.echo_mood").unwrap();
+    let nested = exposures.iter().find(|item| item.descriptor().id().to_string() == "shapes.echo_profiles").unwrap();
+    assert_eq!(Mood::decode(&block_on(direct.dispatch(context(), Mood::Calm.encode().unwrap())).unwrap()).unwrap(), Mood::Calm);
+    let profiles = Some(vec![profile.clone()]);
+    let output = block_on(nested.dispatch(context(), profiles.encode().unwrap())).unwrap();
+    assert_eq!(<Option<Vec<Profile>> as ContractType>::decode(&output).unwrap(), profiles);
+
+    let raw_mood = SlotValue::Value(ContractValue::enum_value("Future", SlotValue::Value(ContractValue::string(SENTINEL))));
+    let raw_profile = ContractValue::object([
+        ("name".into(), ContractValue::string("Ada")),
+        ("mood".into(), ContractValue::enum_value("Future", SlotValue::Value(ContractValue::string(SENTINEL)))),
+    ]).unwrap();
+    let raw_profiles = SlotValue::Value(ContractValue::list([raw_profile.clone()]));
+    for rejected in [block_on(direct.dispatch(context(), raw_mood.clone())), block_on(nested.dispatch(context(), raw_profiles.clone()))] {
+        let Err(ErasedCallError::ContractViolation(detail)) = rejected else { panic!("unknown provider input was accepted") };
+        assert_eq!(detail.code(), "input_decode");
+        assert!(!format!("{detail:?}").contains(SENTINEL));
+    }
+
+    let direct_raw_error = Mood::decode(&raw_mood).unwrap_err();
+    assert_eq!(direct_raw_error.kind(), &DecodeErrorKind::UnknownVariant("Future".into()));
+    let nested_raw_error = <Option<Vec<Profile>> as ContractType>::decode(&raw_profiles).unwrap_err();
+    assert_eq!(nested_raw_error.kind(), &DecodeErrorKind::UnknownVariant("Future".into()));
+    let known_payload = ContractValue::enum_value("Calm", SlotValue::Value(ContractValue::bool(true)));
+    assert_eq!(Mood::decode_value(&known_payload).unwrap_err().kind(), &DecodeErrorKind::UnexpectedPayload);
+
+    let unknown = block_on(handle(raw_mood).echo_mood(context(), Mood::Calm)).unwrap();
+    let Mood::Unknown { tag, payload } = &unknown else { panic!() };
+    assert_eq!(tag, "Future");
+    assert_eq!(payload.reveal(), &OpaqueTree::String(SENTINEL.into()));
+    assert_eq!(format!("{payload:?}"), "OpaquePayload(<redacted>)");
+    assert!(!format!("{unknown:?}").contains(SENTINEL));
+    assert_eq!(Mood::decode(&unknown.encode().unwrap()).unwrap(), unknown);
+
+    let unknown_profiles = block_on(handle(raw_profiles).echo_profiles(context(), Some(Vec::new()))).unwrap();
+    let Mood::Unknown { tag, payload } = &unknown_profiles.as_ref().unwrap()[0].mood else { panic!() };
+    assert_eq!(tag, "Future");
+    assert_eq!(payload.reveal(), &OpaqueTree::String(SENTINEL.into()));
+    assert!(!format!("{unknown_profiles:?}").contains(SENTINEL));
+    let encoded = unknown_profiles.encode().unwrap();
+    assert_eq!(<Option<Vec<Profile>> as ContractType>::decode(&encoded).unwrap(), unknown_profiles);
+
+    let malformed = SlotValue::Value(ContractValue::string("wrong"));
+    let Err(CallError::InvalidResponse(detail)) = block_on(handle(malformed).echo_mood(context(), Mood::Calm)) else { panic!("malformed output was accepted") };
+    assert_eq!(detail.code(), "output_decode");
+    assert_eq!(direct_raw_error.path(), &[PathSegment::Variant("Future".into())]);
+    drop(composition);
+}
+"#,
         )
         .unwrap();
         let output = Command::new("cargo")
-            .args(["run", "--offline", "--quiet", "--manifest-path"])
-            .arg(root.join("Cargo.toml"))
+            .args(["run", "--offline", "--manifest-path"])
+            .arg(implementation.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target"))
             .output()
             .unwrap();
         let _ = fs::remove_dir_all(&root);
