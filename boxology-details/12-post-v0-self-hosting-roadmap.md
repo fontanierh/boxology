@@ -87,6 +87,14 @@ delivered. Generated structured types/codecs are also delivered under #574; desc
 and complete checker/dispatch/handle/fake/adapter wiring are now delivered as well.
 Typed send/ask/reply/resolve-send consume that boundary; remaining Telegram command parity and its
 governed composition follow in bounded slices.
+Once the E3 generated-handle proof exists, classifier and `check`
+work under #575 may proceed in parallel with Telegram composition; they do not
+wait for Telegram parity. The first such T3 slice governs the classifier as a box:
+`boxology generate` now classifies regenerated schemas through its generated typed
+handle while `check`, generator, and installer remain ordinary code pending their
+named slices. The classifier's first checked-in derived tree is seeded by the exact
+pre-box `314dcab` executable; current-version regeneration is required byte-stable,
+but this is neither generator self-hosting nor prior-release reproduction evidence.
 Every PR remains at or below 600 hand-authored lines.
 
 ## Telegram migration matrix
@@ -264,7 +272,7 @@ still requires its own authorization.
 | [#572](https://github.com/fontanierh/boxology/issues/572) | Epic and current-roadmap owner; closes only after its accepted child scope is completed or transferred explicitly |
 | [#573](https://github.com/fontanierh/boxology/issues/573) | Telegram product self-hosting; scalar dogfood plus typed send/ask/reply/resolve-send are delivered; T2 retains pairing/poll/ack/status handles, governed CLI/listen composition, and closeout evidence |
 | [#574](https://github.com/fontanierh/boxology/issues/574) | Delivered minimum structured Telegram boundary; bounded slices from #102/#104 with fixture coordination under #100 |
-| [#575](https://github.com/fontanierh/boxology/issues/575) | Classifier/check/generator/installer use-case entrypoints; follows proven Telegram handles and advances the stage-3 forcing function in #74 |
+| [#575](https://github.com/fontanierh/boxology/issues/575) | Classifier/check/generator/installer use-case entrypoints; classifier and `check` branch from E3 generated-handle proof and may run parallel with Telegram composition, while later dependencies remain use-case-driven; advances #74 |
 | [#576](https://github.com/fontanierh/boxology/issues/576) | Minimum Pi-like harness; follows generated-handle dogfood and models completion as an application box rather than inventing a provider package kind or new kernel feature |
 | [#74](https://github.com/fontanierh/boxology/issues/74) | Existing stage-3 tool-self-hosting forcing function; #575 is its executable rung, not a duplicate closure claim |
 | [#100](https://github.com/fontanierh/boxology/issues/100) | Broader fixture/type-vocabulary evidence; #574 adds only the Telegram-forced cases |

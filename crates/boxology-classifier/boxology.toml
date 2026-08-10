@@ -1,0 +1,26 @@
+schema = 1
+id = "classifier"
+kind = "box"
+owned = ["boxology.toml", "implementation/**"]
+
+[quality]
+commands = [
+    "cargo check -p classifier-contract --all-features",
+    "cargo test -p classifier-implementation",
+]
+
+[[crates]]
+cargo_package = "classifier-implementation"
+path = "implementation"
+role = "box-implementation"
+
+[[crates]]
+cargo_package = "classifier-contract"
+path = "generated/contract"
+role = "box-contract"
+
+[[derived]]
+id = "contract"
+generator = "boxology-contract"
+inputs = ["boxology.toml", "implementation/src/**"]
+outputs = ["generated/contract/**", "generated/adapter/**", "generated/schema.json"]

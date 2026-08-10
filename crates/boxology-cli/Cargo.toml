@@ -13,8 +13,11 @@ boxology-classifier = { version = "=0.0.0", path = "../boxology-classifier" }
 boxology-cli-core = { version = "=0.0.0", path = "../boxology-cli-core" }
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-manifest = { version = "=0.0.0", path = "../boxology-manifest" }
+boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime" }
 boxology-schema = { version = "=0.0.0", path = "../boxology-schema" }
 boxology-workspace = { version = "=0.0.0", path = "../boxology-workspace" }
+classifier-implementation = { version = "=0.0.0", path = "../boxology-classifier/implementation" }
+classifier_contract = { package = "classifier-contract", version = "=0.0.0", path = "../boxology-classifier/generated/contract" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 
 [[test]]
@@ -22,4 +25,5 @@ name = "surface_lock"
 path = "tests/surface_lock.rs"
 
 [dev-dependencies]
+classifier_contract = { package = "classifier-contract", version = "=0.0.0", path = "../boxology-classifier/generated/contract", features = ["test-support"] }
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }

@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
 use boxology_cli::{
-    BaseInputsError, BaseSchemasError, ClassifyStepError, CompareDifference, CompareStepError,
-    DefaultBase, ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError,
-    base_diff_inputs, base_package_schemas, cargo_metadata_command, classify_step, compare_plans,
-    composition_step, execute_plans, plan, resolve_base, resolve_default_base, run_clippy_step,
-    run_command, run_fmt_step, run_lock_step, run_quality_step, run_test_step, walk,
+    BaseInputsError, BaseSchemasError, ClassifierComposition, ClassifyStepError, CompareDifference,
+    CompareStepError, DefaultBase, ExecuteError, GenerationPlan, PlanError, ResolvedBase,
+    SpawnError, base_diff_inputs, base_package_schemas, cargo_metadata_command, classify_step,
+    compare_plans, composition_step, execute_plans, plan, resolve_base, resolve_default_base,
+    run_clippy_step, run_command, run_fmt_step, run_lock_step, run_quality_step, run_test_step,
+    walk,
 };
 use boxology_contract::BoxId;
 use boxology_manifest::RelativePath;
@@ -114,6 +115,7 @@ fn run_generate(
         Err(error) => return report_plan_failure(error, CheckFormat::Human, stderr),
     };
     let mut changed = false;
+    let mut classifier = None;
     for step in execute_plans(root, &plans) {
         let (generation, outcome) = match step {
             Ok(step) => step,
@@ -133,9 +135,22 @@ fn run_generate(
             let _ = writeln!(stdout, "  removed {path}");
         }
         if !outcome.is_unchanged() {
-            match boxology_cli::classify(outcome.base_schema(), outcome.submitted_schema()) {
+            if classifier.is_none() {
+                classifier = match ClassifierComposition::start() {
+                    Ok(classifier) => Some(classifier),
+                    Err(error) => {
+                        let _ = writeln!(stderr, "classifier composition: {error}");
+                        return 1;
+                    }
+                };
+            }
+            match classifier
+                .as_ref()
+                .expect("classifier composition was initialized")
+                .classify(outcome.base_schema(), outcome.submitted_schema())
+            {
                 Ok(report) => {
-                    let _ = write!(stdout, "{}", boxology_classifier::render_text(&report));
+                    let _ = write!(stdout, "{}", report.rendered_text);
                 }
                 Err(error) => {
                     let _ = writeln!(stderr, "{error}");

@@ -1,0 +1,184 @@
+{
+  "box_id": "classifier",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "ClassifierError",
+      "id": "classifier.classify",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "ClassifyRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "classify",
+      "output": {
+        "type": "ClassifyReport"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "generator": "boxology-generator",
+    "generator_version": "0.0.0",
+    "semantic_digest": "sha256:7b482462b11aace6b0939355f3d303794bf3db4c0b995a25a95e9a722a7f2964"
+  },
+  "revision": "sha256:15b0217864e7504475bc7a6393e277486ba4acf5948fd9f4898c6a13c8e10e88",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "CompatibilityClass",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Unchanged"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Documentation"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Deprecation"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Additive"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "CompatibleWithConditions"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Incompatible"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "base",
+          "type": "Option<Vec<u8>>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "submitted",
+          "type": "Vec<u8>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ClassifyRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "code",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "class",
+          "type": "CompatibilityClass"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "base_excerpt",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "submitted_excerpt",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "condition",
+          "type": "Option<String>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ClassifyFinding"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "verdict",
+          "type": "CompatibilityClass"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "findings",
+          "type": "Vec<ClassifyFinding>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "rendered_text",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "ClassifyReport"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "ClassifierError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Failure",
+          "payload": {
+            "deprecation": null,
+            "docs": [],
+            "kind": "value",
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

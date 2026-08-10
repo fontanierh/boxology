@@ -1,0 +1,13 @@
+[package]
+name = "classifier-implementation"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+boxology = { version = "=0.0.0", path = "../../boxology" }
+boxology-classifier = { version = "=0.0.0", path = ".." }
+boxology-contract = { version = "=0.0.0", path = "../../boxology-contract" }
+boxology-runtime = { version = "=0.0.0", path = "../../boxology-runtime" }
+boxology-schema = { version = "=0.0.0", path = "../../boxology-schema" }
+boxology_generated_contract = { package = "classifier-contract", version = "=0.0.0", path = "../generated/contract" }

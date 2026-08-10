@@ -1,0 +1,20 @@
+schema = 1
+id = "boxology-cli"
+kind = "composition"
+owned = ["boxology.toml", "Cargo.toml", "src/**", "tests/**"]
+
+[quality]
+commands = ["cargo test -p boxology-cli"]
+
+[[crates]]
+cargo_package = "boxology-cli"
+path = "."
+role = "composition"
+
+[composition]
+boxes = ["classifier"]
+
+[[composition.bindings]]
+box = "classifier"
+capability = "classifier.classify"
+transport = "in-process"
