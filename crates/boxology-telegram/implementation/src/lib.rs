@@ -224,6 +224,57 @@ boxology::contract! {
         pub error: Option<OperationError>,
     }
 
+    pub struct StatusRequest {
+        pub probe: bool,
+    }
+
+    pub struct InboxStatus {
+        pub unhandled: u64,
+        pub bytes: u64,
+        pub full: bool,
+    }
+
+    pub struct AskStatus {
+        pub active: u64,
+        pub total: u64,
+    }
+
+    pub struct OutboundStatus {
+        pub ambiguous: u64,
+        pub total: u64,
+    }
+
+    pub struct LocalStatus {
+        pub enabled: bool,
+        pub paired: bool,
+        pub next_offset: i64,
+        pub telegram_confirmed_before: i64,
+        pub consumer_locked: bool,
+        pub inbox: InboxStatus,
+        pub asks: AskStatus,
+        pub outbound: OutboundStatus,
+        pub pending_pair: bool,
+        pub last_receive_at: Option<i64>,
+        pub last_error_code: Option<String>,
+    }
+
+    pub struct ProbeStatus {
+        pub api_reachable: bool,
+        pub bot_matches: bool,
+        pub webhook_configured: bool,
+        pub get_updates_compatible: bool,
+    }
+
+    pub struct StatusResult {
+        pub local: Option<LocalStatus>,
+        pub probe: Option<ProbeStatus>,
+    }
+
+    pub struct StatusOutcome {
+        pub status: Option<StatusResult>,
+        pub error: Option<OperationError>,
+    }
+
     #[error]
     pub enum SendTextError {
         Input,
@@ -266,6 +317,9 @@ boxology::contract! {
 
     #[capability(idempotency = inherent)]
     pub async fn ack(request: AckRequest) -> Result<AckOutcome, SendTextError>;
+
+    #[capability]
+    pub async fn status(request: StatusRequest) -> Result<StatusOutcome, SendTextError>;
 }
 
 pub struct TelegramService;
@@ -536,6 +590,23 @@ impl TelegramService {
             },
         })
     }
+
+    pub async fn status(
+        &self,
+        _context: boxology::CallContext,
+        request: StatusRequest,
+    ) -> Result<StatusOutcome, SendTextError> {
+        Ok(match status_typed(request) {
+            Ok(status) => StatusOutcome {
+                status: Some(status),
+                error: None,
+            },
+            Err(error) => StatusOutcome {
+                status: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
 }
 
 fn typed_poll_result(result: receive::PollResult) -> PollResult {
@@ -693,7 +764,7 @@ impl AppError {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StatusRequest {
+struct LegacyStatusRequest {
     schema: u8,
     probe: bool,
 }
@@ -765,7 +836,7 @@ pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
 }
 
 fn status(input: &[u8]) -> (String, ExitClass) {
-    let request: StatusRequest = match parse::<StatusRequest>(input) {
+    let request: LegacyStatusRequest = match parse::<LegacyStatusRequest>(input) {
         Ok(request) if request.schema == SCHEMA => request,
         Ok(_) => {
             return failure(
@@ -775,59 +846,108 @@ fn status(input: &[u8]) -> (String, ExitClass) {
         }
         Err(error) => return failure("status", error),
     };
+    let result = match status_typed(StatusRequest {
+        probe: request.probe,
+    }) {
+        Ok(result) => result,
+        Err(error) => return failure("status", error),
+    };
+    match (result.local, result.probe) {
+        (Some(local), None) => success(
+            "status",
+            serde_json::json!({
+                "probe": false,
+                "enabled": local.enabled,
+                "paired": local.paired,
+                "next_offset": local.next_offset,
+                "telegram_confirmed_before": local.telegram_confirmed_before,
+                "consumer_locked": local.consumer_locked,
+                "inbox": {"unhandled": local.inbox.unhandled, "bytes": local.inbox.bytes, "full": local.inbox.full},
+                "asks": {"active": local.asks.active, "total": local.asks.total},
+                "outbound": {"ambiguous": local.outbound.ambiguous, "total": local.outbound.total},
+                "pending_pair": local.pending_pair,
+                "last_receive_at": local.last_receive_at,
+                "last_error_code": local.last_error_code,
+            }),
+        ),
+        (None, Some(probe)) => success(
+            "status",
+            serde_json::json!({"probe": true, "api_reachable": probe.api_reachable, "bot_matches": probe.bot_matches, "webhook_configured": probe.webhook_configured, "get_updates_compatible": probe.get_updates_compatible}),
+        ),
+        _ => failure(
+            "status",
+            AppError::new(
+                "invalid_status_outcome",
+                "status returned an invalid outcome",
+                ExitClass::Invariant,
+            ),
+        ),
+    }
+}
+
+fn status_typed(request: StatusRequest) -> Result<StatusResult, AppError> {
     if request.probe {
         if !enabled() {
-            return failure("status", AppError::authorization());
+            return Err(AppError::authorization());
         }
-        let token = match api::load_token() {
-            Ok(token) => token,
-            Err(error) => return failure("status", error),
-        };
-        let api = match api::for_commands(token) {
-            Ok(api) => api,
-            Err(error) => return failure("status", error),
-        };
-        let bot = match api.get_me().map_err(api_error) {
-            Ok(bot) => bot,
-            Err(error) => return failure("status", error),
-        };
-        let webhook = match api.webhook_info().map_err(api_error) {
-            Ok(webhook) => webhook,
-            Err(error) => return failure("status", error),
-        };
-        let local = match state::Paths::from_env().and_then(|paths| state::read(&paths)) {
-            Ok(state) => state,
-            Err(error) => return failure("status", error),
-        };
+        let api = api::for_commands(api::load_token()?)?;
+        let bot = api.get_me().map_err(api_error)?;
+        let webhook = api.webhook_info().map_err(api_error)?;
+        let local = state::Paths::from_env().and_then(|paths| state::read(&paths))?;
         let bot_matches = local.bot.is_some_and(|stored| stored.id == bot.id);
-        return success(
-            "status",
-            serde_json::json!({"probe": true, "api_reachable": true, "bot_matches": bot_matches, "webhook_configured": !webhook.url.is_empty(), "get_updates_compatible": webhook.url.is_empty()}),
-        );
+        return Ok(StatusResult {
+            local: None,
+            probe: Some(ProbeStatus {
+                api_reachable: true,
+                bot_matches,
+                webhook_configured: !webhook.url.is_empty(),
+                get_updates_compatible: webhook.url.is_empty(),
+            }),
+        });
     }
-    let paths = match state::Paths::from_env() {
-        Ok(paths) => paths,
-        Err(error) => return failure("status", error),
+    let paths = state::Paths::from_env()?;
+    let local = state::read(&paths)?;
+    let count = |value| {
+        u64::try_from(value).map_err(|_| {
+            AppError::new(
+                "status_count_overflow",
+                "local status count exceeds its supported range",
+                ExitClass::Invariant,
+            )
+        })
     };
-    let state = match state::read(&paths) {
-        Ok(state) => state,
-        Err(error) => return failure("status", error),
-    };
-    let data = serde_json::json!({
-        "probe": false,
-        "enabled": enabled(),
-        "paired": state.pairing.is_some(),
-        "next_offset": state.next_offset,
-        "telegram_confirmed_before": state.confirmed_before,
-        "consumer_locked": state::consumer_locked(&paths).unwrap_or(false),
-        "inbox": {"unhandled": state.events.iter().filter(|event| !event.handled).count(), "bytes": serde_json::to_vec(&state.events).map_or(0, |bytes| bytes.len()), "full": state.events.len() >= 1000},
-        "asks": {"active": state.asks.iter().filter(|ask| ask.state == "open").count(), "total": state.asks.len()},
-        "outbound": {"ambiguous": state.outbound.iter().filter(|record| record.state == "ambiguous").count(), "total": state.outbound.len()},
-        "pending_pair": state.pending_pair.is_some(),
-        "last_receive_at": state.last_receive_at,
-        "last_error_code": state.last_error_code
-    });
-    success("status", data)
+    Ok(StatusResult {
+        probe: None,
+        local: Some(LocalStatus {
+            enabled: enabled(),
+            paired: local.pairing.is_some(),
+            next_offset: local.next_offset,
+            telegram_confirmed_before: local.confirmed_before,
+            consumer_locked: state::consumer_locked(&paths).unwrap_or(false),
+            inbox: InboxStatus {
+                unhandled: count(local.events.iter().filter(|event| !event.handled).count())?,
+                bytes: count(serde_json::to_vec(&local.events).map_or(0, |bytes| bytes.len()))?,
+                full: local.events.len() >= 1_000,
+            },
+            asks: AskStatus {
+                active: count(local.asks.iter().filter(|ask| ask.state == "open").count())?,
+                total: count(local.asks.len())?,
+            },
+            outbound: OutboundStatus {
+                ambiguous: count(
+                    local
+                        .outbound
+                        .iter()
+                        .filter(|record| record.state == "ambiguous")
+                        .count(),
+                )?,
+                total: count(local.outbound.len())?,
+            },
+            pending_pair: local.pending_pair.is_some(),
+            last_receive_at: local.last_receive_at,
+            last_error_code: local.last_error_code,
+        }),
+    })
 }
 
 pub(crate) fn enabled() -> bool {

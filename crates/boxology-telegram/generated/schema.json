@@ -170,14 +170,31 @@
         "type": "AckOutcome"
       },
       "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.status",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "StatusRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "status",
+      "output": {
+        "type": "StatusOutcome"
+      },
+      "shape": "unary"
     }
   ],
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:88bcf0ec73db759fb716da6e2b51f190fc3dddce69161c0c7dddabb7ba9e2cfa"
+    "semantic_digest": "sha256:3ca5d9d120e5b1b1eba632c2faba09d27608b8094a45cdd0d4e6efdd49e4a50d"
   },
-  "revision": "sha256:e904f754d564a2781c5d086ed240f0ccc1a2e8d48d292a34928e03611f736f01",
+  "revision": "sha256:a70ad698d94adbb88fe9328bb3f068bfa44af5480deee485d16c411db4a16587",
   "schema_format": 1,
   "types": [
     {
@@ -1063,6 +1080,232 @@
       ],
       "kind": "struct",
       "name": "AckOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "probe",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "StatusRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "unhandled",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "bytes",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "full",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "InboxStatus"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "active",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "total",
+          "type": "u64"
+        }
+      ],
+      "kind": "struct",
+      "name": "AskStatus"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "ambiguous",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "total",
+          "type": "u64"
+        }
+      ],
+      "kind": "struct",
+      "name": "OutboundStatus"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "enabled",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "paired",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "next_offset",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "telegram_confirmed_before",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "consumer_locked",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "inbox",
+          "type": "InboxStatus"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "asks",
+          "type": "AskStatus"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "outbound",
+          "type": "OutboundStatus"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "pending_pair",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "last_receive_at",
+          "type": "Option<i64>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "last_error_code",
+          "type": "Option<String>"
+        }
+      ],
+      "kind": "struct",
+      "name": "LocalStatus"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "api_reachable",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "bot_matches",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "webhook_configured",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "get_updates_compatible",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "ProbeStatus"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "local",
+          "type": "Option<LocalStatus>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "probe",
+          "type": "Option<ProbeStatus>"
+        }
+      ],
+      "kind": "struct",
+      "name": "StatusResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "status",
+          "type": "Option<StatusResult>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "StatusOutcome"
     },
     {
       "deprecation": null,
