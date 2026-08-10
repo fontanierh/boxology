@@ -23,6 +23,8 @@ members = [
     "crates/boxology-classifier/generated/contract",
     "crates/boxology-model-completion/implementation",
     "crates/boxology-model-completion/generated/contract",
+    "crates/boxology-tool-runner/implementation",
+    "crates/boxology-tool-runner/generated/contract",
     "crates/boxology-workspace",
     "crates/boxology-cli",
     "crates/boxology-cli-core",
