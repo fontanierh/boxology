@@ -1478,6 +1478,7 @@ fn equal_modulo_provenance(base: &SchemaDocument, submitted: &SchemaDocument) ->
     let SchemaDocument {
         box_id: base_box_id,
         capabilities: base_capabilities,
+        data_types: base_data_types,
         provenance: _,
         revision: base_revision,
         types: base_types,
@@ -1485,12 +1486,14 @@ fn equal_modulo_provenance(base: &SchemaDocument, submitted: &SchemaDocument) ->
     let SchemaDocument {
         box_id: submitted_box_id,
         capabilities: submitted_capabilities,
+        data_types: submitted_data_types,
         provenance: _,
         revision: submitted_revision,
         types: submitted_types,
     } = submitted;
     base_box_id == submitted_box_id
         && base_capabilities == submitted_capabilities
+        && base_data_types == submitted_data_types
         && base_revision == submitted_revision
         && base_types == submitted_types
 }

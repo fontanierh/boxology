@@ -340,6 +340,7 @@ fn document(box_id: &str) -> SchemaDocument {
             max_exposure: ExposureLevel::External,
             idempotency: Idempotency::None,
         }],
+        data_types: Vec::new(),
         provenance: Provenance::new(json!(null)),
         revision: REVISION.to_owned(),
         types: vec![SchemaType {
