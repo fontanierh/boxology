@@ -22,7 +22,7 @@ concurrency:
 # critical path.
 jobs:
   validation:
-    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]
+    runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr-primary]
     timeout-minutes: 20
     env:
       CARGO_INCREMENTAL: "1"

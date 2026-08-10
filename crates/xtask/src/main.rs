@@ -840,7 +840,7 @@ mod tests {
 
     // Phase B changes this integrity expectation and the workflow route in the
     // same two-file PR after the primary registration is proven live.
-    const REQUIRED_PR_RUNNER_LABEL: &str = "boxology-macos-pr";
+    const REQUIRED_PR_RUNNER_LABEL: &str = "boxology-macos-pr-primary";
     const XTASK_AUTHORITY_SELECTOR: &str =
         r"^(crates/xtask/|\.github/workflows/|ops/ci-runner/|\.agents/skills/boxology/SKILL\.md$)";
 
