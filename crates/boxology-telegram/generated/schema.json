@@ -51,14 +51,48 @@
         "type": "AskOutcome"
       },
       "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.reply",
+      "idempotency": "inherent",
+      "input": {
+        "name": "request",
+        "type": "ReplyRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "reply",
+      "output": {
+        "type": "DeliveryOutcome"
+      },
+      "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.resolve_send",
+      "idempotency": "inherent",
+      "input": {
+        "name": "request",
+        "type": "ResolveSendRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "resolve_send",
+      "output": {
+        "type": "ResolveSendOutcome"
+      },
+      "shape": "unary"
     }
   ],
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:7222c303688322eaa9640907668896cf57a1a9566b9d7474afbd7e55a916a7a6"
+    "semantic_digest": "sha256:7ea3e86e4d208107a5e4e7ebbe18e893e340ef943806616f7ba972e64be4ac97"
   },
-  "revision": "sha256:33b3d1017695734550d2c6ca9791dea49fa12985a8e0c829cec66dcfc94579a4",
+  "revision": "sha256:3e5fe6c32f467626b256ad79a8a607429a2e30acb2f12e5b4dd3f5bf2d36a7a0",
   "schema_format": 1,
   "types": [
     {
@@ -327,6 +361,136 @@
       ],
       "kind": "struct",
       "name": "AskOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "text",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "dedup_key",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "ReplyRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "ResolutionKind",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Delivered"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "NotDelivered"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "ResolutionKind"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "message_id",
+          "type": "Option<i64>"
+        }
+      ],
+      "kind": "struct",
+      "name": "DeliveryResolution"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "dedup_key",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "resolution",
+          "type": "DeliveryResolution"
+        }
+      ],
+      "kind": "struct",
+      "name": "ResolveSendRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "dedup_key",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "resolved",
+          "type": "ResolutionKind"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "message_id",
+          "type": "Option<i64>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ResolveSendReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "resolution",
+          "type": "Option<ResolveSendReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ResolveSendOutcome"
     },
     {
       "deprecation": null,

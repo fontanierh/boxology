@@ -74,6 +74,38 @@ boxology::contract! {
         pub error: Option<OperationError>,
     }
 
+    pub struct ReplyRequest {
+        pub event_id: String,
+        pub text: String,
+        pub dedup_key: String,
+    }
+
+    pub enum ResolutionKind {
+        Delivered,
+        NotDelivered,
+    }
+
+    pub struct DeliveryResolution {
+        pub kind: ResolutionKind,
+        pub message_id: Option<i64>,
+    }
+
+    pub struct ResolveSendRequest {
+        pub dedup_key: String,
+        pub resolution: DeliveryResolution,
+    }
+
+    pub struct ResolveSendReceipt {
+        pub dedup_key: String,
+        pub resolved: ResolutionKind,
+        pub message_id: Option<i64>,
+    }
+
+    pub struct ResolveSendOutcome {
+        pub resolution: Option<ResolveSendReceipt>,
+        pub error: Option<OperationError>,
+    }
+
     #[error]
     pub enum SendTextError {
         Input,
@@ -95,6 +127,12 @@ boxology::contract! {
 
     #[capability(idempotency = inherent)]
     pub async fn ask(request: AskRequest) -> Result<AskOutcome, SendTextError>;
+
+    #[capability(idempotency = inherent)]
+    pub async fn reply(request: ReplyRequest) -> Result<DeliveryOutcome, SendTextError>;
+
+    #[capability(idempotency = inherent)]
+    pub async fn resolve_send(request: ResolveSendRequest) -> Result<ResolveSendOutcome, SendTextError>;
 }
 
 pub struct TelegramService;
@@ -157,6 +195,70 @@ impl TelegramService {
             },
             Err(error) => AskOutcome {
                 ask: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn reply(
+        &self,
+        _context: boxology::CallContext,
+        request: ReplyRequest,
+    ) -> Result<DeliveryOutcome, SendTextError> {
+        let result = if enabled() {
+            outbound::reply_typed(outbound::ReplyCommand {
+                event_id: request.event_id,
+                text: request.text,
+                dedup_key: request.dedup_key,
+            })
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => DeliveryOutcome {
+                delivery: Some(receipt.into()),
+                error: None,
+            },
+            Err(error) => DeliveryOutcome {
+                delivery: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn resolve_send(
+        &self,
+        _context: boxology::CallContext,
+        request: ResolveSendRequest,
+    ) -> Result<ResolveSendOutcome, SendTextError> {
+        let result = if enabled() {
+            let kind = match request.resolution.kind {
+                ResolutionKind::Delivered => "delivered",
+                ResolutionKind::NotDelivered => "not_delivered",
+                ResolutionKind::Unknown { .. } => "unknown",
+            };
+            outbound::resolve_typed(outbound::ResolveCommand {
+                dedup_key: request.dedup_key,
+                kind: kind.into(),
+                message_id: request.resolution.message_id,
+            })
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => ResolveSendOutcome {
+                resolution: Some(ResolveSendReceipt {
+                    dedup_key: receipt.dedup_key,
+                    resolved: match receipt.resolved {
+                        outbound::Resolved::Delivered => ResolutionKind::Delivered,
+                        outbound::Resolved::NotDelivered => ResolutionKind::NotDelivered,
+                    },
+                    message_id: receipt.message_id,
+                }),
+                error: None,
+            },
+            Err(error) => ResolveSendOutcome {
+                resolution: None,
                 error: Some(operation_error(error)),
             },
         })
