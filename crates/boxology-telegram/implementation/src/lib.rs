@@ -159,6 +159,71 @@ boxology::contract! {
         pub error: Option<OperationError>,
     }
 
+    pub struct PollRequest {
+        pub timeout_seconds: Option<u64>,
+    }
+
+    pub enum InboundEventKind {
+        Text,
+        AskReply,
+        AskChoice,
+    }
+
+    pub struct InboundReplyTarget {
+        pub ask_id: Option<String>,
+        pub outbound_message_id: Option<i64>,
+    }
+
+    pub struct InboundChoice {
+        pub kind: String,
+        pub key: Option<String>,
+    }
+
+    pub struct InboundEvent {
+        pub event_id: String,
+        pub kind: InboundEventKind,
+        pub text: Option<String>,
+        pub received_at: i64,
+        pub reply_to: Option<InboundReplyTarget>,
+        pub ask_id: Option<String>,
+        pub lifecycle_key: Option<String>,
+        pub choice: Option<InboundChoice>,
+    }
+
+    pub struct PollReceipt {
+        pub fetched: bool,
+        pub locally_durable: Option<bool>,
+        pub telegram_confirmed: Option<bool>,
+        pub next_offset: i64,
+        pub telegram_confirmed_before: i64,
+        pub callback_receipt_failed: bool,
+    }
+
+    pub struct PollResult {
+        pub event: Option<InboundEvent>,
+        pub receipt: PollReceipt,
+    }
+
+    pub struct PollOutcome {
+        pub result: Option<PollResult>,
+        pub error: Option<OperationError>,
+    }
+
+    pub struct AckRequest {
+        pub event_id: String,
+    }
+
+    pub struct AckReceipt {
+        pub event_id: String,
+        pub handled: bool,
+        pub already_handled: bool,
+    }
+
+    pub struct AckOutcome {
+        pub acknowledgement: Option<AckReceipt>,
+        pub error: Option<OperationError>,
+    }
+
     #[error]
     pub enum SendTextError {
         Input,
@@ -195,6 +260,12 @@ boxology::contract! {
 
     #[capability]
     pub async fn pair_revoke(request: PairRevokeRequest) -> Result<PairRevokeOutcome, SendTextError>;
+
+    #[capability]
+    pub async fn poll(request: PollRequest) -> Result<PollOutcome, SendTextError>;
+
+    #[capability(idempotency = inherent)]
+    pub async fn ack(request: AckRequest) -> Result<AckOutcome, SendTextError>;
 }
 
 pub struct TelegramService;
@@ -412,6 +483,93 @@ impl TelegramService {
                 error: Some(operation_error(error)),
             },
         })
+    }
+
+    pub async fn poll(
+        &self,
+        _context: boxology::CallContext,
+        request: PollRequest,
+    ) -> Result<PollOutcome, SendTextError> {
+        let result = if enabled() {
+            receive::poll_typed(receive::PollCommand {
+                timeout_seconds: request.timeout_seconds,
+            })
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(result) => PollOutcome {
+                result: Some(typed_poll_result(result)),
+                error: None,
+            },
+            Err(error) => PollOutcome {
+                result: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn ack(
+        &self,
+        _context: boxology::CallContext,
+        request: AckRequest,
+    ) -> Result<AckOutcome, SendTextError> {
+        let result = if enabled() {
+            receive::ack_typed(receive::AckCommand {
+                event_id: request.event_id,
+            })
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => AckOutcome {
+                acknowledgement: Some(AckReceipt {
+                    event_id: receipt.event_id,
+                    handled: receipt.handled,
+                    already_handled: receipt.already_handled,
+                }),
+                error: None,
+            },
+            Err(error) => AckOutcome {
+                acknowledgement: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+}
+
+fn typed_poll_result(result: receive::PollResult) -> PollResult {
+    let event = result.event.map(|event| InboundEvent {
+        event_id: event.event_id,
+        kind: match event.kind.as_str() {
+            "text" => InboundEventKind::Text,
+            "ask_reply" => InboundEventKind::AskReply,
+            "ask_choice" => InboundEventKind::AskChoice,
+            _ => unreachable!("validated durable event kind"),
+        },
+        text: (event.kind != "ask_choice").then_some(event.text),
+        received_at: event.received_at,
+        reply_to: event.reply_to.map(|target| InboundReplyTarget {
+            ask_id: target.ask_id,
+            outbound_message_id: target.outbound_message_id,
+        }),
+        ask_id: event.ask_id,
+        lifecycle_key: event.lifecycle_key,
+        choice: event.choice.map(|choice| InboundChoice {
+            kind: choice.kind,
+            key: choice.key,
+        }),
+    });
+    PollResult {
+        receipt: PollReceipt {
+            fetched: result.fetched,
+            locally_durable: event.as_ref().map(|_| true),
+            telegram_confirmed: result.telegram_confirmed,
+            next_offset: result.next_offset,
+            telegram_confirmed_before: result.telegram_confirmed_before,
+            callback_receipt_failed: result.callback_warning,
+        },
+        event,
     }
 }
 

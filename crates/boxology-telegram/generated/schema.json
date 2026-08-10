@@ -136,14 +136,48 @@
         "type": "PairRevokeOutcome"
       },
       "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.poll",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "PollRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "poll",
+      "output": {
+        "type": "PollOutcome"
+      },
+      "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.ack",
+      "idempotency": "inherent",
+      "input": {
+        "name": "request",
+        "type": "AckRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "ack",
+      "output": {
+        "type": "AckOutcome"
+      },
+      "shape": "unary"
     }
   ],
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:2ab225c09eb03e66e76fc9ee0e331c366cf2b385654a921b236f113a5e22576a"
+    "semantic_digest": "sha256:88bcf0ec73db759fb716da6e2b51f190fc3dddce69161c0c7dddabb7ba9e2cfa"
   },
-  "revision": "sha256:02a72948624a42dda86431b3b8e51fb815fe25b84d078620bfda375e0a000d35",
+  "revision": "sha256:e904f754d564a2781c5d086ed240f0ccc1a2e8d48d292a34928e03611f736f01",
   "schema_format": 1,
   "types": [
     {
@@ -752,6 +786,283 @@
       ],
       "kind": "struct",
       "name": "PairRevokeOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "timeout_seconds",
+          "type": "Option<u64>"
+        }
+      ],
+      "kind": "struct",
+      "name": "PollRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "InboundEventKind",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Text"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "AskReply"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "AskChoice"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "ask_id",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "outbound_message_id",
+          "type": "Option<i64>"
+        }
+      ],
+      "kind": "struct",
+      "name": "InboundReplyTarget"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "key",
+          "type": "Option<String>"
+        }
+      ],
+      "kind": "struct",
+      "name": "InboundChoice"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "InboundEventKind"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "text",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "received_at",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "reply_to",
+          "type": "Option<InboundReplyTarget>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "ask_id",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "lifecycle_key",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "choice",
+          "type": "Option<InboundChoice>"
+        }
+      ],
+      "kind": "struct",
+      "name": "InboundEvent"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "fetched",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "locally_durable",
+          "type": "Option<bool>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "telegram_confirmed",
+          "type": "Option<bool>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "next_offset",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "telegram_confirmed_before",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "callback_receipt_failed",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "PollReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event",
+          "type": "Option<InboundEvent>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "receipt",
+          "type": "PollReceipt"
+        }
+      ],
+      "kind": "struct",
+      "name": "PollResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "result",
+          "type": "Option<PollResult>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "PollOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event_id",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "AckRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "handled",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "already_handled",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "AckReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "acknowledgement",
+          "type": "Option<AckReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "AckOutcome"
     },
     {
       "deprecation": null,

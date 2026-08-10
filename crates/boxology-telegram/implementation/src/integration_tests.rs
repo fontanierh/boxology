@@ -620,6 +620,272 @@ fn contract_error(
 }
 
 #[test]
+fn generated_poll_replays_oldest_durable_event_and_acknowledges_it_locally() {
+    let context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    unhandled_event(&paths, "tg:20:1", 20);
+    let (composition, telegram) = assembled_telegram(&["poll", "ack"]);
+
+    let (legacy_poll, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
+    assert_eq!(exit, ExitClass::Success);
+    assert_eq!(
+        legacy_poll,
+        r#"{"schema":1,"ok":true,"command":"poll","data":{"event":{"event_id":"tg:20:1","kind":"text","received_at":1,"reply_to":{"ask_id":null,"outbound_message_id":null},"text":"incoming context"},"receipt":{"fetched":false,"locally_durable":true,"telegram_confirmed":false}}}"#
+    );
+
+    let polled = run_ready(telegram.poll(
+        call_context(),
+        boxology_generated_contract::PollRequest {
+            timeout_seconds: Some(0),
+        },
+    ))
+    .unwrap();
+    assert_eq!(polled.error, None);
+    let polled = polled.result.unwrap();
+    assert_eq!(polled.event.as_ref().unwrap().event_id, "tg:20:1");
+    assert_eq!(
+        polled.event.as_ref().unwrap().kind,
+        boxology_generated_contract::InboundEventKind::Text
+    );
+    assert_eq!(
+        polled.event.unwrap().text.as_deref(),
+        Some("incoming context")
+    );
+    assert_eq!(
+        polled.receipt,
+        boxology_generated_contract::PollReceipt {
+            fetched: false,
+            locally_durable: Some(true),
+            telegram_confirmed: Some(false),
+            next_offset: 21,
+            telegram_confirmed_before: 0,
+            callback_receipt_failed: false,
+        }
+    );
+    assert_eq!(context.fake.request_count(), 0);
+
+    let acknowledgement = run_ready(telegram.ack(
+        call_context(),
+        boxology_generated_contract::AckRequest {
+            event_id: "tg:20:1".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(acknowledgement.error, None);
+    assert_eq!(
+        acknowledgement.acknowledgement,
+        Some(boxology_generated_contract::AckReceipt {
+            event_id: "tg:20:1".into(),
+            handled: true,
+            already_handled: false,
+        })
+    );
+    assert!(state::read(&paths).unwrap().events[0].handled);
+    let replay = run_ready(telegram.ack(
+        call_context(),
+        boxology_generated_contract::AckRequest {
+            event_id: "tg:20:1".into(),
+        },
+    ))
+    .unwrap();
+    assert!(replay.acknowledgement.unwrap().already_handled);
+    let (legacy_ack, exit) = run(&["ack"], json!({"schema": SCHEMA, "event_id": "tg:20:1"}));
+    assert_eq!(exit, ExitClass::Success);
+    assert_eq!(
+        legacy_ack,
+        r#"{"schema":1,"ok":true,"command":"ack","data":{"already_handled":true,"event_id":"tg:20:1","handled":true}}"#
+    );
+    assert_eq!(context.fake.request_count(), 0, "ack never calls Telegram");
+    drop(composition);
+}
+
+#[test]
+fn generated_poll_filters_orders_and_replays_every_current_event_variant() {
+    let mut context = Context::new(vec![response(&json!({"message_id": 80}))]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    let (composition, telegram) = assembled_telegram(&["ask", "poll", "ack"]);
+    let ask = run_ready(telegram.ask(
+        call_context(),
+        boxology_generated_contract::AskRequest {
+            summary: "Choose the typed polling path for this release.".into(),
+            recommendation: "Use the generated handle now.".into(),
+            alternatives: Some(vec![boxology_generated_contract::AskAlternative {
+                key: "pause".into(),
+                label: "Pause".into(),
+                text: "Wait for more context.".into(),
+            }]),
+            lifecycle_key: "typed-poll-life".into(),
+            dedup_key: "typed-poll-ask".into(),
+        },
+    ))
+    .unwrap()
+    .ask
+    .unwrap();
+    let callback = super::ask::token(&ask.ask_id, "alternative", Some("pause"));
+    context.replace_fake(vec![
+        response(&json!([
+            {"update_id": 20, "message": {"message_id": 1, "from": {"id": 42, "is_bot": false}, "chat": {"id": 42, "type": "private"}, "text": "typed text"}},
+            {"update_id": 21, "message": {"message_id": 2, "from": {"id": 99, "is_bot": false}, "chat": {"id": 99, "type": "private"}, "text": "secret unauthorized"}},
+            {"update_id": 22, "message": {"message_id": 90, "from": {"id": 42, "is_bot": false}, "chat": {"id": 42, "type": "private"}, "text": "custom context", "reply_to_message": {"message_id": 80, "chat": {"id": 42, "type": "private"}}}},
+            {"update_id": 23, "callback_query": {"id": "callback-typed", "from": {"id": 42, "is_bot": false}, "message": {"message_id": 80, "chat": {"id": 42, "type": "private"}}, "data": callback}}
+        ])),
+        None,
+    ]);
+
+    let first = run_ready(telegram.poll(
+        call_context(),
+        boxology_generated_contract::PollRequest {
+            timeout_seconds: Some(0),
+        },
+    ))
+    .unwrap()
+    .result
+    .unwrap();
+    assert_eq!(first.event.as_ref().unwrap().event_id, "tg:20:1");
+    assert_eq!(
+        first.event.unwrap().kind,
+        boxology_generated_contract::InboundEventKind::Text
+    );
+    assert_eq!(first.receipt.next_offset, 24);
+    assert_eq!(first.receipt.telegram_confirmed_before, 0);
+    assert!(first.receipt.fetched && first.receipt.callback_receipt_failed);
+    let durable = state::read(&paths).unwrap();
+    assert_eq!(
+        durable
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        ["tg:20:1", "tg:22:90", "tg:23:80"]
+    );
+    assert!(
+        !fs::read_to_string(context.root.join("state.json"))
+            .unwrap()
+            .contains("secret unauthorized")
+    );
+    assert_eq!(context.fake.request_count(), 2);
+
+    for event_id in ["tg:20:1", "tg:22:90"] {
+        let acknowledged = run_ready(telegram.ack(
+            call_context(),
+            boxology_generated_contract::AckRequest {
+                event_id: event_id.into(),
+            },
+        ))
+        .unwrap();
+        assert!(acknowledged.error.is_none());
+        if event_id == "tg:20:1" {
+            let replayed = run_ready(telegram.poll(
+                call_context(),
+                boxology_generated_contract::PollRequest {
+                    timeout_seconds: Some(0),
+                },
+            ))
+            .unwrap()
+            .result
+            .unwrap();
+            let reply = replayed.event.unwrap();
+            assert_eq!(
+                reply.kind,
+                boxology_generated_contract::InboundEventKind::AskReply
+            );
+            assert_eq!(reply.ask_id.as_deref(), Some(ask.ask_id.as_str()));
+            assert_eq!(reply.lifecycle_key.as_deref(), Some("typed-poll-life"));
+            assert_eq!(reply.reply_to.unwrap().outbound_message_id, Some(80));
+            assert!(!replayed.receipt.fetched);
+        }
+    }
+    assert_eq!(state::read(&paths).unwrap().asks[0].state, "answered");
+
+    drop(composition);
+    let (composition, telegram) = assembled_telegram(&["poll", "ack"]);
+    let replayed = run_ready(telegram.poll(
+        call_context(),
+        boxology_generated_contract::PollRequest {
+            timeout_seconds: Some(0),
+        },
+    ))
+    .unwrap()
+    .result
+    .unwrap();
+    let choice = replayed.event.unwrap();
+    assert_eq!(
+        choice.kind,
+        boxology_generated_contract::InboundEventKind::AskChoice
+    );
+    assert_eq!(choice.ask_id.as_deref(), Some(ask.ask_id.as_str()));
+    assert_eq!(choice.choice.unwrap().key.as_deref(), Some("pause"));
+    assert!(!replayed.receipt.fetched, "restart replays durable state");
+    assert_eq!(context.fake.request_count(), 2, "replay does not refetch");
+    assert_eq!(state::read(&paths).unwrap().events.len(), 3);
+    drop(composition);
+}
+
+#[test]
+fn generated_poll_and_ack_gate_before_inputs_state_network_and_consumer_work() {
+    let context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    unhandled_event(&paths, "tg:30:1", 30);
+    let (composition, telegram) = assembled_telegram(&["poll", "ack"]);
+    let before = fs::read(context.root.join("state.json")).unwrap();
+    let lock = state::ConsumerLock::acquire(&paths).unwrap();
+    let conflict = run_ready(telegram.poll(
+        call_context(),
+        boxology_generated_contract::PollRequest {
+            timeout_seconds: Some(0),
+        },
+    ))
+    .unwrap();
+    assert_eq!(conflict.result, None);
+    assert_eq!(
+        conflict.error,
+        Some(contract_error(
+            "consumer_locked",
+            "another local consumer holds the lock",
+            boxology_generated_contract::FailureClass::Conflict,
+            false,
+            None,
+        ))
+    );
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
+    assert_eq!(context.fake.request_count(), 0);
+    drop(lock);
+
+    unsafe { std::env::remove_var(ENABLED_VARIABLE) };
+    let disabled_poll = run_ready(telegram.poll(
+        call_context(),
+        boxology_generated_contract::PollRequest {
+            timeout_seconds: Some(51),
+        },
+    ))
+    .unwrap();
+    let disabled_ack = run_ready(telegram.ack(
+        call_context(),
+        boxology_generated_contract::AckRequest {
+            event_id: String::new(),
+        },
+    ))
+    .unwrap();
+    let authorization = contract_error(
+        "telegram_disabled",
+        "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1",
+        boxology_generated_contract::FailureClass::Authorization,
+        false,
+        None,
+    );
+    assert_eq!(disabled_poll.result, None);
+    assert_eq!(disabled_poll.error, Some(authorization.clone()));
+    assert_eq!(disabled_ack.acknowledgement, None);
+    assert_eq!(disabled_ack.error, Some(authorization));
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
+    assert_eq!(context.fake.request_count(), 0);
+    drop(composition);
+}
+
+#[test]
 fn typed_send_seam_returns_exact_delivery_and_replay_receipts() {
     let mut context = Context::new(vec![]);
     paired_state(&Paths::from_env().unwrap());
