@@ -176,11 +176,11 @@ stdio JSON/RPC composition
 package; Boxology has no provider package kind. `agent-loop.run_turn` consumes the
 other generated handles. The first version can compile in one model implementation
 and four tools (`read`, `write`, `edit`, and `bash`); it does not need runtime
-plugin discovery.
+plugin discovery. The first H0 slice now delivers the governed `model-completion.complete` contract, generated fake, and an explicitly configured non-retrying xAI implementation. Tool running, sessions/compaction, the agent loop, JSON/RPC, and authorized live dogfood remain; no sandbox is claimed.
 
 | Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
 | --- | --- | --- | --- | --- |
-| Model completion/agent loop | Boxology has unary typed calls and generated handles, but no model protocol or agent loop | `model-completion.complete` application-box contract and `agent-loop.run_turn` composition | Deterministic fake model requests one tool, consumes its result, then returns a final answer | Model-backend marketplace, multimodal or streaming protocol |
+| Model completion/agent loop | Governed `model-completion.complete` protocol, generated fake, and configured xAI adapter; no agent loop | `agent-loop.run_turn` composition over the completion and tool handles | Deterministic fake model requests one tool, consumes its result, then returns a final answer | Model-backend marketplace, multimodal or streaming protocol |
 | Tool execution | No coding-tool application box | `tool-runner.execute` plus bounded `read`/`write`/`edit`/`bash` implementations | Fake-model turn edits an isolated fixture only through the generated tool handle | Dynamic tool plugins and a general permission framework |
 | Sessions/resume | No agent session application | Append-only turn/tool events and `session-store.load/append` | Stop and restart, load the same session, and complete the next turn deterministically | Distributed session service |
 | Compaction | No agent-context compactor | Deterministic summary/checkpoint operation owned by the harness composition | Resume a fixture beyond its context threshold from a persisted compacted state | Multiple compaction strategies |
