@@ -127,10 +127,39 @@ jobs:
               crates/xtask/Cargo.toml)
                 # Already covered by the repository-invariant step.
                 ;;
-              crates/boxology-init/Cargo.toml)
-                # The multi-minute born-valid nested-workspace acceptance test
-                # remains in dispatch-only deep validation.
-                cargo test --manifest-path "$manifest" --all-features --locked --lib --bins
+              crates/boxology-init/Cargo.toml|\
+              crates/boxology-cli/Cargo.toml|\
+              crates/boxology-workspace/Cargo.toml|\
+              crates/boxology-classifier/Cargo.toml|\
+              crates/boxology-generator/Cargo.toml|\
+              crates/boxology-generator-model/Cargo.toml)
+                # Born-valid, five redundant integration targets, and two
+                # nested-Cargo generator unit tests are deep-only.
+                # Keep ordinary unit, binary, doctest, and integration coverage.
+                if [ "$manifest" = crates/boxology-generator/Cargo.toml ]; then
+                  cargo test --manifest-path "$manifest" --all-features --locked --lib --bins -- \
+                    --exact \
+                    --skip tests::generated_multi_capability_box_compiles_and_routes_both_capabilities \
+                    --skip tests::generated_import_adapter_sealed_import_routes_to_real_provider_end_to_end
+                else
+                  cargo test --manifest-path "$manifest" --all-features --locked --lib --bins
+                fi
+                cargo test --manifest-path "$manifest" --all-features --locked --doc
+                crate_dir="$(dirname "$manifest")"
+                for source in "$crate_dir"/tests/*.rs; do
+                  test -f "$source" || continue
+                  target="$(basename "$source" .rs)"
+                  case "$(basename "$crate_dir"):$target" in
+                    boxology-init:born_valid|\
+                    boxology-cli:cli|boxology-cli:surface_lock|\
+                    boxology-workspace:surface_lock|\
+                    boxology-classifier:surface_lock|\
+                    boxology-generator-model:purity_lock)
+                      continue
+                      ;;
+                  esac
+                  cargo test --manifest-path "$manifest" --all-features --locked --test "$target"
+                done
                 ;;
               *)
                 cargo test --manifest-path "$manifest" --all-features --locked

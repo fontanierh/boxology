@@ -43,6 +43,7 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     source: "crates/boxology-workspace/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
+    manifest_digest: None,
     source_digest: "851bc809ce185a49fb0ef6b6b5758269c2ae559bd7f363ed1288c86883780eea",
     body_digest: "3daaf29c01df87b82990aaeeaa74b8856f85e1ff8a984992910393b3528b60d9",
 };
@@ -54,10 +55,11 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
+        manifest_digest: None,
         source_digest: "594db997b4d7eb79efcd05f9ad5d2235e1ffca4fca40bbd53d3c1e91125f5afe",
         body_digest: "49c5350e23a2c3bf6f84a86e34fc18df7fc8458395cd04ca8a4439cf077fdd89",
     };
-// #107A closed generator source-surface and effect authority. PR-required. Transitive: #358.
+// #107A closed generator source-surface and effect authority. Deep-required. Transitive: #358.
 const GENERATOR_SOURCE_INVENTORY_TESTS: &[&str] = &[
     "closure_rules_reject_live_hostile_corpus",
     "effect_scan_allows_positive_controls",
@@ -76,6 +78,7 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-generator-model/tests/purity_lock.rs",
         default_source: "tests/purity_lock.rs",
         tests: GENERATOR_SOURCE_INVENTORY_TESTS,
+        manifest_digest: None,
         source_digest: "4e032f8b6046a98ed9477057313f659faae539c236dd6285ec75486178f2a5b7",
         body_digest: "703b85e771149ae68064568bfa7a453962d608ae49edc165df2bf4ee96bc26c0",
     };
@@ -86,10 +89,96 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     source: "crates/boxology-init/tests/born_valid.rs",
     default_source: "tests/born_valid.rs",
     tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
+    manifest_digest: None,
     source_digest: "0768cf6784ed0ec519b952fc63b4a5f64cfe925aa91eff70e5c468799ca6a5f4",
     body_digest: "1a5399cc443c1636c531208924e739258237fb2fa2121bc3806bce8cd4216deb",
 };
+const CLI_END_TO_END_TESTS: &[&str] = &[
+    "check_base_absent_schema_is_a_valid_none_base",
+    "check_base_cat_file_failure_after_confirmed_presence_is_always_bxw0092",
+    "check_base_git_boundary_uses_the_exact_nonmutating_argv",
+    "check_base_git_spawn_failure_is_invocation_exit_two",
+    "check_base_rejects_invalid_and_noncommit_revisions_without_echoing_them",
+    "check_base_reports_a_present_non_blob_schema_as_bxw0092",
+    "check_base_reports_malformed_schema_as_bxw0080",
+    "check_base_reports_real_addition_and_unchanged_baseline_without_failing",
+    "check_clean_workspace_reports_all_steps_and_exits_zero",
+    "check_default_base_classifies_against_merge_base_with_main",
+    "check_default_base_git_boundary_uses_the_exact_nonmutating_argv",
+    "check_default_base_git_spawn_failure_is_invocation_exit_two",
+    "check_default_base_merge_base_garbage_is_bxw0091",
+    "check_default_base_skips_when_histories_are_disjoint",
+    "check_default_base_skips_when_main_is_missing_after_committed_trunk",
+    "check_default_base_skips_when_main_is_unborn",
+    "check_default_base_skips_when_no_repository_is_available",
+    "check_deleted_generation_input_is_a_step_error",
+    "check_format_human_matches_default_bytes",
+    "check_guard_rejection_is_fatal_without_a_misleading_report",
+    "check_json_accepts_format_and_base_in_either_order",
+    "check_json_clean_workspace_is_exact_byte_golden",
+    "check_json_lock_failure_is_structured_failed_with_output",
+    "check_json_planning_failure_is_exact_and_human_stays_unchanged",
+    "check_json_preserves_controlled_contract_diagnostics_before_any_later_step",
+    "check_json_preserves_request_diagnostics_before_any_later_step",
+    "check_lock_failure_renders_finding_command_output_and_keeps_later_steps",
+    "check_metadata_failure_is_invocation",
+    "check_quality_commands_run_after_tests_in_package_id_order",
+    "check_quality_failure_is_bxw0107_with_captured_output_and_continues",
+    "check_rejects_unwired_flags_with_usage",
+    "check_reports_an_absent_selected_box_as_bxw0087",
+    "check_reports_schema_selector_and_exposure_findings_in_the_eight_step_report",
+    "check_tampered_and_missing_artifacts_fail_naming_repair",
+    "check_test_failure_renders_finding_command_output_and_exit_one",
+    "check_tool_failure_renders_finding_command_output_and_exit_one",
+    "check_validates_exact_and_wildcard_composition_with_the_planned_schema",
+    "check_workspace_findings_fail_before_composition",
+    "corrupted_cargo_toml_is_reported_with_captured_cargo_output",
+    "first_write_then_byte_identical_unchanged_run_uses_exact_argv",
+    "generate_incompatible_classification_still_exits_zero",
+    "generate_package_ping_attaches_exact_additive_classification",
+    "generate_unparseable_base_is_bxw0077_without_result_line",
+    "generate_updates_provenance_digest_and_revision",
+    "ingest::git_ingestion_boundary_discovery_and_cargo",
+    "metadata_failure_reports_code_and_captured_stderr",
+    "non_unicode_argument_is_usage_failure_without_panic",
+    "non_utf8_metadata_is_a_coded_failure",
+    "ownership::report_wiring_real_git_cases",
+    "parsing_accepts_only_the_two_generate_forms",
+    "unknown_package_is_invocation_failure",
+    "unowned_tracked_file_is_a_workspace_failure",
+];
+const CLI_SURFACE_LOCK_TESTS: &[&str] = &[
+    "invalid_path_is_not_skipped_on_unix",
+    "root_gate_is_exact",
+    "source_surface_is_exact_and_mutation_resistant",
+    "symlink_root_is_rejected_before_external_ingestion",
+    "walk_is_opaque_sorted_and_exact",
+];
+const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
+    package: "boxology-cli",
+    target: "cli",
+    manifest: "crates/boxology-cli/Cargo.toml",
+    source: "crates/boxology-cli/tests/cli.rs",
+    default_source: "tests/cli.rs",
+    tests: CLI_END_TO_END_TESTS,
+    manifest_digest: Some("26aa674cbb8a37ccf176a224860deebfd3b56cd8552f3892e967679b5f9aff8e"),
+    source_digest: "50b8641327b54a40e40973d0394c0d6998797705d609ce70cc1f80ef2bfdf8fa",
+    body_digest: "22b894e80b8da524466a16723349316863ff83f42675ead294cf298ba44b2ba7",
+};
+const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
+    package: "boxology-cli",
+    target: "surface_lock",
+    manifest: "crates/boxology-cli/Cargo.toml",
+    source: "crates/boxology-cli/tests/surface_lock.rs",
+    default_source: "tests/surface_lock.rs",
+    tests: CLI_SURFACE_LOCK_TESTS,
+    manifest_digest: Some("26aa674cbb8a37ccf176a224860deebfd3b56cd8552f3892e967679b5f9aff8e"),
+    source_digest: "d689375ccc5861ca32c18fd6ac9069ae095fdf800525bfbd80b5b22a556bc6bf",
+    body_digest: "d1614766e8a840a551630dbd67a219c5b7b4b95c72c5a34eaa55ff55383ded55",
+};
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
+    ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),
+    ("cli-surface-lock-integrity", &CLI_SURFACE_LOCK_SPEC),
     ("surface-lock", &SURFACE_LOCK_SPEC),
     ("classifier-surface-lock", &CLASSIFIER_SURFACE_LOCK_SPEC),
     (
@@ -98,11 +187,44 @@ const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ),
     ("born-valid", &BORN_VALID_SPEC),
 ];
-type ExternalTestRunner<'a> = dyn FnMut(&[&str]) -> Option<(bool, Vec<u8>)> + 'a;
 type ProductRunner<'a> = dyn FnMut(&[&str]) -> bool + 'a;
+type CargoRunner<'a> = dyn FnMut(&[&str]) -> bool + 'a;
 type SkillCommand = (&'static str, fn(&Path) -> u8);
+const GENERATOR_DEEP_TEST_ARGS: &[&str] = &[
+    "test",
+    "-p",
+    "boxology-generator",
+    "--all-features",
+    "--",
+    "--ignored",
+    "--test-threads=1",
+];
 const SKILL_COMMANDS: &[SkillCommand] = &[("skill-audit", skill_audit::run)];
 const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
+const GENERATOR_MULTI_CAPABILITY_E2E: &str =
+    "tests::generated_multi_capability_box_compiles_and_routes_both_capabilities";
+const GENERATOR_SEALED_IMPORT_E2E: &str =
+    "tests::generated_import_adapter_sealed_import_routes_to_real_provider_end_to_end";
+const GENERATOR_PR_EXCLUDED_LIVE_TEST_SPEC: external_test::LiveTestSpec =
+    external_test::LiveTestSpec {
+        manifest: "crates/boxology-generator/Cargo.toml",
+        manifest_digest: "2a5d0e715e019c59f919d6b547a2e6c4830e75369d1a75d6ba1d654a718634be",
+        source: "crates/boxology-generator/src/lib.rs",
+        tests: &[GENERATOR_MULTI_CAPABILITY_E2E, GENERATOR_SEALED_IMPORT_E2E],
+        body_digest: "8c6452f54c7057f5384d0c2d71df4ad48eae506ccffd847dcacf853bede457f6",
+    };
+#[cfg(test)]
+const GENERATOR_PR_EXCLUDED_UNIT_TESTS: &[&str] =
+    &[GENERATOR_MULTI_CAPABILITY_E2E, GENERATOR_SEALED_IMPORT_E2E];
+#[cfg(test)]
+const PR_EXCLUDED_INTEGRATION_TARGETS: &[(&str, &str)] = &[
+    ("boxology-init", "born_valid"),
+    ("boxology-cli", "cli"),
+    ("boxology-cli", "surface_lock"),
+    ("boxology-workspace", "surface_lock"),
+    ("boxology-classifier", "surface_lock"),
+    ("boxology-generator-model", "purity_lock"),
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CiTier {
@@ -127,10 +249,13 @@ const PR_CHECKS: &[&str] = &[
     "audit",
     "fixture-projects",
     "generated-style-fmt",
+    "cli-end-to-end-integrity",
+    "cli-surface-lock-integrity",
     "surface-lock",
     "classifier-surface-lock",
     "generator-source-inventory",
     "born-valid",
+    "generator-pr-excluded-unit-integrity",
     "whitespace",
     "links",
     "records",
@@ -146,10 +271,13 @@ const DEEP_CHECKS: &[&str] = &[
     "repo-editor",
     "repo-generator-deep-tests",
     "repo-doc",
+    "cli-end-to-end-integrity",
+    "cli-surface-lock-integrity",
     "surface-lock",
     "classifier-surface-lock",
     "generator-source-inventory",
     "born-valid",
+    "generator-pr-excluded-unit-integrity",
     "whitespace",
     "links",
     "records",
@@ -274,27 +402,35 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn external_test_checks(
-    root: &Path,
-    run: &mut ExternalTestRunner<'_>,
-) -> Vec<(&'static str, bool)> {
+fn external_test_integrity_checks(root: &Path) -> Vec<(&'static str, bool)> {
     EXTERNAL_TEST_SPECS
         .iter()
         .map(|(name, spec)| {
             (
                 *name,
-                timed(name, || {
-                    match external_test::run_with_cargo(root, spec, |args| run(args)) {
+                timed(
+                    name,
+                    || match external_test::check_external_test_integrity(root, spec) {
                         Ok(()) => true,
                         Err(error) => {
                             eprintln!("{name}: {error}");
                             false
                         }
-                    }
-                }),
+                    },
+                ),
             )
         })
         .collect()
+}
+
+fn generator_pr_excluded_unit_integrity(root: &Path) -> bool {
+    match external_test::check_live_test_integrity(root, &GENERATOR_PR_EXCLUDED_LIVE_TEST_SPEC) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("generator-pr-excluded-unit-integrity: {error}");
+            false
+        }
+    }
 }
 
 /// Missing tier-required check names, then false verdicts.
@@ -368,23 +504,19 @@ fn run_ci(base: Option<&str>) -> u8 {
             (
                 "repo-generator-deep-tests",
                 timed("repo-generator-deep-tests", || {
-                    run_cargo(&[
-                        "test",
-                        "-p",
-                        "boxology-generator",
-                        "--all-features",
-                        "--",
-                        "--ignored",
-                        "--test-threads=1",
-                    ])
+                    run_generator_deep_tests(&mut |args| run_cargo(args))
                 }),
             ),
             ("repo-doc", timed("repo-doc", run_doc)),
         ]);
     }
-    checks.extend(external_test_checks(&root(), &mut |args| {
-        external_test::cargo(&root(), args)
-    }));
+    checks.extend(external_test_integrity_checks(&root()));
+    checks.push((
+        "generator-pr-excluded-unit-integrity",
+        timed("generator-pr-excluded-unit-integrity", || {
+            generator_pr_excluded_unit_integrity(&root())
+        }),
+    ));
     checks.extend([
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
         ("links", timed("links", || links::check(&root()))),
@@ -642,6 +774,10 @@ fn run_cargo(args: &[&str]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+fn run_generator_deep_tests(run: &mut CargoRunner<'_>) -> bool {
+    run(GENERATOR_DEEP_TEST_ARGS)
+}
+
 fn check_tracked_whitespace() -> bool {
     let output = match Command::new("git")
         .args(["ls-files", "-z"])
@@ -736,6 +872,8 @@ mod tests {
     #[test]
     fn external_test_specs_are_registered_once_by_identity() {
         let expected = [
+            ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),
+            ("cli-surface-lock-integrity", &CLI_SURFACE_LOCK_SPEC),
             ("surface-lock", &SURFACE_LOCK_SPEC),
             ("classifier-surface-lock", &CLASSIFIER_SURFACE_LOCK_SPEC),
             (
@@ -759,139 +897,12 @@ mod tests {
     }
 
     #[test]
-    fn external_test_checks_consult_and_propagate() {
-        let mut consultations: Vec<Vec<String>> = Vec::new();
-        let results = external_test_checks(&root(), &mut |args| {
-            consultations.push(args.iter().map(|arg| (*arg).to_owned()).collect());
-            let package = args
-                .iter()
-                .position(|arg| *arg == "-p")
-                .and_then(|index| args.get(index + 1))
-                .copied()
-                .unwrap_or("");
-            let tests: &[&str] = match package {
-                "boxology-workspace" | "boxology-classifier" => {
-                    &["surface_and_live_evasions_are_locked"]
-                }
-                "boxology-generator-model" => GENERATOR_SOURCE_INVENTORY_TESTS,
-                "boxology-init" => BORN_VALID_SPEC.tests,
-                other => panic!("unexpected package: {other}"),
-            };
-            if args.last().copied() == Some("--list") {
-                let listed = tests
-                    .iter()
-                    .map(|name| format!("{name}: test\n"))
-                    .collect::<String>();
-                Some((true, listed.into_bytes()))
-            } else {
-                let executed = tests
-                    .iter()
-                    .map(|name| format!("test {name} ... ok\n"))
-                    .collect::<String>();
-                Some((true, executed.into_bytes()))
-            }
-        });
-        assert_eq!(results.len(), 4, "mutation survived: results.len()");
+    fn external_test_integrity_checks_are_complete_and_nonexecuting() {
+        let results = external_test_integrity_checks(&root());
+        assert_eq!(results.len(), EXTERNAL_TEST_SPECS.len());
         assert!(
             results.iter().all(|(_, passed)| *passed),
-            "mutation survived: live consumer consultation"
-        );
-        let expected_argv: &[&[&str]] = &[
-            &[
-                "test",
-                "-p",
-                "boxology-workspace",
-                "--test",
-                "surface_lock",
-                "--",
-                "--list",
-            ],
-            &[
-                "test",
-                "-p",
-                "boxology-workspace",
-                "--test",
-                "surface_lock",
-                "--",
-                "--test-threads=1",
-            ],
-            &[
-                "test",
-                "-p",
-                "boxology-classifier",
-                "--test",
-                "surface_lock",
-                "--",
-                "--list",
-            ],
-            &[
-                "test",
-                "-p",
-                "boxology-classifier",
-                "--test",
-                "surface_lock",
-                "--",
-                "--test-threads=1",
-            ],
-            &[
-                "test",
-                "-p",
-                "boxology-generator-model",
-                "--test",
-                "purity_lock",
-                "--",
-                "--list",
-            ],
-            &[
-                "test",
-                "-p",
-                "boxology-generator-model",
-                "--test",
-                "purity_lock",
-                "--",
-                "--test-threads=1",
-            ],
-            &[
-                "test",
-                "-p",
-                "boxology-init",
-                "--test",
-                "born_valid",
-                "--",
-                "--list",
-            ],
-            &[
-                "test",
-                "-p",
-                "boxology-init",
-                "--test",
-                "born_valid",
-                "--",
-                "--test-threads=1",
-            ],
-        ];
-        // Two argv vectors per spec: list then run.
-        assert_eq!(
-            consultations.len(),
-            expected_argv.len(),
-            "mutation survived: consultation count"
-        );
-        for (got, expected) in consultations.iter().zip(expected_argv.iter()) {
-            assert_eq!(
-                got.iter().map(String::as_str).collect::<Vec<_>>(),
-                expected.to_vec(),
-                "mutation survived: argv"
-            );
-        }
-        let false_results = external_test_checks(&root(), &mut |_| Some((false, Vec::new())));
-        assert_eq!(
-            false_results.len(),
-            4,
-            "mutation survived: false-propagation length"
-        );
-        assert!(
-            false_results.iter().all(|(_, passed)| !*passed),
-            "mutation survived: false-propagation"
+            "mutation survived: integrity verdict"
         );
     }
 
@@ -967,6 +978,56 @@ mod tests {
     }
 
     #[test]
+    fn deep_has_one_behavioral_executor_and_integrity_owns_every_pr_exclusion() {
+        let mut integrity_owned_integrations = EXTERNAL_TEST_SPECS
+            .iter()
+            .map(|(_, spec)| (spec.package, spec.target))
+            .collect::<Vec<_>>();
+        integrity_owned_integrations.sort_unstable();
+        let mut expected_integrations = PR_EXCLUDED_INTEGRATION_TARGETS.to_vec();
+        expected_integrations.sort_unstable();
+        assert_eq!(integrity_owned_integrations, expected_integrations);
+        integrity_owned_integrations.dedup();
+        assert_eq!(
+            integrity_owned_integrations.len(),
+            PR_EXCLUDED_INTEGRATION_TARGETS.len()
+        );
+        assert_eq!(
+            GENERATOR_PR_EXCLUDED_LIVE_TEST_SPEC.tests,
+            GENERATOR_PR_EXCLUDED_UNIT_TESTS
+        );
+        assert!(generator_pr_excluded_unit_integrity(&root()));
+
+        let mut cargo_calls = Vec::new();
+        assert!(run_product_check(None, &mut |args| {
+            cargo_calls.push(args.iter().map(ToString::to_string).collect::<Vec<_>>());
+            true
+        }));
+        assert!(run_generator_deep_tests(&mut |args| {
+            cargo_calls.push(args.iter().map(ToString::to_string).collect::<Vec<_>>());
+            true
+        }));
+        assert_eq!(
+            cargo_calls,
+            [
+                product_check_args(None)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                GENERATOR_DEEP_TEST_ARGS
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+            ]
+        );
+        assert_eq!(
+            boxology_cli_core::test_spec().render(),
+            "cargo test --workspace --all-features"
+        );
+        assert!(GENERATOR_DEEP_TEST_ARGS.contains(&"--ignored"));
+    }
+
+    #[test]
     fn ci_hygiene_dispatch_rejects_missing_empty_and_flag_shaped_bases() {
         let root = root();
         for args in [
@@ -1013,6 +1074,70 @@ mod tests {
         assert!(workflow.contains("cargo test -p xtask --locked"));
         assert!(workflow.contains("- name: Test changed crates"));
         assert!(workflow.contains("- name: Check workspace build graph"));
+        let changed_crates = workflow
+            .split_once("- name: Test changed crates")
+            .unwrap()
+            .1
+            .split_once("- name: Check workspace build graph")
+            .unwrap()
+            .0;
+        assert_eq!(changed_crates.matches("--doc").count(), 1);
+        for (package, target) in PR_EXCLUDED_INTEGRATION_TARGETS {
+            let target = format!("{package}:{target}");
+            assert_eq!(changed_crates.matches(&target).count(), 1, "{target}");
+        }
+        assert_eq!(
+            changed_crates
+                .matches("crates/boxology-generator/Cargo.toml")
+                .count(),
+            2
+        );
+        for test in GENERATOR_PR_EXCLUDED_UNIT_TESTS {
+            assert_eq!(changed_crates.matches(test).count(), 1, "{test}");
+        }
+        let exact_skips = format!(
+            "--lib --bins -- \\\n                    --exact \\\n                    --skip {} \\\n                    --skip {}",
+            GENERATOR_MULTI_CAPABILITY_E2E, GENERATOR_SEALED_IMPORT_E2E
+        );
+        assert_eq!(changed_crates.matches(&exact_skips).count(), 1);
+        assert!(changed_crates.contains("--test \"$target\""));
+        let steps = workflow
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- name: "))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            steps,
+            [
+                "Install pinned toolchain",
+                "Record runner evidence",
+                "CI hygiene",
+                "Select test scope",
+                "Test repository invariants",
+                "Test changed crates",
+                "Check workspace build graph",
+                "Test changed opaque fixtures",
+                "Test process reaper",
+                "Test delivery worker ownership",
+            ]
+        );
+        let cargo_tests = workflow
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim().strip_prefix("run: ").unwrap_or(line.trim());
+                line.starts_with("cargo test").then_some(line)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cargo_tests,
+            [
+                "cargo test -p xtask --locked",
+                "cargo test --manifest-path \"$manifest\" --all-features --locked --lib --bins -- \\",
+                "cargo test --manifest-path \"$manifest\" --all-features --locked --lib --bins",
+                "cargo test --manifest-path \"$manifest\" --all-features --locked --doc",
+                "cargo test --manifest-path \"$manifest\" --all-features --locked --test \"$target\"",
+                "cargo test --manifest-path \"$manifest\" --all-features --locked",
+            ]
+        );
         assert!(
             scope.find("crates/fixtures/fixture-tests/*) ;;").unwrap()
                 < scope
@@ -1029,6 +1154,28 @@ mod tests {
         let deep = include_str!("../../../.github/workflows/deep-validation.yml");
         assert_eq!(deep.matches("cargo xtask ci --no-budget").count(), 1);
         assert!(!deep.contains("--bin boxology -- check"));
+    }
+
+    #[test]
+    fn generated_multi_capability_box_compiles_and_routes_both_capabilities_suffix_collision() {}
+
+    #[test]
+    fn exact_generator_skips_preserve_suffix_collision() {
+        let test = "tests::generated_multi_capability_box_compiles_and_routes_both_capabilities_suffix_collision";
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                test,
+                "--exact",
+                "--skip",
+                GENERATOR_MULTI_CAPABILITY_E2E,
+                "--skip",
+                GENERATOR_SEALED_IMPORT_E2E,
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("1 passed"));
     }
 
     #[test]
