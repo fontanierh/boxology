@@ -1,42 +1,7 @@
 use crate::api;
 use crate::state::{self, ChoiceRecord, EventRecord, Paths, ReplyTarget, State};
-use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
-use serde::Deserialize;
+use crate::{AppError, ExitClass, api_error};
 use serde_json::{Value, json};
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonPollRequest {
-    schema: u8,
-    timeout_seconds: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonAckRequest {
-    schema: u8,
-    event_id: String,
-}
-
-pub(crate) fn poll(input: &[u8]) -> Result<Value, AppError> {
-    poll_inner(input, true)
-}
-
-pub(crate) fn poll_locked(input: &[u8]) -> Result<Value, AppError> {
-    poll_inner(input, false)
-}
-
-fn poll_inner(input: &[u8], acquire_consumer: bool) -> Result<Value, AppError> {
-    let request: JsonPollRequest = parse(input)?;
-    check_schema(request.schema)?;
-    poll_command(
-        PollCommand {
-            timeout_seconds: request.timeout_seconds,
-        },
-        acquire_consumer,
-    )
-    .map(poll_result)
-}
 
 pub(crate) struct PollCommand {
     pub(crate) timeout_seconds: Option<u64>,
@@ -147,17 +112,6 @@ fn poll_command(command: PollCommand, acquire_consumer: bool) -> Result<PollResu
         &state,
         callback_warning,
     ))
-}
-
-pub(crate) fn ack(input: &[u8]) -> Result<Value, AppError> {
-    let request: JsonAckRequest = parse(input)?;
-    check_schema(request.schema)?;
-    ack_typed(AckCommand {
-        event_id: request.event_id,
-    })
-    .map(|receipt| {
-        json!({"event_id": receipt.event_id, "handled": receipt.handled, "already_handled": receipt.already_handled})
-    })
 }
 
 pub(crate) struct AckCommand {
@@ -342,24 +296,6 @@ fn poll_receipt(
     }
 }
 
-fn poll_result(result: PollResult) -> Value {
-    let receipt = json!({
-        "fetched": result.fetched,
-        "next_offset": result.next_offset,
-        "telegram_confirmed_before": result.telegram_confirmed_before
-    });
-    let mut value = match result.event {
-        Some(event) => {
-            json!({"event": event_value(&event), "receipt": {"locally_durable": true, "telegram_confirmed": result.telegram_confirmed.expect("event confirmation"), "fetched": result.fetched}})
-        }
-        None => json!({"event": Value::Null, "receipt": receipt}),
-    };
-    if result.callback_warning {
-        value["warnings"] = json!(["callback was stored but its Telegram UI receipt failed"]);
-    }
-    value
-}
-
 pub(crate) fn event_value(event: &EventRecord) -> Value {
     let mut value = json!({
         "event_id": event.event_id,
@@ -416,10 +352,4 @@ fn validate_update_order(updates: &[api::Update], requested_offset: i64) -> Resu
         ));
     }
     Ok(())
-}
-
-fn check_schema(schema: u8) -> Result<(), AppError> {
-    (schema == SCHEMA)
-        .then_some(())
-        .ok_or_else(|| AppError::input("unsupported_schema", "unsupported schema"))
 }

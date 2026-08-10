@@ -1,12 +1,14 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::env;
 use std::io;
 use std::sync::Mutex;
 
+use boxology_generated_contract as contract;
+
 #[allow(dead_code)]
 mod api;
 mod ask;
+#[doc(hidden)]
+pub mod cli;
 mod listen;
 mod outbound;
 mod pairing;
@@ -656,6 +658,42 @@ impl TelegramService {
     }
 }
 
+macro_rules! direct_backend {
+    ($($method:ident($request:ty) -> $outcome:ty;)*) => {
+        impl cli::Backend for TelegramService {$(
+            fn $method(&self, request: $request) -> Result<$outcome, AppError> {
+                direct(boxology_generated_contract::TelegramDispatch::$method(self, call_context(), request))
+            }
+        )*}
+    };
+}
+
+cli::backend_methods!(direct_backend);
+
+fn call_context() -> boxology_contract::CallContext {
+    boxology_contract::CallContext::new(
+        boxology_contract::Caller::Anonymous,
+        None,
+        boxology_contract::CancelToken::new(),
+        boxology_contract::TraceContext::empty(),
+        None,
+    )
+}
+
+fn direct<T>(
+    future: impl std::future::Future<Output = Result<T, boxology_generated_contract::SendTextError>>,
+) -> Result<T, AppError> {
+    let mut future = std::pin::pin!(future);
+    match std::future::Future::poll(
+        future.as_mut(),
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    ) {
+        std::task::Poll::Ready(Ok(value)) => Ok(value),
+        std::task::Poll::Ready(Err(_)) => Err(AppError::invariant()),
+        std::task::Poll::Pending => Err(AppError::invariant()),
+    }
+}
+
 fn listen_start_typed(
     slot: &Mutex<Option<state::ConsumerLock>>,
 ) -> Result<ListenStartReceipt, AppError> {
@@ -781,7 +819,6 @@ pub mod generated {
 
 pub const SCHEMA: u8 = 1;
 pub const ENABLED_VARIABLE: &str = "BOXOLOGY_TELEGRAM_ENABLED";
-const MAX_INPUT: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExitClass {
@@ -846,129 +883,20 @@ impl AppError {
             retry_after: None,
         }
     }
-}
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyStatusRequest {
-    schema: u8,
-    probe: bool,
-}
-
-#[derive(Serialize)]
-struct Envelope<'a> {
-    schema: u8,
-    ok: bool,
-    command: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<ErrorBody<'a>>,
-}
-
-#[derive(Serialize)]
-struct ErrorBody<'a> {
-    code: &'a str,
-    message: &'a str,
-    retryable: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    retry_after_seconds: Option<u64>,
+    pub const fn invariant() -> Self {
+        Self {
+            code: "invalid_backend_outcome",
+            message: "Telegram capability returned an invalid outcome",
+            retryable: false,
+            exit: ExitClass::Invariant,
+            retry_after: None,
+        }
+    }
 }
 
 pub fn execute(args: &[String], input: &[u8]) -> (String, ExitClass) {
-    let (command, subcommand) = match args {
-        [command] => (command.as_str(), None),
-        [command, subcommand] if command == "pair" => (command.as_str(), Some(subcommand.as_str())),
-        _ => {
-            return failure(
-                "unknown",
-                AppError::input("invalid_command", "invalid command"),
-            );
-        }
-    };
-    if command == "status" {
-        return status(input);
-    }
-    if !enabled() {
-        return failure(command, AppError::authorization());
-    }
-    if command == "pair" {
-        return match subcommand {
-            Some("begin") | Some("complete") | Some("revoke") => {
-                match pairing::run(subcommand.expect("pair subcommand"), input) {
-                    Ok(data) => success("pair", data),
-                    Err(error) => failure("pair", error),
-                }
-            }
-            _ => failure(
-                "pair",
-                AppError::input("invalid_subcommand", "invalid pair operation"),
-            ),
-        };
-    }
-    let result = match command {
-        "poll" => receive::poll(input),
-        "ack" => receive::ack(input),
-        "send" => outbound::send(input),
-        "reply" => outbound::reply(input),
-        "resolve-send" => outbound::resolve(input),
-        "ask" => ask::run(input),
-        _ => return failure(command, AppError::unsupported()),
-    };
-    match result {
-        Ok(data) => success(command, data),
-        Err(error) => failure(command, error),
-    }
-}
-
-fn status(input: &[u8]) -> (String, ExitClass) {
-    let request: LegacyStatusRequest = match parse::<LegacyStatusRequest>(input) {
-        Ok(request) if request.schema == SCHEMA => request,
-        Ok(_) => {
-            return failure(
-                "status",
-                AppError::input("unsupported_schema", "unsupported schema"),
-            );
-        }
-        Err(error) => return failure("status", error),
-    };
-    let result = match status_typed(StatusRequest {
-        probe: request.probe,
-    }) {
-        Ok(result) => result,
-        Err(error) => return failure("status", error),
-    };
-    match (result.local, result.probe) {
-        (Some(local), None) => success(
-            "status",
-            serde_json::json!({
-                "probe": false,
-                "enabled": local.enabled,
-                "paired": local.paired,
-                "next_offset": local.next_offset,
-                "telegram_confirmed_before": local.telegram_confirmed_before,
-                "consumer_locked": local.consumer_locked,
-                "inbox": {"unhandled": local.inbox.unhandled, "bytes": local.inbox.bytes, "full": local.inbox.full},
-                "asks": {"active": local.asks.active, "total": local.asks.total},
-                "outbound": {"ambiguous": local.outbound.ambiguous, "total": local.outbound.total},
-                "pending_pair": local.pending_pair,
-                "last_receive_at": local.last_receive_at,
-                "last_error_code": local.last_error_code,
-            }),
-        ),
-        (None, Some(probe)) => success(
-            "status",
-            serde_json::json!({"probe": true, "api_reachable": probe.api_reachable, "bot_matches": probe.bot_matches, "webhook_configured": probe.webhook_configured, "get_updates_compatible": probe.get_updates_compatible}),
-        ),
-        _ => failure(
-            "status",
-            AppError::new(
-                "invalid_status_outcome",
-                "status returned an invalid outcome",
-                ExitClass::Invariant,
-            ),
-        ),
-    }
+    cli::execute(&TelegramService::default(), enabled(), args, input)
 }
 
 fn status_typed(request: StatusRequest) -> Result<StatusResult, AppError> {
@@ -1061,48 +989,8 @@ pub(crate) fn api_error(error: api::ApiError) -> AppError {
     }
 }
 
-pub(crate) fn parse<T: for<'de> Deserialize<'de>>(input: &[u8]) -> Result<T, AppError> {
-    if input.len() > MAX_INPUT {
-        return Err(AppError::input(
-            "input_too_large",
-            "request exceeds input limit",
-        ));
-    }
-    serde_json::from_slice(input)
-        .map_err(|_| AppError::input("invalid_json", "request must be one valid JSON object"))
-}
-
-pub(crate) fn success(command: &str, data: Value) -> (String, ExitClass) {
-    let envelope = Envelope {
-        schema: SCHEMA,
-        ok: true,
-        command,
-        data: Some(data),
-        error: None,
-    };
-    (
-        serde_json::to_string(&envelope).expect("envelope serialization"),
-        ExitClass::Success,
-    )
-}
-
-pub(crate) fn failure(command: &str, error: AppError) -> (String, ExitClass) {
-    let envelope = Envelope {
-        schema: SCHEMA,
-        ok: false,
-        command,
-        data: None,
-        error: Some(ErrorBody {
-            code: error.code,
-            message: error.message,
-            retryable: error.retryable,
-            retry_after_seconds: error.retry_after,
-        }),
-    };
-    (
-        serde_json::to_string(&envelope).expect("envelope serialization"),
-        error.exit,
-    )
+pub(crate) fn parse<T: for<'de> serde::Deserialize<'de>>(input: &[u8]) -> Result<T, AppError> {
+    cli::parse(input)
 }
 
 #[cfg(test)]

@@ -1,17 +1,8 @@
 use crate::api;
 use crate::state::{self, EventRecord, OutboundRecord, Paths};
-use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use crate::{AppError, ExitClass, api_error};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SendRequest {
-    schema: u8,
-    text: String,
-    dedup_key: String,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SendCommand {
@@ -24,36 +15,6 @@ pub(crate) struct SendReceipt {
     pub(crate) dedup_key: String,
     pub(crate) message_id: i64,
     pub(crate) deduplicated: bool,
-}
-
-impl SendReceipt {
-    fn into_value(self) -> Value {
-        delivery_value(self.dedup_key, self.message_id, self.deduplicated)
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonReplyRequest {
-    schema: u8,
-    event_id: String,
-    text: String,
-    dedup_key: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonResolveRequest {
-    schema: u8,
-    dedup_key: String,
-    resolution: JsonResolution,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonResolution {
-    kind: String,
-    message_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,22 +44,6 @@ pub(crate) struct ResolveReceipt {
     pub(crate) message_id: Option<i64>,
 }
 
-impl ResolveReceipt {
-    fn into_value(self) -> Value {
-        match self.message_id {
-            Some(message_id) => json!({
-                "dedup_key": self.dedup_key,
-                "resolved": "delivered",
-                "message_id": message_id,
-            }),
-            None => json!({
-                "dedup_key": self.dedup_key,
-                "resolved": "not_delivered",
-            }),
-        }
-    }
-}
-
 enum Start {
     Send { deduplicated: bool },
     Existing { message_id: i64 },
@@ -118,16 +63,6 @@ struct Delivery<'a> {
 struct DeliveryReceipt {
     message_id: i64,
     deduplicated: bool,
-}
-
-pub(crate) fn send(input: &[u8]) -> Result<Value, AppError> {
-    let request: SendRequest = parse(input)?;
-    check_schema(request.schema)?;
-    send_typed(SendCommand {
-        text: request.text,
-        dedup_key: request.dedup_key,
-    })
-    .map(SendReceipt::into_value)
 }
 
 pub(crate) fn send_typed(command: SendCommand) -> Result<SendReceipt, AppError> {
@@ -153,17 +88,6 @@ pub(crate) fn send_typed(command: SendCommand) -> Result<SendReceipt, AppError> 
         message_id: receipt.message_id,
         deduplicated: receipt.deduplicated,
     })
-}
-
-pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
-    let request: JsonReplyRequest = parse(input)?;
-    check_schema(request.schema)?;
-    reply_typed(ReplyCommand {
-        event_id: request.event_id,
-        text: request.text,
-        dedup_key: request.dedup_key,
-    })
-    .map(SendReceipt::into_value)
 }
 
 pub(crate) fn reply_typed(command: ReplyCommand) -> Result<SendReceipt, AppError> {
@@ -201,17 +125,6 @@ pub(crate) fn reply_typed(command: ReplyCommand) -> Result<SendReceipt, AppError
         message_id: receipt.message_id,
         deduplicated: receipt.deduplicated,
     })
-}
-
-pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
-    let request: JsonResolveRequest = parse(input)?;
-    check_schema(request.schema)?;
-    resolve_typed(ResolveCommand {
-        dedup_key: request.dedup_key,
-        kind: request.resolution.kind,
-        message_id: request.resolution.message_id,
-    })
-    .map(ResolveReceipt::into_value)
 }
 
 pub(crate) fn resolve_typed(command: ResolveCommand) -> Result<ResolveReceipt, AppError> {
@@ -438,15 +351,6 @@ pub(crate) fn deliver_ask(
     })
 }
 
-fn delivery_value(dedup_key: String, message_id: i64, deduplicated: bool) -> Value {
-    json!({
-        "dedup_key": dedup_key,
-        "deduplicated": deduplicated,
-        "delivery": "delivered",
-        "message_id": message_id,
-    })
-}
-
 fn mark_retryable(paths: &Paths, key: &str, error: AppError) -> AppError {
     let _ = state::update(paths, |state| {
         if let Some(record) = state
@@ -548,12 +452,6 @@ fn validate_event_id(event_id: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
-}
-
-fn check_schema(schema: u8) -> Result<(), AppError> {
-    (schema == SCHEMA)
-        .then_some(())
-        .ok_or_else(|| AppError::input("unsupported_schema", "unsupported schema"))
 }
 
 pub(crate) fn not_paired() -> AppError {

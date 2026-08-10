@@ -1,30 +1,8 @@
 use crate::api;
 use crate::state::{self, BotFingerprint, Pairing, Paths, PendingPair};
-use crate::{AppError, ExitClass, SCHEMA, api_error, parse};
+use crate::{AppError, ExitClass, api_error};
 use getrandom::fill;
-use serde::Deserialize;
-use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BeginRequest {
-    schema: u8,
-    nonce_ttl_seconds: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CompleteRequest {
-    schema: u8,
-    timeout_seconds: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RevokeRequest {
-    schema: u8,
-}
 
 pub(crate) struct BeginCommand {
     pub nonce_ttl_seconds: Option<u64>,
@@ -61,31 +39,6 @@ pub(crate) struct CompleteReceipt {
 
 pub(crate) struct RevokeReceipt {
     pub pairing_revoked: bool,
-}
-
-pub(crate) fn run(operation: &str, input: &[u8]) -> Result<Value, AppError> {
-    match operation {
-        "begin" => begin(input),
-        "complete" => complete(input),
-        "revoke" => revoke(input),
-        _ => Err(AppError::input(
-            "invalid_subcommand",
-            "invalid pair operation",
-        )),
-    }
-}
-
-fn begin(input: &[u8]) -> Result<Value, AppError> {
-    let request: BeginRequest = parse(input)?;
-    check_schema(request.schema)?;
-    let receipt = begin_typed(BeginCommand {
-        nonce_ttl_seconds: request.nonce_ttl_seconds,
-    })?;
-    Ok(json!({
-        "deep_link": receipt.deep_link,
-        "expires_at": receipt.expires_at,
-        "bot": {"id": receipt.bot.id, "username": receipt.bot.username}
-    }))
 }
 
 pub(crate) fn begin_typed(command: BeginCommand) -> Result<BeginReceipt, AppError> {
@@ -173,24 +126,6 @@ pub(crate) fn begin_typed(command: BeginCommand) -> Result<BeginReceipt, AppErro
             username,
         },
     })
-}
-
-fn complete(input: &[u8]) -> Result<Value, AppError> {
-    let request: CompleteRequest = parse(input)?;
-    check_schema(request.schema)?;
-    let receipt = complete_typed(CompleteCommand {
-        timeout_seconds: request.timeout_seconds,
-    })?;
-    let confirmation = match receipt.confirmation {
-        Confirmation::Delivered => "delivered",
-        Confirmation::Ambiguous => "ambiguous",
-        Confirmation::NotAttempted => "not_attempted",
-    };
-    let mut data = json!({"paired": true, "user_id": receipt.user_id, "chat_id": receipt.chat_id, "paired_at": receipt.paired_at, "confirmation": confirmation});
-    if matches!(receipt.confirmation, Confirmation::Ambiguous) {
-        data["warnings"] = json!(["pairing confirmation delivery is ambiguous"]);
-    }
-    Ok(data)
 }
 
 pub(crate) fn complete_typed(command: CompleteCommand) -> Result<CompleteReceipt, AppError> {
@@ -283,13 +218,6 @@ pub(crate) fn complete_typed(command: CompleteCommand) -> Result<CompleteReceipt
     })
 }
 
-fn revoke(input: &[u8]) -> Result<Value, AppError> {
-    let request: RevokeRequest = parse(input)?;
-    check_schema(request.schema)?;
-    let receipt = revoke_typed()?;
-    Ok(json!({"pairing_revoked": receipt.pairing_revoked}))
-}
-
 pub(crate) fn revoke_typed() -> Result<RevokeReceipt, AppError> {
     let paths = Paths::from_env()?;
     let revoked = state::update(&paths, |state| {
@@ -338,12 +266,6 @@ fn validate_update_order(updates: &[api::Update], requested_offset: i64) -> Resu
         ));
     }
     Ok(())
-}
-
-fn check_schema(schema: u8) -> Result<(), AppError> {
-    (schema == SCHEMA)
-        .then_some(())
-        .ok_or_else(|| AppError::input("unsupported_schema", "unsupported schema"))
 }
 
 fn valid_username(username: &str) -> bool {

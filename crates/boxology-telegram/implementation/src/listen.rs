@@ -69,8 +69,6 @@ pub(crate) fn run(input: &[u8], output: &mut dyn Write) -> ExitClass {
     }
     install_signal_handlers();
     STOP.store(false, Ordering::Relaxed);
-    let poll_input = serde_json::to_vec(&json!({"schema": SCHEMA, "timeout_seconds": long_poll}))
-        .expect("poll request");
     let mut emitted = BTreeSet::new();
     let mut last_heartbeat = Instant::now();
     let mut backoff = 1_u64;
@@ -96,22 +94,23 @@ pub(crate) fn run(input: &[u8], output: &mut dyn Write) -> ExitClass {
                 thread::sleep(Duration::from_millis(250));
             }
         } else {
-            match receive::poll_locked(&poll_input) {
+            match receive::poll_typed_locked(receive::PollCommand {
+                timeout_seconds: Some(long_poll),
+            }) {
                 Ok(data) => {
                     backoff = 1;
-                    if let Some(warnings) = data.get("warnings")
-                        && emit(output, json!({"kind": "warning", "code": "callback_receipt_failed", "message": warnings})).is_err()
+                    if data.callback_warning
+                        && emit(output, json!({"kind": "warning", "code": "callback_receipt_failed", "message": ["callback was stored but its Telegram UI receipt failed"]})).is_err()
                     {
                         break ExitClass::Local;
                     }
-                    if let Some(event) = data.get("event").filter(|event| !event.is_null()) {
-                        let event_id = event
-                            .get("event_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        if !event_id.is_empty()
-                            && emitted.insert(event_id.into())
-                            && emit(output, json!({"kind": "event", "event": event})).is_err()
+                    if let Some(event) = data.event {
+                        if emitted.insert(event.event_id.clone())
+                            && emit(
+                                output,
+                                json!({"kind": "event", "event": receive::event_value(&event)}),
+                            )
+                            .is_err()
                         {
                             break ExitClass::Local;
                         }
