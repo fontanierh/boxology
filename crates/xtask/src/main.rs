@@ -54,8 +54,8 @@ const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
         source: "crates/boxology-classifier/tests/surface_lock.rs",
         default_source: "tests/surface_lock.rs",
         tests: &["surface_and_live_evasions_are_locked"],
-        source_digest: "95b9db2ed3ef102760fd514f0048d27463b79ff3d3d453cf5535120cf0c345f4",
-        body_digest: "4cfd468d1d4e2d61a0576c4a88d06ef09267f0cd1d598b6a8d63f9cb61795812",
+        source_digest: "594db997b4d7eb79efcd05f9ad5d2235e1ffca4fca40bbd53d3c1e91125f5afe",
+        body_digest: "49c5350e23a2c3bf6f84a86e34fc18df7fc8458395cd04ca8a4439cf077fdd89",
     };
 // #107A closed generator source-surface and effect authority. PR-required. Transitive: #358.
 const GENERATOR_SOURCE_INVENTORY_TESTS: &[&str] = &[

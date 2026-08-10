@@ -1191,12 +1191,11 @@ fn assert_data_mutation(mutate: fn(&mut SchemaDocument), expected: Vec<DataChang
     submitted.revision = OTHER_REVISION.into();
     let roles = reachability(&base, &submitted);
     assert_eq!(data_changes(&base, &submitted, &roles), expected);
-    assert_unclassified_pair(base, submitted);
 }
 
 #[rustfmt::skip]
 #[test]
-fn structured_raw_change_corpus_is_exact_and_fail_closed() {
+fn structured_raw_change_corpus_is_exact() {
     let none = Roles { input: false, output: false };
     let both = Roles { input: true, output: true };
     type Case = (fn(&mut SchemaDocument), Vec<DataChange>);
@@ -1205,7 +1204,7 @@ fn structured_raw_change_corpus_is_exact_and_fail_closed() {
         (|d| { d.data_types.pop(); }, vec![DataChange::TypeRemoved { name: "Archive".into(), roles: none }]),
         (|d| data_type_mut(d, "Archive").name = "Vault".into(), vec![DataChange::TypeRemoved { name: "Archive".into(), roles: none }, DataChange::TypeAdded { name: "Vault".into(), roles: none }]),
         (|d| d.data_types.swap(1, 2), vec![DataChange::TypesReordered]),
-        (|d| data_type_mut(d, "Archive").shape = SchemaDataShape::Enum(vec![data_variant("Stored")]), vec![DataChange::TypeKindChanged { name: "Archive".into() }]),
+        (|d| data_type_mut(d, "Archive").shape = SchemaDataShape::Enum(vec![data_variant("Stored")]), vec![DataChange::TypeKindChanged("Archive".into())]),
         (|d| { let item = data_type_mut(d, "Archive"); item.docs.push("docs".into()); item.deprecation = Some("old".into()); }, vec![DataChange::TypeDocsChanged { name: "Archive".into() }, DataChange::TypeDeprecationChanged { name: "Archive".into() }]),
         (|d| profile_fields(d).push(data_field("active", TypeExpression::Bool)), vec![DataChange::FieldAdded { type_name: "Profile".into(), field_name: "active".into(), roles: both }]),
         (|d| { profile_fields(d).pop(); }, vec![DataChange::FieldRemoved { type_name: "Profile".into(), field_name: "tags".into(), roles: both }]),
@@ -1221,6 +1220,112 @@ fn structured_raw_change_corpus_is_exact_and_fail_closed() {
     for (mutate, expected) in cases {
         assert_data_mutation(mutate, expected);
     }
+}
+
+#[rustfmt::skip]
+#[test]
+fn structured_d5_findings_are_exact_and_role_ordered() {
+    let mut base = structured_document();
+    profile_fields(&mut base).insert(2, data_field("archive", TypeExpression::Local("Archive".into())));
+    let mut submitted = base.clone();
+    data_type_mut(&mut submitted, "Archive").shape = SchemaDataShape::Enum(vec![data_variant("Stored")]);
+    let fields = profile_fields(&mut submitted);
+    fields[0].docs.push("renamed docs".into());
+    fields[0].deprecation = Some("retired".into());
+    fields[0].ty = TypeExpression::Bool;
+    fields.pop();
+    fields.push(data_field("active", TypeExpression::Bool));
+    fields.push(data_field("alias", TypeExpression::Option(Box::new(TypeExpression::String))));
+    let variants = mood_variants(&mut submitted);
+    variants[0].docs.push("calm docs".into());
+    variants[0].deprecation = Some("quiet".into());
+    variants.pop();
+    variants.push(data_variant("Away"));
+    submitted.revision = OTHER_REVISION.into();
+    assert_exact_report(
+        &classify(Some(&base), Some(&submitted)).unwrap(),
+        &[
+            e!("BXC0063", "hello/type/Archive", "type kind changed", Class::Incompatible, Some("struct"), Some("enum"), None),
+            e!("BXC0067", "hello/type/Mood/variant/Away", "enum variant added", Class::CompatibleWithConditions, None, Some("Away"), Some("provider-first deployment order")),
+            e!("BXC0068", "hello/type/Mood/variant/Away", "enum variant added", Class::CompatibleWithConditions, None, Some("Away"), Some("unknown-variant tolerance")),
+            e!("BXC0035", "hello/type/Mood/variant/Busy", "variant removed", Class::Incompatible, Some("Busy"), None, None),
+            e!("BXC0069", "hello/type/Mood/variant/Busy", "variant removed", Class::Incompatible, Some("Busy"), None, None),
+            e!("BXC0033", "hello/type/Mood/variant/Calm", "documentation changed", Class::Documentation, Some(""), Some("calm docs"), None),
+            e!("BXC0034", "hello/type/Mood/variant/Calm", "deprecation changed", Class::Deprecation, None, Some("quiet"), None),
+            e!("BXC0049", "hello/type/Profile/field/active", "field added", Class::Incompatible, None, Some("active"), None),
+            e!("BXC0064", "hello/type/Profile/field/active", "field added", Class::Additive, None, Some("active"), None),
+            e!("BXC0049", "hello/type/Profile/field/alias", "field added", Class::CompatibleWithConditions, None, Some("alias"), Some("provider-first deployment order")),
+            e!("BXC0064", "hello/type/Profile/field/alias", "field added", Class::Additive, None, Some("alias"), None),
+            e!("BXC0033", "hello/type/Profile/field/name", "documentation changed", Class::Documentation, Some(""), Some("renamed docs"), None),
+            e!("BXC0034", "hello/type/Profile/field/name", "deprecation changed", Class::Deprecation, None, Some("retired"), None),
+            e!("BXC0051", "hello/type/Profile/field/name", "field type changed", Class::Incompatible, Some("String"), Some("bool"), None),
+            e!("BXC0066", "hello/type/Profile/field/name", "field type changed", Class::Incompatible, Some("String"), Some("bool"), None),
+            e!("BXC0050", "hello/type/Profile/field/tags", "field removed", Class::Incompatible, Some("tags"), None, None),
+            e!("BXC0065", "hello/type/Profile/field/tags", "field removed", Class::Incompatible, Some("tags"), None, None),
+        ],
+        Class::Incompatible,
+    );
+}
+
+#[rustfmt::skip]
+#[test]
+fn structured_reused_and_fail_closed_rows_are_exact() {
+    let base = structured_document();
+    let mut added = base.clone();
+    added.data_types.push(SchemaDataType { name: "Cache".into(), docs: Vec::new(), deprecation: None, shape: SchemaDataShape::Struct(Vec::new()) });
+    added.capabilities[0].output.leaf = TypeExpression::Local("Cache".into());
+    added.revision = OTHER_REVISION.into();
+    assert_exact_report(&classify(Some(&base), Some(&added)).unwrap(), &[
+        e!("BXC0043", "hello.greet/output", "capability output type changed", Class::Incompatible, Some("Option<Vec<Profile>>"), Some("Cache"), None),
+        e!("BXC0031", "hello/type/Cache", "type added", Class::Additive, None, Some("Cache"), None),
+    ], Class::Incompatible);
+    let mut removed = base.clone();
+    removed.data_types.pop();
+    removed.revision = OTHER_REVISION.into();
+    assert_exact_report(&classify(Some(&base), Some(&removed)).unwrap(), &[
+        e!("BXC0032", "hello/type/Archive", "type removed", Class::Incompatible, Some("Archive"), None, None),
+    ], Class::Incompatible);
+    let mut metadata = base.clone();
+    data_type_mut(&mut metadata, "Archive").docs.push("archive docs".into());
+    data_type_mut(&mut metadata, "Archive").deprecation = Some("retired".into());
+    metadata.revision = OTHER_REVISION.into();
+    assert_exact_report(&classify(Some(&base), Some(&metadata)).unwrap(), &[
+        e!("BXC0033", "hello/type/Archive", "documentation changed", Class::Documentation, Some(""), Some("archive docs"), None),
+        e!("BXC0034", "hello/type/Archive", "deprecation changed", Class::Deprecation, None, Some("retired"), None),
+    ], Class::Deprecation);
+    let mut reordered = base.clone();
+    reordered.data_types.swap(0, 1);
+    profile_fields(&mut reordered).swap(0, 1);
+    mood_variants(&mut reordered).swap(0, 1);
+    reordered.revision = OTHER_REVISION.into();
+    assert_exact_report(&classify(Some(&base), Some(&reordered)).unwrap(), &[
+        e!("BXC0028", "hello", "unclassified change", Class::Incompatible, None, None, None),
+    ], Class::Incompatible);
+    let mut unreachable_kind = base.clone();
+    data_type_mut(&mut unreachable_kind, "Archive").shape = SchemaDataShape::Enum(vec![data_variant("Stored")]);
+    unreachable_kind.revision = OTHER_REVISION.into();
+    assert_exact_report(&classify(Some(&base), Some(&unreachable_kind)).unwrap(), &[
+        e!("BXC0028", "hello", "unclassified change", Class::Incompatible, None, None, None),
+    ], Class::Incompatible);
+}
+
+#[rustfmt::skip]
+#[test]
+fn error_declaration_kind_transitions_are_paired_before_add_remove() {
+    let base = structured_document();
+    let mut submitted = base.clone();
+    submitted.data_types.pop();
+    submitted.data_types.push(SchemaDataType { name: "GreetError".into(), docs: vec!["new docs".into()], deprecation: Some("retired".into()), shape: SchemaDataShape::Enum(vec![data_variant("Failure")]) });
+    submitted.types[0] = SchemaType { name: "Archive".into(), docs: Vec::new(), deprecation: None, variants: vec![SchemaVariant { name: "Failure".into(), docs: Vec::new(), deprecation: None, payload: SchemaPayload::Unit }] };
+    submitted.capabilities[0].error = "Archive".into();
+    submitted.revision = OTHER_REVISION.into();
+    assert_exact_report(&classify(Some(&base), Some(&submitted)).unwrap(), &[
+        e!("BXC0044", "hello.greet/error", "capability declared error changed", Class::Incompatible, Some("GreetError"), Some("Archive"), None),
+        e!("BXC0063", "hello/type/Archive", "type kind changed", Class::Incompatible, Some("struct"), Some("error"), None),
+        e!("BXC0033", "hello/type/GreetError", "documentation changed", Class::Documentation, Some("Greet failures."), Some("new docs"), None),
+        e!("BXC0034", "hello/type/GreetError", "deprecation changed", Class::Deprecation, None, Some("retired"), None),
+        e!("BXC0063", "hello/type/GreetError", "type kind changed", Class::Incompatible, Some("error"), Some("enum"), None),
+    ], Class::Incompatible);
 }
 
 #[rustfmt::skip]

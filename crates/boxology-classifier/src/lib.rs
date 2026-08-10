@@ -245,6 +245,24 @@ const CODE_FIELD_TYPE_CHANGED: &str = "BXC0051";
 /// Error payload kind or value type changed (D5 incompatible row).
 const CODE_PAYLOAD_CHANGED: &str = "BXC0052";
 
+/// Structured type kind changed (D5 incompatible row).
+const CODE_TYPE_KIND_CHANGED: &str = "BXC0063";
+/// Output-reachable structured field added (D5 additive row).
+const CODE_OUTPUT_FIELD_ADDED: &str = "BXC0064";
+/// Output-reachable structured field removed (D5 incompatible row).
+const CODE_OUTPUT_FIELD_REMOVED: &str = "BXC0065";
+/// Output-reachable structured field type changed (D5 incompatible row).
+const CODE_OUTPUT_FIELD_TYPE_CHANGED: &str = "BXC0066";
+
+/// Input-reachable enum variant added (D5 conditional row).
+const CODE_INPUT_VARIANT_ADDED: &str = "BXC0067";
+
+/// Output-reachable enum variant added (D5 conditional row).
+const CODE_OUTPUT_VARIANT_ADDED: &str = "BXC0068";
+
+/// Output-reachable enum variant removed (D5 incompatible row).
+const CODE_OUTPUT_VARIANT_REMOVED: &str = "BXC0069";
+
 const KIND_CONTRACT_INTRODUCED: &str = "contract introduced";
 const KIND_CONTRACT_REMOVED: &str = "contract removed";
 const KIND_UNCLASSIFIED: &str = "unclassified change";
@@ -268,9 +286,13 @@ const KIND_FIELD_ADDED: &str = "field added";
 const KIND_FIELD_REMOVED: &str = "field removed";
 const KIND_FIELD_TYPE_CHANGED: &str = "field type changed";
 const KIND_PAYLOAD_CHANGED: &str = "error payload changed";
+const KIND_TYPE_KIND_CHANGED: &str = "type kind changed";
+const KIND_ENUM_VARIANT_ADDED: &str = "enum variant added";
 
 /// Migration condition for referenced error-enum variant addition.
 const CONDITION_UNKNOWN_VARIANT: &str = "unknown-variant tolerance";
+/// Migration condition for an input addition that requires provider-first rollout.
+const CONDITION_PROVIDER_FIRST: &str = "provider-first deployment order";
 
 fn fail_closed_finding(base: &SchemaDocument) -> Finding {
     Finding {
@@ -281,6 +303,26 @@ fn fail_closed_finding(base: &SchemaDocument) -> Finding {
         base_excerpt: None,
         submitted_excerpt: None,
         condition: None,
+    }
+}
+
+fn data_finding(
+    code: &'static str,
+    path: String,
+    kind: &'static str,
+    class: Class,
+    base_excerpt: Option<String>,
+    submitted_excerpt: Option<String>,
+    condition: Option<&'static str>,
+) -> Finding {
+    Finding {
+        code,
+        path,
+        kind,
+        class,
+        base_excerpt,
+        submitted_excerpt,
+        condition,
     }
 }
 
@@ -333,14 +375,66 @@ fn field_named<'a>(variant: &'a SchemaVariant, name: &str) -> Option<&'a SchemaF
     }
 }
 
+fn data_type_named<'a>(document: &'a SchemaDocument, name: &str) -> Option<&'a SchemaDataType> {
+    document.data_types.iter().find(|item| item.name == name)
+}
+
+fn data_field_named<'a>(data_type: &'a SchemaDataType, name: &str) -> Option<&'a SchemaDataField> {
+    match &data_type.shape {
+        SchemaDataShape::Struct(fields) => fields.iter().find(|item| item.name == name),
+        SchemaDataShape::Enum(_) => None,
+    }
+}
+
+fn data_variant_named<'a>(
+    data_type: &'a SchemaDataType,
+    name: &str,
+) -> Option<&'a SchemaDataVariant> {
+    match &data_type.shape {
+        SchemaDataShape::Enum(variants) => variants.iter().find(|item| item.name == name),
+        SchemaDataShape::Struct(_) => None,
+    }
+}
+
+fn data_shape_excerpt(shape: &SchemaDataShape) -> &'static str {
+    match shape {
+        SchemaDataShape::Struct(_) => "struct",
+        SchemaDataShape::Enum(_) => "enum",
+    }
+}
+
+fn declaration<'a>(
+    document: &'a SchemaDocument,
+    name: &str,
+) -> Option<(&'static str, &'a [String], Option<&'a str>)> {
+    if let Some(item) = type_named(document, name) {
+        return Some(("error", &item.docs, item.deprecation.as_deref()));
+    }
+    data_type_named(document, name).map(|item| {
+        (
+            data_shape_excerpt(&item.shape),
+            item.docs.as_slice(),
+            item.deprecation.as_deref(),
+        )
+    })
+}
+
+fn is_top_level_optional(ty: &TypeExpression) -> bool {
+    let TypeExpression::Option(_) = ty else {
+        return false;
+    };
+    true
+}
+
 /// Applies the D5 type-graph and structural capability taxonomies, then the fail-closed default.
 ///
 /// Named findings are always emitted individually. Unreferenced *additions* (type, variant, or
 /// field) fall to the fail-closed default per D5's preamble — a declared type reachable from no
-/// capability is not a named additive/conditional row. Documentation, deprecation, and removal rows
-/// classify by their D5 table wording regardless of reachability; only addition rows are
-/// reachability-gated. Capability additions, removals, input-name changes, input-leaf changes, and
-/// output-leaf changes use their named rows. Capability metadata and named payload fields use their
+/// capability is not a named additive/conditional row. Documentation, deprecation, whole-type
+/// removals, and legacy error removals classify regardless of reachability; structured field and
+/// variant role rows are reachability-gated. Capability additions, removals, input-name changes,
+/// input-leaf changes, and output-leaf changes use their named rows. Capability metadata and named
+/// payload fields use their
 /// D5 rows; capability, type, variant, and field reorders remain fail closed at `<box>`. A
 /// revision-only difference (no type or capability delta) yields an empty finding list; `classify`
 /// turns that empty result into the D6 check-B integrity error.
@@ -348,10 +442,7 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
     let roles = reachability(base, submitted);
     let changes = type_changes(base, submitted, &roles);
     let mut findings = Vec::new();
-    // PR3a deliberately records structured changes without assigning D5 policy. Every such raw
-    // change therefore reaches the existing fail-closed finding; PR3b consumes the exact change
-    // vocabulary and roles below.
-    let mut unclassified = !data_changes(base, submitted, &roles).is_empty();
+    let mut unclassified = append_data_findings(base, submitted, &roles, &mut findings);
     for change in &changes {
         match change {
             TypeChange::TypeAdded { name, roles } if roles.output => {
@@ -802,6 +893,298 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
     findings
 }
 
+fn append_data_findings(
+    base: &SchemaDocument,
+    submitted: &SchemaDocument,
+    roles_by_type: &BTreeMap<&str, Roles>,
+    findings: &mut Vec<Finding>,
+) -> bool {
+    let mut unclassified = false;
+    for change in data_changes(base, submitted, roles_by_type) {
+        match change {
+            DataChange::TypeAdded { name, roles } if roles.input || roles.output => {
+                findings.push(data_finding(
+                    CODE_TYPE_ADDED,
+                    type_path(base, &name),
+                    KIND_TYPE_ADDED,
+                    Class::Additive,
+                    None,
+                    Some(name),
+                    None,
+                ));
+            }
+            DataChange::TypeRemoved { name, .. } => findings.push(data_finding(
+                CODE_TYPE_REMOVED,
+                type_path(base, &name),
+                KIND_TYPE_REMOVED,
+                Class::Incompatible,
+                Some(name),
+                None,
+                None,
+            )),
+            DataChange::TypeKindChanged(name) if roles_by_type.contains_key(name.as_str()) => {
+                findings.push(data_finding(
+                    CODE_TYPE_KIND_CHANGED,
+                    type_path(base, &name),
+                    KIND_TYPE_KIND_CHANGED,
+                    Class::Incompatible,
+                    declaration(base, &name).map(|item| item.0.to_owned()),
+                    declaration(submitted, &name).map(|item| item.0.to_owned()),
+                    None,
+                ))
+            }
+            DataChange::TypeDocsChanged { name } => findings.push(data_finding(
+                CODE_DOCS_CHANGED,
+                type_path(base, &name),
+                KIND_DOCS_CHANGED,
+                Class::Documentation,
+                declaration(base, &name).map(|item| docs_excerpt(item.1)),
+                declaration(submitted, &name).map(|item| docs_excerpt(item.1)),
+                None,
+            )),
+            DataChange::TypeDeprecationChanged { name } => findings.push(data_finding(
+                CODE_DEPRECATION_CHANGED,
+                type_path(base, &name),
+                KIND_DEPRECATION_CHANGED,
+                Class::Deprecation,
+                declaration(base, &name).and_then(|item| item.2.map(str::to_owned)),
+                declaration(submitted, &name).and_then(|item| item.2.map(str::to_owned)),
+                None,
+            )),
+            DataChange::FieldAdded {
+                type_name,
+                field_name,
+                roles,
+            } => {
+                if roles.input {
+                    let field = data_type_named(submitted, &type_name)
+                        .and_then(|item| data_field_named(item, &field_name))
+                        .expect("an added field is present in the submitted type");
+                    let optional = is_top_level_optional(&field.ty);
+                    findings.push(data_finding(
+                        CODE_FIELD_ADDED,
+                        data_field_path(base, &type_name, &field_name),
+                        KIND_FIELD_ADDED,
+                        if optional {
+                            Class::CompatibleWithConditions
+                        } else {
+                            Class::Incompatible
+                        },
+                        None,
+                        Some(field_name.clone()),
+                        optional.then_some(CONDITION_PROVIDER_FIRST),
+                    ));
+                }
+                if roles.output {
+                    findings.push(data_finding(
+                        CODE_OUTPUT_FIELD_ADDED,
+                        data_field_path(base, &type_name, &field_name),
+                        KIND_FIELD_ADDED,
+                        Class::Additive,
+                        None,
+                        Some(field_name),
+                        None,
+                    ));
+                }
+                unclassified |= !roles.input && !roles.output;
+            }
+            DataChange::FieldRemoved {
+                type_name,
+                field_name,
+                roles,
+            } => {
+                if roles.input {
+                    findings.push(data_finding(
+                        CODE_FIELD_REMOVED,
+                        data_field_path(base, &type_name, &field_name),
+                        KIND_FIELD_REMOVED,
+                        Class::Incompatible,
+                        Some(field_name.clone()),
+                        None,
+                        None,
+                    ));
+                }
+                if roles.output {
+                    findings.push(data_finding(
+                        CODE_OUTPUT_FIELD_REMOVED,
+                        data_field_path(base, &type_name, &field_name),
+                        KIND_FIELD_REMOVED,
+                        Class::Incompatible,
+                        Some(field_name),
+                        None,
+                        None,
+                    ));
+                }
+                unclassified |= !roles.input && !roles.output;
+            }
+            DataChange::FieldTypeChanged {
+                type_name,
+                field_name,
+            } => {
+                let roles = roles_for(roles_by_type, &type_name);
+                let path = data_field_path(base, &type_name, &field_name);
+                let base_excerpt = data_type_named(base, &type_name)
+                    .and_then(|item| data_field_named(item, &field_name))
+                    .map(|item| item.ty.canonical_name());
+                let submitted_excerpt = data_type_named(submitted, &type_name)
+                    .and_then(|item| data_field_named(item, &field_name))
+                    .map(|item| item.ty.canonical_name());
+                if roles.input {
+                    findings.push(data_finding(
+                        CODE_FIELD_TYPE_CHANGED,
+                        path.clone(),
+                        KIND_FIELD_TYPE_CHANGED,
+                        Class::Incompatible,
+                        base_excerpt.clone(),
+                        submitted_excerpt.clone(),
+                        None,
+                    ));
+                }
+                if roles.output {
+                    findings.push(data_finding(
+                        CODE_OUTPUT_FIELD_TYPE_CHANGED,
+                        path,
+                        KIND_FIELD_TYPE_CHANGED,
+                        Class::Incompatible,
+                        base_excerpt,
+                        submitted_excerpt,
+                        None,
+                    ));
+                }
+                unclassified |= !roles.input && !roles.output;
+            }
+            DataChange::FieldDocsChanged {
+                type_name,
+                field_name,
+            } => findings.push(data_finding(
+                CODE_DOCS_CHANGED,
+                data_field_path(base, &type_name, &field_name),
+                KIND_DOCS_CHANGED,
+                Class::Documentation,
+                data_type_named(base, &type_name)
+                    .and_then(|item| data_field_named(item, &field_name))
+                    .map(|item| docs_excerpt(&item.docs)),
+                data_type_named(submitted, &type_name)
+                    .and_then(|item| data_field_named(item, &field_name))
+                    .map(|item| docs_excerpt(&item.docs)),
+                None,
+            )),
+            DataChange::FieldDeprecationChanged {
+                type_name,
+                field_name,
+            } => findings.push(data_finding(
+                CODE_DEPRECATION_CHANGED,
+                data_field_path(base, &type_name, &field_name),
+                KIND_DEPRECATION_CHANGED,
+                Class::Deprecation,
+                data_type_named(base, &type_name)
+                    .and_then(|item| data_field_named(item, &field_name))
+                    .and_then(|item| item.deprecation.clone()),
+                data_type_named(submitted, &type_name)
+                    .and_then(|item| data_field_named(item, &field_name))
+                    .and_then(|item| item.deprecation.clone()),
+                None,
+            )),
+            DataChange::VariantAdded {
+                type_name,
+                variant_name,
+                roles,
+            } => {
+                if roles.input {
+                    findings.push(data_finding(
+                        CODE_INPUT_VARIANT_ADDED,
+                        variant_path(base, &type_name, &variant_name),
+                        KIND_ENUM_VARIANT_ADDED,
+                        Class::CompatibleWithConditions,
+                        None,
+                        Some(variant_name.clone()),
+                        Some(CONDITION_PROVIDER_FIRST),
+                    ));
+                }
+                if roles.output {
+                    findings.push(data_finding(
+                        CODE_OUTPUT_VARIANT_ADDED,
+                        variant_path(base, &type_name, &variant_name),
+                        KIND_ENUM_VARIANT_ADDED,
+                        Class::CompatibleWithConditions,
+                        None,
+                        Some(variant_name),
+                        Some(CONDITION_UNKNOWN_VARIANT),
+                    ));
+                }
+                unclassified |= !roles.input && !roles.output;
+            }
+            DataChange::VariantRemoved {
+                type_name,
+                variant_name,
+                roles,
+            } => {
+                if roles.input {
+                    findings.push(data_finding(
+                        CODE_VARIANT_REMOVED,
+                        variant_path(base, &type_name, &variant_name),
+                        KIND_VARIANT_REMOVED,
+                        Class::Incompatible,
+                        Some(variant_name.clone()),
+                        None,
+                        None,
+                    ));
+                }
+                if roles.output {
+                    findings.push(data_finding(
+                        CODE_OUTPUT_VARIANT_REMOVED,
+                        variant_path(base, &type_name, &variant_name),
+                        KIND_VARIANT_REMOVED,
+                        Class::Incompatible,
+                        Some(variant_name),
+                        None,
+                        None,
+                    ));
+                }
+                unclassified |= !roles.input && !roles.output;
+            }
+            DataChange::VariantDocsChanged {
+                type_name,
+                variant_name,
+            } => findings.push(data_finding(
+                CODE_DOCS_CHANGED,
+                variant_path(base, &type_name, &variant_name),
+                KIND_DOCS_CHANGED,
+                Class::Documentation,
+                data_type_named(base, &type_name)
+                    .and_then(|item| data_variant_named(item, &variant_name))
+                    .map(|item| docs_excerpt(&item.docs)),
+                data_type_named(submitted, &type_name)
+                    .and_then(|item| data_variant_named(item, &variant_name))
+                    .map(|item| docs_excerpt(&item.docs)),
+                None,
+            )),
+            DataChange::VariantDeprecationChanged {
+                type_name,
+                variant_name,
+            } => findings.push(data_finding(
+                CODE_DEPRECATION_CHANGED,
+                variant_path(base, &type_name, &variant_name),
+                KIND_DEPRECATION_CHANGED,
+                Class::Deprecation,
+                data_type_named(base, &type_name)
+                    .and_then(|item| data_variant_named(item, &variant_name))
+                    .and_then(|item| item.deprecation.clone()),
+                data_type_named(submitted, &type_name)
+                    .and_then(|item| data_variant_named(item, &variant_name))
+                    .and_then(|item| item.deprecation.clone()),
+                None,
+            )),
+            DataChange::TypeAdded { .. }
+            | DataChange::TypeKindChanged(_)
+            | DataChange::TypesReordered
+            | DataChange::FieldsReordered { .. }
+            | DataChange::VariantsReordered { .. } => unclassified = true,
+        }
+    }
+    unclassified
+}
+
 fn exposure_classification(
     base: ExposureLevel,
     submitted: ExposureLevel,
@@ -869,6 +1252,10 @@ fn variant_path(base: &SchemaDocument, type_name: &str, variant_name: &str) -> S
     .concat()
 }
 
+fn data_field_path(base: &SchemaDocument, type_name: &str, field_name: &str) -> String {
+    [type_path(base, type_name).as_str(), "/field/", field_name].concat()
+}
+
 fn field_path(
     base: &SchemaDocument,
     type_name: &str,
@@ -918,9 +1305,7 @@ enum DataChange {
         roles: Roles,
     },
     TypesReordered,
-    TypeKindChanged {
-        name: String,
-    },
+    TypeKindChanged(String),
     TypeDocsChanged {
         name: String,
     },
@@ -1261,6 +1646,28 @@ fn common_name_sequence_differs<'a, T, U>(
     base_common != submitted_common
 }
 
+fn append_cross_kind_changes(
+    changes: &mut Vec<DataChange>,
+    base: &SchemaDocument,
+    submitted: &SchemaDocument,
+    name: &str,
+) {
+    let (_, base_docs, base_deprecation) = declaration(base, name).expect("base declaration");
+    let (_, submitted_docs, submitted_deprecation) =
+        declaration(submitted, name).expect("submitted declaration");
+    changes.push(DataChange::TypeKindChanged(name.to_owned()));
+    if base_docs != submitted_docs {
+        changes.push(DataChange::TypeDocsChanged {
+            name: name.to_owned(),
+        });
+    }
+    if base_deprecation != submitted_deprecation {
+        changes.push(DataChange::TypeDeprecationChanged {
+            name: name.to_owned(),
+        });
+    }
+}
+
 fn data_changes(
     base: &SchemaDocument,
     submitted: &SchemaDocument,
@@ -1271,6 +1678,9 @@ fn data_changes(
     let submitted_by_name = index_data_types(&submitted.data_types);
     for base_type in &base.data_types {
         match submitted_by_name.get(base_type.name.as_str()) {
+            None if type_named(submitted, &base_type.name).is_some() => {
+                append_cross_kind_changes(&mut changes, base, submitted, &base_type.name)
+            }
             None => changes.push(DataChange::TypeRemoved {
                 name: base_type.name.clone(),
                 roles: roles_for(roles, base_type.name.as_str()),
@@ -1285,10 +1695,15 @@ fn data_changes(
     }
     for submitted_type in &submitted.data_types {
         if !base_by_name.contains_key(submitted_type.name.as_str()) {
-            changes.push(DataChange::TypeAdded {
-                name: submitted_type.name.clone(),
-                roles: roles_for(roles, submitted_type.name.as_str()),
-            });
+            match type_named(base, &submitted_type.name) {
+                Some(_) => {
+                    append_cross_kind_changes(&mut changes, base, submitted, &submitted_type.name)
+                }
+                None => changes.push(DataChange::TypeAdded {
+                    name: submitted_type.name.clone(),
+                    roles: roles_for(roles, submitted_type.name.as_str()),
+                }),
+            }
         }
     }
     if common_name_sequence_differs(
@@ -1337,9 +1752,7 @@ fn append_matched_data_type_changes(
                 roles,
             );
         }
-        _ => changes.push(DataChange::TypeKindChanged {
-            name: base.name.clone(),
-        }),
+        _ => changes.push(DataChange::TypeKindChanged(base.name.clone())),
     }
 }
 
@@ -1466,6 +1879,7 @@ fn type_changes(
 
     for base_type in &base.types {
         match submitted_by_name.get(base_type.name.as_str()) {
+            None if data_type_named(submitted, &base_type.name).is_some() => {}
             None => {
                 changes.push(TypeChange::TypeRemoved {
                     name: base_type.name.clone(),
@@ -1484,7 +1898,9 @@ fn type_changes(
     }
 
     for submitted_type in &submitted.types {
-        if base_by_name.contains_key(submitted_type.name.as_str()) {
+        if base_by_name.contains_key(submitted_type.name.as_str())
+            || data_type_named(base, &submitted_type.name).is_some()
+        {
             continue;
         }
         changes.push(TypeChange::TypeAdded {
