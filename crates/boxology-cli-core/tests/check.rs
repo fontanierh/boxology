@@ -1,4 +1,4 @@
-use boxology_cli::{
+use boxology_cli_core::{
     CheckClassificationError, ClassifyStepError, DuplicatePackages, PackageSchemas, classify_step,
 };
 use boxology_contract::BoxId;

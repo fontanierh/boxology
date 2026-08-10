@@ -1,4 +1,4 @@
-use boxology_cli::{
+use boxology_cli_core::{
     CapturedOutput, CommandRunner, CommandSpec, SpawnError, cargo_metadata_command, clippy_spec,
     fmt_packages, fmt_spec, lock_spec, quality_specs, run_clippy_step, run_command, run_fmt_step,
     run_lock_step, run_quality_step, run_test_step, test_spec, walk,

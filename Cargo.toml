@@ -21,6 +21,7 @@ members = [
     "crates/boxology-classifier",
     "crates/boxology-workspace",
     "crates/boxology-cli",
+    "crates/boxology-cli-core",
     "crates/boxology-http",
     "crates/boxology-http-conformance",
     "crates/boxology-runtime",

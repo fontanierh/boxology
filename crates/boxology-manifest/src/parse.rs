@@ -1182,14 +1182,17 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         let workspace = include_str!("../../boxology-workspace/src/lib.rs");
         assert!(reserved_codes_are(workspace, &reserved, &reserved[..19]));
         let cli = [
-            ("walk.rs", include_str!("../../boxology-cli/src/walk.rs")),
+            (
+                "walk.rs",
+                include_str!("../../boxology-cli-core/src/walk.rs"),
+            ),
             (
                 "generate.rs",
-                include_str!("../../boxology-cli/src/generate.rs"),
+                include_str!("../../boxology-cli-core/src/generate.rs"),
             ),
             (
                 "execute.rs",
-                include_str!("../../boxology-cli/src/execute.rs"),
+                include_str!("../../boxology-cli-core/src/execute.rs"),
             ),
         ];
         assert!(
@@ -1215,9 +1218,9 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
             .chain([84, 85, 86])
             .map(|number| format!("BX{}{number:04}", 'W'))
             .collect();
-        let walk = include_str!("../../boxology-cli/src/walk.rs");
-        let generate = include_str!("../../boxology-cli/src/generate.rs");
-        let execute = include_str!("../../boxology-cli/src/execute.rs");
+        let walk = include_str!("../../boxology-cli-core/src/walk.rs");
+        let generate = include_str!("../../boxology-cli-core/src/generate.rs");
+        let execute = include_str!("../../boxology-cli-core/src/execute.rs");
         let wrong_walk = format!(
             "{walk}\nconst WRONG_OWNER: Rule = (\"{}\", ROOT_TEXT, RULE_SOURCE);\n",
             reserved[22]

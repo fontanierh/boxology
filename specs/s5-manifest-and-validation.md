@@ -24,8 +24,10 @@ protection are not delivered. The CLI surface is `boxology generate [--package <
 - `boxology-manifest` is the pure strict schema-1 parser.
 - `boxology-workspace` is pure over supplied file, manifest, schema, and Cargo-metadata data. It
   owns discovery, classification, crate roles, and edge policy without filesystem/process access.
-- `boxology-cli` owns effects: filesystem and git reads, Cargo commands, generation, validation,
-  and report rendering. The `boxology` facade crate remains authoring-only.
+- `boxology-cli-core` owns the reusable effectful implementation: filesystem and git reads, Cargo
+  commands, generation, validation, and report rendering. `boxology-cli` retains the installed
+  `boxology` binary and compatibility re-export facade. The `boxology` facade crate remains
+  authoring-only.
 
 Library diagnostics use stable `BXW####` codes and deterministic ordering.
 

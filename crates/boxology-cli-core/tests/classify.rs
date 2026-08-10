@@ -1,5 +1,5 @@
 use boxology_classifier::render_text;
-use boxology_cli::classify;
+use boxology_cli_core::classify;
 use boxology_contract::BoxId;
 use boxology_generator::{OUTPUTS, generate};
 use boxology_generator_model::GenerationRequest;

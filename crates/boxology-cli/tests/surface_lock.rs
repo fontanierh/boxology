@@ -9,18 +9,23 @@ use std::{
 };
 use syn::visit::Visit;
 const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs compare.rs classify.rs check.rs base.rs runner.rs main.rs";
-const FILES: &str = "Cargo.toml src/base.rs src/check.rs src/classify.rs src/compare.rs src/execute.rs src/generate.rs src/lib.rs src/main.rs src/runner.rs src/walk.rs tests/bxw.golden tests/check.rs tests/classify.rs tests/cli.rs tests/compare.rs tests/execute.rs tests/generation_plan.rs tests/runner.rs tests/surface_lock.rs";
+const FILES: &str = "Cargo.toml src/lib.rs src/main.rs tests/cli.rs tests/surface_lock.rs";
+const CORE_FILES: &str = "Cargo.toml src/base.rs src/check.rs src/classify.rs src/compare.rs src/execute.rs src/generate.rs src/lib.rs src/runner.rs src/walk.rs tests/bxw.golden tests/check.rs tests/classify.rs tests/compare.rs tests/execute.rs tests/generation_plan.rs tests/runner.rs";
 const PACKAGE: &str = include_str!("../Cargo.toml");
-const PACKAGE_HASH: u64 = 15_713_256_556_475_452_448;
-const LIB: &str = include_str!("../src/lib.rs");
-const WALK: &str = include_str!("../src/walk.rs");
-const GENERATE: &str = include_str!("../src/generate.rs");
-const EXECUTE: &str = include_str!("../src/execute.rs");
-const COMPARE: &str = include_str!("../src/compare.rs");
-const CLASSIFY: &str = include_str!("../src/classify.rs");
-const CHECK: &str = include_str!("../src/check.rs");
-const BASE: &str = include_str!("../src/base.rs");
-const RUNNER: &str = include_str!("../src/runner.rs");
+const CORE_PACKAGE: &str = include_str!("../../boxology-cli-core/Cargo.toml");
+const FACADE: &str = include_str!("../src/lib.rs");
+const PACKAGE_HASH: u64 = 6_372_022_880_874_878_890;
+const CORE_PACKAGE_HASH: u64 = 1_604_661_066_284_442_872;
+const FACADE_HASH: u64 = 300_721_434_560_145_121;
+const LIB: &str = include_str!("../../boxology-cli-core/src/lib.rs");
+const WALK: &str = include_str!("../../boxology-cli-core/src/walk.rs");
+const GENERATE: &str = include_str!("../../boxology-cli-core/src/generate.rs");
+const EXECUTE: &str = include_str!("../../boxology-cli-core/src/execute.rs");
+const COMPARE: &str = include_str!("../../boxology-cli-core/src/compare.rs");
+const CLASSIFY: &str = include_str!("../../boxology-cli-core/src/classify.rs");
+const CHECK: &str = include_str!("../../boxology-cli-core/src/check.rs");
+const BASE: &str = include_str!("../../boxology-cli-core/src/base.rs");
+const RUNNER: &str = include_str!("../../boxology-cli-core/src/runner.rs");
 const MAIN: &str = include_str!("../src/main.rs");
 const SOURCES: &[(&str, &str)] = &[
     ("lib.rs", LIB),
@@ -34,7 +39,7 @@ const SOURCES: &[(&str, &str)] = &[
     ("runner.rs", RUNNER),
     ("main.rs", MAIN),
 ];
-const GOLDEN: &str = include_str!("bxw.golden");
+const GOLDEN: &str = include_str!("../../boxology-cli-core/tests/bxw.golden");
 const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086 BXW0091 BXW0092 BXW0093 BXW0094 BXW0095 BXW0096 BXW0097 BXW0103 BXW0104 BXW0105 BXW0106 BXW0107";
 const LIB_HASH: u64 = 10_011_101_472_945_035_346;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
@@ -456,13 +461,13 @@ fn source_surface_is_exact_and_mutation_resistant() {
         let mut mutant = files.clone();
         mutant.push(extra.to_owned());
         mutant.sort_unstable();
-        assert!(!package_is(PACKAGE, &mutant));
+        assert!(!package_is(PACKAGE, PACKAGE_HASH, &mutant, FILES));
     }
     for mutant in [
         format!("{PACKAGE}\n[lib]\npath = \"src/walk.rs\"\n"),
         format!("{PACKAGE}\n[[example]]\nname = \"escape\"\npath = \"src/lib.rs\"\n"),
     ] {
-        assert!(!package_is(&mutant, &files));
+        assert!(!package_is(&mutant, PACKAGE_HASH, &files, FILES));
     }
 }
 fn rejects<const N: usize, const M: usize>(bodies: [&str; N], hashes: [u64; M]) {
@@ -561,14 +566,24 @@ impl<'ast> Visit<'ast> for Lock {
 }
 fn locked() -> bool {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let core = root.join("../boxology-cli-core");
     let mut files = Vec::new();
     let inventory = package_files(root, root, &mut files);
     files.sort_unstable();
+    let mut core_files = Vec::new();
+    let core_inventory = package_files(&core, &core, &mut core_files);
+    core_files.sort_unstable();
     inventory
-        && package_is(PACKAGE, &files)
+        && core_inventory
+        && package_is(PACKAGE, PACKAGE_HASH, &files, FILES)
+        && package_is(CORE_PACKAGE, CORE_PACKAGE_HASH, &core_files, CORE_FILES)
         && fs::read_to_string(root.join("Cargo.toml")).is_ok_and(|text| text == PACKAGE)
+        && fs::read_to_string(core.join("Cargo.toml")).is_ok_and(|text| text == CORE_PACKAGE)
+        && fs::read_to_string(root.join("src/lib.rs")).is_ok_and(|text| text == FACADE)
+        && hash(FACADE) == FACADE_HASH
         && SOURCES.iter().all(|(name, source)| {
-            fs::read_to_string(root.join("src").join(name)).is_ok_and(|text| text == *source)
+            let owner = if *name == "main.rs" { root } else { &core };
+            fs::read_to_string(owner.join("src").join(name)).is_ok_and(|text| text == *source)
         })
         && locked_sources(SOURCES, HASHES, GOLDEN)
 }
@@ -597,8 +612,8 @@ fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool
     }
     true
 }
-fn package_is(manifest: &str, files: &[String]) -> bool {
-    hash(manifest) == PACKAGE_HASH && files.join(" ") == FILES
+fn package_is(manifest: &str, expected_hash: u64, files: &[String], expected_files: &str) -> bool {
+    hash(manifest) == expected_hash && files.join(" ") == expected_files
 }
 fn locked_sources(sources: &[(&str, &str)], hashes: impl AsRef<[u64]>, golden: &str) -> bool {
     let hashes = hashes.as_ref();
