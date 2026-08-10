@@ -22,9 +22,9 @@
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:004bee1dabbe8c770d3207bf7a05d9f77507c887ec4b96fad2853891a72ca9f8"
+    "semantic_digest": "sha256:985294bcb527e9ddc2ad924f6e0e30881386e861051a812df3efe85e88af8f3f"
   },
-  "revision": "sha256:6802e140ef409a595b79a8e5b0771e610feec2858cf82fbbf0bb3961dfbcbdbf",
+  "revision": "sha256:6493baa7fa8929bb296b82911222bbd0b4b74a96cb0d80c17a310d0bee2fc575",
   "schema_format": 1,
   "types": [
     {
@@ -68,6 +68,32 @@
         {
           "deprecation": null,
           "docs": [],
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "old_text",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "new_text",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "EditRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
           "name": "read",
           "type": "Option<ReadRequest>"
         },
@@ -76,6 +102,12 @@
           "docs": [],
           "name": "write",
           "type": "Option<WriteRequest>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "edit",
+          "type": "Option<EditRequest>"
         }
       ],
       "kind": "struct",
@@ -96,6 +128,11 @@
           "deprecation": null,
           "docs": [],
           "name": "Write"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Edit"
         }
       ]
     },

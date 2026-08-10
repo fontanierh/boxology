@@ -12,8 +12,9 @@ static STAGE: AtomicU64 = AtomicU64::new(0);
 boxology::contract! {
     pub struct ReadRequest { pub path: String }
     pub struct WriteRequest { pub path: String, pub content: String }
-    pub struct ExecuteRequest { pub read: Option<ReadRequest>, pub write: Option<WriteRequest> }
-    pub enum FileOperation { Read, Write }
+    pub struct EditRequest { pub path: String, pub old_text: String, pub new_text: String }
+    pub struct ExecuteRequest { pub read: Option<ReadRequest>, pub write: Option<WriteRequest>, pub edit: Option<EditRequest> }
+    pub enum FileOperation { Read, Write, Edit }
     pub struct FileResult { pub operation: FileOperation, pub path: String, pub content: Option<String>, pub bytes: u64, pub changed: bool }
     pub struct ExecuteResult { pub file: Option<FileResult> }
     pub enum ToolFailureClass { Input, Boundary, Missing, Conflict, Resource, Local, Cancelled, Deadline }
@@ -36,6 +37,11 @@ pub struct ToolRunnerService {
     mutation: Mutex<()>,
     #[cfg(test)]
     fault: Option<Fault>,
+    #[cfg(test)]
+    edit_pause: Option<(
+        std::sync::Arc<std::sync::Barrier>,
+        std::sync::Arc<std::sync::Barrier>,
+    )>,
 }
 
 #[rustfmt::skip]
@@ -53,7 +59,8 @@ impl ToolRunnerService {
         if canonical != root {
             return Err(fail(ToolFailureClass::Boundary, "outside_root", false));
         }
-        Ok(Self { root, mutation: Mutex::new(()), #[cfg(test)] fault: None })
+        Ok(Self { root, mutation: Mutex::new(()), #[cfg(test)] fault: None,
+            #[cfg(test)] edit_pause: None })
     }
 
     fn resolve(&self, raw: &str) -> Result<(PathBuf, String), ToolFailure> {
@@ -258,6 +265,47 @@ impl ToolRunnerService {
         Ok(file(FileOperation::Write, path, None, request.content.len(), true))
     }
 
+    fn edit(&self, context: &boxology::CallContext,
+        request: EditRequest) -> Result<FileResult, ToolFailure> {
+        if request.old_text.is_empty() {
+            return Err(fail(ToolFailureClass::Input, "edit_old_empty", false));
+        }
+        if request.old_text.len() > LIMIT || request.new_text.len() > LIMIT {
+            return Err(fail(ToolFailureClass::Resource, "edit_text_too_large", false));
+        }
+        if request.old_text == request.new_text {
+            return Err(fail(ToolFailureClass::Input, "edit_no_change", false));
+        }
+        let (target, path) = self.resolve(&request.path)?;
+        let _mutation = self.mutation.lock()
+            .map_err(|_| fail(ToolFailureClass::Local, "local_io", false))?;
+        #[cfg(test)]
+        if let Some((entered, release)) = &self.edit_pause { entered.wait(); release.wait(); }
+        let metadata = self.file_metadata(&target, false)?;
+        let existing = self.read_file(context, &target, false)?;
+        let content = std::str::from_utf8(&existing)
+            .map_err(|_| fail(ToolFailureClass::Input, "not_utf8", false))?;
+        let mut matches = content.match_indices(&request.old_text);
+        let index = matches.next().map(|(index, _)| index)
+            .ok_or_else(|| fail(ToolFailureClass::Conflict, "edit_not_found", false))?;
+        if matches.next().is_some() {
+            return Err(fail(ToolFailureClass::Conflict, "edit_ambiguous", false));
+        }
+        let final_len = existing.len().checked_sub(request.old_text.len())
+            .and_then(|length| length.checked_add(request.new_text.len()))
+            .ok_or_else(|| fail(ToolFailureClass::Resource, "file_too_large", false))?;
+        if final_len > LIMIT {
+            return Err(fail(ToolFailureClass::Resource, "file_too_large", false));
+        }
+        let mut replacement = String::with_capacity(final_len);
+        replacement.push_str(&content[..index]);
+        replacement.push_str(&request.new_text);
+        replacement.push_str(&content[index + request.old_text.len()..]);
+        self.replace(context, &target, replacement.as_bytes(), Some(&existing),
+            Some(metadata.permissions()), false)?;
+        Ok(file(FileOperation::Edit, path, None, replacement.len(), true))
+    }
+
 }
 
 #[boxology::implementation]
@@ -268,15 +316,16 @@ impl ToolRunnerService {
         context: boxology::CallContext,
         request: ExecuteRequest,
     ) -> Result<ExecuteOutcome, ExecuteError> {
-        let operation = match (request.read, request.write) {
-            (Some(request), None) => self.resolve(&request.path).and_then(|(target, path)| {
+        let operation = match (request.read, request.write, request.edit) {
+            (Some(request), None, None) => self.resolve(&request.path).and_then(|(target, path)| {
                 let bytes = self.read_file(&context, &target, false)?;
                 let content = String::from_utf8(bytes)
                     .map_err(|_| fail(ToolFailureClass::Input, "not_utf8", false))?;
                 let length = content.len();
                 Ok(file(FileOperation::Read, path, Some(content), length, false))
             }),
-            (None, Some(request)) => self.write(&context, request),
+            (None, Some(request), None) => self.write(&context, request),
+            (None, None, Some(request)) => self.edit(&context, request),
             _ => Err(fail(ToolFailureClass::Input, "request_invalid", false)),
         };
         Ok(match operation {
