@@ -66,6 +66,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           run_rust=true
+          run_xtask=false
           run_workspace_check=false
           run_reaper=false
           run_fixtures=false
@@ -73,7 +74,7 @@ jobs:
           changed_manifests="$RUNNER_TEMP/boxology-changed-manifests"
           : > "$changed_manifests"
           if test "$EVENT_NAME" = pull_request; then
-            changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+            changed="$(git diff --name-only --no-renames "$BASE_SHA" HEAD)"
             if test -n "$changed" && ! grep -Evq '\.md$' <<<"$changed"; then
               run_rust=false
             fi
@@ -85,6 +86,9 @@ jobs:
             fi
             if grep -Eq '^ops/delivery-worker/' <<<"$changed"; then
               run_delivery_worker=true
+            fi
+            if grep -Eq '^(crates/xtask/|\.github/workflows/|ops/ci-runner/|\.agents/skills/boxology/SKILL\.md$)' <<<"$changed"; then
+              run_xtask=true
             fi
             if test "$run_rust" = true; then
               if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$' <<<"$changed"; then
@@ -108,15 +112,17 @@ jobs:
             fi
           fi
           echo "run_rust=$run_rust" | tee -a "$GITHUB_OUTPUT"
+          echo "run_xtask=$run_xtask" | tee -a "$GITHUB_OUTPUT"
           echo "run_workspace_check=$run_workspace_check" | tee -a "$GITHUB_OUTPUT"
           echo "run_reaper=$run_reaper" | tee -a "$GITHUB_OUTPUT"
           echo "run_fixtures=$run_fixtures" | tee -a "$GITHUB_OUTPUT"
           echo "run_delivery_worker=$run_delivery_worker" | tee -a "$GITHUB_OUTPUT"
 
-      # This catches repository-policy regressions on every code PR and is much
-      # cheaper than executing every package's integration suite.
+      # CI-authority changes exercise the repository unit suite. Ordinary
+      # product changes retain live hygiene plus their directly changed crates;
+      # deep validation owns the redundant xtask unit pass.
       - name: Test repository invariants
-        if: steps.scope.outputs.run_rust == 'true'
+        if: steps.scope.outputs.run_xtask == 'true'
         run: cargo test -p xtask --locked
 
       - name: Test changed crates

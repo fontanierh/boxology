@@ -55,11 +55,19 @@ but no active workflow currently compares platforms.
 
 ### D3 — Required pull-request validation
 
-`.github/workflows/pr.yml` has one required `validation` job on
-`[self-hosted, macOS, ARM64, boxology-macos-pr]`, with a 20-minute timeout and no Actions cache.
+`.github/workflows/pr.yml` has one required `validation` job with a 20-minute timeout and no
+Actions cache. Its support/configuration PR uses `[self-hosted, macOS, ARM64,
+boxology-macos-pr]`; after that merged configuration is deployed and the new label is verified
+online, an exact two-file change selects `[self-hosted, macOS, ARM64,
+boxology-macos-pr-primary]` in the workflow and updates `REQUIRED_PR_RUNNER_LABEL` in its xtask
+integrity test. This gives required PRs one persistent Cargo cache instead of randomly choosing
+among four cache islands while making the routing change self-validating.
 It always runs `ci-hygiene` against the pull-request base. Markdown-only changes stop there.
 
-Code changes run the xtask invariant suite and ordinary tests for directly changed crates. The CLI
+Code changes run ordinary tests for directly changed crates. The xtask unit suite runs only for
+changes to xtask, workflows, runner operations, or the embedded Boxology skill source; the live
+hygiene command remains universal and deep validation retains the complete suite. Changed-path
+inventory disables rename detection, so an authority rename exposes both old and new paths. The CLI
 end-to-end target, CLI/workspace/classifier surface locks, and generator-model purity lock are
 dispatch-only regardless of the changed path; their four crates retain library/binary tests,
 explicit doctests, and every other integration target in required CI. `boxology-init` likewise
@@ -82,9 +90,13 @@ weakened policy-only mode.
 
 Four native Apple-silicon Mac JIT slots are active. Each slot has an isolated disposable checkout
 and a private persistent Cargo target cache; concurrency is bounded to four build/test jobs per
-slot. Linux JIT source and assets remain in `ops/ci-runner/`, but Linux services, registrations,
-and the Colima profile are dormant. There is no active Linux, x86, or cross-platform workflow.
-Any reactivation is deliberate [#525](https://github.com/fontanierh/boxology/issues/525) work.
+slot. The checked-in base service alone also configures the `boxology-macos-pr-primary` label for
+required-PR cache affinity; slots 2–4 retain the generic label for deep, advisory, smoke, and
+overflow capacity. Routing remains generic until the merged service is deployed and its exact
+label is verified, so the configuration and routing changes each self-validate.
+Linux JIT source and assets remain in `ops/ci-runner/`, but Linux services, registrations, and the
+Colima profile are dormant. There is no active Linux, x86, or cross-platform workflow. Any
+reactivation is deliberate [#525](https://github.com/fontanierh/boxology/issues/525) work.
 
 Runner labels are capabilities, not immutable platform images. Actions are pinned by full commit
 SHA; checkout does not persist credentials. Native host execution is trusted only for this private

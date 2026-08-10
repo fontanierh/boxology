@@ -13,6 +13,7 @@
     <key>KEYCHAIN_SERVICE</key><string>com.fontanierh.boxology-ci-runner</string>
     <key>KEYCHAIN_ACCOUNT</key><string>jim</string>
     <key>MAX_RUNNERS</key><string>4</string>
+    <key>RUNNER_EXTRA_LABEL</key><string>boxology-macos-pr-primary</string>
     <key>PATH</key><string>/Users/jim/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>

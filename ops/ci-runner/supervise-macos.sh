@@ -15,6 +15,7 @@ RUST_VERSION=1.97.1
 CARGO_DENY_VERSION=0.20.2
 IMAGE_ID=boxology-macos-arm64-pr
 RUNNER_LABEL=boxology-macos-pr
+RUNNER_EXTRA_LABEL="${RUNNER_EXTRA_LABEL:-}"
 IMAGE_OS=macos-arm64-host
 MACOS_VERSION="$(/usr/bin/sw_vers -productVersion)"
 IMAGE_VERSION="macOS-${MACOS_VERSION}-arm64-runner-${RUNNER_VERSION}-rust-${RUST_VERSION}-deny-${CARGO_DENY_VERSION}"
@@ -29,6 +30,7 @@ RUNNER_NAME= RUNNER_ID= runner_pid= run_dir= token=
 [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 64
 [[ "$RUNNER_GROUP_ID" =~ ^[0-9]+$ ]] || exit 64
 [[ "$MAX_RUNNERS" =~ ^[0-9]+$ && "$MAX_RUNNERS" -ge 1 && "$MAX_RUNNERS" -le 90 ]] || exit 64
+[[ -z "$RUNNER_EXTRA_LABEL" || ( "$RUNNER_EXTRA_LABEL" =~ ^[A-Za-z0-9_.-]+$ && "$RUNNER_EXTRA_LABEL" != "$RUNNER_LABEL" ) ]] || exit 64
 [[ "$(uname -m)" = arm64 ]] || exit 69
 for tool in curl jq security uuidgen shasum sw_vers; do command -v "$tool" >/dev/null || exit 69; done
 [[ -x "$RUNNER_BASE/run.sh" && -x "$RUNNER_BASE/bin/Runner.Listener" ]] || exit 69
@@ -148,7 +150,12 @@ check_repo() {
   jq -e '(.total_count | numbers) < 100' <<<"$runners" >/dev/null || return 1
   jq -e --arg label "$RUNNER_LABEL" --argjson max "$MAX_RUNNERS" \
     '([.runners[] | select(.labels | any(.name == $label))] | length) < $max' \
-    <<<"$runners" >/dev/null
+    <<<"$runners" >/dev/null || return 1
+  if [[ -n "$RUNNER_EXTRA_LABEL" ]]; then
+    jq -e --arg label "$RUNNER_EXTRA_LABEL" \
+      '([.runners[] | select(.labels | any(.name == $label))] | length) < 1' \
+      <<<"$runners" >/dev/null || return 1
+  fi
 }
 verify_runner_base() {
   [[ "$(cat "$RUNNER_BASE/.boxology-runner-sha256" 2>/dev/null)" = "$RUNNER_SHA256" ]] || return 1
@@ -206,8 +213,8 @@ run_once() {
   run_id="$(uuidgen | tr '[:upper:]' '[:lower:]')" || return 1
   [[ "$run_id" =~ ^[0-9a-f-]{36}$ ]] || return 1
   RUNNER_NAME="$IMAGE_ID-$run_id"
-  payload="$(jq -cn --arg name "$RUNNER_NAME" --argjson group "$RUNNER_GROUP_ID" --arg label "$RUNNER_LABEL" \
-    '{name:$name,runner_group_id:$group,labels:["self-hosted","macOS","ARM64",$label],work_folder:"_work"}')" || return 1
+  payload="$(jq -cn --arg name "$RUNNER_NAME" --argjson group "$RUNNER_GROUP_ID" --arg label "$RUNNER_LABEL" --arg extra "$RUNNER_EXTRA_LABEL" \
+    '{name:$name,runner_group_id:$group,labels:(["self-hosted","macOS","ARM64",$label] + (if $extra == "" then [] else [$extra] end)),work_folder:"_work"}')" || return 1
   response="$(api POST /actions/runners/generate-jitconfig "$payload")" || { reconcile_jit_runner; return 1; }
   validate_jit_response "$RUNNER_NAME" "$response" || { reconcile_jit_runner; return 1; }
   RUNNER_ID="$(jq -er '.runner.id | numbers' <<<"$response")" || { reconcile_jit_runner; return 1; }
