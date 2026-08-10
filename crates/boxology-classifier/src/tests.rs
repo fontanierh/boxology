@@ -1,8 +1,9 @@
 use super::*;
 use boxology_contract::{BoxId, CapabilityName, ExposureLevel, Idempotency};
 use boxology_schema::{
-    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDocument, SchemaField,
-    SchemaPayload, SchemaType, SchemaVariant, Shape,
+    BoundaryLeaf, InputSlot, OutputSlot, Provenance, SchemaCapability, SchemaDataField,
+    SchemaDataShape, SchemaDataType, SchemaDataVariant, SchemaDocument, SchemaField, SchemaPayload,
+    SchemaType, SchemaVariant, Shape, TypeExpression,
 };
 use serde_json::json;
 
@@ -180,6 +181,84 @@ fn shaped_document(capabilities: usize, types: usize) -> SchemaDocument {
         add_type(&mut document);
     }
     document
+}
+
+fn structured_document() -> SchemaDocument {
+    let mut document = document("hello");
+    document.capabilities[0].input.leaf = TypeExpression::Local("Profile".into());
+    document.capabilities[0].output.leaf = TypeExpression::Option(Box::new(TypeExpression::Vec(
+        Box::new(TypeExpression::Local("Profile".into())),
+    )));
+    document.data_types = vec![
+        SchemaDataType {
+            name: "Mood".into(),
+            docs: Vec::new(),
+            deprecation: None,
+            shape: SchemaDataShape::Enum(vec![data_variant("Calm"), data_variant("Busy")]),
+        },
+        SchemaDataType {
+            name: "Profile".into(),
+            docs: Vec::new(),
+            deprecation: None,
+            shape: SchemaDataShape::Struct(vec![
+                data_field("name", TypeExpression::String),
+                data_field(
+                    "mood",
+                    TypeExpression::Option(Box::new(TypeExpression::Local("Mood".into()))),
+                ),
+                data_field(
+                    "tags",
+                    TypeExpression::Vec(Box::new(TypeExpression::String)),
+                ),
+            ]),
+        },
+        SchemaDataType {
+            name: "Archive".into(),
+            docs: Vec::new(),
+            deprecation: None,
+            shape: SchemaDataShape::Struct(Vec::new()),
+        },
+    ];
+    document
+}
+
+fn data_field(name: &str, ty: TypeExpression) -> SchemaDataField {
+    SchemaDataField {
+        name: name.into(),
+        docs: Vec::new(),
+        deprecation: None,
+        ty,
+    }
+}
+
+fn data_variant(name: &str) -> SchemaDataVariant {
+    SchemaDataVariant {
+        name: name.into(),
+        docs: Vec::new(),
+        deprecation: None,
+    }
+}
+
+fn data_type_mut<'a>(document: &'a mut SchemaDocument, name: &str) -> &'a mut SchemaDataType {
+    document
+        .data_types
+        .iter_mut()
+        .find(|item| item.name == name)
+        .unwrap()
+}
+
+fn profile_fields(document: &mut SchemaDocument) -> &mut Vec<SchemaDataField> {
+    let SchemaDataShape::Struct(fields) = &mut data_type_mut(document, "Profile").shape else {
+        unreachable!("Profile is a struct")
+    };
+    fields
+}
+
+fn mood_variants(document: &mut SchemaDocument) -> &mut Vec<SchemaDataVariant> {
+    let SchemaDataShape::Enum(variants) = &mut data_type_mut(document, "Mood").shape else {
+        unreachable!("Mood is an enum")
+    };
+    variants
 }
 
 #[test]
@@ -1041,6 +1120,125 @@ fn revision_only_difference_is_integrity_silence() {
     assert_eq!(diagnostic.code(), "BXC0038");
     assert_eq!(diagnostic.location(), "");
     assert_eq!(diagnostic.to_string(), INTEGRITY_SILENCE);
+}
+
+#[test]
+fn structured_reachability_uses_both_graphs_and_reaches_a_fixed_point() {
+    let mut base = structured_document();
+    base.data_types.push(SchemaDataType {
+        name: "Envelope".into(),
+        docs: Vec::new(),
+        deprecation: None,
+        shape: SchemaDataShape::Struct(vec![data_field(
+            "profile",
+            TypeExpression::Local("Profile".into()),
+        )]),
+    });
+    base.capabilities[0].input.leaf = TypeExpression::Option(Box::new(TypeExpression::Vec(
+        Box::new(TypeExpression::Local("Envelope".into())),
+    )));
+    base.capabilities[0].output.leaf = TypeExpression::Local("Envelope".into());
+    let mut submitted = base.clone();
+    profile_fields(&mut base)[1].ty = TypeExpression::String;
+    let envelope = submitted.data_types.pop().unwrap();
+    submitted.data_types.insert(1, envelope);
+    profile_fields(&mut submitted).push(data_field(
+        "envelope",
+        TypeExpression::Local("Envelope".into()),
+    ));
+    let SchemaDataShape::Struct(fields) = &mut data_type_mut(&mut submitted, "Envelope").shape
+    else {
+        unreachable!("Envelope is a struct")
+    };
+    fields[0].ty = TypeExpression::String;
+
+    let roles = reachability(&base, &submitted);
+    let both = Roles {
+        input: true,
+        output: true,
+    };
+    assert_eq!(roles_for(&roles, "Envelope"), both);
+    assert_eq!(
+        roles_for(&roles, "Profile"),
+        both,
+        "base-only edge propagates"
+    );
+    assert_eq!(
+        roles_for(&roles, "Mood"),
+        both,
+        "submitted-only edge propagates transitively"
+    );
+    assert_eq!(
+        roles_for(&roles, "Archive"),
+        Roles {
+            input: false,
+            output: false
+        }
+    );
+    assert_eq!(
+        roles_for(&roles, "GreetError"),
+        Roles {
+            input: false,
+            output: true
+        }
+    );
+}
+
+fn assert_data_mutation(mutate: fn(&mut SchemaDocument), expected: Vec<DataChange>) {
+    let base = structured_document();
+    let mut submitted = base.clone();
+    mutate(&mut submitted);
+    submitted.revision = OTHER_REVISION.into();
+    let roles = reachability(&base, &submitted);
+    assert_eq!(data_changes(&base, &submitted, &roles), expected);
+    assert_unclassified_pair(base, submitted);
+}
+
+#[rustfmt::skip]
+#[test]
+fn structured_raw_change_corpus_is_exact_and_fail_closed() {
+    let none = Roles { input: false, output: false };
+    let both = Roles { input: true, output: true };
+    type Case = (fn(&mut SchemaDocument), Vec<DataChange>);
+    let cases: Vec<Case> = vec![
+        (|d| d.data_types.push(SchemaDataType { name: "Cache".into(), docs: Vec::new(), deprecation: None, shape: SchemaDataShape::Struct(Vec::new()) }), vec![DataChange::TypeAdded { name: "Cache".into(), roles: none }]),
+        (|d| { d.data_types.pop(); }, vec![DataChange::TypeRemoved { name: "Archive".into(), roles: none }]),
+        (|d| data_type_mut(d, "Archive").name = "Vault".into(), vec![DataChange::TypeRemoved { name: "Archive".into(), roles: none }, DataChange::TypeAdded { name: "Vault".into(), roles: none }]),
+        (|d| d.data_types.swap(1, 2), vec![DataChange::TypesReordered]),
+        (|d| data_type_mut(d, "Archive").shape = SchemaDataShape::Enum(vec![data_variant("Stored")]), vec![DataChange::TypeKindChanged { name: "Archive".into() }]),
+        (|d| { let item = data_type_mut(d, "Archive"); item.docs.push("docs".into()); item.deprecation = Some("old".into()); }, vec![DataChange::TypeDocsChanged { name: "Archive".into() }, DataChange::TypeDeprecationChanged { name: "Archive".into() }]),
+        (|d| profile_fields(d).push(data_field("active", TypeExpression::Bool)), vec![DataChange::FieldAdded { type_name: "Profile".into(), field_name: "active".into(), roles: both }]),
+        (|d| { profile_fields(d).pop(); }, vec![DataChange::FieldRemoved { type_name: "Profile".into(), field_name: "tags".into(), roles: both }]),
+        (|d| profile_fields(d)[0].name = "label".into(), vec![DataChange::FieldRemoved { type_name: "Profile".into(), field_name: "name".into(), roles: both }, DataChange::FieldAdded { type_name: "Profile".into(), field_name: "label".into(), roles: both }]),
+        (|d| profile_fields(d).swap(0, 2), vec![DataChange::FieldsReordered { type_name: "Profile".into() }]),
+        (|d| { let item = &mut profile_fields(d)[0]; item.docs.push("docs".into()); item.deprecation = Some("old".into()); item.ty = TypeExpression::Vec(Box::new(TypeExpression::String)); }, vec![DataChange::FieldDocsChanged { type_name: "Profile".into(), field_name: "name".into() }, DataChange::FieldDeprecationChanged { type_name: "Profile".into(), field_name: "name".into() }, DataChange::FieldTypeChanged { type_name: "Profile".into(), field_name: "name".into() }]),
+        (|d| mood_variants(d).push(data_variant("Away")), vec![DataChange::VariantAdded { type_name: "Mood".into(), variant_name: "Away".into(), roles: both }]),
+        (|d| { mood_variants(d).pop(); }, vec![DataChange::VariantRemoved { type_name: "Mood".into(), variant_name: "Busy".into(), roles: both }]),
+        (|d| mood_variants(d)[0].name = "Quiet".into(), vec![DataChange::VariantRemoved { type_name: "Mood".into(), variant_name: "Calm".into(), roles: both }, DataChange::VariantAdded { type_name: "Mood".into(), variant_name: "Quiet".into(), roles: both }]),
+        (|d| mood_variants(d).swap(0, 1), vec![DataChange::VariantsReordered { type_name: "Mood".into() }]),
+        (|d| { let item = &mut mood_variants(d)[0]; item.docs.push("docs".into()); item.deprecation = Some("old".into()); }, vec![DataChange::VariantDocsChanged { type_name: "Mood".into(), variant_name: "Calm".into() }, DataChange::VariantDeprecationChanged { type_name: "Mood".into(), variant_name: "Calm".into() }]),
+    ];
+    for (mutate, expected) in cases {
+        assert_data_mutation(mutate, expected);
+    }
+}
+
+#[rustfmt::skip]
+#[test]
+fn capability_expression_changes_keep_existing_named_findings() {
+    let base = structured_document();
+    let mut submitted = base.clone();
+    submitted.capabilities[0].input.leaf = TypeExpression::Option(Box::new(TypeExpression::Vec(Box::new(TypeExpression::Local("Profile".into())))));
+    submitted.capabilities[0].output.leaf = TypeExpression::Local("Profile".into());
+    submitted.revision = OTHER_REVISION.into();
+    assert_exact_report(
+        &classify(Some(&base), Some(&submitted)).unwrap(),
+        &[
+            e!("BXC0042", "hello.greet/input", "capability input type changed", Class::Incompatible, Some("Profile"), Some("Option<Vec<Profile>>"), None),
+            e!("BXC0043", "hello.greet/output", "capability output type changed", Class::Incompatible, Some("Option<Vec<Profile>>"), Some("Profile"), None),
+        ],
+        Class::Incompatible,
+    );
 }
 
 #[rustfmt::skip]

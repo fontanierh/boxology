@@ -11,8 +11,9 @@
 #![forbid(unsafe_code)]
 
 use boxology_schema::{
-    Diagnostic, Diagnostics, ExposureLevel, Idempotency, SchemaCapability, SchemaDocument,
-    SchemaField, SchemaPayload, SchemaType, SchemaVariant,
+    Diagnostic, Diagnostics, ExposureLevel, Idempotency, SchemaCapability, SchemaDataField,
+    SchemaDataShape, SchemaDataType, SchemaDataVariant, SchemaDocument, SchemaField, SchemaPayload,
+    SchemaType, SchemaVariant, TypeExpression,
 };
 use std::collections::BTreeMap;
 
@@ -347,7 +348,10 @@ fn classify_paired_documents(base: &SchemaDocument, submitted: &SchemaDocument) 
     let roles = reachability(base, submitted);
     let changes = type_changes(base, submitted, &roles);
     let mut findings = Vec::new();
-    let mut unclassified = false;
+    // PR3a deliberately records structured changes without assigning D5 policy. Every such raw
+    // change therefore reaches the existing fail-closed finding; PR3b consumes the exact change
+    // vocabulary and roles below.
+    let mut unclassified = !data_changes(base, submitted, &roles).is_empty();
     for change in &changes {
         match change {
             TypeChange::TypeAdded { name, roles } if roles.output => {
@@ -904,6 +908,74 @@ struct Roles {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+enum DataChange {
+    TypeAdded {
+        name: String,
+        roles: Roles,
+    },
+    TypeRemoved {
+        name: String,
+        roles: Roles,
+    },
+    TypesReordered,
+    TypeKindChanged {
+        name: String,
+    },
+    TypeDocsChanged {
+        name: String,
+    },
+    TypeDeprecationChanged {
+        name: String,
+    },
+    FieldAdded {
+        type_name: String,
+        field_name: String,
+        roles: Roles,
+    },
+    FieldRemoved {
+        type_name: String,
+        field_name: String,
+        roles: Roles,
+    },
+    FieldsReordered {
+        type_name: String,
+    },
+    FieldDocsChanged {
+        type_name: String,
+        field_name: String,
+    },
+    FieldDeprecationChanged {
+        type_name: String,
+        field_name: String,
+    },
+    FieldTypeChanged {
+        type_name: String,
+        field_name: String,
+    },
+    VariantAdded {
+        type_name: String,
+        variant_name: String,
+        roles: Roles,
+    },
+    VariantRemoved {
+        type_name: String,
+        variant_name: String,
+        roles: Roles,
+    },
+    VariantsReordered {
+        type_name: String,
+    },
+    VariantDocsChanged {
+        type_name: String,
+        variant_name: String,
+    },
+    VariantDeprecationChanged {
+        type_name: String,
+        variant_name: String,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
 enum TypeChange {
     TypeAdded {
         name: String,
@@ -1030,30 +1102,90 @@ enum CapabilityChange {
     },
 }
 
-/// Reachability over the union of both documents' capability graphs.
+/// Reachability over the union of both documents' capability and local-type graphs.
 ///
-/// Format 1 `InputSlot` / `OutputSlot` hold [`boxology_schema::BoundaryLeaf`] only, so no
-/// declared type is input-reachable; `input` is computed but always false. Typed slots land in
-/// #103 / #104. A type is output-reachable when any capability on either side names it as
-/// `error` (error enums are output-reachable).
+/// Capability expressions seed their respective role, declared errors seed output, and struct
+/// fields propagate both roles transitively through local, `Option`, and `Vec` expressions. The
+/// monotone fixed point terminates even when individually acyclic documents form a cycle in their
+/// union. Unit enums are leaves.
 fn reachability<'a>(
     base: &'a SchemaDocument,
     submitted: &'a SchemaDocument,
 ) -> BTreeMap<&'a str, Roles> {
     let mut roles = BTreeMap::new();
-    mark_error_outputs(&mut roles, base);
-    mark_error_outputs(&mut roles, submitted);
+    for document in [base, submitted] {
+        for capability in &document.capabilities {
+            mark_expression(
+                &mut roles,
+                &capability.input.leaf,
+                Roles {
+                    input: true,
+                    output: false,
+                },
+            );
+            mark_expression(
+                &mut roles,
+                &capability.output.leaf,
+                Roles {
+                    input: false,
+                    output: true,
+                },
+            );
+            mark_roles(
+                &mut roles,
+                capability.error.as_str(),
+                Roles {
+                    input: false,
+                    output: true,
+                },
+            );
+        }
+    }
+    loop {
+        let mut changed = false;
+        for document in [base, submitted] {
+            for data_type in &document.data_types {
+                let inherited = roles_for(&roles, data_type.name.as_str());
+                if let SchemaDataShape::Struct(fields) = &data_type.shape {
+                    for field in fields {
+                        changed |= mark_expression(&mut roles, &field.ty, inherited);
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     roles
 }
 
-fn mark_error_outputs<'a>(roles: &mut BTreeMap<&'a str, Roles>, document: &'a SchemaDocument) {
-    for capability in &document.capabilities {
-        let entry = roles.entry(capability.error.as_str()).or_insert(Roles {
-            input: false,
-            output: false,
-        });
-        entry.output = true;
+fn mark_expression<'a>(
+    roles: &mut BTreeMap<&'a str, Roles>,
+    expression: &'a TypeExpression,
+    inherited: Roles,
+) -> bool {
+    if !inherited.input && !inherited.output {
+        return false;
     }
+    match expression {
+        TypeExpression::Local(name) => mark_roles(roles, name, inherited),
+        TypeExpression::Option(inner) | TypeExpression::Vec(inner) => {
+            mark_expression(roles, inner, inherited)
+        }
+        _ => false,
+    }
+}
+
+fn mark_roles<'a>(roles: &mut BTreeMap<&'a str, Roles>, name: &'a str, inherited: Roles) -> bool {
+    let entry = roles.entry(name).or_insert(Roles {
+        input: false,
+        output: false,
+    });
+    let before = *entry;
+    entry.input |= inherited.input;
+    entry.output |= inherited.output;
+    *entry != before
 }
 
 fn roles_for(roles: &BTreeMap<&str, Roles>, name: &str) -> Roles {
@@ -1069,6 +1201,27 @@ fn index_types(types: &[SchemaType]) -> BTreeMap<&str, &SchemaType> {
         index.insert(schema_type.name.as_str(), schema_type);
     }
     index
+}
+
+fn index_data_types(types: &[SchemaDataType]) -> BTreeMap<&str, &SchemaDataType> {
+    types
+        .iter()
+        .map(|item| (item.name.as_str(), item))
+        .collect()
+}
+
+fn index_data_fields(fields: &[SchemaDataField]) -> BTreeMap<&str, &SchemaDataField> {
+    fields
+        .iter()
+        .map(|item| (item.name.as_str(), item))
+        .collect()
+}
+
+fn index_data_variants(variants: &[SchemaDataVariant]) -> BTreeMap<&str, &SchemaDataVariant> {
+    variants
+        .iter()
+        .map(|item| (item.name.as_str(), item))
+        .collect()
 }
 
 fn index_variants(variants: &[SchemaVariant]) -> BTreeMap<&str, &SchemaVariant> {
@@ -1106,6 +1259,200 @@ fn common_name_sequence_differs<'a, T, U>(
         }
     }
     base_common != submitted_common
+}
+
+fn data_changes(
+    base: &SchemaDocument,
+    submitted: &SchemaDocument,
+    roles: &BTreeMap<&str, Roles>,
+) -> Vec<DataChange> {
+    let mut changes = Vec::new();
+    let base_by_name = index_data_types(&base.data_types);
+    let submitted_by_name = index_data_types(&submitted.data_types);
+    for base_type in &base.data_types {
+        match submitted_by_name.get(base_type.name.as_str()) {
+            None => changes.push(DataChange::TypeRemoved {
+                name: base_type.name.clone(),
+                roles: roles_for(roles, base_type.name.as_str()),
+            }),
+            Some(submitted_type) => append_matched_data_type_changes(
+                &mut changes,
+                base_type,
+                submitted_type,
+                roles_for(roles, base_type.name.as_str()),
+            ),
+        }
+    }
+    for submitted_type in &submitted.data_types {
+        if !base_by_name.contains_key(submitted_type.name.as_str()) {
+            changes.push(DataChange::TypeAdded {
+                name: submitted_type.name.clone(),
+                roles: roles_for(roles, submitted_type.name.as_str()),
+            });
+        }
+    }
+    if common_name_sequence_differs(
+        base.data_types.iter().map(|item| item.name.as_str()),
+        submitted.data_types.iter().map(|item| item.name.as_str()),
+        &base_by_name,
+        &submitted_by_name,
+    ) {
+        changes.push(DataChange::TypesReordered);
+    }
+    changes
+}
+
+fn append_matched_data_type_changes(
+    changes: &mut Vec<DataChange>,
+    base: &SchemaDataType,
+    submitted: &SchemaDataType,
+    roles: Roles,
+) {
+    if base.docs != submitted.docs {
+        changes.push(DataChange::TypeDocsChanged {
+            name: base.name.clone(),
+        });
+    }
+    if base.deprecation != submitted.deprecation {
+        changes.push(DataChange::TypeDeprecationChanged {
+            name: base.name.clone(),
+        });
+    }
+    match (&base.shape, &submitted.shape) {
+        (SchemaDataShape::Struct(base_fields), SchemaDataShape::Struct(submitted_fields)) => {
+            append_data_field_changes(
+                changes,
+                base.name.as_str(),
+                base_fields,
+                submitted_fields,
+                roles,
+            );
+        }
+        (SchemaDataShape::Enum(base_variants), SchemaDataShape::Enum(submitted_variants)) => {
+            append_data_variant_changes(
+                changes,
+                base.name.as_str(),
+                base_variants,
+                submitted_variants,
+                roles,
+            );
+        }
+        _ => changes.push(DataChange::TypeKindChanged {
+            name: base.name.clone(),
+        }),
+    }
+}
+
+fn append_data_field_changes(
+    changes: &mut Vec<DataChange>,
+    type_name: &str,
+    base: &[SchemaDataField],
+    submitted: &[SchemaDataField],
+    roles: Roles,
+) {
+    let base_by_name = index_data_fields(base);
+    let submitted_by_name = index_data_fields(submitted);
+    for field in base {
+        match submitted_by_name.get(field.name.as_str()) {
+            None => changes.push(DataChange::FieldRemoved {
+                type_name: type_name.to_owned(),
+                field_name: field.name.clone(),
+                roles,
+            }),
+            Some(submitted_field) => {
+                if field.docs != submitted_field.docs {
+                    changes.push(DataChange::FieldDocsChanged {
+                        type_name: type_name.to_owned(),
+                        field_name: field.name.clone(),
+                    });
+                }
+                if field.deprecation != submitted_field.deprecation {
+                    changes.push(DataChange::FieldDeprecationChanged {
+                        type_name: type_name.to_owned(),
+                        field_name: field.name.clone(),
+                    });
+                }
+                if field.ty != submitted_field.ty {
+                    changes.push(DataChange::FieldTypeChanged {
+                        type_name: type_name.to_owned(),
+                        field_name: field.name.clone(),
+                    });
+                }
+            }
+        }
+    }
+    for field in submitted {
+        if !base_by_name.contains_key(field.name.as_str()) {
+            changes.push(DataChange::FieldAdded {
+                type_name: type_name.to_owned(),
+                field_name: field.name.clone(),
+                roles,
+            });
+        }
+    }
+    if common_name_sequence_differs(
+        base.iter().map(|item| item.name.as_str()),
+        submitted.iter().map(|item| item.name.as_str()),
+        &base_by_name,
+        &submitted_by_name,
+    ) {
+        changes.push(DataChange::FieldsReordered {
+            type_name: type_name.to_owned(),
+        });
+    }
+}
+
+fn append_data_variant_changes(
+    changes: &mut Vec<DataChange>,
+    type_name: &str,
+    base: &[SchemaDataVariant],
+    submitted: &[SchemaDataVariant],
+    roles: Roles,
+) {
+    let base_by_name = index_data_variants(base);
+    let submitted_by_name = index_data_variants(submitted);
+    for variant in base {
+        match submitted_by_name.get(variant.name.as_str()) {
+            None => changes.push(DataChange::VariantRemoved {
+                type_name: type_name.to_owned(),
+                variant_name: variant.name.clone(),
+                roles,
+            }),
+            Some(submitted_variant) => {
+                if variant.docs != submitted_variant.docs {
+                    changes.push(DataChange::VariantDocsChanged {
+                        type_name: type_name.to_owned(),
+                        variant_name: variant.name.clone(),
+                    });
+                }
+                if variant.deprecation != submitted_variant.deprecation {
+                    changes.push(DataChange::VariantDeprecationChanged {
+                        type_name: type_name.to_owned(),
+                        variant_name: variant.name.clone(),
+                    });
+                }
+            }
+        }
+    }
+    for variant in submitted {
+        if !base_by_name.contains_key(variant.name.as_str()) {
+            changes.push(DataChange::VariantAdded {
+                type_name: type_name.to_owned(),
+                variant_name: variant.name.clone(),
+                roles,
+            });
+        }
+    }
+    if common_name_sequence_differs(
+        base.iter().map(|item| item.name.as_str()),
+        submitted.iter().map(|item| item.name.as_str()),
+        &base_by_name,
+        &submitted_by_name,
+    ) {
+        changes.push(DataChange::VariantsReordered {
+            type_name: type_name.to_owned(),
+        });
+    }
 }
 
 fn type_changes(
