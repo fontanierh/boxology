@@ -158,6 +158,23 @@
       "deprecation": null,
       "docs": [],
       "error": "SendTextError",
+      "id": "telegram.listen_start",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "ListenStartRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "listen_start",
+      "output": {
+        "type": "ListenStartOutcome"
+      },
+      "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
       "id": "telegram.ack",
       "idempotency": "inherent",
       "input": {
@@ -192,9 +209,9 @@
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:3ca5d9d120e5b1b1eba632c2faba09d27608b8094a45cdd0d4e6efdd49e4a50d"
+    "semantic_digest": "sha256:9054c5510143625b9a345387d750e67c69a96970831094337197d7ab811a97df"
   },
-  "revision": "sha256:a70ad698d94adbb88fe9328bb3f068bfa44af5480deee485d16c411db4a16587",
+  "revision": "sha256:c0b475b9507825940ab7fafd98d37e1a911712012ac6fa4afa2873376dda8703",
   "schema_format": 1,
   "types": [
     {
@@ -1020,6 +1037,53 @@
       ],
       "kind": "struct",
       "name": "PollOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [],
+      "kind": "struct",
+      "name": "ListenStartRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "next_offset",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "unhandled",
+          "type": "u64"
+        }
+      ],
+      "kind": "struct",
+      "name": "ListenStartReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "startup",
+          "type": "Option<ListenStartReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ListenStartOutcome"
     },
     {
       "deprecation": null,

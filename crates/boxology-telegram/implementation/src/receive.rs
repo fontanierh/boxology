@@ -55,6 +55,10 @@ pub(crate) fn poll_typed(command: PollCommand) -> Result<PollResult, AppError> {
     poll_command(command, true)
 }
 
+pub(crate) fn poll_typed_locked(command: PollCommand) -> Result<PollResult, AppError> {
+    poll_command(command, false)
+}
+
 fn poll_command(command: PollCommand, acquire_consumer: bool) -> Result<PollResult, AppError> {
     let timeout = command.timeout_seconds.unwrap_or(30);
     if timeout > 50 {

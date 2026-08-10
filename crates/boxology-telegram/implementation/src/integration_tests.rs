@@ -250,7 +250,7 @@ fn assembled_telegram(
     let transport = Arc::new(StubTransport::new());
     let mut builder = CompositionBuilder::new();
     builder.add_box(descriptor, |imports| {
-        generated::factory(TelegramService, imports)
+        generated::factory(TelegramService::default(), imports)
     });
     for capability in capabilities {
         builder.expose(
@@ -267,6 +267,112 @@ fn assembled_telegram(
         ExposureTarget(runtime.exposures().to_vec()),
     ));
     (composition, telegram)
+}
+
+#[test]
+fn generated_listen_start_gates_disabled_before_local_or_network_authority() {
+    let context = Context::new(vec![]);
+    let untouched = context.root.join("disabled-listener-must-not-exist");
+    unsafe {
+        std::env::remove_var(ENABLED_VARIABLE);
+        std::env::remove_var("BOXOLOGY_TELEGRAM_BOT_TOKEN");
+        std::env::set_var("BOXOLOGY_TELEGRAM_HOME", &untouched);
+    }
+    let (composition, telegram) = assembled_telegram(&["listen_start"]);
+    let outcome = run_ready(telegram.listen_start(
+        call_context(),
+        boxology_generated_contract::ListenStartRequest {},
+    ))
+    .unwrap();
+    assert_eq!(outcome.startup, None);
+    assert_eq!(
+        outcome.error,
+        Some(contract_error(
+            "telegram_disabled",
+            "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1",
+            boxology_generated_contract::FailureClass::Authorization,
+            false,
+            None,
+        ))
+    );
+    assert!(!untouched.exists());
+    assert_eq!(context.fake.request_count(), 0);
+    drop(telegram);
+    drop(composition);
+}
+
+#[test]
+fn generated_listener_retains_one_lease_for_startup_and_poll_until_drop() {
+    let context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    unhandled_event(&paths, "tg:40:4", 40);
+    state::update(&paths, |state| {
+        state.next_offset = 42;
+        state.events.push(EventRecord {
+            event_id: "tg:41:5".into(),
+            update_id: 41,
+            kind: "text".into(),
+            text: "handled context".into(),
+            received_at: 2,
+            handled: true,
+            reply_to: None,
+            ask_id: None,
+            lifecycle_key: None,
+            choice: None,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let (composition, telegram) = assembled_telegram(&["listen_start", "poll"]);
+    let started = run_ready(telegram.listen_start(
+        call_context(),
+        boxology_generated_contract::ListenStartRequest {},
+    ))
+    .unwrap();
+    assert_eq!(started.error, None);
+    assert_eq!(
+        started.startup,
+        Some(boxology_generated_contract::ListenStartReceipt {
+            next_offset: 42,
+            unhandled: 1,
+        })
+    );
+    let (second_composition, second_handle) = assembled_telegram(&["listen_start"]);
+    let second = run_ready(second_handle.listen_start(
+        call_context(),
+        boxology_generated_contract::ListenStartRequest {},
+    ))
+    .unwrap();
+    assert_eq!(second.startup, None);
+    assert_eq!(
+        second.error,
+        Some(contract_error(
+            "consumer_locked",
+            "another local consumer holds the lock",
+            boxology_generated_contract::FailureClass::Conflict,
+            false,
+            None,
+        ))
+    );
+    drop(second_handle);
+    drop(second_composition);
+
+    let polled = run_ready(telegram.poll(
+        call_context(),
+        boxology_generated_contract::PollRequest {
+            timeout_seconds: Some(0),
+        },
+    ))
+    .unwrap();
+    assert_eq!(polled.error, None);
+    assert_eq!(polled.result.unwrap().event.unwrap().event_id, "tg:40:4");
+    assert_eq!(context.fake.request_count(), 0);
+
+    drop(telegram);
+    drop(composition);
+    let released = state::ConsumerLock::acquire(&paths).unwrap();
+    drop(released);
 }
 
 #[test]
