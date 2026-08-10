@@ -54,3 +54,4 @@ The generated README owns the invocation contract. Its current end-to-end comman
 - [Canonical capability contract](boxology-details/09-capability-contract.md)
 - [Strategy review and self-hosting ladder](boxology-details/10-strategy-review.md)
 - [V0 streams](boxology-details/11-v0-streams.md)
+- [Post-V0 self-hosting roadmap](boxology-details/12-post-v0-self-hosting-roadmap.md)
