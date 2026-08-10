@@ -16,7 +16,7 @@
 #![forbid(unsafe_code)]
 
 // `BXC####` allocation, recorded so S4's slices cannot collide or strand gaps. The strict reader
-// claims BXC0001–BXC0023 and BXC0029–BXC0030, the whole format-1 read inventory: BXC0001–BXC0006 the document gates,
+// claims BXC0001–BXC0023, BXC0029–BXC0030, and BXC0053–BXC0062, the whole format-1 read inventory: BXC0001–BXC0006 the document gates,
 // with unknown key, missing key, and wrong type generic across every level rather than repeated
 // per level (`boxology-manifest`'s shape, keeping the initial read inventory compact);
 // BXC0007 and BXC0008 the exposure and idempotency spelling gates; BXC0009 the revision spelling; BXC0010–BXC0014
@@ -25,7 +25,8 @@
 // are likewise registered here — with constructors and rule_of/source_of arms — but emitted and
 // reachability-proven by the classifier. The classifier owns BXC0026–BXC0028, BXC0031–BXC0036,
 // and BXC0039–BXC0052 as reserved findings with no rule-text arms here; BXC0029–BXC0030 remain
-// named-payload-field rules.
+// named-payload-field rules; BXC0053–BXC0062 cover structured declaration grammar and identity,
+// so the next planned classifier allocation begins at BXC0063.
 //
 // BXC0007 and BXC0008 accept the exposure and idempotency spellings S2 D3 lists and reject every
 // other spelling. Widening the emitted grammar must widen this reader in the same change, or
@@ -143,14 +144,14 @@ impl Provenance {
 pub struct InputSlot {
     /// The declared parameter name.
     pub name: String,
-    /// The parameter's boundary leaf type.
+    /// The parameter's boundary type expression.
     pub leaf: BoundaryLeaf,
 }
 
 /// One capability's output slot, which format 1 names but does not name a parameter for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputSlot {
-    /// The output's boundary leaf type.
+    /// The output's boundary type expression.
     pub leaf: BoundaryLeaf,
 }
 
@@ -267,7 +268,7 @@ pub struct SchemaVariant {
     pub payload: SchemaPayload,
 }
 
-/// One declared type of a format-1 schema document; format 1 declares error types only.
+/// The sole declared error type of a format-1 schema document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaType {
     /// The type's declared identifier.

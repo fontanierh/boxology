@@ -1,4 +1,4 @@
-use boxology_schema::{BoundaryLeaf, SchemaDocument};
+use boxology_schema::{BoundaryLeaf, SchemaDataShape, SchemaDocument, TypeExpression};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -251,4 +251,39 @@ fn checked_in_s2_schemas_parse_and_round_trip() {
         );
         assert_semantics(&document, case);
     }
+}
+
+#[test]
+fn structured_document_is_readable_through_the_public_seam() {
+    let mut value: serde_json::Value = serde_json::from_slice(CASES[1].bytes).unwrap();
+    let error = value["types"].as_array_mut().unwrap().pop().unwrap();
+    value["types"] = serde_json::json!([
+        {"kind": "enum", "name": "Mode", "docs": [], "deprecation": null,
+         "variants": [{"name": "Fast", "docs": [], "deprecation": null}]},
+        {"kind": "struct", "name": "Request", "docs": [], "deprecation": null, "fields": []},
+        error
+    ]);
+    value["capabilities"][0]["input"]["type"] = serde_json::json!("Request");
+    value["capabilities"][0]["output"]["type"] = serde_json::json!("Option<Vec<Mode>>");
+
+    let document = SchemaDocument::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        document.data_types[0].shape,
+        SchemaDataShape::Enum(_)
+    ));
+    assert!(
+        matches!(document.data_types[1].shape, SchemaDataShape::Struct(ref fields) if fields.is_empty())
+    );
+    assert_eq!(
+        document.capabilities[0].input.leaf,
+        TypeExpression::Local("Request".into())
+    );
+    assert_eq!(
+        document.capabilities[0].output.leaf.canonical_name(),
+        "Option<Vec<Mode>>"
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&document.canonical_bytes()).unwrap(),
+        value
+    );
 }
