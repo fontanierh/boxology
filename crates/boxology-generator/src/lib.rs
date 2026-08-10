@@ -1011,8 +1011,8 @@ fn import_descriptors(imports: &[boxology_generator_model::ImportModel]) -> Stri
 
 /// Emits the adapter's typed import surface: a `{BPascal}Import` wrapper per imported box, a
 /// `{APascal}Imports` bundle, and a `typed_imports(&Imports)` converter, so box A can call an
-/// imported capability with typed leaf I/O — level 2 (leaf-typed I/O; the error stays
-/// `ErasedCallError`, foreign typed errors deferred). It has no dependency on box B's contract crate.
+/// imported capability with typed I/O from the provider contract crate; foreign errors stay
+/// erased as `ErasedCallError`.
 ///
 /// Zero imports return `String::new()`: the adapter is reprinted through prettyplease from a parsed
 /// AST, so an empty interpolation is byte-identical to the pre-import output — the same mechanism
@@ -1058,14 +1058,14 @@ fn typed_imports_source(box_id: &str, imports: &[boxology_generator_model::Impor
                     )
                 }})?;
                 let output = self.handle.call(&capability, context, input).await?;
-                let output = ::boxology_contract::TypeDescriptor::{output_constructor}()
+                let output = {output_descriptor}
                     .conform(::boxology_contract::DecodeRole::ConsumerOutput, output)
                     .map_err(|error| {{
                         ::boxology_contract::ErasedCallError::InvalidResponse(
                             conversion_detail("output_decode", error),
                         )
                     }})?;
-                {output_qualified}::decode(&output).map_err(|error| {{
+                {output_decode}.map_err(|error| {{
                     ::boxology_contract::ErasedCallError::InvalidResponse(
                         conversion_detail("output_decode", error),
                     )
@@ -1073,10 +1073,14 @@ fn typed_imports_source(box_id: &str, imports: &[boxology_generator_model::Impor
             }}
 "#,
                         name = capability.name(),
-                        input_qualified = rust_value_type(capability.input_type(), true),
-                        output_qualified = rust_value_type(capability.output_type(), true),
-                        output_constructor =
-                            schema::descriptor_constructor(capability.output_type()),
+                        input_qualified = imported_rust_type(import, capability.input_type()),
+                        output_qualified = imported_rust_type(import, capability.output_type()),
+                        output_descriptor =
+                            imported_type_descriptor_source(import, capability.output_type(),),
+                        output_decode = imported_decode_call(
+                            capability.output_type(),
+                            &imported_rust_type(import, capability.output_type()),
+                        ),
                         package = package,
                     )
                 })
@@ -1140,6 +1144,101 @@ fn typed_imports_source(box_id: &str, imports: &[boxology_generator_model::Impor
         fields = fields,
         conversions = conversions,
     )
+}
+
+/// Spells imported locals through their deterministic implementation dependency alias. Provider
+/// declarations remain owned by the provider contract crate and are never copied into the adapter.
+fn imported_rust_type(
+    import: &boxology_generator_model::ImportModel,
+    expression: &TypeExpression,
+) -> String {
+    match expression {
+        TypeExpression::Leaf(leaf) => rust_value_type(*leaf, true).into(),
+        TypeExpression::Local(name) => format!(
+            "::boxology_import_{}::{name}",
+            import.package().as_str().replace('-', "_")
+        ),
+        TypeExpression::Option(inner) => format!(
+            "::core::option::Option<{}>",
+            imported_rust_type(import, inner)
+        ),
+        TypeExpression::Vec(inner) => {
+            format!("::std::vec::Vec<{}>", imported_rust_type(import, inner))
+        }
+    }
+}
+
+fn imported_decode_call(expression: &TypeExpression, rust_type: &str) -> String {
+    if expression.leaf().is_some() {
+        format!("{rust_type}::decode(&output)")
+    } else {
+        format!("<{rust_type} as ::boxology_contract::ContractType>::decode(&output)")
+    }
+}
+
+/// Lowers a hydrated provider expression to the structural descriptor used to conform responses.
+fn imported_type_descriptor_source(
+    import: &boxology_generator_model::ImportModel,
+    expression: &TypeExpression,
+) -> String {
+    match expression {
+        TypeExpression::Leaf(leaf) => format!(
+            "::boxology_contract::TypeDescriptor::{}()",
+            schema::descriptor_constructor(*leaf)
+        ),
+        TypeExpression::Local(name) => {
+            let declaration = import
+                .declarations()
+                .iter()
+                .find(|declaration| declaration.name == *name)
+                .expect("strict imported local names a provider declaration");
+            match &declaration.shape {
+                DataShape::Struct(fields) => {
+                    let fields = fields
+                        .iter()
+                        .map(|field| format!(
+                            "::boxology_contract::FieldDescriptor::new({name:?}, {descriptor}, {deprecation}),",
+                            name = field.name,
+                            descriptor = imported_type_descriptor_source(import, &field.ty),
+                            deprecation = import_deprecation(&field.deprecation),
+                        ))
+                        .collect::<String>();
+                    format!(
+                        "::boxology_contract::TypeDescriptor::structure([{fields}]).expect(\"generated imported struct descriptor is valid\")"
+                    )
+                }
+                DataShape::Enum(variants) => {
+                    let variants = variants
+                        .iter()
+                        .map(|variant| format!(
+                            "::boxology_contract::VariantDescriptor::new({name:?}, ::boxology_contract::VariantPayload::Unit, {deprecation}),",
+                            name = variant.name,
+                            deprecation = import_deprecation(&variant.deprecation),
+                        ))
+                        .collect::<String>();
+                    format!(
+                        "::boxology_contract::TypeDescriptor::enumeration([{variants}]).expect(\"generated imported enum descriptor is valid\")"
+                    )
+                }
+            }
+        }
+        TypeExpression::Option(inner) => format!(
+            "::boxology_contract::TypeDescriptor::optional({}).expect(\"generated imported optional descriptor is valid\")",
+            imported_type_descriptor_source(import, inner)
+        ),
+        TypeExpression::Vec(inner) => format!(
+            "::boxology_contract::TypeDescriptor::list({}).expect(\"generated imported list descriptor is valid\")",
+            imported_type_descriptor_source(import, inner)
+        ),
+    }
+}
+
+fn import_deprecation(note: &Option<String>) -> String {
+    match note {
+        None => "None".into(),
+        Some(note) if note.is_empty() => "Some(::boxology_contract::Deprecation::new(None))".into(),
+        Some(note) => format!("Some(::boxology_contract::Deprecation::new(Some({note:?}.into())))"),
+    }
 }
 
 fn dispatch_source(box_id: &str, contract: &Contract) -> String {
@@ -1696,9 +1795,11 @@ macro_rules! __boxology_check_implementation {
             .iter()
             .map(|(name, input, output)| {
                 format!(
-                    "{{ \"id\": \"{package}.{name}\", \
+                    "{{ \"deprecation\": null, \"docs\": [], \"error\": \"ImportError\", \
+                     \"id\": \"{package}.{name}\", \"idempotency\": \"none\", \
                      \"input\": {{ \"name\": \"name\", \"type\": \"{input}\" }}, \
-                     \"name\": \"{name}\", \"output\": {{ \"type\": \"{output}\" }}, \
+                     \"max_exposure\": \"external\", \"name\": \"{name}\", \
+                     \"output\": {{ \"type\": \"{output}\" }}, \
                      \"shape\": \"unary\" }}"
                 )
             })
@@ -1706,7 +1807,10 @@ macro_rules! __boxology_check_implementation {
             .join(", ");
         format!(
             "{{ \"box_id\": \"{package}\", \"capabilities\": [ {entries} ], \
-             \"revision\": \"{IMPORT_REVISION}\", \"schema_format\": 1 }}"
+             \"provenance\": {{}}, \"revision\": \"{IMPORT_REVISION}\", \"schema_format\": 1, \
+             \"types\": [ {{ \"deprecation\": null, \"docs\": [], \"kind\": \"error\", \
+             \"name\": \"ImportError\", \"variants\": [ {{ \"deprecation\": null, \"docs\": [], \
+             \"name\": \"Failed\", \"payload\": \"unit\" }} ] }} ] }}"
         )
     }
 
@@ -4575,10 +4679,11 @@ fn main() {
     }
 
     #[test]
-    fn generated_import_adapter_sealed_import_routes_to_real_provider_end_to_end() {
-        // Capstone of the imports axis: a greeter box whose own capability internally calls the
-        // imported hello.greet through a SEALED import returns hello's real transformed output end
-        // to end. Two generated adapters each reference the absolute path `::boxology_generated_contract`,
+    fn structured_import_routes_through_provider_owned_alias_end_to_end() {
+        // A greeter calls a provider-owned nested struct + unit enum + Option + Vec through its
+        // sealed generated import. The app's explicit `boxology_import_hello` dependency is the
+        // only owner-facing path used by the consumer adapter; no provider declarations are copied.
+        // Two generated adapters still use `::boxology_generated_contract` for their own contract,
         // so each is aliased in its own crate: a `hello-impl` lib box and an `app` bin box. The app
         // adds both boxes, asserts `validate()` reports exactly the unresolved-import assembly error
         // (folded-in negative test), resolves greeter->hello, exposes greeter.greet_loudly on a
@@ -4598,7 +4703,23 @@ fn main() {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
-        for file in generate(request_for("hello", CONTRACT)).unwrap().files() {
+        let hello_source = r#"boxology::contract! {
+            pub enum Tone { Calm, Loud }
+            pub struct GreetRequest {
+                pub name: String, pub tones: Vec<Tone>, pub nickname: Option<String>,
+            }
+            pub struct GreetOutcome {
+                pub messages: Vec<String>, pub selected: Option<Tone>,
+            }
+            #[error] pub enum GreetError { EmptyName }
+            #[capability(exposure=external)]
+            pub async fn greet(request:GreetRequest)->Result<GreetOutcome,GreetError>;
+        }"#;
+        let hello_tree = generate(request_for("hello", hello_source)).unwrap();
+        let hello_schema = std::str::from_utf8(file(&hello_tree, "generated/schema.json").bytes())
+            .unwrap()
+            .to_owned();
+        for file in hello_tree.files() {
             let path = root.join("hello").join(file.path());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, file.bytes()).unwrap();
@@ -4608,7 +4729,7 @@ fn main() {
             GREETER,
             "hello",
             "imports/hello.json",
-            &valid_hello_schema(),
+            &hello_schema,
         );
         for file in generate(greeter_request).unwrap().files() {
             let path = root.join("greeter").join(file.path());
@@ -4639,18 +4760,26 @@ fn main() {
             hello_impl.join("src/lib.rs"),
             r#"
 use boxology_contract::CallContext;
-use boxology_generated_contract::GreetError;
+use boxology_generated_contract::{GreetError, GreetOutcome, GreetRequest};
 
 pub struct HelloService;
 
 #[boxology::implementation]
 impl HelloService {
-    pub async fn greet(&self, context: CallContext, name: String) -> Result<String, GreetError> {
+    pub async fn greet(
+        &self,
+        context: CallContext,
+        request: GreetRequest,
+    ) -> Result<GreetOutcome, GreetError> {
         // The sealed import must carry the parent's inherited trace + absolute deadline across the
         // boundary; `context.child()` in the greeter derives them, so both are present here.
         assert_eq!(context.trace().traceparent(), Some("e2e-parent"));
         assert!(context.deadline().is_some());
-        Ok(format!("Hello, {name}!"))
+        let who = request.nickname.unwrap_or(request.name);
+        Ok(GreetOutcome {
+            messages: vec![format!("Hello, {who}!")],
+            selected: request.tones.into_iter().next(),
+        })
     }
 }
 
@@ -4664,7 +4793,7 @@ pub mod generated {
         fs::create_dir_all(app.join("src")).unwrap();
         fs::write(
             app.join("Cargo.toml"),
-            "[package]\nname=\"app\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology={workspace=true}\nboxology-contract={workspace=true}\nboxology-runtime={workspace=true}\nboxology_generated_contract={package=\"greeter-contract\",path=\"../greeter/generated/contract\"}\nhello-impl={path=\"../hello-impl\"}\n",
+            "[package]\nname=\"app\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology={workspace=true}\nboxology-contract={workspace=true}\nboxology-runtime={workspace=true}\nboxology_generated_contract={package=\"greeter-contract\",path=\"../greeter/generated/contract\"}\nboxology_import_hello={package=\"hello-contract\",path=\"../hello/generated/contract\"}\nhello-impl={path=\"../hello-impl\"}\n",
         )
         .unwrap();
         fs::write(
@@ -4693,11 +4822,23 @@ impl GreeterService {
         context: CallContext,
         name: String,
     ) -> Result<String, GreetLoudlyError> {
-        let greeting = self
+        let outcome = self
             .hello
-            .greet(context.child(), name)
+            .greet(
+                context.child(),
+                boxology_import_hello::GreetRequest {
+                    name,
+                    tones: vec![boxology_import_hello::Tone::Loud],
+                    nickname: Some("Ada".into()),
+                },
+            )
             .await
             .map_err(|_| GreetLoudlyError::Refused)?;
+        assert!(matches!(
+            outcome.selected,
+            Some(boxology_import_hello::Tone::Loud)
+        ));
+        let greeting = outcome.messages.into_iter().next().unwrap();
         Ok(greeting.to_uppercase())
     }
 }

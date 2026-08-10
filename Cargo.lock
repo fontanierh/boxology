@@ -136,6 +136,7 @@ version = "0.0.0"
 dependencies = [
  "boxology-contract",
  "boxology-contract-syntax",
+ "boxology-schema",
  "proc-macro2",
  "serde_json",
  "syn 3.0.0",
