@@ -220,4 +220,26 @@ fn implementation_crate_root_must_be_exactly_derivable() {
     let plans = plan(&workspace_with(config), None).unwrap();
     assert_eq!(plans[0].crate_root().as_str(), "engine/src/lib.rs");
 }
+
+#[test]
+fn package_root_implementation_projects_to_src_lib() {
+    let candidate = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"Cargo.toml\", \"boxology.toml\", \"src/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \".\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"**\"]\noutputs = [\"generated/**\"]\n";
+    let files = [
+        "Cargo.toml", "Cargo.lock", "boxology.toml", "ping/boxology.toml",
+        "ping/Cargo.toml", "ping/src/lib.rs", "ping/generated/contract/Cargo.toml",
+    ].into_iter().map(|name| FileEntry::file(path(name))).collect();
+    let manifests = vec![
+        (path("boxology.toml"), ROOT_MANIFEST.as_bytes().to_vec()),
+        (path("ping/boxology.toml"), candidate.as_bytes().to_vec()),
+    ];
+    let members = [("ping", "ping-implementation"), ("ping/generated/contract", "ping-contract")];
+    let ids = members.iter().map(|(directory, _)| format!("{:?}", format!("path+file:///w/{directory}#0.0.0"))).collect::<Vec<_>>().join(",");
+    let packages = members.iter().map(|(directory, name)| metadata_package(directory, name)).collect::<Vec<_>>().join(",");
+    let metadata = format!(r#"{{"workspace_root":"/w","workspace_members":[{ids}],"packages":[{packages}]}}"#);
+    let workspace = WorkspaceInputs::new(files, manifests, &metadata).unwrap().check().unwrap();
+    let plans = plan(&workspace, None).unwrap();
+    let [plan] = plans.as_slice() else { panic!("one plan is required") };
+    assert_eq!(plan.crate_root().as_str(), "src/lib.rs");
+    assert_eq!(input_names(plan), ["Cargo.toml", "boxology.toml", "src/lib.rs"]);
+}
 }
