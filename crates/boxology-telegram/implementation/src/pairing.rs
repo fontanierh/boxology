@@ -26,6 +26,43 @@ struct RevokeRequest {
     schema: u8,
 }
 
+pub(crate) struct BeginCommand {
+    pub nonce_ttl_seconds: Option<u64>,
+}
+
+pub(crate) struct BotIdentity {
+    pub id: i64,
+    pub username: String,
+}
+
+pub(crate) struct BeginReceipt {
+    pub deep_link: String,
+    pub expires_at: i64,
+    pub bot: BotIdentity,
+}
+
+pub(crate) struct CompleteCommand {
+    pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Confirmation {
+    Delivered,
+    Ambiguous,
+    NotAttempted,
+}
+
+pub(crate) struct CompleteReceipt {
+    pub user_id: i64,
+    pub chat_id: i64,
+    pub paired_at: i64,
+    pub confirmation: Confirmation,
+}
+
+pub(crate) struct RevokeReceipt {
+    pub pairing_revoked: bool,
+}
+
 pub(crate) fn run(operation: &str, input: &[u8]) -> Result<Value, AppError> {
     match operation {
         "begin" => begin(input),
@@ -41,7 +78,18 @@ pub(crate) fn run(operation: &str, input: &[u8]) -> Result<Value, AppError> {
 fn begin(input: &[u8]) -> Result<Value, AppError> {
     let request: BeginRequest = parse(input)?;
     check_schema(request.schema)?;
-    let ttl = request.nonce_ttl_seconds.unwrap_or(600);
+    let receipt = begin_typed(BeginCommand {
+        nonce_ttl_seconds: request.nonce_ttl_seconds,
+    })?;
+    Ok(json!({
+        "deep_link": receipt.deep_link,
+        "expires_at": receipt.expires_at,
+        "bot": {"id": receipt.bot.id, "username": receipt.bot.username}
+    }))
+}
+
+pub(crate) fn begin_typed(command: BeginCommand) -> Result<BeginReceipt, AppError> {
+    let ttl = command.nonce_ttl_seconds.unwrap_or(600);
     if !(60..=600).contains(&ttl) {
         return Err(AppError::input(
             "invalid_nonce_ttl",
@@ -117,17 +165,36 @@ fn begin(input: &[u8]) -> Result<Value, AppError> {
         state.pending_pair = Some(pending.clone());
         Ok(())
     })?;
-    Ok(json!({
-        "deep_link": format!("https://t.me/{username}?start={payload}"),
-        "expires_at": pending.expires_at,
-        "bot": {"id": bot.id, "username": username}
-    }))
+    Ok(BeginReceipt {
+        deep_link: format!("https://t.me/{username}?start={payload}"),
+        expires_at: pending.expires_at,
+        bot: BotIdentity {
+            id: bot.id,
+            username,
+        },
+    })
 }
 
 fn complete(input: &[u8]) -> Result<Value, AppError> {
     let request: CompleteRequest = parse(input)?;
     check_schema(request.schema)?;
-    let timeout = request.timeout_seconds.unwrap_or(30);
+    let receipt = complete_typed(CompleteCommand {
+        timeout_seconds: request.timeout_seconds,
+    })?;
+    let confirmation = match receipt.confirmation {
+        Confirmation::Delivered => "delivered",
+        Confirmation::Ambiguous => "ambiguous",
+        Confirmation::NotAttempted => "not_attempted",
+    };
+    let mut data = json!({"paired": true, "user_id": receipt.user_id, "chat_id": receipt.chat_id, "paired_at": receipt.paired_at, "confirmation": confirmation});
+    if matches!(receipt.confirmation, Confirmation::Ambiguous) {
+        data["warnings"] = json!(["pairing confirmation delivery is ambiguous"]);
+    }
+    Ok(data)
+}
+
+pub(crate) fn complete_typed(command: CompleteCommand) -> Result<CompleteReceipt, AppError> {
+    let timeout = command.timeout_seconds.unwrap_or(30);
     if timeout > 50 {
         return Err(AppError::input(
             "invalid_timeout",
@@ -171,6 +238,7 @@ fn complete(input: &[u8]) -> Result<Value, AppError> {
         })?,
         None => before.next_offset,
     };
+    let paired_at = selected.map(|_| state::now());
     state::update(&paths, |state| {
         if state
             .pending_pair
@@ -189,7 +257,7 @@ fn complete(input: &[u8]) -> Result<Value, AppError> {
             state.pairing = Some(Pairing {
                 user_id,
                 chat_id,
-                paired_at: state::now(),
+                paired_at: paired_at.expect("selected pairing has timestamp"),
             });
             state.pending_pair = None;
         }
@@ -202,22 +270,27 @@ fn complete(input: &[u8]) -> Result<Value, AppError> {
             ExitClass::Policy,
         ));
     };
-    let (confirmation, ambiguous) =
-        match api.send_message(chat_id, "Telegram pairing confirmed.", None, None) {
-            Ok(_) => ("delivered", false),
-            Err(error) if error.ambiguous => ("ambiguous", true),
-            Err(_) => ("not_attempted", false),
-        };
-    let mut data = json!({"paired": true, "user_id": user_id, "chat_id": chat_id, "paired_at": state::now(), "confirmation": confirmation});
-    if ambiguous {
-        data["warnings"] = json!(["pairing confirmation delivery is ambiguous"]);
-    }
-    Ok(data)
+    let confirmation = match api.send_message(chat_id, "Telegram pairing confirmed.", None, None) {
+        Ok(_) => Confirmation::Delivered,
+        Err(error) if error.ambiguous => Confirmation::Ambiguous,
+        Err(_) => Confirmation::NotAttempted,
+    };
+    Ok(CompleteReceipt {
+        user_id,
+        chat_id,
+        paired_at: paired_at.expect("selected pairing has timestamp"),
+        confirmation,
+    })
 }
 
 fn revoke(input: &[u8]) -> Result<Value, AppError> {
     let request: RevokeRequest = parse(input)?;
     check_schema(request.schema)?;
+    let receipt = revoke_typed()?;
+    Ok(json!({"pairing_revoked": receipt.pairing_revoked}))
+}
+
+pub(crate) fn revoke_typed() -> Result<RevokeReceipt, AppError> {
     let paths = Paths::from_env()?;
     let revoked = state::update(&paths, |state| {
         let revoked = state.pairing.take().is_some();
@@ -227,7 +300,9 @@ fn revoke(input: &[u8]) -> Result<Value, AppError> {
         state.outbound.clear();
         Ok(revoked)
     })?;
-    Ok(json!({"pairing_revoked": revoked}))
+    Ok(RevokeReceipt {
+        pairing_revoked: revoked,
+    })
 }
 
 fn pairing_candidate(update: &api::Update, pending: &PendingPair) -> Option<(i64, i64)> {

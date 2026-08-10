@@ -85,14 +85,65 @@
         "type": "ResolveSendOutcome"
       },
       "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.pair_begin",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "PairBeginRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "pair_begin",
+      "output": {
+        "type": "PairBeginOutcome"
+      },
+      "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.pair_complete",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "PairCompleteRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "pair_complete",
+      "output": {
+        "type": "PairCompleteOutcome"
+      },
+      "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.pair_revoke",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "PairRevokeRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "pair_revoke",
+      "output": {
+        "type": "PairRevokeOutcome"
+      },
+      "shape": "unary"
     }
   ],
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:7ea3e86e4d208107a5e4e7ebbe18e893e340ef943806616f7ba972e64be4ac97"
+    "semantic_digest": "sha256:2ab225c09eb03e66e76fc9ee0e331c366cf2b385654a921b236f113a5e22576a"
   },
-  "revision": "sha256:3e5fe6c32f467626b256ad79a8a607429a2e30acb2f12e5b4dd3f5bf2d36a7a0",
+  "revision": "sha256:02a72948624a42dda86431b3b8e51fb815fe25b84d078620bfda375e0a000d35",
   "schema_format": 1,
   "types": [
     {
@@ -491,6 +542,216 @@
       ],
       "kind": "struct",
       "name": "ResolveSendOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "nonce_ttl_seconds",
+          "type": "Option<u64>"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairBeginRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "id",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "username",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "TelegramBotIdentity"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "deep_link",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "expires_at",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "bot",
+          "type": "TelegramBotIdentity"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairBeginReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "pairing",
+          "type": "Option<PairBeginReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairBeginOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "timeout_seconds",
+          "type": "Option<u64>"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairCompleteRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "PairConfirmation",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Delivered"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Ambiguous"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "NotAttempted"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "user_id",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "chat_id",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "paired_at",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "confirmation",
+          "type": "PairConfirmation"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairCompleteReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "pairing",
+          "type": "Option<PairCompleteReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairCompleteOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [],
+      "kind": "struct",
+      "name": "PairRevokeRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "pairing_revoked",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairRevokeReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "revocation",
+          "type": "Option<PairRevokeReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "PairRevokeOutcome"
     },
     {
       "deprecation": null,
