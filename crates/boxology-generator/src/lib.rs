@@ -278,6 +278,14 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
             } else {
                 format!("{known_fields} => {{}},")
             };
+            let unknown_field = "return Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnknownField(field.into())).under(::boxology_contract::PathSegment::Field(field.into())))";
+            let field_validation = if fields.is_empty() {
+                format!("if let Some((field, _)) = fields.entries().next() {{ {unknown_field}; }}")
+            } else {
+                format!(
+                    "for (field, _) in fields.entries() {{ match field {{ {known_arm}_ => {unknown_field} }} }}"
+                )
+            };
             let decoders = fields
                 .iter()
                 .map(|field| format!(
@@ -286,12 +294,17 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                     ty = rust_type_expression(&field.ty, "", true)
                 ))
                 .collect::<String>();
+            let field_binding = if fields.is_empty() {
+                "let fields = ::std::vec::Vec::new();"
+            } else {
+                "let mut fields = ::std::vec::Vec::new();"
+            };
             format!(
                 r#"
                 {attrs}#[derive(Debug, Clone, PartialEq)] pub struct {name} {{ {definitions} }}
                 impl ::boxology_contract::ContractType for {name} {{
                     fn encode_value(&self) -> ::core::result::Result<::boxology_contract::ContractValue, ::boxology_contract::EncodeError> {{
-                        let mut fields = ::std::vec::Vec::new();
+                        {field_binding}
                         {encoders}
                         ::boxology_contract::ContractValue::object(fields).map_err(|_| unreachable!("validated generated field identities are unique"))
                     }}
@@ -299,9 +312,7 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                         let ::boxology_contract::ValueRef::Object(fields) = value.view() else {{
                             return Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::KindMismatch));
                         }};
-                        for (field, _) in fields.entries() {{
-                            match field {{ {known_arm}_ => return Err(::boxology_contract::DecodeError::new(::boxology_contract::DecodeErrorKind::UnknownField(field.into())).under(::boxology_contract::PathSegment::Field(field.into()))) }}
-                        }}
+                        {field_validation}
                         Ok(Self {{ {decoders} }})
                     }}
                 }}
@@ -3532,7 +3543,7 @@ macro_rules! __boxology_check_implementation {
             #[capability] pub async fn save(input: Profile) -> Result<Profile, Fault>;
         }"#;
         const SOURCE_SHA256: &str =
-            "f79a534e98f19c22ccbc0510c6389b117aaa93ef23f34fa4702abca0c4ec5878";
+            "1d310b0c762fceec5596e51e55144c6fc615b52ee8b37c718a7269bed4fd5ef5";
         let contract = scalar_model(SOURCE);
         let source = structured_types_source(contract.model());
         assert_eq!(source, structured_types_source(contract.model()));
@@ -3550,6 +3561,7 @@ macro_rules! __boxology_check_implementation {
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
         for expected in [
             "#[derive(Debug, Clone, PartialEq)]\npub struct Empty {}",
+            "let fields = ::std::vec::Vec::new();",
             "///mood\n#[derive(Debug, Clone, PartialEq)]\npub enum Mood",
             "#[deprecated]\n#[derive(Debug, Clone, PartialEq)]\npub struct Profile",
             "///name\n    pub name: ::std::string::String",

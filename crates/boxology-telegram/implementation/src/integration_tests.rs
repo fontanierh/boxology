@@ -330,6 +330,179 @@ fn pairing_rejects_invalid_private_user_chat_ids() {
 }
 
 #[test]
+fn generated_pairing_lifecycle_is_private_durable_ambiguous_and_locally_revocable() {
+    let mut context = Context::new(vec![
+        response(&json!({"id": 7, "is_bot": true, "username": "fake_bot"})),
+        response(&json!({"url": ""})),
+    ]);
+    let paths = Paths::from_env().unwrap();
+    let (composition, telegram) =
+        assembled_telegram(&["pair_begin", "pair_complete", "send", "ask", "pair_revoke"]);
+    let begun = run_ready(telegram.pair_begin(
+        call_context(),
+        boxology_generated_contract::PairBeginRequest {
+            nonce_ttl_seconds: Some(60),
+        },
+    ))
+    .unwrap();
+    assert_eq!(begun.error, None);
+    let begun = begun.pairing.unwrap();
+    assert_eq!(begun.bot.id, 7);
+    assert_eq!(begun.bot.username, "fake_bot");
+    let payload = begun.deep_link.rsplit("?start=").next().unwrap();
+    let pending = state::read(&paths).unwrap();
+    assert!(pending.pairing.is_none());
+    assert_eq!(
+        pending.pending_pair.as_ref().unwrap().expires_at,
+        begun.expires_at
+    );
+    assert!(
+        !String::from_utf8(fs::read(context.root.join("state.json")).unwrap())
+            .unwrap()
+            .contains(payload)
+    );
+
+    context.replace_fake(vec![
+        response(&json!([
+            {"update_id": 10, "message": {"message_id": 1, "from": {"id": 42, "is_bot": true}, "chat": {"id": 42, "type": "private"}, "text": format!("/start {payload}")}},
+            {"update_id": 11, "message": {"message_id": 2, "from": {"id": 42, "is_bot": false}, "chat": {"id": 99, "type": "private"}, "text": format!("/start {payload}")}},
+            {"update_id": 12, "message": {"message_id": 3, "from": {"id": 42, "is_bot": false}, "chat": {"id": 42, "type": "group"}, "text": format!("/start {payload}")}},
+            {"update_id": 13, "message": {"message_id": 4, "from": {"id": 42, "is_bot": false}, "chat": {"id": 42, "type": "private"}, "text": format!("/start {payload}")}}
+        ])),
+        None,
+    ]);
+    let completed = run_ready(telegram.pair_complete(
+        call_context(),
+        boxology_generated_contract::PairCompleteRequest {
+            timeout_seconds: Some(0),
+        },
+    ))
+    .unwrap();
+    assert_eq!(completed.error, None);
+    let completed = completed.pairing.unwrap();
+    assert_eq!((completed.user_id, completed.chat_id), (42, 42));
+    assert_eq!(
+        completed.confirmation,
+        boxology_generated_contract::PairConfirmation::Ambiguous
+    );
+    assert_eq!(
+        context.fake.request_count(),
+        2,
+        "confirmation ambiguity is not retried"
+    );
+    let durable = state::read(&paths).unwrap();
+    assert!(durable.pending_pair.is_none());
+    assert!(durable.events.is_empty());
+    assert_eq!(durable.next_offset, 14);
+    assert_eq!(
+        durable.pairing.as_ref().unwrap().paired_at,
+        completed.paired_at
+    );
+
+    context.replace_fake(vec![
+        response(&json!({"message_id": 700})),
+        response(&json!({"message_id": 701})),
+    ]);
+    unhandled_event(&paths, "tg:20:1", 20);
+    assert!(
+        run_ready(telegram.send(
+            call_context(),
+            boxology_generated_contract::SendRequest {
+                text: "sensitive outbound".into(),
+                dedup_key: "pair-revoke-send".into(),
+            },
+        ))
+        .unwrap()
+        .error
+        .is_none()
+    );
+    assert!(
+        run_ready(telegram.ask(
+            call_context(),
+            boxology_generated_contract::AskRequest {
+                summary: "Sensitive pairing context needs a decision.".into(),
+                recommendation: "Revoke it locally.".into(),
+                alternatives: None,
+                lifecycle_key: "pair-revoke-life".into(),
+                dedup_key: "pair-revoke-ask".into(),
+            },
+        ))
+        .unwrap()
+        .error
+        .is_none()
+    );
+    let before_revoke = state::read(&paths).unwrap();
+    assert!(!before_revoke.events.is_empty());
+    assert!(!before_revoke.asks.is_empty());
+    assert!(!before_revoke.outbound.is_empty());
+    let request_count = context.fake.request_count();
+    let revoked = run_ready(telegram.pair_revoke(
+        call_context(),
+        boxology_generated_contract::PairRevokeRequest {},
+    ))
+    .unwrap();
+    assert_eq!(revoked.error, None);
+    assert!(revoked.revocation.unwrap().pairing_revoked);
+    let revoked = state::read(&paths).unwrap();
+    assert!(revoked.pairing.is_none() && revoked.pending_pair.is_none());
+    assert!(revoked.events.is_empty() && revoked.asks.is_empty() && revoked.outbound.is_empty());
+    assert_eq!(revoked.bot.unwrap().id, 7);
+    assert_eq!(revoked.next_offset, before_revoke.next_offset);
+    assert_eq!(
+        context.fake.request_count(),
+        request_count,
+        "revoke is local"
+    );
+    drop(composition);
+}
+
+#[test]
+fn generated_pair_complete_conflicts_before_network_or_state_change() {
+    let mut context = Context::new(vec![
+        response(&json!({"id": 7, "is_bot": true, "username": "fake_bot"})),
+        response(&json!({"url": ""})),
+    ]);
+    let paths = Paths::from_env().unwrap();
+    let (composition, telegram) = assembled_telegram(&["pair_begin", "pair_complete"]);
+    assert!(
+        run_ready(telegram.pair_begin(
+            call_context(),
+            boxology_generated_contract::PairBeginRequest {
+                nonce_ttl_seconds: None,
+            },
+        ))
+        .unwrap()
+        .error
+        .is_none()
+    );
+    context.replace_fake(vec![]);
+    let before = fs::read(context.root.join("state.json")).unwrap();
+    let lock = state::ConsumerLock::acquire(&paths).unwrap();
+    let outcome = run_ready(telegram.pair_complete(
+        call_context(),
+        boxology_generated_contract::PairCompleteRequest {
+            timeout_seconds: Some(0),
+        },
+    ))
+    .unwrap();
+    assert_eq!(outcome.pairing, None);
+    assert_eq!(
+        outcome.error,
+        Some(contract_error(
+            "consumer_locked",
+            "another local consumer holds the lock",
+            boxology_generated_contract::FailureClass::Conflict,
+            false,
+            None,
+        ))
+    );
+    assert_eq!(context.fake.request_count(), 0);
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
+    drop(lock);
+    drop(composition);
+}
+
+#[test]
 fn unauthorized_pairing_content_is_erased_but_offset_advances() {
     let mut context = Context::new(vec![
         response(&json!({"id": 7, "is_bot": true, "username": "fake_bot"})),
@@ -837,7 +1010,15 @@ fn disabled_generated_commands_return_authorization_without_side_effects() {
     let paths = Paths::from_env().unwrap();
     paired_state(&paths);
     let before = fs::read(context.root.join("state.json")).unwrap();
-    let (composition, telegram) = assembled_telegram(&["send", "ask", "reply", "resolve_send"]);
+    let (composition, telegram) = assembled_telegram(&[
+        "send",
+        "ask",
+        "reply",
+        "resolve_send",
+        "pair_begin",
+        "pair_complete",
+        "pair_revoke",
+    ]);
     let authorization = contract_error(
         "telegram_disabled",
         "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1",
@@ -895,7 +1076,33 @@ fn disabled_generated_commands_return_authorization_without_side_effects() {
     ))
     .unwrap();
     assert_eq!(resolution.resolution, None);
-    assert_eq!(resolution.error, Some(authorization));
+    assert_eq!(resolution.error, Some(authorization.clone()));
+
+    let begin = run_ready(telegram.pair_begin(
+        call_context(),
+        boxology_generated_contract::PairBeginRequest {
+            nonce_ttl_seconds: Some(0),
+        },
+    ))
+    .unwrap();
+    assert_eq!(begin.pairing, None);
+    assert_eq!(begin.error, Some(authorization.clone()));
+    let complete = run_ready(telegram.pair_complete(
+        call_context(),
+        boxology_generated_contract::PairCompleteRequest {
+            timeout_seconds: Some(999),
+        },
+    ))
+    .unwrap();
+    assert_eq!(complete.pairing, None);
+    assert_eq!(complete.error, Some(authorization.clone()));
+    let revoke = run_ready(telegram.pair_revoke(
+        call_context(),
+        boxology_generated_contract::PairRevokeRequest {},
+    ))
+    .unwrap();
+    assert_eq!(revoke.revocation, None);
+    assert_eq!(revoke.error, Some(authorization));
     assert_eq!(context.fake.request_count(), 0);
     assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
     drop(composition);

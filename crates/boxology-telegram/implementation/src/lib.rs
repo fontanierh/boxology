@@ -106,6 +106,59 @@ boxology::contract! {
         pub error: Option<OperationError>,
     }
 
+    pub struct PairBeginRequest {
+        pub nonce_ttl_seconds: Option<u64>,
+    }
+
+    pub struct TelegramBotIdentity {
+        pub id: i64,
+        pub username: String,
+    }
+
+    pub struct PairBeginReceipt {
+        pub deep_link: String,
+        pub expires_at: i64,
+        pub bot: TelegramBotIdentity,
+    }
+
+    pub struct PairBeginOutcome {
+        pub pairing: Option<PairBeginReceipt>,
+        pub error: Option<OperationError>,
+    }
+
+    pub struct PairCompleteRequest {
+        pub timeout_seconds: Option<u64>,
+    }
+
+    pub enum PairConfirmation {
+        Delivered,
+        Ambiguous,
+        NotAttempted,
+    }
+
+    pub struct PairCompleteReceipt {
+        pub user_id: i64,
+        pub chat_id: i64,
+        pub paired_at: i64,
+        pub confirmation: PairConfirmation,
+    }
+
+    pub struct PairCompleteOutcome {
+        pub pairing: Option<PairCompleteReceipt>,
+        pub error: Option<OperationError>,
+    }
+
+    pub struct PairRevokeRequest {}
+
+    pub struct PairRevokeReceipt {
+        pub pairing_revoked: bool,
+    }
+
+    pub struct PairRevokeOutcome {
+        pub revocation: Option<PairRevokeReceipt>,
+        pub error: Option<OperationError>,
+    }
+
     #[error]
     pub enum SendTextError {
         Input,
@@ -133,6 +186,15 @@ boxology::contract! {
 
     #[capability(idempotency = inherent)]
     pub async fn resolve_send(request: ResolveSendRequest) -> Result<ResolveSendOutcome, SendTextError>;
+
+    #[capability]
+    pub async fn pair_begin(request: PairBeginRequest) -> Result<PairBeginOutcome, SendTextError>;
+
+    #[capability]
+    pub async fn pair_complete(request: PairCompleteRequest) -> Result<PairCompleteOutcome, SendTextError>;
+
+    #[capability]
+    pub async fn pair_revoke(request: PairRevokeRequest) -> Result<PairRevokeOutcome, SendTextError>;
 }
 
 pub struct TelegramService;
@@ -259,6 +321,94 @@ impl TelegramService {
             },
             Err(error) => ResolveSendOutcome {
                 resolution: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn pair_begin(
+        &self,
+        _context: boxology::CallContext,
+        request: PairBeginRequest,
+    ) -> Result<PairBeginOutcome, SendTextError> {
+        let result = if enabled() {
+            pairing::begin_typed(pairing::BeginCommand {
+                nonce_ttl_seconds: request.nonce_ttl_seconds,
+            })
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => PairBeginOutcome {
+                pairing: Some(PairBeginReceipt {
+                    deep_link: receipt.deep_link,
+                    expires_at: receipt.expires_at,
+                    bot: TelegramBotIdentity {
+                        id: receipt.bot.id,
+                        username: receipt.bot.username,
+                    },
+                }),
+                error: None,
+            },
+            Err(error) => PairBeginOutcome {
+                pairing: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn pair_complete(
+        &self,
+        _context: boxology::CallContext,
+        request: PairCompleteRequest,
+    ) -> Result<PairCompleteOutcome, SendTextError> {
+        let result = if enabled() {
+            pairing::complete_typed(pairing::CompleteCommand {
+                timeout_seconds: request.timeout_seconds,
+            })
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => PairCompleteOutcome {
+                pairing: Some(PairCompleteReceipt {
+                    user_id: receipt.user_id,
+                    chat_id: receipt.chat_id,
+                    paired_at: receipt.paired_at,
+                    confirmation: match receipt.confirmation {
+                        pairing::Confirmation::Delivered => PairConfirmation::Delivered,
+                        pairing::Confirmation::Ambiguous => PairConfirmation::Ambiguous,
+                        pairing::Confirmation::NotAttempted => PairConfirmation::NotAttempted,
+                    },
+                }),
+                error: None,
+            },
+            Err(error) => PairCompleteOutcome {
+                pairing: None,
+                error: Some(operation_error(error)),
+            },
+        })
+    }
+
+    pub async fn pair_revoke(
+        &self,
+        _context: boxology::CallContext,
+        _request: PairRevokeRequest,
+    ) -> Result<PairRevokeOutcome, SendTextError> {
+        let result = if enabled() {
+            pairing::revoke_typed()
+        } else {
+            Err(AppError::authorization())
+        };
+        Ok(match result {
+            Ok(receipt) => PairRevokeOutcome {
+                revocation: Some(PairRevokeReceipt {
+                    pairing_revoked: receipt.pairing_revoked,
+                }),
+                error: None,
+            },
+            Err(error) => PairRevokeOutcome {
+                revocation: None,
                 error: Some(operation_error(error)),
             },
         })
