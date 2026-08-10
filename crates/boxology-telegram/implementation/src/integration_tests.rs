@@ -589,11 +589,32 @@ fn generated_handles_send_replay_and_structured_ask_end_to_end() {
 
 #[test]
 fn generated_reply_correlates_marks_handled_and_replays_without_a_write() {
-    let context = Context::new(vec![response(&json!({"message_id": 601}))]);
+    let mut context = Context::new(vec![response(&json!({"message_id": 600}))]);
     let paths = Paths::from_env().unwrap();
     paired_state(&paths);
-    unhandled_event(&paths, "tg:41:91", 41);
-    let (composition, telegram) = assembled_telegram(&["reply"]);
+    let (composition, telegram) = assembled_telegram(&["ask", "reply"]);
+    let ask = run_ready(telegram.ask(
+        call_context(),
+        boxology_generated_contract::AskRequest {
+            summary: "Choose the correlated reply path.".into(),
+            recommendation: "Reply through the generated handle.".into(),
+            alternatives: None,
+            lifecycle_key: "reply-correlation".into(),
+            dedup_key: "reply-correlation-ask".into(),
+        },
+    ))
+    .unwrap()
+    .ask
+    .unwrap();
+    context.replace_fake(vec![response(&json!([{"update_id": 41, "message": {
+        "message_id": 91, "from": {"id": 42, "is_bot": false},
+        "chat": {"id": 42, "type": "private"}, "text": "incoming context",
+        "reply_to_message": {"message_id": 600, "chat": {"id": 42, "type": "private"}}
+    }}]))]);
+    let (polled, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
+    assert_eq!(exit, ExitClass::Success, "{polled}");
+    assert_eq!(ok(&polled)["event"]["ask_id"], ask.ask_id);
+    context.replace_fake(vec![response(&json!({"message_id": 601}))]);
     let request = boxology_generated_contract::ReplyRequest {
         event_id: "tg:41:91".into(),
         text: "typed response".into(),
@@ -620,7 +641,9 @@ fn generated_reply_correlates_marks_handled_and_replays_without_a_write() {
     assert_eq!(body["reply_parameters"]["message_id"], 91);
     assert_eq!(body["text"], "typed response");
     drop(requests);
-    assert!(state::read(&paths).unwrap().events[0].handled);
+    let durable = state::read(&paths).unwrap();
+    assert!(durable.events[0].handled);
+    assert_eq!(durable.asks[0].state, "answered");
     drop(composition);
 }
 
