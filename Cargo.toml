@@ -21,6 +21,8 @@ members = [
     "crates/boxology-classifier",
     "crates/boxology-classifier/implementation",
     "crates/boxology-classifier/generated/contract",
+    "crates/boxology-model-completion/implementation",
+    "crates/boxology-model-completion/generated/contract",
     "crates/boxology-workspace",
     "crates/boxology-cli",
     "crates/boxology-cli-core",

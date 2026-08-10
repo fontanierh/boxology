@@ -826,6 +826,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "model-completion-contract"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
+
+[[package]]
+name = "model-completion-implementation"
+version = "0.0.0"
+dependencies = [
+ "boxology",
+ "boxology-contract",
+ "boxology-runtime",
+ "model-completion-contract",
+ "reqwest",
+ "serde_json",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
