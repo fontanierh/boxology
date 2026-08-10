@@ -50,7 +50,6 @@ const CONTROLLED_SITE_RULE: &str =
     "exact boxology::contract! invocations must appear once at reachable module scope";
 const CONTROLLED_PARSE_RULE: &str = "contract tokens must satisfy the controlled v0 grammar";
 const CONTROLLED_PARSE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3";
-const STRUCTURED_EMITTABLE_RULE: &str = "structured data declarations and boundary type expressions are parsed and modelled but require the later structured emitter slice";
 const EMITTABLE_RULE: &str = "the `Blob` capability boundary or value-payload leaf is parsed and modelled but its v0 end-to-end runtime generation is not yet implemented (deferred); scalar leaves and `String` are emittable.";
 const EMITTABLE_RULE_SOURCE: &str = "specs/s2-contract-generator.md D3,D5";
 const PAYLOAD_EMITTABLE_RULE: &str = "named-field payloads require contract-emitter support";
@@ -138,19 +137,15 @@ impl ControlledContract {
 
     /// Fails closed when parsed semantics are not yet supported by the v0 emitter.
     ///
-    /// Scalar leaves and `String` are emittable, including as one-value error payloads; the plain
-    /// parse path still returns structured, `Blob`, and named-payload models so later tasks can
-    /// consume them, while this guard prevents silently emitting unsupported artifacts.
+    /// Scalar leaves, `String`, and the accepted narrow structured subset are emittable, including
+    /// scalar one-value error payloads; the plain parse path still returns `Blob` and named-payload
+    /// models so later tasks can consume them while this guard prevents unsupported artifacts.
     /// Contracts holding any number of capabilities are emittable; the guard checks every
     /// capability's boundary leaves and every value-payload leaf.
     ///
     /// # Errors
     /// Returns at most one diagnostic per unsupported family at the contract-invocation span.
     pub fn require_v0_emittable(&self) -> Result<(), Diagnostics> {
-        let has_structured = !self.model.data.is_empty()
-            || self.model.capabilities.iter().any(|capability| {
-                capability.input_type.leaf().is_none() || capability.output_type.leaf().is_none()
-            });
         let has_blob_boundary = self.model.capabilities.iter().any(|capability| {
             capability.input_type.contains_blob() || capability.output_type.contains_blob()
         }) || self.model.data.iter().any(|declaration| match &declaration
@@ -173,16 +168,6 @@ impl ControlledContract {
             )
         });
         let mut diagnostics = Vec::new();
-        if has_structured {
-            diagnostics.push(Diagnostic {
-                path: self.source.clone(),
-                span: self.span,
-                code: DiagnosticCode::Bxg0038,
-                offending: "structured contract model not yet emittable".into(),
-                rule: STRUCTURED_EMITTABLE_RULE,
-                rule_source: CONTROLLED_PARSE_RULE_SOURCE,
-            });
-        }
         if has_blob_boundary {
             diagnostics.push(Diagnostic {
                 path: self.source.clone(),
@@ -2458,13 +2443,12 @@ mod tests {
 
     #[test]
     #[rustfmt::skip]
-    fn structured_contract_diagnostics_and_emitter_gate_are_exact() {
+    fn structured_contract_grammar_and_residual_emitter_gates_are_exact() {
         const VALID: &str = "boxology::contract! { pub struct A { pub x: String } pub enum Kind { One } #[error] pub enum Fault { Bad } #[capability] pub async fn go(input:A)->Result<Option<Vec<A>>,Fault>; }";
         let parsed = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", VALID)])).unwrap();
         let model = parsed.controlled_contract().unwrap();
         assert_eq!(model.model().data.len(), 2);
-        let gate = model.require_v0_emittable().unwrap_err();
-        assert_eq!(gate.as_slice().iter().map(|item| item.code()).collect::<Vec<_>>(), ["BXG0038"]);
+        model.require_v0_emittable().expect("the narrow structured subset is emittable");
         let mutations = [
             ("pub struct A { pub x: String }", "struct A { pub x: String }", "struct A { pub x: String }"),
             ("{ pub x: String }", "(pub String);", "(pub String)"), ("{ pub x: String }", ";", "A"),
@@ -2502,7 +2486,7 @@ mod tests {
         }
         let blob = VALID.replace("Option<Vec<A>>", "Option<Vec<Blob>>");
         let model = ParsedRustInputs::parse(&request("root.rs", &[("root.rs", &blob)])).unwrap().controlled_contract().unwrap();
-        assert_eq!(model.require_v0_emittable().unwrap_err().as_slice().iter().map(|item| item.code()).collect::<Vec<_>>(), ["BXG0038", "BXG0040"]);
+        assert_eq!(model.require_v0_emittable().unwrap_err().as_slice().iter().map(|item| item.code()).collect::<Vec<_>>(), ["BXG0040"]);
     }
 
     fn assert_metadata_error(attributes: &str, code: &str, expected_span: &str) {
