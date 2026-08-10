@@ -34,9 +34,11 @@ fn context() -> CallContext {
     CallContext::new(Caller::Anonymous, None, CancelToken::new(), TraceContext::empty(), None)
 }
 #[rustfmt::skip]
-fn read(path: &str) -> ExecuteRequest { ExecuteRequest { read: Some(ReadRequest { path: path.into() }), write: None } }
+fn read(path: &str) -> ExecuteRequest { ExecuteRequest { read: Some(ReadRequest { path: path.into() }), write: None, edit: None } }
 #[rustfmt::skip]
-fn write(path: &str, content: &str) -> ExecuteRequest { ExecuteRequest { read: None, write: Some(WriteRequest { path: path.into(), content: content.into() }) } }
+fn write(path: &str, content: &str) -> ExecuteRequest { ExecuteRequest { read: None, write: Some(WriteRequest { path: path.into(), content: content.into() }), edit: None } }
+#[rustfmt::skip]
+fn edit(path: &str, old_text: &str, new_text: &str) -> ExecuteRequest { ExecuteRequest { read: None, write: None, edit: Some(EditRequest { path: path.into(), old_text: old_text.into(), new_text: new_text.into() }) } }
 
 struct ExposureTarget(Vec<TransportExposure>);
 #[rustfmt::skip]
@@ -53,12 +55,17 @@ fn assembled(root: PathBuf) -> (Composition, boxology_generated_contract::ToolRu
 }
 #[rustfmt::skip]
 fn assembled_fault(root: PathBuf, fault: Option<Fault>) -> (Composition, boxology_generated_contract::ToolRunnerHandle) {
+    assembled_control(root, fault, None)
+}
+#[rustfmt::skip]
+fn assembled_control(root: PathBuf, fault: Option<Fault>, edit_pause: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>) -> (Composition, boxology_generated_contract::ToolRunnerHandle) {
     let descriptor = generated::implementation_descriptor();
     let capability = descriptor.contract().capabilities()[0].id().clone();
     let transport = Arc::new(StubTransport::new());
     let mut builder = CompositionBuilder::new();
     builder.add_box(descriptor, move |imports| {
-        let mut service = ToolRunnerService::new(root).unwrap(); service.fault = fault;
+        let mut service = ToolRunnerService::new(root).unwrap();
+        service.fault = fault; service.edit_pause = edit_pause;
         generated::factory(service, imports)
     });
     builder.expose(BoxId::new("tool-runner").unwrap(), capability, transport.clone(), ExposureLevel::CodeOnly);
@@ -88,13 +95,17 @@ fn failure(handle: &boxology_generated_contract::ToolRunnerHandle, request: Exec
 fn generated_fake_runs_through_its_typed_handle() {
     use boxology_generated_contract::test_support::ToolRunnerFake;
     let fake = ToolRunnerFake::new().with_execute(|_, request| async move {
-        assert_eq!(request.read.unwrap().path, "note.txt");
+        let request = request.edit.unwrap();
+        assert_eq!((request.path.as_str(), request.old_text.as_str(), request.new_text.as_str()),
+            ("note.txt", "old", "new"));
         Ok(ExecuteOutcome { result: Some(ExecuteResult { file: Some(file(
-            FileOperation::Read, "note.txt".into(), Some("hi".into()), 2, false,
+            FileOperation::Edit, "note.txt".into(), None, 3, true,
         )) }), failure: None })
     });
-    let outcome = call(&fake.handle(), context(), read("note.txt"));
-    assert_eq!(outcome.result.unwrap().file.unwrap().content.as_deref(), Some("hi"));
+    let result = call(&fake.handle(), context(), edit("note.txt", "old", "new"))
+        .result.unwrap().file.unwrap();
+    assert!(matches!(result.operation, FileOperation::Edit));
+    assert_eq!((result.path.as_str(), result.bytes, result.changed), ("note.txt", 3, true));
 }
 
 #[test]
@@ -115,7 +126,14 @@ fn generated_adapter_writes_reads_and_preserves_replacement_metadata() {
     assert_eq!(call(&handle, context(), write("maximum", &maximum)).result.unwrap()
         .file.unwrap().bytes, LIMIT as u64);
     assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o640);
-    let unchanged = call(&handle, context(), write("nested/note.txt", "hello world"))
+    let edited = call(&handle, context(), edit("nested/note.txt", "world", "Boxology"))
+        .result.unwrap().file.unwrap();
+    assert!(matches!(edited.operation, FileOperation::Edit));
+    assert_eq!((edited.path.as_str(), edited.bytes, edited.changed),
+        ("nested/note.txt", 14, true));
+    assert_eq!(fs::read(&target).unwrap(), b"hello Boxology");
+    assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o640);
+    let unchanged = call(&handle, context(), write("nested/note.txt", "hello Boxology"))
         .result.unwrap().file.unwrap();
     assert!(!unchanged.changed);
     assert!(fs::read_dir(target.parent().unwrap()).unwrap()
@@ -149,6 +167,9 @@ fn boundaries_sizes_and_encoding_are_typed_and_sanitized() {
         (read("missing"), "not_found"), (read("directory"), "not_file"),
         (read("large"), "file_too_large"), (read("binary"), "not_utf8"),
         (write("oversize", &"x".repeat(LIMIT + 1)), "file_too_large"),
+        (edit("linked-file", "safe", "unsafe"), "symlink"),
+        (edit("../outside/canary", "safe", "unsafe"), "outside_root"),
+        (edit("binary", "x", "y"), "not_utf8"),
     ] { failure(&handle, request, code, &fixture.root); }
     assert_eq!(fs::read_to_string(outside.join("canary")).unwrap(), "safe");
 }
@@ -159,9 +180,11 @@ fn invalid_shapes_cancellation_and_deadline_never_mutate() {
     use boxology_contract::Deadline;
     let fixture = Fixture::new();
     let (_composition, handle) = assembled(fixture.root.clone());
-    for invalid in [ExecuteRequest { read: None, write: None },
+    for invalid in [ExecuteRequest { read: None, write: None, edit: None },
         ExecuteRequest { read: Some(ReadRequest { path: "x".into() }), write: Some(WriteRequest {
-            path: "x".into(), content: "x".into() }) }] {
+            path: "x".into(), content: "x".into() }), edit: None },
+        ExecuteRequest { read: None, write: Some(WriteRequest { path: "x".into(), content: "x".into() }),
+            edit: Some(EditRequest { path: "x".into(), old_text: "x".into(), new_text: "y".into() }) }] {
         failure(&handle, invalid, "request_invalid", &fixture.root);
     }
     let token = CancelToken::new();
@@ -175,6 +198,66 @@ fn invalid_shapes_cancellation_and_deadline_never_mutate() {
         "deadline_exceeded");
     assert!(!fixture.root.join("cancelled").exists());
     assert!(!fixture.root.join("expired").exists());
+}
+
+#[test]
+#[rustfmt::skip]
+fn edit_rejections_and_exact_size_boundary_are_typed() {
+    let fixture = Fixture::new();
+    fs::write(fixture.root.join("repeated"), "one one").unwrap();
+    fs::write(fixture.root.join("maximum"), format!("!{}", "x".repeat(LIMIT - 1))).unwrap();
+    fs::write(fixture.root.join("grow-to-limit"), format!("!{}", "x".repeat(LIMIT - 2))).unwrap();
+    let (_composition, handle) = assembled(fixture.root.clone());
+    for (request, code) in [
+        (edit("repeated", "", "x"), "edit_old_empty"),
+        (edit("repeated", "missing", "x"), "edit_not_found"),
+        (edit("repeated", "one", "x"), "edit_ambiguous"),
+        (edit("repeated", "one", "one"), "edit_no_change"),
+        (edit("repeated", &"x".repeat(LIMIT + 1), "y"), "edit_text_too_large"),
+        (edit("repeated", "one", &"x".repeat(LIMIT + 1)), "edit_text_too_large"),
+        (edit("maximum", "!", "!!"), "file_too_large"),
+    ] { failure(&handle, request, code, &fixture.root); }
+    let accepted = call(&handle, context(), edit("grow-to-limit", "!", "!!"))
+        .result.unwrap().file.unwrap();
+    assert_eq!(accepted.bytes, LIMIT as u64);
+    assert_eq!(fs::metadata(fixture.root.join("grow-to-limit")).unwrap().len(), LIMIT as u64);
+    assert_eq!(fs::metadata(fixture.root.join("maximum")).unwrap().len(), LIMIT as u64);
+    assert_eq!(fs::read_to_string(fixture.root.join("repeated")).unwrap(), "one one");
+}
+
+#[test]
+#[rustfmt::skip]
+fn edit_reuses_pre_rename_fault_cleanup_and_target_preservation() {
+    let fixture = Fixture::new(); let target = fixture.root.join("target");
+    fs::write(&target, "original").unwrap();
+    for (fault, code, side) in [(Fault::PreRenameCancel, "cancelled", false),
+        (Fault::Rename, "local_io", true), (Fault::CleanupSync, "cancelled", true)] {
+        let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(fault));
+        let failure = call(&handle, context(), edit("target", "original", "changed")).failure.unwrap();
+        assert_eq!((failure.code.as_str(), failure.side_effect_possible), (code, side));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "original");
+        assert!(fs::read_dir(&fixture.root).unwrap().all(|entry|
+            !entry.unwrap().file_name().to_string_lossy().starts_with(".boxology-")));
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn same_service_write_waits_for_edit_mutation() {
+    let fixture = Fixture::new(); fs::write(fixture.root.join("target"), "old").unwrap();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let (_composition, handle) = assembled_control(fixture.root.clone(), None,
+        Some((entered.clone(), release.clone())));
+    let handle = Arc::new(handle); let editing = handle.clone();
+    let edit_thread = std::thread::spawn(move || call(&editing, context(), edit("target", "old", "new")));
+    entered.wait();
+    let writing = handle.clone();
+    let write_thread = std::thread::spawn(move || call(&writing, context(), write("target", "new+write")));
+    release.wait();
+    assert!(edit_thread.join().unwrap().result.unwrap().file.unwrap().changed);
+    assert!(write_thread.join().unwrap().result.unwrap().file.unwrap().changed);
+    assert_eq!(fs::read_to_string(fixture.root.join("target")).unwrap(), "new+write");
 }
 
 #[test]

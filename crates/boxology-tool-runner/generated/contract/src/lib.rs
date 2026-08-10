@@ -55,6 +55,31 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
                         .expect("generated optional descriptor is valid"),
                     None,
                 ),
+                ::boxology_contract::FieldDescriptor::new(
+                    "edit",
+                    ::boxology_contract::TypeDescriptor::optional(
+                            ::boxology_contract::TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "path",
+                                        ::boxology_contract::TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "old_text",
+                                        ::boxology_contract::TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "new_text",
+                                        ::boxology_contract::TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
+                    None,
+                ),
             ])
             .expect("generated struct descriptor is valid"),
         ::boxology_contract::TypeDescriptor::structure([
@@ -76,6 +101,11 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
                                                                     ),
                                                                     ::boxology_contract::VariantDescriptor::new(
                                                                         "Write",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Edit",
                                                                         ::boxology_contract::VariantPayload::Unit,
                                                                         None,
                                                                     ),
@@ -207,7 +237,7 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
             box_id,
             [capability],
             ::boxology_contract::ContractRevision::new(
-                    "sha256:6802e140ef409a595b79a8e5b0771e610feec2858cf82fbbf0bb3961dfbcbdbf",
+                    "sha256:6493baa7fa8929bb296b82911222bbd0b4b74a96cb0d80c17a310d0bee2fc575",
                 )
                 .expect("generated contract revision is non-empty"),
         )
@@ -275,6 +305,11 @@ impl ToolRunnerHandle {
                                                                     ),
                                                                     ::boxology_contract::VariantDescriptor::new(
                                                                         "Write",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Edit",
                                                                         ::boxology_contract::VariantPayload::Unit,
                                                                         None,
                                                                     ),
@@ -553,9 +588,105 @@ impl ::boxology_contract::ContractType for WriteRequest {
     }
 }
 #[derive(Debug, Clone, PartialEq)]
+pub struct EditRequest {
+    pub path: ::std::string::String,
+    pub old_text: ::std::string::String,
+    pub new_text: ::std::string::String,
+}
+impl ::boxology_contract::ContractType for EditRequest {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.path)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("path".into()))
+            })?
+        {
+            fields.push(("path".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.old_text,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("old_text".into()))
+            })?
+        {
+            fields.push(("old_text".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.new_text,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("new_text".into()))
+            })?
+        {
+            fields.push(("new_text".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "path" | "old_text" | "new_text" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            path: <::std::string::String as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("path"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("path".into()))
+                })?,
+            old_text: <::std::string::String as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("old_text"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("old_text".into()),
+                        )
+                })?,
+            new_text: <::std::string::String as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("new_text"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("new_text".into()),
+                        )
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExecuteRequest {
     pub read: ::core::option::Option<ReadRequest>,
     pub write: ::core::option::Option<WriteRequest>,
+    pub edit: ::core::option::Option<EditRequest>,
 }
 impl ::boxology_contract::ContractType for ExecuteRequest {
     fn encode_value(
@@ -579,6 +710,13 @@ impl ::boxology_contract::ContractType for ExecuteRequest {
         {
             fields.push(("write".into(), value));
         }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.edit)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("edit".into()))
+            })?
+        {
+            fields.push(("edit".into(), value));
+        }
         ::boxology_contract::ContractValue::object(fields)
             .map_err(|_| unreachable!("validated generated field identities are unique"))
     }
@@ -594,7 +732,7 @@ impl ::boxology_contract::ContractType for ExecuteRequest {
         };
         for (field, _) in fields.entries() {
             match field {
-                "read" | "write" => {}
+                "read" | "write" | "edit" => {}
                 _ => {
                     return Err(
                         ::boxology_contract::DecodeError::new(
@@ -620,6 +758,12 @@ impl ::boxology_contract::ContractType for ExecuteRequest {
                 .map_err(|error| {
                     error.under(::boxology_contract::PathSegment::Field("write".into()))
                 })?,
+            edit: <::core::option::Option<
+                EditRequest,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("edit"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("edit".into()))
+                })?,
         })
     }
 }
@@ -627,6 +771,7 @@ impl ::boxology_contract::ContractType for ExecuteRequest {
 pub enum FileOperation {
     Read,
     Write,
+    Edit,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
 }
 impl ::boxology_contract::ContractType for FileOperation {
@@ -639,6 +784,7 @@ impl ::boxology_contract::ContractType for FileOperation {
         let (tag, payload) = match self {
             Self::Read => ("Read".into(), ::boxology_contract::SlotValue::Null),
             Self::Write => ("Write".into(), ::boxology_contract::SlotValue::Null),
+            Self::Edit => ("Edit".into(), ::boxology_contract::SlotValue::Null),
             Self::Unknown { tag, payload } => {
                 (
                     tag.clone(),
@@ -676,6 +822,17 @@ impl ::boxology_contract::ContractType for FileOperation {
                 Ok(Self::Write)
             }
             "Write" => {
+                Err(
+                    ::boxology_contract::DecodeError::new(
+                            ::boxology_contract::DecodeErrorKind::UnexpectedPayload,
+                        )
+                        .under(::boxology_contract::PathSegment::Variant(tag.into())),
+                )
+            }
+            "Edit" if matches!(payload, ::boxology_contract::SlotValue::Null) => {
+                Ok(Self::Edit)
+            }
+            "Edit" => {
                 Err(
                     ::boxology_contract::DecodeError::new(
                             ::boxology_contract::DecodeErrorKind::UnexpectedPayload,
@@ -1487,6 +1644,31 @@ pub mod test_support {
                                 .expect("generated optional descriptor is valid"),
                             None,
                         ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "edit",
+                            TypeDescriptor::optional(
+                                    TypeDescriptor::structure([
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "path",
+                                                TypeDescriptor::string(),
+                                                None,
+                                            ),
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "old_text",
+                                                TypeDescriptor::string(),
+                                                None,
+                                            ),
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "new_text",
+                                                TypeDescriptor::string(),
+                                                None,
+                                            ),
+                                        ])
+                                        .expect("generated struct descriptor is valid"),
+                                )
+                                .expect("generated optional descriptor is valid"),
+                            None,
+                        ),
                     ])
                     .expect("generated struct descriptor is valid")
                     .conform(DecodeRole::ProviderInput, input)
@@ -1522,8 +1704,8 @@ pub mod test_support {
 }
 #[doc(hidden)]
 pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [
-    0, 75, 238, 29, 171, 190, 140, 119, 13, 50, 7, 191, 122, 5, 217, 247, 117, 7, 200,
-    135, 236, 75, 150, 250, 210, 133, 56, 145, 167, 44, 169, 248,
+    152, 82, 148, 188, 181, 39, 233, 221, 194, 173, 146, 79, 110, 14, 48, 136, 19, 134,
+    232, 97, 5, 26, 129, 45, 243, 239, 232, 94, 136, 175, 143, 63,
 ];
 #[doc(hidden)]
 #[macro_export]

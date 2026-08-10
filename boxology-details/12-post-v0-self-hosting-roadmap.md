@@ -177,14 +177,14 @@ package; Boxology has no provider package kind. `agent-loop.run_turn` consumes t
 other generated handles. The first version can compile in one model implementation
 and four tools (`read`, `write`, `edit`, and `bash`); it does not need runtime
 plugin discovery. H0 now has the governed `model-completion.complete` contract,
-configured xAI implementation, and root-confined typed read/write operations.
-Edit and then bounded bash are the next tool slices. Sessions/compaction, the agent loop, JSON/RPC,
+configured xAI implementation, and root-confined typed read/write/edit operations.
+Bounded bash is the next tool slice. Sessions/compaction, the agent loop, JSON/RPC,
 and authorized live dogfood remain; no sandbox is claimed.
 
 | Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
 | --- | --- | --- | --- | --- |
 | Model completion/agent loop | Governed `model-completion.complete` protocol, generated fake, and configured xAI adapter; no agent loop | `agent-loop.run_turn` composition over the completion and tool handles | Deterministic fake model requests one tool, consumes its result, then returns a final answer | Model-backend marketplace, multimodal or streaming protocol |
-| Tool execution | Governed `tool-runner.execute` with bounded root-confined read/write; no edit, bash, or sandbox | Add atomic edit, then bounded bash with explicit process and environment controls | Fake-model turn edits an isolated fixture only through the generated tool handle | Dynamic tool plugins and a general permission framework |
+| Tool execution | Governed `tool-runner.execute` with bounded root-confined read/write/edit; no bash or sandbox | Add bounded bash with explicit process and environment controls | Fake-model turn edits an isolated fixture only through the generated tool handle | Dynamic tool plugins and a general permission framework |
 | Sessions/resume | No agent session application | Append-only turn/tool events and `session-store.load/append` | Stop and restart, load the same session, and complete the next turn deterministically | Distributed session service |
 | Compaction | No agent-context compactor | Deterministic summary/checkpoint operation owned by the harness composition | Resume a fixture beyond its context threshold from a persisted compacted state | Multiple compaction strategies |
 | Interactive/print/JSON/RPC modes | Product CLIs exist, including Telegram JSON, but no generic agent protocol | Stdio JSON/RPC composition; interactive or print adapter only when needed | RPC request drives one complete fake-model turn with ordered events | Network daemon protocol and UI |

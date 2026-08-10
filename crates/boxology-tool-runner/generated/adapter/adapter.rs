@@ -90,6 +90,31 @@ where
                             .expect("generated optional descriptor is valid"),
                         None,
                     ),
+                    ::boxology_contract::FieldDescriptor::new(
+                        "edit",
+                        ::boxology_contract::TypeDescriptor::optional(
+                                ::boxology_contract::TypeDescriptor::structure([
+                                        ::boxology_contract::FieldDescriptor::new(
+                                            "path",
+                                            ::boxology_contract::TypeDescriptor::string(),
+                                            None,
+                                        ),
+                                        ::boxology_contract::FieldDescriptor::new(
+                                            "old_text",
+                                            ::boxology_contract::TypeDescriptor::string(),
+                                            None,
+                                        ),
+                                        ::boxology_contract::FieldDescriptor::new(
+                                            "new_text",
+                                            ::boxology_contract::TypeDescriptor::string(),
+                                            None,
+                                        ),
+                                    ])
+                                    .expect("generated struct descriptor is valid"),
+                            )
+                            .expect("generated optional descriptor is valid"),
+                        None,
+                    ),
                 ])
                 .expect("generated struct descriptor is valid")
                 .conform(::boxology_contract::DecodeRole::ProviderInput, input)
