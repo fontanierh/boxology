@@ -26,8 +26,10 @@ protection are not delivered. The CLI surface is `boxology generate [--package <
   owns discovery, classification, crate roles, and edge policy without filesystem/process access.
 - `boxology-cli-core` owns the reusable effectful implementation: filesystem and git reads, Cargo
   commands, generation, validation, and report rendering. `boxology-cli` retains the installed
-  `boxology` binary and compatibility re-export facade. The `boxology` facade crate remains
-  authoring-only.
+  `boxology` binary and compatibility re-export facade. It is also the governed composition for
+  the `generate` classification path and consumes the generated classifier handle; `check`
+  remains on the direct core path pending its named #575 slice. The `boxology` facade crate
+  remains authoring-only.
 
 Library diagnostics use stable `BXW####` codes and deterministic ordering.
 
@@ -58,7 +60,9 @@ bypasses a Cargo edge remains outside that model.
 Generation candidates and inputs come from manifests, including declared imported schemas. The
 CLI regenerates into temporary output, compares bytes, writes only changed packages through the
 generator's confined per-file atomic publication, refreshes provenance, and attaches the S4
-classification unmodified. `--package` selects one package; a byte-identical run writes nothing.
+classification unmodified. Post-V0, that classification crosses the real generated classifier
+handle assembled by the CLI composition; generation and publication remain ordinary core code.
+`--package` selects one package; a byte-identical run writes nothing.
 For a `box-implementation` crate, path `.` projects to package-root `src/lib.rs`; a nested crate path
 projects to `<path>/src/lib.rs`.
 

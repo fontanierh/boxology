@@ -27,6 +27,10 @@ The read side is **strict**: `schema_format` other than `1`, an unknown field, a
 
 The classifier itself is **`boxology-classifier`**: `classify(base: Option<&SchemaDocument>, submitted: Option<&SchemaDocument>) -> Result<ClassificationReport, Diagnostics>`, pure — no filesystem, environment, network, clock, or execution access, matching the S2 generator's discipline. How S5 obtains the two documents (base from the merge-base checkout, submitted from regeneration) is S5's concern.
 
+Post-V0, the same pure function is exposed by the governed `classifier` box. Its byte-oriented
+implementation wrapper adds no policy: it decodes the two supplied schema documents, delegates to
+this function, and returns the complete report or diagnostics through the generated typed handle.
+
 ### D2 — Pairing
 
 - Both sides present: `box_id` must match; classifying two different boxes against each other is a coded input error, not a finding.

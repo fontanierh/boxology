@@ -4,6 +4,10 @@
 
 This document expands the quality ownership, CI, review, policy, and human-authority model discussed during the design interview.
 
+Status: this document combines current principles with target mature-harness enforcement. Today,
+declared package quality is reporting and guidance unless an existing repository gate explicitly
+enforces it; later sections call out that boundary.
+
 ## Separation of responsibility
 
 Quality belongs to accountable packages and the software factory, not to the application runtime.

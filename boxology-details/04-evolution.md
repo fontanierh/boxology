@@ -4,6 +4,10 @@
 
 This document expands the compatibility, migration, and deprecation process discussed during the design interview.
 
+Status: deterministic structural classification is delivered. The durable migration record,
+telemetry, and removal workflow below remain target software-factory design and are not current
+repository enforcement.
+
 ## Compatibility goal
 
 Boxes should normally evolve through backward-compatible changes. Consumers depend only on the generated contract and should not require simultaneous edits when the providing box's implementation changes.

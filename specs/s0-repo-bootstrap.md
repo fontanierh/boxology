@@ -1,7 +1,7 @@
 # S0 Spec — Product-Repo Bootstrap and CI
 
 [Stream definition](../boxology-details/11-v0-streams.md#s0--product-repo-bootstrap-and-ci) ·
-Status: **delivered; current baseline after PR #571**
+Status: **delivered; live repository baseline**
 
 S0 is the live normative baseline for this repository's workspace and validation substrate. V0
 completion is evidenced in the
@@ -56,12 +56,10 @@ but no active workflow currently compares platforms.
 ### D3 — Required pull-request validation
 
 `.github/workflows/pr.yml` has one required `validation` job with a 20-minute timeout and no
-Actions cache. Its support/configuration PR uses `[self-hosted, macOS, ARM64,
-boxology-macos-pr]`; after that merged configuration is deployed and the new label is verified
-online, an exact two-file change selects `[self-hosted, macOS, ARM64,
-boxology-macos-pr-primary]` in the workflow and updates `REQUIRED_PR_RUNNER_LABEL` in its xtask
-integrity test. This gives required PRs one persistent Cargo cache instead of randomly choosing
-among four cache islands while making the routing change self-validating.
+Actions cache. It selects `[self-hosted, macOS, ARM64, boxology-macos-pr-primary]`, and
+`REQUIRED_PR_RUNNER_LABEL` pins the same route. The base runner's persistent Cargo target/cache
+gives required PRs stable warm-cache affinity; slots 2–4 retain generic capacity for independent
+work.
 It always runs `ci-hygiene` against the pull-request base. Markdown-only changes stop there.
 
 Code changes run ordinary tests for directly changed crates. The xtask unit suite runs only for
@@ -92,8 +90,9 @@ Four native Apple-silicon Mac JIT slots are active. Each slot has an isolated di
 and a private persistent Cargo target cache; concurrency is bounded to four build/test jobs per
 slot. The checked-in base service alone also configures the `boxology-macos-pr-primary` label for
 required-PR cache affinity; slots 2–4 retain the generic label for deep, advisory, smoke, and
-overflow capacity. Routing remains generic until the merged service is deployed and its exact
-label is verified, so the configuration and routing changes each self-validate.
+overflow capacity. The base slot carries both generic and primary labels and owns required PRs.
+The workflow route and its xtask integrity expectation must change atomically before any topology
+rollback removes the primary registration.
 Linux JIT source and assets remain in `ops/ci-runner/`, but Linux services, registrations, and the
 Colima profile are dormant. There is no active Linux, x86, or cross-platform workflow. Any
 reactivation is deliberate [#525](https://github.com/fontanierh/boxology/issues/525) work.

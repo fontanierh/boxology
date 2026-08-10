@@ -4,6 +4,10 @@
 
 This document expands the package kinds and infrastructure model discussed during the design interview.
 
+Status: this is target architecture. The shipped manifest schema currently recognizes `box`,
+`composition`, and `platform`; it deliberately rejects `provider` until a real use case forces
+that package kind. Provider and package-binding sections below do not claim current support.
+
 ## Package kinds
 
 The ecosystem contains four distinct package kinds. Every kind can own source, a pull request, a factory area, and a quality contract.
