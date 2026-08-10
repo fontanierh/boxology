@@ -7,10 +7,8 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
         .expect("generated box identity is valid");
     let error = ::boxology_contract::TypeDescriptor::enumeration([
             ::boxology_contract::VariantDescriptor::new(
-                "Failure",
-                ::boxology_contract::VariantPayload::Value(
-                    ::boxology_contract::TypeDescriptor::string(),
-                ),
+                "Internal",
+                ::boxology_contract::VariantPayload::Unit,
                 None,
             ),
         ])
@@ -45,63 +43,11 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
             .expect("generated struct descriptor is valid"),
         ::boxology_contract::TypeDescriptor::structure([
                 ::boxology_contract::FieldDescriptor::new(
-                    "verdict",
-                    ::boxology_contract::TypeDescriptor::enumeration([
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Unchanged",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Documentation",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Deprecation",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Additive",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "CompatibleWithConditions",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Incompatible",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                        ])
-                        .expect("generated enum descriptor is valid"),
-                    None,
-                ),
-                ::boxology_contract::FieldDescriptor::new(
-                    "findings",
-                    ::boxology_contract::TypeDescriptor::list(
+                    "report",
+                    ::boxology_contract::TypeDescriptor::optional(
                             ::boxology_contract::TypeDescriptor::structure([
                                     ::boxology_contract::FieldDescriptor::new(
-                                        "code",
-                                        ::boxology_contract::TypeDescriptor::string(),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "path",
-                                        ::boxology_contract::TypeDescriptor::string(),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "kind",
-                                        ::boxology_contract::TypeDescriptor::string(),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "class",
+                                        "verdict",
                                         ::boxology_contract::TypeDescriptor::enumeration([
                                                 ::boxology_contract::VariantDescriptor::new(
                                                     "Unchanged",
@@ -138,38 +84,137 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
                                         None,
                                     ),
                                     ::boxology_contract::FieldDescriptor::new(
-                                        "base_excerpt",
-                                        ::boxology_contract::TypeDescriptor::optional(
-                                                ::boxology_contract::TypeDescriptor::string(),
+                                        "findings",
+                                        ::boxology_contract::TypeDescriptor::list(
+                                                ::boxology_contract::TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "code",
+                                                            ::boxology_contract::TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "path",
+                                                            ::boxology_contract::TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "kind",
+                                                            ::boxology_contract::TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "class",
+                                                            ::boxology_contract::TypeDescriptor::enumeration([
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Unchanged",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Documentation",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Deprecation",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Additive",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "CompatibleWithConditions",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Incompatible",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated enum descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "base_excerpt",
+                                                            ::boxology_contract::TypeDescriptor::optional(
+                                                                    ::boxology_contract::TypeDescriptor::string(),
+                                                                )
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "submitted_excerpt",
+                                                            ::boxology_contract::TypeDescriptor::optional(
+                                                                    ::boxology_contract::TypeDescriptor::string(),
+                                                                )
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "condition",
+                                                            ::boxology_contract::TypeDescriptor::optional(
+                                                                    ::boxology_contract::TypeDescriptor::string(),
+                                                                )
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
                                             )
-                                            .expect("generated optional descriptor is valid"),
+                                            .expect("generated list descriptor is valid"),
                                         None,
                                     ),
                                     ::boxology_contract::FieldDescriptor::new(
-                                        "submitted_excerpt",
-                                        ::boxology_contract::TypeDescriptor::optional(
-                                                ::boxology_contract::TypeDescriptor::string(),
-                                            )
-                                            .expect("generated optional descriptor is valid"),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "condition",
-                                        ::boxology_contract::TypeDescriptor::optional(
-                                                ::boxology_contract::TypeDescriptor::string(),
-                                            )
-                                            .expect("generated optional descriptor is valid"),
+                                        "rendered_text",
+                                        ::boxology_contract::TypeDescriptor::string(),
                                         None,
                                     ),
                                 ])
                                 .expect("generated struct descriptor is valid"),
                         )
-                        .expect("generated list descriptor is valid"),
+                        .expect("generated optional descriptor is valid"),
                     None,
                 ),
                 ::boxology_contract::FieldDescriptor::new(
-                    "rendered_text",
-                    ::boxology_contract::TypeDescriptor::string(),
+                    "failure",
+                    ::boxology_contract::TypeDescriptor::optional(
+                            ::boxology_contract::TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "stage",
+                                        ::boxology_contract::TypeDescriptor::enumeration([
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Base",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Submitted",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Pairing",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                            ])
+                                            .expect("generated enum descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "diagnostics",
+                                        ::boxology_contract::TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
                     None,
                 ),
             ])
@@ -184,7 +229,7 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
             box_id,
             [capability],
             ::boxology_contract::ContractRevision::new(
-                    "sha256:15b0217864e7504475bc7a6393e277486ba4acf5948fd9f4898c6a13c8e10e88",
+                    "sha256:c615a71958fd24f37973ef962d34a3c349bd87901bf92e83712a9e6ba367a536",
                 )
                 .expect("generated contract revision is non-empty"),
         )
@@ -207,7 +252,7 @@ pub trait ClassifierDispatch: Send + Sync + 'static {
         context: CallContext,
         request: ClassifyRequest,
     ) -> Pin<
-        Box<dyn Future<Output = Result<ClassifyReport, ClassifierError>> + Send + 'a>,
+        Box<dyn Future<Output = Result<ClassifyOutcome, ClassifierError>> + Send + 'a>,
     >;
 }
 #[derive(Clone)]
@@ -223,7 +268,7 @@ impl ClassifierHandle {
         &self,
         context: CallContext,
         request: ClassifyRequest,
-    ) -> Result<ClassifyReport, CallError<ClassifierError>> {
+    ) -> Result<ClassifyOutcome, CallError<ClassifierError>> {
         let input = request
             .encode()
             .map_err(|error| conversion_detail("input_encode", error))
@@ -237,63 +282,11 @@ impl ClassifierHandle {
             })?;
         let output = TypeDescriptor::structure([
                 ::boxology_contract::FieldDescriptor::new(
-                    "verdict",
-                    TypeDescriptor::enumeration([
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Unchanged",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Documentation",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Deprecation",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Additive",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "CompatibleWithConditions",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                            ::boxology_contract::VariantDescriptor::new(
-                                "Incompatible",
-                                ::boxology_contract::VariantPayload::Unit,
-                                None,
-                            ),
-                        ])
-                        .expect("generated enum descriptor is valid"),
-                    None,
-                ),
-                ::boxology_contract::FieldDescriptor::new(
-                    "findings",
-                    TypeDescriptor::list(
+                    "report",
+                    TypeDescriptor::optional(
                             TypeDescriptor::structure([
                                     ::boxology_contract::FieldDescriptor::new(
-                                        "code",
-                                        TypeDescriptor::string(),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "path",
-                                        TypeDescriptor::string(),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "kind",
-                                        TypeDescriptor::string(),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "class",
+                                        "verdict",
                                         TypeDescriptor::enumeration([
                                                 ::boxology_contract::VariantDescriptor::new(
                                                     "Unchanged",
@@ -330,32 +323,131 @@ impl ClassifierHandle {
                                         None,
                                     ),
                                     ::boxology_contract::FieldDescriptor::new(
-                                        "base_excerpt",
-                                        TypeDescriptor::optional(TypeDescriptor::string())
-                                            .expect("generated optional descriptor is valid"),
+                                        "findings",
+                                        TypeDescriptor::list(
+                                                TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "code",
+                                                            TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "path",
+                                                            TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "kind",
+                                                            TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "class",
+                                                            TypeDescriptor::enumeration([
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Unchanged",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Documentation",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Deprecation",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Additive",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "CompatibleWithConditions",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                    ::boxology_contract::VariantDescriptor::new(
+                                                                        "Incompatible",
+                                                                        ::boxology_contract::VariantPayload::Unit,
+                                                                        None,
+                                                                    ),
+                                                                ])
+                                                                .expect("generated enum descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "base_excerpt",
+                                                            TypeDescriptor::optional(TypeDescriptor::string())
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "submitted_excerpt",
+                                                            TypeDescriptor::optional(TypeDescriptor::string())
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "condition",
+                                                            TypeDescriptor::optional(TypeDescriptor::string())
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
+                                            )
+                                            .expect("generated list descriptor is valid"),
                                         None,
                                     ),
                                     ::boxology_contract::FieldDescriptor::new(
-                                        "submitted_excerpt",
-                                        TypeDescriptor::optional(TypeDescriptor::string())
-                                            .expect("generated optional descriptor is valid"),
-                                        None,
-                                    ),
-                                    ::boxology_contract::FieldDescriptor::new(
-                                        "condition",
-                                        TypeDescriptor::optional(TypeDescriptor::string())
-                                            .expect("generated optional descriptor is valid"),
+                                        "rendered_text",
+                                        TypeDescriptor::string(),
                                         None,
                                     ),
                                 ])
                                 .expect("generated struct descriptor is valid"),
                         )
-                        .expect("generated list descriptor is valid"),
+                        .expect("generated optional descriptor is valid"),
                     None,
                 ),
                 ::boxology_contract::FieldDescriptor::new(
-                    "rendered_text",
-                    TypeDescriptor::string(),
+                    "failure",
+                    TypeDescriptor::optional(
+                            TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "stage",
+                                        TypeDescriptor::enumeration([
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Base",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Submitted",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                                ::boxology_contract::VariantDescriptor::new(
+                                                    "Pairing",
+                                                    ::boxology_contract::VariantPayload::Unit,
+                                                    None,
+                                                ),
+                                            ])
+                                            .expect("generated enum descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "diagnostics",
+                                        TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
                     None,
                 ),
             ])
@@ -363,7 +455,7 @@ impl ClassifierHandle {
             .conform(DecodeRole::ConsumerOutput, output)
             .map_err(|error| conversion_detail("output_decode", error))
             .map_err(CallError::InvalidResponse)?;
-        <ClassifyReport as ContractType>::decode(&output)
+        <ClassifyOutcome as ContractType>::decode(&output)
             .map_err(|error| conversion_detail("output_decode", error))
             .map_err(CallError::InvalidResponse)
     }
@@ -377,10 +469,8 @@ static CLASSIFIER_CLASSIFY: LazyLock<CapabilityId> = LazyLock::new(|| {
 static CLASSIFIER_ERROR_DESCRIPTOR: LazyLock<TypeDescriptor> = LazyLock::new(|| {
     TypeDescriptor::enumeration([
             ::boxology_contract::VariantDescriptor::new(
-                "Failure",
-                ::boxology_contract::VariantPayload::Value(
-                    ::boxology_contract::TypeDescriptor::string(),
-                ),
+                "Internal",
+                ::boxology_contract::VariantPayload::Unit,
                 None,
             ),
         ])
@@ -907,11 +997,13 @@ impl ::boxology_contract::ContractType for ClassifyReport {
     }
 }
 #[derive(Debug, Clone, PartialEq)]
-pub enum ClassifierError {
-    Failure(::std::string::String),
+pub enum ClassifyFailureStage {
+    Base,
+    Submitted,
+    Pairing,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
 }
-impl ::boxology_contract::ContractType for ClassifierError {
+impl ::boxology_contract::ContractType for ClassifyFailureStage {
     fn encode_value(
         &self,
     ) -> ::core::result::Result<
@@ -919,19 +1011,9 @@ impl ::boxology_contract::ContractType for ClassifierError {
         ::boxology_contract::EncodeError,
     > {
         let (tag, payload) = match self {
-            Self::Failure(value) => {
-                (
-                    "Failure".into(),
-                    value
-                        .encode()
-                        .map_err(|error| {
-                            error
-                                .under(
-                                    ::boxology_contract::PathSegment::Variant("Failure".into()),
-                                )
-                        })?,
-                )
-            }
+            Self::Base => ("Base".into(), ::boxology_contract::SlotValue::Null),
+            Self::Submitted => ("Submitted".into(), ::boxology_contract::SlotValue::Null),
+            Self::Pairing => ("Pairing".into(), ::boxology_contract::SlotValue::Null),
             Self::Unknown { tag, payload } => {
                 (
                     tag.clone(),
@@ -954,13 +1036,279 @@ impl ::boxology_contract::ContractType for ClassifierError {
             );
         };
         match tag {
-            "Failure" => {
-                ::std::string::String::decode(payload)
-                    .map(Self::Failure)
-                    .map_err(|error| {
-                        error
-                            .under(::boxology_contract::PathSegment::Variant(tag.into()))
-                    })
+            "Base" if matches!(payload, ::boxology_contract::SlotValue::Null) => {
+                Ok(Self::Base)
+            }
+            "Base" => {
+                Err(
+                    ::boxology_contract::DecodeError::new(
+                            ::boxology_contract::DecodeErrorKind::UnexpectedPayload,
+                        )
+                        .under(::boxology_contract::PathSegment::Variant(tag.into())),
+                )
+            }
+            "Submitted" if matches!(payload, ::boxology_contract::SlotValue::Null) => {
+                Ok(Self::Submitted)
+            }
+            "Submitted" => {
+                Err(
+                    ::boxology_contract::DecodeError::new(
+                            ::boxology_contract::DecodeErrorKind::UnexpectedPayload,
+                        )
+                        .under(::boxology_contract::PathSegment::Variant(tag.into())),
+                )
+            }
+            "Pairing" if matches!(payload, ::boxology_contract::SlotValue::Null) => {
+                Ok(Self::Pairing)
+            }
+            "Pairing" => {
+                Err(
+                    ::boxology_contract::DecodeError::new(
+                            ::boxology_contract::DecodeErrorKind::UnexpectedPayload,
+                        )
+                        .under(::boxology_contract::PathSegment::Variant(tag.into())),
+                )
+            }
+            _ => {
+                match payload {
+                    ::boxology_contract::SlotValue::Value(value) => {
+                        match value.view() {
+                            ::boxology_contract::ValueRef::Opaque(payload) => {
+                                Ok(Self::Unknown {
+                                    tag: tag.into(),
+                                    payload: payload.forward(),
+                                })
+                            }
+                            _ => {
+                                Err(
+                                    ::boxology_contract::DecodeError::new(
+                                            ::boxology_contract::DecodeErrorKind::UnknownVariant(
+                                                tag.into(),
+                                            ),
+                                        )
+                                        .under(
+                                            ::boxology_contract::PathSegment::Variant(tag.into()),
+                                        ),
+                                )
+                            }
+                        }
+                    }
+                    _ => {
+                        Err(
+                            ::boxology_contract::DecodeError::new(
+                                    ::boxology_contract::DecodeErrorKind::UnknownVariant(
+                                        tag.into(),
+                                    ),
+                                )
+                                .under(
+                                    ::boxology_contract::PathSegment::Variant(tag.into()),
+                                ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifyFailure {
+    pub stage: ClassifyFailureStage,
+    pub diagnostics: ::std::string::String,
+}
+impl ::boxology_contract::ContractType for ClassifyFailure {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.stage)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("stage".into()))
+            })?
+        {
+            fields.push(("stage".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.diagnostics,
+            )
+            .map_err(|error| {
+                error
+                    .under(::boxology_contract::PathSegment::Field("diagnostics".into()))
+            })?
+        {
+            fields.push(("diagnostics".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "stage" | "diagnostics" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            stage: <ClassifyFailureStage as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("stage"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("stage".into()))
+                })?,
+            diagnostics: <::std::string::String as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("diagnostics"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("diagnostics".into()),
+                        )
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifyOutcome {
+    pub report: ::core::option::Option<ClassifyReport>,
+    pub failure: ::core::option::Option<ClassifyFailure>,
+}
+impl ::boxology_contract::ContractType for ClassifyOutcome {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.report,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("report".into()))
+            })?
+        {
+            fields.push(("report".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.failure,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("failure".into()))
+            })?
+        {
+            fields.push(("failure".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "report" | "failure" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            report: <::core::option::Option<
+                ClassifyReport,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("report"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("report".into()))
+                })?,
+            failure: <::core::option::Option<
+                ClassifyFailure,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("failure"))
+                .map_err(|error| {
+                    error
+                        .under(::boxology_contract::PathSegment::Field("failure".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassifierError {
+    Internal,
+    Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+impl ::boxology_contract::ContractType for ClassifierError {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let (tag, payload) = match self {
+            Self::Internal => ("Internal".into(), ::boxology_contract::SlotValue::Null),
+            Self::Unknown { tag, payload } => {
+                (
+                    tag.clone(),
+                    ::boxology_contract::SlotValue::Value(
+                        ::boxology_contract::ContractValue::opaque(payload.forward()),
+                    ),
+                )
+            }
+        };
+        Ok(::boxology_contract::ContractValue::enum_value(tag, payload))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Enum { tag, payload } = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        match tag {
+            "Internal" if matches!(payload, ::boxology_contract::SlotValue::Null) => {
+                Ok(Self::Internal)
+            }
+            "Internal" => {
+                Err(
+                    ::boxology_contract::DecodeError::new(
+                            ::boxology_contract::DecodeErrorKind::UnexpectedPayload,
+                        )
+                        .under(::boxology_contract::PathSegment::Variant(tag.into())),
+                )
             }
             _ => {
                 match payload {
@@ -1006,7 +1354,7 @@ impl ::boxology_contract::ContractType for ClassifierError {
 impl ::boxology_contract::ContractError for ClassifierError {
     fn error_tag(&self) -> &str {
         match self {
-            Self::Failure(..) => "Failure",
+            Self::Internal => "Internal",
             Self::Unknown { tag, .. } => tag,
         }
     }
@@ -1026,7 +1374,7 @@ pub mod test_support {
     type ClassifyFuture = Pin<
         Box<
             dyn Future<
-                Output = Result<super::ClassifyReport, ClassifierError>,
+                Output = Result<super::ClassifyOutcome, ClassifierError>,
             > + Send + 'static,
         >,
     >;
@@ -1045,7 +1393,7 @@ pub mod test_support {
         pub fn with_classify<F, Fut>(mut self, responder: F) -> Self
         where
             F: Fn(CallContext, super::ClassifyRequest) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = Result<super::ClassifyReport, ClassifierError>> + Send
+            Fut: Future<Output = Result<super::ClassifyOutcome, ClassifierError>> + Send
                 + 'static,
         {
             self.classify = Some(
@@ -1126,8 +1474,8 @@ pub mod test_support {
 }
 #[doc(hidden)]
 pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [
-    123, 72, 36, 98, 177, 26, 172, 230, 176, 147, 147, 85, 243, 211, 3, 121, 75, 243,
-    219, 76, 11, 153, 90, 37, 169, 94, 154, 114, 42, 127, 41, 100,
+    109, 184, 18, 42, 31, 151, 168, 155, 0, 129, 107, 38, 231, 98, 215, 88, 240, 163, 42,
+    234, 254, 59, 212, 168, 89, 246, 169, 255, 100, 153, 180, 91,
 ];
 #[doc(hidden)]
 #[macro_export]
@@ -1139,16 +1487,16 @@ macro_rules! __boxology_check_implementation {
     (@ find $receiver:ty; classify valid; $($rest:tt)*) => {
         const _ : () = { fn require_service < T : ::core::marker::Send +
         ::core::marker::Sync + 'static > () {} fn require_future < F :
-        ::core::future::Future < Output = ::core::result::Result <$crate::ClassifyReport,
-        $crate::ClassifierError >> + ::core::marker::Send > (_ : F) {} fn check(receiver
-        : &$receiver, context : ::boxology::CallContext, input : $crate::ClassifyRequest)
-        { require_service::<$receiver > (); require_future(receiver.classify(context,
-        input)); } }; impl $crate::ClassifierDispatch for $receiver { fn classify <'a >
-        (&'a self, context : ::boxology::CallContext, input : $crate::ClassifyRequest,)
-        -> ::std::pin::Pin < ::std::boxed::Box < dyn ::core::future::Future < Output =
-        ::core::result::Result < $crate::ClassifyReport, $crate::ClassifierError, >, > +
-        ::core::marker::Send + 'a, >, > { ::std::boxed::Box::pin(self.classify(context,
-        input)) } }
+        ::core::future::Future < Output = ::core::result::Result
+        <$crate::ClassifyOutcome, $crate::ClassifierError >> + ::core::marker::Send > (_
+        : F) {} fn check(receiver : &$receiver, context : ::boxology::CallContext, input
+        : $crate::ClassifyRequest) { require_service::<$receiver > ();
+        require_future(receiver.classify(context, input)); } }; impl
+        $crate::ClassifierDispatch for $receiver { fn classify <'a > (&'a self, context :
+        ::boxology::CallContext, input : $crate::ClassifyRequest,) -> ::std::pin::Pin <
+        ::std::boxed::Box < dyn ::core::future::Future < Output = ::core::result::Result
+        < $crate::ClassifyOutcome, $crate::ClassifierError, >, > + ::core::marker::Send +
+        'a, >, > { ::std::boxed::Box::pin(self.classify(context, input)) } }
     };
     (@ find $receiver:ty; classify invalid; $($rest:tt)*) => {
         compile_error!("Boxology capability has an invalid structural signature");

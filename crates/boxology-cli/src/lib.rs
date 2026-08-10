@@ -23,7 +23,12 @@ use boxology_runtime::{
     Composition, CompositionBuilder, TransportBinding, TransportExposure, TransportHandle,
     TransportJoinFuture, TransportRuntime,
 };
-use classifier_contract::{ClassifierError, ClassifierHandle, ClassifyReport, ClassifyRequest};
+use classifier_contract::{
+    ClassifierError, ClassifierHandle, ClassifyFailure, ClassifyFailureStage, ClassifyOutcome,
+    ClassifyReport, ClassifyRequest, CompatibilityClass,
+};
+
+const INVALID_CLASSIFIER_OUTCOME: &str = "classifier call failed: invalid classifier outcome";
 
 /// Live local classifier box assembled for the CLI composition.
 pub struct ClassifierComposition {
@@ -77,11 +82,57 @@ impl ClassifierComposition {
             submitted: submitted.to_vec(),
         };
         match ready(self.handle.classify(context(), request))? {
-            Ok(report) => Ok(report),
-            Err(CallError::Domain(ClassifierError::Failure(message))) => Err(message),
+            Ok(outcome) => outcome_report(outcome),
+            Err(CallError::Domain(ClassifierError::Internal | ClassifierError::Unknown { .. })) => {
+                Err(INVALID_CLASSIFIER_OUTCOME.into())
+            }
             Err(error) => Err(format!("classifier call failed: {error}")),
         }
     }
+}
+
+fn outcome_report(outcome: ClassifyOutcome) -> Result<ClassifyReport, String> {
+    match (outcome.report, outcome.failure) {
+        (Some(report), None) if report_classes_are_known(&report) => Ok(report),
+        (None, Some(failure)) => failure_message(failure),
+        _ => Err(INVALID_CLASSIFIER_OUTCOME.into()),
+    }
+}
+
+fn failure_message(failure: ClassifyFailure) -> Result<ClassifyReport, String> {
+    let (code, stage, detail) = match failure.stage {
+        ClassifyFailureStage::Base => (
+            "BXW0077",
+            "base",
+            "the checked-in schema document must satisfy the strict format-1 reader",
+        ),
+        ClassifyFailureStage::Submitted => (
+            "BXW0078",
+            "submitted",
+            "the regenerated schema document must satisfy the strict format-1 reader",
+        ),
+        ClassifyFailureStage::Pairing => (
+            "BXW0079",
+            "pairing",
+            "the checked-in and regenerated schema documents must pair and satisfy classifier integrity",
+        ),
+        ClassifyFailureStage::Unknown { .. } => {
+            return Err(INVALID_CLASSIFIER_OUTCOME.into());
+        }
+    };
+    Err(format!("{code} {stage}: {detail}: {}", failure.diagnostics))
+}
+
+fn report_classes_are_known(report: &ClassifyReport) -> bool {
+    class_is_known(&report.verdict)
+        && report
+            .findings
+            .iter()
+            .all(|finding| class_is_known(&finding.class))
+}
+
+fn class_is_known(class: &CompatibilityClass) -> bool {
+    !matches!(class, CompatibilityClass::Unknown { .. })
 }
 
 fn context() -> CallContext {
@@ -184,5 +235,62 @@ impl ErasedCallTarget for ExposureTarget {
             ))));
         }
         self.0.dispatch(context, input)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boxology_contract::{OpaquePayload, OpaqueTree};
+
+    fn empty_report(verdict: CompatibilityClass) -> ClassifyReport {
+        ClassifyReport {
+            verdict,
+            findings: Vec::new(),
+            rendered_text: "classification unchanged\n".into(),
+        }
+    }
+
+    fn unknown_class() -> CompatibilityClass {
+        CompatibilityClass::Unknown {
+            tag: "Future".into(),
+            payload: OpaquePayload::new(OpaqueTree::Null),
+        }
+    }
+
+    #[test]
+    fn invalid_or_unknown_classifier_outcomes_fail_internally() {
+        for outcome in [
+            ClassifyOutcome {
+                report: None,
+                failure: None,
+            },
+            ClassifyOutcome {
+                report: Some(empty_report(CompatibilityClass::Unchanged)),
+                failure: Some(ClassifyFailure {
+                    stage: ClassifyFailureStage::Base,
+                    diagnostics: "diagnostic".into(),
+                }),
+            },
+            ClassifyOutcome {
+                report: Some(empty_report(unknown_class())),
+                failure: None,
+            },
+            ClassifyOutcome {
+                report: None,
+                failure: Some(ClassifyFailure {
+                    stage: ClassifyFailureStage::Unknown {
+                        tag: "Future".into(),
+                        payload: OpaquePayload::new(OpaqueTree::Null),
+                    },
+                    diagnostics: "diagnostic".into(),
+                }),
+            },
+        ] {
+            assert_eq!(
+                outcome_report(outcome).unwrap_err(),
+                INVALID_CLASSIFIER_OUTCOME
+            );
+        }
     }
 }

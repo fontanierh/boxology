@@ -173,8 +173,8 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
     manifest_digest: Some("5212c9912674eb2310a861633a55027475b7c1f3dd7f7528cabefe825e0e929e"),
-    source_digest: "56af47d4ef7a5dff756d376de029a62aa54dab2d8f01aae1bbd66ad7a78d709a",
-    body_digest: "ea9651682c3d3a8656dba555ff440127a2640adae9a35cc9d548b66a4bc71a92",
+    source_digest: "d9aff947f1b7bbbbe2ce391d41a6d8d547dbfe2044474c70159390cb10671fb5",
+    body_digest: "1d10c902108688b0a4e401b5da9b0fd0aa32e487a5b83d0ae8df463da40fe03f",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),

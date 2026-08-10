@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const LIB: &str = include_str!("../src/lib.rs");
 const PACKAGE_HASH: u64 = 8_561_730_811_314_096_507;
-const LIB_HASH: u64 = 7_880_428_116_796_372_419;
+const LIB_HASH: u64 = 18_296_820_620_204_196_880;
 
 fn hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {

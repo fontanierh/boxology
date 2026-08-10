@@ -36,11 +36,27 @@ boxology::contract! {
         pub rendered_text: String,
     }
 
+    pub enum ClassifyFailureStage {
+        Base,
+        Submitted,
+        Pairing,
+    }
+
+    pub struct ClassifyFailure {
+        pub stage: ClassifyFailureStage,
+        pub diagnostics: String,
+    }
+
+    pub struct ClassifyOutcome {
+        pub report: Option<ClassifyReport>,
+        pub failure: Option<ClassifyFailure>,
+    }
+
     #[error]
-    pub enum ClassifierError { Failure(String) }
+    pub enum ClassifierError { Internal }
 
     #[capability]
-    pub async fn classify(request: ClassifyRequest) -> Result<ClassifyReport, ClassifierError>;
+    pub async fn classify(request: ClassifyRequest) -> Result<ClassifyOutcome, ClassifierError>;
 }
 
 /// Pure implementation of the generated classifier capability.
@@ -53,33 +69,46 @@ impl ClassifierService {
         &self,
         _context: boxology::CallContext,
         request: ClassifyRequest,
-    ) -> Result<ClassifyReport, ClassifierError> {
+    ) -> Result<ClassifyOutcome, ClassifierError> {
         let base = match request.base.as_deref() {
-            Some(bytes) => Some(SchemaDocument::parse(bytes).map_err(base_failure)?),
+            Some(bytes) => match SchemaDocument::parse(bytes) {
+                Ok(document) => Some(document),
+                Err(diagnostics) => {
+                    return Ok(failure(ClassifyFailureStage::Base, diagnostics));
+                }
+            },
             None => None,
         };
-        let submitted = SchemaDocument::parse(&request.submitted).map_err(submitted_failure)?;
-        let report = classify(base.as_ref(), Some(&submitted)).map_err(pairing_failure)?;
-        Ok(boundary_report(&report))
+        let submitted = match SchemaDocument::parse(&request.submitted) {
+            Ok(document) => document,
+            Err(diagnostics) => {
+                return Ok(failure(ClassifyFailureStage::Submitted, diagnostics));
+            }
+        };
+        let report = match classify(base.as_ref(), Some(&submitted)) {
+            Ok(report) => report,
+            Err(diagnostics) => {
+                return Ok(failure(ClassifyFailureStage::Pairing, diagnostics));
+            }
+        };
+        Ok(ClassifyOutcome {
+            report: Some(boundary_report(&report)),
+            failure: None,
+        })
     }
 }
 
-fn base_failure(diagnostics: boxology_schema::Diagnostics) -> ClassifierError {
-    ClassifierError::Failure(format!(
-        "BXW0077 base: the checked-in schema document must satisfy the strict format-1 reader: {diagnostics}"
-    ))
-}
-
-fn submitted_failure(diagnostics: boxology_schema::Diagnostics) -> ClassifierError {
-    ClassifierError::Failure(format!(
-        "BXW0078 submitted: the regenerated schema document must satisfy the strict format-1 reader: {diagnostics}"
-    ))
-}
-
-fn pairing_failure(diagnostics: boxology_schema::Diagnostics) -> ClassifierError {
-    ClassifierError::Failure(format!(
-        "BXW0079 pairing: the checked-in and regenerated schema documents must pair and satisfy classifier integrity: {diagnostics}"
-    ))
+fn failure(
+    stage: ClassifyFailureStage,
+    diagnostics: boxology_schema::Diagnostics,
+) -> ClassifyOutcome {
+    ClassifyOutcome {
+        report: None,
+        failure: Some(ClassifyFailure {
+            stage,
+            diagnostics: diagnostics.to_string(),
+        }),
+    }
 }
 
 fn boundary_report(report: &ClassificationReport) -> ClassifyReport {
