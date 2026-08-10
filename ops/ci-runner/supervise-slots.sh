@@ -33,6 +33,9 @@ spawn_slot() {
     export RUST_TEST_THREADS="$SLOT_RUST_TEST_THREADS"
     export CONTAINER_CPUS="$SLOT_CONTAINER_CPUS"
     export CONTAINER_MEMORY="$SLOT_CONTAINER_MEMORY"
+    # The three capacity slots stay generic even if an operator shell happens
+    # to carry the base service's required-PR affinity label.
+    export RUNNER_EXTRA_LABEL=
     exec "$SUPERVISOR"
   ) >>"$log_path" 2>&1 &
   pids[$slot]=$!

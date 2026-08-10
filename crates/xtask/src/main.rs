@@ -1048,6 +1048,15 @@ mod tests {
     #[test]
     fn workflows_keep_product_dispatch_only_and_preserve_scoped_pr_gates() {
         let workflow = include_str!("../../../.github/workflows/pr.yml");
+        assert_eq!(
+            workflow
+                .matches("runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]")
+                .count(),
+            1
+        );
+        assert!(
+            !workflow.contains("runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr-primary]")
+        );
         let scope = workflow
             .split_once("- name: Select test scope")
             .expect("Select test scope step")
@@ -1069,6 +1078,8 @@ mod tests {
         assert!(!workflow.contains("--bin boxology -- check"));
         assert!(!workflow.contains("cargo xtask ci --base"));
         assert!(workflow.contains("cargo xtask ci-fixtures"));
+        assert!(workflow.contains("if: steps.scope.outputs.run_xtask == 'true'"));
+        assert!(scope.contains("crates/xtask/") && scope.contains("ops/ci-runner/"));
         assert!(workflow.contains("steps.scope.outputs.run_reaper == 'true'"));
         assert!(workflow.contains("steps.scope.outputs.run_delivery_worker == 'true'"));
         assert!(workflow.contains("cargo test -p xtask --locked"));
@@ -1154,6 +1165,27 @@ mod tests {
         let deep = include_str!("../../../.github/workflows/deep-validation.yml");
         assert_eq!(deep.matches("cargo xtask ci --no-budget").count(), 1);
         assert!(!deep.contains("--bin boxology -- check"));
+    }
+
+    #[test]
+    fn base_runner_configures_one_primary_affinity_and_capacity_slots_stay_generic() {
+        let supervisor = include_str!("../../../ops/ci-runner/supervise-macos.sh");
+        assert!(supervisor.contains("RUNNER_LABEL=boxology-macos-pr\n"));
+        assert!(supervisor.contains("RUNNER_EXTRA_LABEL=\"${RUNNER_EXTRA_LABEL:-}\""));
+        assert!(supervisor.contains("$RUNNER_EXTRA_LABEL\" != \"$RUNNER_LABEL"));
+        assert!(supervisor.contains("length) < 1"));
+        assert!(supervisor.contains("if $extra == \"\" then [] else [$extra] end"));
+
+        let base =
+            include_str!("../../../ops/ci-runner/com.fontanierh.boxology-ci-macos-runner.plist");
+        assert_eq!(base.matches("boxology-macos-pr-primary").count(), 1);
+
+        let slots = include_str!("../../../ops/ci-runner/supervise-slots.sh");
+        let slots_plist = include_str!(
+            "../../../ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots.plist"
+        );
+        assert_eq!(slots.matches("export RUNNER_EXTRA_LABEL=").count(), 1);
+        assert!(!slots_plist.contains("boxology-macos-pr-primary"));
     }
 
     #[test]
