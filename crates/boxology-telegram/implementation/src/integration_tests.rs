@@ -410,6 +410,42 @@ fn paired_state(paths: &Paths) {
     .unwrap();
 }
 
+fn unhandled_event(paths: &Paths, event_id: &str, update_id: i64) {
+    state::update(paths, |state| {
+        state.next_offset = update_id + 1;
+        state.events.push(EventRecord {
+            event_id: event_id.into(),
+            update_id,
+            kind: "text".into(),
+            text: "incoming context".into(),
+            received_at: 1,
+            handled: false,
+            reply_to: None,
+            ask_id: None,
+            lifecycle_key: None,
+            choice: None,
+        });
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn contract_error(
+    code: &str,
+    message: &str,
+    class: boxology_generated_contract::FailureClass,
+    retryable: bool,
+    retry_after_seconds: Option<u64>,
+) -> boxology_generated_contract::OperationError {
+    boxology_generated_contract::OperationError {
+        code: code.into(),
+        message: message.into(),
+        retryable,
+        retry_after_seconds,
+        class,
+    }
+}
+
 #[test]
 fn typed_send_seam_returns_exact_delivery_and_replay_receipts() {
     let mut context = Context::new(vec![]);
@@ -552,12 +588,263 @@ fn generated_handles_send_replay_and_structured_ask_end_to_end() {
 }
 
 #[test]
-fn disabled_generated_send_and_ask_return_authorization_without_side_effects() {
+fn generated_reply_correlates_marks_handled_and_replays_without_a_write() {
+    let mut context = Context::new(vec![response(&json!({"message_id": 600}))]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    let (composition, telegram) = assembled_telegram(&["ask", "reply"]);
+    let ask = run_ready(telegram.ask(
+        call_context(),
+        boxology_generated_contract::AskRequest {
+            summary: "Choose the correlated reply path.".into(),
+            recommendation: "Reply through the generated handle.".into(),
+            alternatives: None,
+            lifecycle_key: "reply-correlation".into(),
+            dedup_key: "reply-correlation-ask".into(),
+        },
+    ))
+    .unwrap()
+    .ask
+    .unwrap();
+    context.replace_fake(vec![response(&json!([{"update_id": 41, "message": {
+        "message_id": 91, "from": {"id": 42, "is_bot": false},
+        "chat": {"id": 42, "type": "private"}, "text": "incoming context",
+        "reply_to_message": {"message_id": 600, "chat": {"id": 42, "type": "private"}}
+    }}]))]);
+    let (polled, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
+    assert_eq!(exit, ExitClass::Success, "{polled}");
+    assert_eq!(ok(&polled)["event"]["ask_id"], ask.ask_id);
+    context.replace_fake(vec![response(&json!({"message_id": 601}))]);
+    let request = boxology_generated_contract::ReplyRequest {
+        event_id: "tg:41:91".into(),
+        text: "typed response".into(),
+        dedup_key: "typed-reply-1".into(),
+    };
+
+    let first = run_ready(telegram.reply(call_context(), request.clone())).unwrap();
+    assert_eq!(first.error, None);
+    assert_eq!(
+        first.delivery,
+        Some(boxology_generated_contract::DeliveryReceipt {
+            dedup_key: "typed-reply-1".into(),
+            message_id: 601,
+            deduplicated: false,
+        })
+    );
+    let replay = run_ready(telegram.reply(call_context(), request)).unwrap();
+    assert_eq!(replay.error, None);
+    assert!(replay.delivery.unwrap().deduplicated);
+
+    let requests = context.fake.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body = request_body(&requests[0]);
+    assert_eq!(body["reply_parameters"]["message_id"], 91);
+    assert_eq!(body["text"], "typed response");
+    drop(requests);
+    let durable = state::read(&paths).unwrap();
+    assert!(durable.events[0].handled);
+    assert_eq!(durable.asks[0].state, "answered");
+    drop(composition);
+}
+
+#[test]
+fn generated_reply_projects_safe_policy_and_rate_limit_failures() {
+    let mut context = Context::new(vec![]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    unhandled_event(&paths, "tg:42:92", 42);
+    let (composition, telegram) = assembled_telegram(&["reply"]);
+
+    let unknown = run_ready(telegram.reply(
+        call_context(),
+        boxology_generated_contract::ReplyRequest {
+            event_id: "tg:43:93".into(),
+            text: "safe response".into(),
+            dedup_key: "unknown-reply-1".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(unknown.delivery, None);
+    assert_eq!(
+        unknown.error,
+        Some(contract_error(
+            "unknown_event",
+            "event is not available",
+            boxology_generated_contract::FailureClass::Policy,
+            false,
+            None,
+        ))
+    );
+
+    context.replace_fake(vec![raw(r#"{"ok":false,"error_code":429,"description":"secret rate detail","parameters":{"retry_after":3}}"#)]);
+    let limited = run_ready(telegram.reply(
+        call_context(),
+        boxology_generated_contract::ReplyRequest {
+            event_id: "tg:42:92".into(),
+            text: "safe response".into(),
+            dedup_key: "limited-reply-1".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(limited.delivery, None);
+    assert_eq!(
+        limited.error,
+        Some(contract_error(
+            "telegram_rate_limited",
+            "Telegram is temporarily unavailable",
+            boxology_generated_contract::FailureClass::Transient,
+            true,
+            Some(3),
+        ))
+    );
+    assert!(!state::read(&paths).unwrap().events[0].handled);
+    assert_eq!(context.fake.request_count(), 1);
+    drop(composition);
+}
+
+#[test]
+fn generated_resolution_preserves_ambiguity_and_both_recovery_paths() {
+    let mut context = Context::new(vec![None]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    let (composition, telegram) = assembled_telegram(&["send", "resolve_send"]);
+    let first_request = boxology_generated_contract::SendRequest {
+        text: "uncertain first delivery".into(),
+        dedup_key: "ambiguous-typed-1".into(),
+    };
+
+    let first = run_ready(telegram.send(call_context(), first_request.clone())).unwrap();
+    assert_eq!(first.delivery, None);
+    assert_eq!(
+        first.error,
+        Some(contract_error(
+            "delivery_ambiguous",
+            "outbound delivery requires explicit resolution",
+            boxology_generated_contract::FailureClass::Ambiguous,
+            false,
+            None,
+        ))
+    );
+    assert_eq!(
+        run_ready(telegram.send(call_context(), first_request.clone()))
+            .unwrap()
+            .error,
+        first.error
+    );
+    assert_eq!(context.fake.request_count(), 1, "ambiguity must not retry");
+
+    let before_invalid = fs::read(context.root.join("state.json")).unwrap();
+    let invalid = run_ready(telegram.resolve_send(
+        call_context(),
+        boxology_generated_contract::ResolveSendRequest {
+            dedup_key: "ambiguous-typed-1".into(),
+            resolution: boxology_generated_contract::DeliveryResolution {
+                kind: boxology_generated_contract::ResolutionKind::Delivered,
+                message_id: None,
+            },
+        },
+    ))
+    .unwrap();
+    assert_eq!(invalid.resolution, None);
+    assert_eq!(
+        invalid.error,
+        Some(contract_error(
+            "invalid_resolution",
+            "delivery resolution is invalid",
+            boxology_generated_contract::FailureClass::Input,
+            false,
+            None,
+        ))
+    );
+    assert_eq!(
+        fs::read(context.root.join("state.json")).unwrap(),
+        before_invalid
+    );
+
+    let retryable = run_ready(telegram.resolve_send(
+        call_context(),
+        boxology_generated_contract::ResolveSendRequest {
+            dedup_key: "ambiguous-typed-1".into(),
+            resolution: boxology_generated_contract::DeliveryResolution {
+                kind: boxology_generated_contract::ResolutionKind::NotDelivered,
+                message_id: None,
+            },
+        },
+    ))
+    .unwrap();
+    assert_eq!(retryable.error, None);
+    assert_eq!(
+        retryable.resolution,
+        Some(boxology_generated_contract::ResolveSendReceipt {
+            dedup_key: "ambiguous-typed-1".into(),
+            resolved: boxology_generated_contract::ResolutionKind::NotDelivered,
+            message_id: None,
+        })
+    );
+    context.replace_fake(vec![response(&json!({"message_id": 602}))]);
+    let retried = run_ready(telegram.send(call_context(), first_request)).unwrap();
+    assert_eq!(retried.error, None);
+    assert_eq!(retried.delivery.unwrap().message_id, 602);
+
+    context.replace_fake(vec![None]);
+    let supplied_request = boxology_generated_contract::SendRequest {
+        text: "uncertain supplied delivery".into(),
+        dedup_key: "ambiguous-typed-2".into(),
+    };
+    assert!(
+        run_ready(telegram.send(call_context(), supplied_request.clone()))
+            .unwrap()
+            .delivery
+            .is_none()
+    );
+    let supplied = run_ready(telegram.resolve_send(
+        call_context(),
+        boxology_generated_contract::ResolveSendRequest {
+            dedup_key: "ambiguous-typed-2".into(),
+            resolution: boxology_generated_contract::DeliveryResolution {
+                kind: boxology_generated_contract::ResolutionKind::Delivered,
+                message_id: Some(603),
+            },
+        },
+    ))
+    .unwrap();
+    assert_eq!(supplied.error, None);
+    assert_eq!(
+        supplied.resolution,
+        Some(boxology_generated_contract::ResolveSendReceipt {
+            dedup_key: "ambiguous-typed-2".into(),
+            resolved: boxology_generated_contract::ResolutionKind::Delivered,
+            message_id: Some(603),
+        })
+    );
+    let replay = run_ready(telegram.send(call_context(), supplied_request)).unwrap();
+    assert_eq!(replay.delivery.unwrap().message_id, 603);
+    assert_eq!(
+        context.fake.request_count(),
+        1,
+        "supplied delivery must not call API"
+    );
+    let durable = state::read(&paths).unwrap();
+    assert_eq!(durable.outbound[0].message_id, Some(602));
+    assert_eq!(durable.outbound[1].message_id, Some(603));
+    drop(composition);
+}
+
+#[test]
+fn disabled_generated_commands_return_authorization_without_side_effects() {
     let context = Context::new(vec![]);
     unsafe { std::env::remove_var(ENABLED_VARIABLE) };
     let paths = Paths::from_env().unwrap();
     paired_state(&paths);
-    let (composition, telegram) = assembled_telegram(&["send", "ask"]);
+    let before = fs::read(context.root.join("state.json")).unwrap();
+    let (composition, telegram) = assembled_telegram(&["send", "ask", "reply", "resolve_send"]);
+    let authorization = contract_error(
+        "telegram_disabled",
+        "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1",
+        boxology_generated_contract::FailureClass::Authorization,
+        false,
+        None,
+    );
 
     let outcome = run_ready(telegram.send(
         call_context(),
@@ -568,16 +855,7 @@ fn disabled_generated_send_and_ask_return_authorization_without_side_effects() {
     ))
     .unwrap();
     assert_eq!(outcome.delivery, None);
-    assert_eq!(
-        outcome.error,
-        Some(boxology_generated_contract::OperationError {
-            code: "telegram_disabled".into(),
-            message: "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1".into(),
-            retryable: false,
-            retry_after_seconds: None,
-            class: boxology_generated_contract::FailureClass::Authorization,
-        })
-    );
+    assert_eq!(outcome.error, Some(authorization.clone()));
 
     let outcome = run_ready(telegram.ask(
         call_context(),
@@ -591,20 +869,35 @@ fn disabled_generated_send_and_ask_return_authorization_without_side_effects() {
     ))
     .unwrap();
     assert_eq!(outcome.ask, None);
-    assert_eq!(
-        outcome.error,
-        Some(boxology_generated_contract::OperationError {
-            code: "telegram_disabled".into(),
-            message: "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1".into(),
-            retryable: false,
-            retry_after_seconds: None,
-            class: boxology_generated_contract::FailureClass::Authorization,
-        })
-    );
+    assert_eq!(outcome.error, Some(authorization.clone()));
+
+    let reply = run_ready(telegram.reply(
+        call_context(),
+        boxology_generated_contract::ReplyRequest {
+            event_id: "invalid-before-gate".into(),
+            text: "".into(),
+            dedup_key: "".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(reply.delivery, None);
+    assert_eq!(reply.error, Some(authorization.clone()));
+
+    let resolution = run_ready(telegram.resolve_send(
+        call_context(),
+        boxology_generated_contract::ResolveSendRequest {
+            dedup_key: "".into(),
+            resolution: boxology_generated_contract::DeliveryResolution {
+                kind: boxology_generated_contract::ResolutionKind::Delivered,
+                message_id: None,
+            },
+        },
+    ))
+    .unwrap();
+    assert_eq!(resolution.resolution, None);
+    assert_eq!(resolution.error, Some(authorization));
     assert_eq!(context.fake.request_count(), 0);
-    let durable = state::read(&paths).unwrap();
-    assert!(durable.outbound.is_empty());
-    assert!(durable.asks.is_empty());
+    assert_eq!(fs::read(context.root.join("state.json")).unwrap(), before);
     drop(composition);
 }
 

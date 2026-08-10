@@ -34,7 +34,7 @@ impl SendReceipt {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ReplyRequest {
+struct JsonReplyRequest {
     schema: u8,
     event_id: String,
     text: String,
@@ -43,17 +43,60 @@ struct ReplyRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ResolveRequest {
+struct JsonResolveRequest {
     schema: u8,
     dedup_key: String,
-    resolution: Resolution,
+    resolution: JsonResolution,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Resolution {
+struct JsonResolution {
     kind: String,
     message_id: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReplyCommand {
+    pub(crate) event_id: String,
+    pub(crate) text: String,
+    pub(crate) dedup_key: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ResolveCommand {
+    pub(crate) dedup_key: String,
+    pub(crate) kind: String,
+    pub(crate) message_id: Option<i64>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Resolved {
+    Delivered,
+    NotDelivered,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ResolveReceipt {
+    pub(crate) dedup_key: String,
+    pub(crate) resolved: Resolved,
+    pub(crate) message_id: Option<i64>,
+}
+
+impl ResolveReceipt {
+    fn into_value(self) -> Value {
+        match self.message_id {
+            Some(message_id) => json!({
+                "dedup_key": self.dedup_key,
+                "resolved": "delivered",
+                "message_id": message_id,
+            }),
+            None => json!({
+                "dedup_key": self.dedup_key,
+                "resolved": "not_delivered",
+            }),
+        }
+    }
 }
 
 enum Start {
@@ -113,17 +156,26 @@ pub(crate) fn send_typed(command: SendCommand) -> Result<SendReceipt, AppError> 
 }
 
 pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
-    let request: ReplyRequest = parse(input)?;
+    let request: JsonReplyRequest = parse(input)?;
     check_schema(request.schema)?;
-    validate_text(&request.text)?;
-    validate_key(&request.dedup_key)?;
-    validate_event_id(&request.event_id)?;
+    reply_typed(ReplyCommand {
+        event_id: request.event_id,
+        text: request.text,
+        dedup_key: request.dedup_key,
+    })
+    .map(SendReceipt::into_value)
+}
+
+pub(crate) fn reply_typed(command: ReplyCommand) -> Result<SendReceipt, AppError> {
+    validate_text(&command.text)?;
+    validate_key(&command.dedup_key)?;
+    validate_event_id(&command.event_id)?;
     let paths = Paths::from_env()?;
     let state = state::read(&paths)?;
     let event = state
         .events
         .iter()
-        .find(|event| event.event_id == request.event_id)
+        .find(|event| event.event_id == command.event_id)
         .cloned()
         .ok_or_else(|| {
             AppError::new("unknown_event", "event is not available", ExitClass::Policy)
@@ -135,8 +187,8 @@ pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
         &paths,
         Delivery {
             kind: "reply",
-            dedup_key: &request.dedup_key,
-            text: &request.text,
+            dedup_key: &command.dedup_key,
+            text: &command.text,
             reply_to: Some(message_id),
             buttons: None,
             chat_id,
@@ -144,23 +196,32 @@ pub(crate) fn reply(input: &[u8]) -> Result<Value, AppError> {
             ask_id: ask_id.as_deref(),
         },
     )?;
-    Ok(delivery_value(
-        request.dedup_key,
-        receipt.message_id,
-        receipt.deduplicated,
-    ))
+    Ok(SendReceipt {
+        dedup_key: command.dedup_key,
+        message_id: receipt.message_id,
+        deduplicated: receipt.deduplicated,
+    })
 }
 
 pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
-    let request: ResolveRequest = parse(input)?;
+    let request: JsonResolveRequest = parse(input)?;
     check_schema(request.schema)?;
-    validate_key(&request.dedup_key)?;
+    resolve_typed(ResolveCommand {
+        dedup_key: request.dedup_key,
+        kind: request.resolution.kind,
+        message_id: request.resolution.message_id,
+    })
+    .map(ResolveReceipt::into_value)
+}
+
+pub(crate) fn resolve_typed(command: ResolveCommand) -> Result<ResolveReceipt, AppError> {
+    validate_key(&command.dedup_key)?;
     let paths = Paths::from_env()?;
     state::update(&paths, |state| {
         let record = state
             .outbound
             .iter_mut()
-            .find(|record| record.dedup_key == request.dedup_key)
+            .find(|record| record.dedup_key == command.dedup_key)
             .ok_or_else(|| {
                 AppError::new(
                     "unknown_delivery",
@@ -168,10 +229,7 @@ pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
                     ExitClass::Policy,
                 )
             })?;
-        match (
-            request.resolution.kind.as_str(),
-            request.resolution.message_id,
-        ) {
+        match (command.kind.as_str(), command.message_id) {
             ("delivered", Some(message_id)) if message_id > 0 => {
                 record.state = "delivered".into();
                 record.message_id = Some(message_id);
@@ -190,14 +248,20 @@ pub(crate) fn resolve(input: &[u8]) -> Result<Value, AppError> {
                         ask.state = "answered".into();
                     }
                 }
-                Ok(
-                    json!({"dedup_key": request.dedup_key, "resolved": "delivered", "message_id": message_id}),
-                )
+                Ok(ResolveReceipt {
+                    dedup_key: command.dedup_key,
+                    resolved: Resolved::Delivered,
+                    message_id: Some(message_id),
+                })
             }
             ("not_delivered", None) => {
                 record.state = "retryable".into();
                 record.message_id = None;
-                Ok(json!({"dedup_key": request.dedup_key, "resolved": "not_delivered"}))
+                Ok(ResolveReceipt {
+                    dedup_key: command.dedup_key,
+                    resolved: Resolved::NotDelivered,
+                    message_id: None,
+                })
             }
             _ => Err(AppError::input(
                 "invalid_resolution",
