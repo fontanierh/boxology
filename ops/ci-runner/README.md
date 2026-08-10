@@ -75,8 +75,12 @@ live yet:
    `REQUIRED_PR_RUNNER_LABEL` integrity expectation in `crates/xtask/src/main.rs`. That PR can
    self-validate on the now-live label.
 
-Roll back by restoring the snapshot and reloading both services before reverting the workflow
-label. Do not substitute a persistent runner or weaken the exact label during activation.
+Roll back in the opposite safe order. While the primary registration is still live, first merge
+the paired two-file rollback that restores the generic `pr.yml` route and the generic
+`REQUIRED_PR_RUNNER_LABEL` expectation. Only after that rollback self-validates and merges should
+the operator drain jobs, restore the snapshot, reload both services, and verify four generic and
+zero primary registrations. Do not substitute a persistent runner or weaken the exact label during
+activation or rollback.
 
 Each supervisor validates tools, paths, runner count, repository response, locks, and the pinned
 runner base before provisioning. It APFS-clones the base into a fresh owned run directory, waits
@@ -165,10 +169,11 @@ the absence of unexpected owned run directories after jobs. Inspect only fixed s
 sanitized supervisor output; raw runner logs can contain secrets and must not be collected.
 
 Before topology work, disable dispatch, drain every queued/running workflow and busy runner, and
-snapshot installed scripts/plists with checksums. Rollback restores that snapshot before reloading
-services, then verifies registrations reconcile to exactly four. A stale lock may be removed only
-after proving its supervisor process is gone. Never register a persistent runner, reuse a checkout,
-widen credentials, or bypass JIT cleanup as a rollback shortcut.
+snapshot installed scripts/plists with checksums. After workflow routing and its integrity
+expectation are safely restored as described above, topology rollback restores that snapshot
+before reloading services, then verifies registrations reconcile to exactly four. A stale lock may
+be removed only after proving its supervisor process is gone. Never register a persistent runner,
+reuse a checkout, widen credentials, or bypass JIT cleanup as a rollback shortcut.
 
 To retire the active lane, drain it first, unload only the two owned native services, remove only
 their verified run state, and confirm their JIT registrations disappear. Reverting workflow
