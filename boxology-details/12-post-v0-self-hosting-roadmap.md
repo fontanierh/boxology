@@ -124,7 +124,7 @@ does not enable Telegram or grant permission to contact it.
 
 | Crate/category | Disposition | First useful proof |
 | --- | --- | --- |
-| `boxology-telegram` | Migrate use-case entrypoints; retain working implementation behavior and handwritten binding during the transition | T0 scalar send, then T2 command parity |
+| `boxology-telegram` | Migrate use-case entrypoints; retain working implementation behavior and handwritten binding during the transition | T0 scalar send, T1a typed send/ask, then T2 command parity |
 | `boxology-classifier` | Box the classify use case, not every parsing helper | Typed old/new schema input to findings report under #575 |
 | `boxology-cli` | Keep as a binding; route substantive self-hosted commands through generated handles | `check` and installer compositions under #575 |
 | `boxology-generator-model`, `boxology-generator-writer`, `boxology-generator` | Box the generation entrypoint and keep model/writer internals ordinary; #575 records the current checked-in bootstrap boundary, while the first pinned release later proves prior-release regeneration | Typed generation plan/result under #575 |
@@ -231,21 +231,25 @@ are application boxes or compositions, not reasons to enlarge the kernel by defa
 
 ## Dogfood and evidence protocol
 
-Every dogfood or self-hosting milestone must leave replayable evidence:
+Every bounded delivery slice leaves exact replayable evidence in its PR and linked
+issue:
 
 1. deterministic fake-model or fake-API tests cover success and meaningful
    failure/ambiguity paths;
 2. tests consume real generated handles, not handwritten substitutes with the
    same shape; from T2 onward the governed composition consumes those handles;
-3. cold generation from a clean copy is byte-stable and a second generation is
-   unchanged;
-4. `boxology check` passes on the governed workspace;
-5. a dated append-only record captures exact commit, commands, outcomes, and
-   limitations;
-6. mechanical or semantic friction is recorded in
-   [`ops/friction-log.md`](../ops/friction-log.md); and
-7. the epic, task, related legacy issues, PR reviews, and current `main` are
-   reconciled before closure.
+3. deterministic generation records the exact classification and a repeated run
+   is byte-unchanged when that slice changes generated surfaces; and
+4. the epic, task, related legacy issues, PR reviews, and current `main` are
+   reconciled before merge.
+
+Full dogfood-milestone or issue closeout additionally requires cold generation
+from a clean copy, `boxology check` on the governed workspace, and a dated
+append-only record of the exact commit, commands, outcomes, and limitations.
+Record mechanical or semantic friction in
+[`ops/friction-log.md`](../ops/friction-log.md) when the work actually encounters
+friction or relaxes a discipline. A delivered bounded slice such as T1a is real
+progress, but it does not by itself claim full Telegram self-hosting or closeout.
 
 A live-model or live-Telegram check complements deterministic evidence; it
 never replaces it. Secrets stay outside the repository, and external contact

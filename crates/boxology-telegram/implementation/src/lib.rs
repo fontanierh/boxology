@@ -517,20 +517,67 @@ mod tests {
     #[test]
     fn typed_errors_preserve_every_stable_failure_class() {
         let cases = [
-            (ExitClass::Input, SendTextError::Input),
-            (ExitClass::Authorization, SendTextError::Authorization),
-            (ExitClass::Conflict, SendTextError::Conflict),
-            (ExitClass::Local, SendTextError::Local),
-            (ExitClass::Policy, SendTextError::Policy),
-            (ExitClass::Transient, SendTextError::Transient),
-            (ExitClass::Permanent, SendTextError::Permanent),
-            (ExitClass::Ambiguous, SendTextError::Ambiguous),
-            (ExitClass::Invariant, SendTextError::Invariant),
+            (ExitClass::Input, SendTextError::Input, FailureClass::Input),
+            (
+                ExitClass::Authorization,
+                SendTextError::Authorization,
+                FailureClass::Authorization,
+            ),
+            (
+                ExitClass::Conflict,
+                SendTextError::Conflict,
+                FailureClass::Conflict,
+            ),
+            (ExitClass::Local, SendTextError::Local, FailureClass::Local),
+            (
+                ExitClass::Policy,
+                SendTextError::Policy,
+                FailureClass::Policy,
+            ),
+            (
+                ExitClass::Transient,
+                SendTextError::Transient,
+                FailureClass::Transient,
+            ),
+            (
+                ExitClass::Permanent,
+                SendTextError::Permanent,
+                FailureClass::Permanent,
+            ),
+            (
+                ExitClass::Ambiguous,
+                SendTextError::Ambiguous,
+                FailureClass::Ambiguous,
+            ),
+            (
+                ExitClass::Invariant,
+                SendTextError::Invariant,
+                FailureClass::Invariant,
+            ),
         ];
-        for (exit, expected) in cases {
+        for (index, (exit, send_error, failure_class)) in cases.into_iter().enumerate() {
             assert_eq!(
                 map_send_text_error(AppError::new("test", "test", exit)),
-                expected
+                send_error
+            );
+            let retryable = exit == ExitClass::Transient;
+            let retry_after = retryable.then_some(17);
+            assert_eq!(
+                operation_error(AppError {
+                    code: "exact_code",
+                    message: "exact message",
+                    retryable,
+                    exit,
+                    retry_after,
+                }),
+                OperationError {
+                    code: "exact_code".into(),
+                    message: "exact message".into(),
+                    retryable,
+                    retry_after_seconds: retry_after,
+                    class: failure_class,
+                },
+                "failure projection case {index}"
             );
         }
     }

@@ -494,7 +494,7 @@ fn generated_handles_send_replay_and_structured_ask_end_to_end() {
     );
     let replay = run_ready(telegram.send(call_context(), send)).unwrap();
     assert_eq!(replay.error, None);
-    assert_eq!(replay.delivery.unwrap().deduplicated, true);
+    assert!(replay.delivery.unwrap().deduplicated);
 
     let outcome = run_ready(telegram.ask(
         call_context(),
@@ -515,7 +515,7 @@ fn generated_handles_send_replay_and_structured_ask_end_to_end() {
     let ask = outcome.ask.expect("successful ask receipt");
     assert_eq!(ask.lifecycle_key, "release-choice");
     assert_eq!(ask.delivery.message_id, 576);
-    assert_eq!(ask.delivery.deduplicated, false);
+    assert!(!ask.delivery.deduplicated);
 
     let requests = context.fake.requests.lock().expect("fake requests");
     assert_eq!(requests.len(), 2, "send replay must not write to Telegram");
@@ -552,11 +552,12 @@ fn generated_handles_send_replay_and_structured_ask_end_to_end() {
 }
 
 #[test]
-fn disabled_generated_send_returns_structured_authorization_without_side_effects() {
+fn disabled_generated_send_and_ask_return_authorization_without_side_effects() {
     let context = Context::new(vec![]);
     unsafe { std::env::remove_var(ENABLED_VARIABLE) };
     let paths = Paths::from_env().unwrap();
-    let (composition, telegram) = assembled_telegram(&["send"]);
+    paired_state(&paths);
+    let (composition, telegram) = assembled_telegram(&["send", "ask"]);
 
     let outcome = run_ready(telegram.send(
         call_context(),
@@ -567,6 +568,29 @@ fn disabled_generated_send_returns_structured_authorization_without_side_effects
     ))
     .unwrap();
     assert_eq!(outcome.delivery, None);
+    assert_eq!(
+        outcome.error,
+        Some(boxology_generated_contract::OperationError {
+            code: "telegram_disabled".into(),
+            message: "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1".into(),
+            retryable: false,
+            retry_after_seconds: None,
+            class: boxology_generated_contract::FailureClass::Authorization,
+        })
+    );
+
+    let outcome = run_ready(telegram.ask(
+        call_context(),
+        boxology_generated_contract::AskRequest {
+            summary: "Must not leave the process".into(),
+            recommendation: "Keep Telegram disabled".into(),
+            alternatives: None,
+            lifecycle_key: "disabled-lifecycle".into(),
+            dedup_key: "disabled-ask-1".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(outcome.ask, None);
     assert_eq!(
         outcome.error,
         Some(boxology_generated_contract::OperationError {
