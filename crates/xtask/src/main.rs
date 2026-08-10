@@ -204,14 +204,14 @@ const CI_SKILL_AUDITS: &[fn(&Path) -> bool] = &[run_skill_audit_ci];
 const GENERATOR_MULTI_CAPABILITY_E2E: &str =
     "tests::generated_multi_capability_box_compiles_and_routes_both_capabilities";
 const GENERATOR_SEALED_IMPORT_E2E: &str =
-    "tests::generated_import_adapter_sealed_import_routes_to_real_provider_end_to_end";
+    "tests::structured_import_routes_through_provider_owned_alias_end_to_end";
 const GENERATOR_PR_EXCLUDED_LIVE_TEST_SPEC: external_test::LiveTestSpec =
     external_test::LiveTestSpec {
         manifest: "crates/boxology-generator/Cargo.toml",
         manifest_digest: "2a5d0e715e019c59f919d6b547a2e6c4830e75369d1a75d6ba1d654a718634be",
         source: "crates/boxology-generator/src/lib.rs",
         tests: &[GENERATOR_MULTI_CAPABILITY_E2E, GENERATOR_SEALED_IMPORT_E2E],
-        body_digest: "8c6452f54c7057f5384d0c2d71df4ad48eae506ccffd847dcacf853bede457f6",
+        body_digest: "43d1ae661136f78917180c6483811fc13f315569d67a7e4af650c279b3ddbe45",
     };
 #[cfg(test)]
 const GENERATOR_PR_EXCLUDED_UNIT_TESTS: &[&str] =

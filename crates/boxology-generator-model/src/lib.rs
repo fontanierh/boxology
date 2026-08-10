@@ -1046,7 +1046,7 @@ BXG0043 imports/hello.json:1:1-1:1 offending="import hello schema_format" rule="
 BXG0044 imports/hello.json:1:1-1:1 offending="import hello box_id" rule="an imported schema box_id must equal the declared import package" source="specs/s2-contract-generator.md D4"
 BXG0045 imports/hello.json:1:1-1:1 offending="import hello self-import" rule="a box must not declare an import of itself" source="specs/s2-contract-generator.md D3"
 BXG0046 imports/hello.json:1:1-1:1 offending="import hello revision" rule="an imported revision must be \"sha256:\" followed by 64 lowercase hexadecimal digits" source="specs/s2-contract-generator.md D4"
-BXG0047 imports/hello.json:1:1-1:1 offending="import hello capabilities" rule="each imported capability must declare a unique valid name, its box-qualified id, a unary shape, and known boundary leaves" source="specs/s2-contract-generator.md D4"
+BXG0047 imports/hello.json:1:1-1:1 offending="import hello contract surface" rule="an imported schema must be a strict format-1 contract whose unary capabilities use the supported structured boundary subset" source="specs/s2-contract-generator.md D4"
 BXG0048 root.rs:1:11-1:19 offending="named-field error variants are not yet emittable" rule="named-field payloads require contract-emitter support" source="specs/s2-contract-generator.md D3"
 "##;
         assert_eq!(human, EXPECTED_HUMAN);

@@ -96,8 +96,9 @@ wait for Telegram parity. The first such T3 slice governs the classifier as a bo
 handle while `check`, generator, and installer remain ordinary code pending their
 named slices. Classifier parse and pairing failures now cross that handle as typed
 stage-tagged outcome data rather than an erased domain-error payload. Structured
-foreign imports are the remaining prerequisite before the governed `check` box can
-consume this boundary losslessly. The classifier's first checked-in derived tree is seeded by the exact
+foreign imports now hydrate the classifier's provider-owned request/outcome graph and
+emit typed consumer methods without duplicating those types, so the governed `check`
+box can consume this boundary losslessly in its next slice. The classifier's first checked-in derived tree is seeded by the exact
 pre-box `314dcab` executable; current-version regeneration is required byte-stable,
 but this is neither generator self-hosting nor prior-release reproduction evidence.
 Every PR remains at or below 600 hand-authored lines.

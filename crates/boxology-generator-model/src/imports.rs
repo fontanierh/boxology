@@ -8,10 +8,15 @@ use super::{
     DeclaredImport, Diagnostic, DiagnosticCode, Diagnostics, GenerationRequest, REQUEST_SPAN,
     RelativePath,
 };
-use boxology_contract::{BoxId, CapabilityName};
-use boxology_contract_syntax::CanonicalType;
+use boxology_contract::BoxId;
+use boxology_contract_syntax::{
+    CanonicalType, DataDeclaration, DataField, DataShape, DataVariant, TypeExpression,
+};
+use boxology_schema::{
+    SchemaDataField, SchemaDataShape, SchemaDataType, SchemaDataVariant, SchemaDocument,
+    TypeExpression as SchemaTypeExpression,
+};
 use serde_json::Value;
-use std::collections::BTreeSet;
 
 const D4: &str = "specs/s2-contract-generator.md D4";
 const D3: &str = "specs/s2-contract-generator.md D3";
@@ -21,21 +26,14 @@ const BOX_ID_RULE: &str = "an imported schema box_id must equal the declared imp
 const SELF_RULE: &str = "a box must not declare an import of itself";
 const REVISION_RULE: &str =
     "an imported revision must be \"sha256:\" followed by 64 lowercase hexadecimal digits";
-const CAPABILITY_RULE: &str = "each imported capability must declare a unique valid name, its box-qualified id, a unary shape, and known boundary leaves";
-
-#[rustfmt::skip]
-const LEAVES: [CanonicalType; 13] = [
-    CanonicalType::Bool, CanonicalType::U8, CanonicalType::U16, CanonicalType::U32, CanonicalType::U64,
-    CanonicalType::I8, CanonicalType::I16, CanonicalType::I32, CanonicalType::I64,
-    CanonicalType::F32, CanonicalType::F64, CanonicalType::String, CanonicalType::Blob,
-];
+const CAPABILITY_RULE: &str = "an imported schema must be a strict format-1 contract whose unary capabilities use the supported structured boundary subset";
 
 /// One boundary capability offered by an imported package.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportedCapability {
     name: String,
-    input_type: CanonicalType,
-    output_type: CanonicalType,
+    input_type: TypeExpression,
+    output_type: TypeExpression,
 }
 
 impl ImportedCapability {
@@ -44,14 +42,14 @@ impl ImportedCapability {
         &self.name
     }
 
-    /// Returns the capability's input boundary leaf.
-    pub fn input_type(&self) -> CanonicalType {
-        self.input_type
+    /// Returns the capability's input boundary expression.
+    pub fn input_type(&self) -> &TypeExpression {
+        &self.input_type
     }
 
-    /// Returns the capability's output boundary leaf.
-    pub fn output_type(&self) -> CanonicalType {
-        self.output_type
+    /// Returns the capability's output boundary expression.
+    pub fn output_type(&self) -> &TypeExpression {
+        &self.output_type
     }
 }
 
@@ -60,6 +58,7 @@ impl ImportedCapability {
 pub struct ImportModel {
     package: BoxId,
     expected_revision: String,
+    declarations: Vec<DataDeclaration>,
     capabilities: Vec<ImportedCapability>,
 }
 
@@ -107,6 +106,11 @@ impl ImportModel {
         &self.expected_revision
     }
 
+    /// Returns provider-owned structured declarations in schema order.
+    pub fn declarations(&self) -> &[DataDeclaration] {
+        &self.declarations
+    }
+
     /// Returns the imported capabilities in schema declaration order.
     pub fn capabilities(&self) -> &[ImportedCapability] {
         &self.capabilities
@@ -140,84 +144,85 @@ fn parse_one(
     if !revision.is_some_and(is_valid_revision) {
         emit(diagnostics, path, package, DiagnosticCode::Bxg0046, "revision");
     }
-    let capabilities = parse_capabilities(package, &object, path, diagnostics);
-    (diagnostics.len() == start).then(|| ImportModel {
+    if diagnostics.len() != start {
+        return None;
+    }
+    let Ok(document) = SchemaDocument::parse(bytes) else {
+        emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "contract surface");
+        return None;
+    };
+    if document.capabilities.is_empty() {
+        emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "contract surface");
+        return None;
+    }
+    Some(ImportModel {
         package: package.clone(),
         expected_revision: revision
             .expect("a clean import carries a revision")
             .to_owned(),
-        capabilities,
+        declarations: document.data_types.into_iter().map(data_declaration).collect(),
+        capabilities: document.capabilities.into_iter().map(|capability| ImportedCapability {
+            name: capability.name.as_str().to_owned(),
+            input_type: type_expression(capability.input.leaf),
+            output_type: type_expression(capability.output.leaf),
+        }).collect(),
     })
 }
 
-#[rustfmt::skip]
-fn parse_capabilities(
-    package: &BoxId,
-    object: &serde_json::Map<String, Value>,
-    path: &RelativePath,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<ImportedCapability> {
-    let mut capabilities = Vec::new();
-    let entries = match object.get("capabilities") {
-        Some(Value::Array(entries)) if !entries.is_empty() => entries,
-        _ => {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capabilities");
-            return capabilities;
-        }
-    };
-    let mut seen = BTreeSet::new();
-    for entry in entries {
-        let Value::Object(entry) = entry else {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability entry");
-            continue;
-        };
-        let Some(name) = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .and_then(|name| CapabilityName::new(name).ok())
-        else {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability name");
-            continue;
-        };
-        if !seen.insert(name.as_str().to_owned()) {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "duplicate name");
-            continue;
-        }
-        let expected_id = format!("{}.{}", package.as_str(), name.as_str());
-        let id_ok = entry.get("id").and_then(Value::as_str) == Some(expected_id.as_str());
-        let shape_ok = entry.get("shape").and_then(Value::as_str) == Some("unary");
-        let input = leaf_type(entry.get("input"));
-        let output = leaf_type(entry.get("output"));
-        if !id_ok {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability id");
-        }
-        if !shape_ok {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "capability shape");
-        }
-        if input.is_none() {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "input type");
-        }
-        if output.is_none() {
-            emit(diagnostics, path, package, DiagnosticCode::Bxg0047, "output type");
-        }
-        if let (true, true, Some(input_type), Some(output_type)) = (id_ok, shape_ok, input, output)
-        {
-            capabilities.push(ImportedCapability {
-                name: name.as_str().to_owned(),
-                input_type,
-                output_type,
-            });
-        }
+fn data_declaration(declaration: SchemaDataType) -> DataDeclaration {
+    DataDeclaration {
+        docs: declaration.docs,
+        deprecation: declaration.deprecation,
+        name: declaration.name,
+        shape: match declaration.shape {
+            SchemaDataShape::Struct(fields) => {
+                DataShape::Struct(fields.into_iter().map(data_field).collect())
+            }
+            SchemaDataShape::Enum(variants) => {
+                DataShape::Enum(variants.into_iter().map(data_variant).collect())
+            }
+        },
     }
-    capabilities
 }
 
-/// Maps a slot's schema `type` spelling back to its canonical boundary leaf.
-fn leaf_type(slot: Option<&Value>) -> Option<CanonicalType> {
-    let name = slot?.get("type")?.as_str()?;
-    LEAVES
-        .into_iter()
-        .find(|leaf| leaf.canonical_name() == name)
+fn data_field(field: SchemaDataField) -> DataField {
+    DataField {
+        docs: field.docs,
+        deprecation: field.deprecation,
+        name: field.name,
+        ty: type_expression(field.ty),
+    }
+}
+
+fn data_variant(variant: SchemaDataVariant) -> DataVariant {
+    DataVariant {
+        docs: variant.docs,
+        deprecation: variant.deprecation,
+        name: variant.name,
+    }
+}
+
+fn type_expression(expression: SchemaTypeExpression) -> TypeExpression {
+    match expression {
+        SchemaTypeExpression::Bool => CanonicalType::Bool.into(),
+        SchemaTypeExpression::U8 => CanonicalType::U8.into(),
+        SchemaTypeExpression::U16 => CanonicalType::U16.into(),
+        SchemaTypeExpression::U32 => CanonicalType::U32.into(),
+        SchemaTypeExpression::U64 => CanonicalType::U64.into(),
+        SchemaTypeExpression::I8 => CanonicalType::I8.into(),
+        SchemaTypeExpression::I16 => CanonicalType::I16.into(),
+        SchemaTypeExpression::I32 => CanonicalType::I32.into(),
+        SchemaTypeExpression::I64 => CanonicalType::I64.into(),
+        SchemaTypeExpression::F32 => CanonicalType::F32.into(),
+        SchemaTypeExpression::F64 => CanonicalType::F64.into(),
+        SchemaTypeExpression::String => CanonicalType::String.into(),
+        SchemaTypeExpression::Blob => CanonicalType::Blob.into(),
+        SchemaTypeExpression::Local(name) => TypeExpression::Local(name),
+        SchemaTypeExpression::Option(inner) => {
+            TypeExpression::Option(Box::new(type_expression(*inner)))
+        }
+        SchemaTypeExpression::Vec(inner) => TypeExpression::Vec(Box::new(type_expression(*inner))),
+    }
 }
 
 fn is_valid_revision(value: &str) -> bool {
@@ -283,10 +288,15 @@ mod tests {
 
     fn valid_schema(box_id: &str, capability: &str) -> String {
         format!(
-            "{{ \"box_id\": \"{box_id}\", \"capabilities\": [ {{ \"id\": \"{box_id}.{capability}\", \
-             \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \"name\": \"{capability}\", \
+            "{{ \"box_id\": \"{box_id}\", \"capabilities\": [ {{ \"deprecation\": null, \
+             \"docs\": [], \"error\": \"ImportError\", \"id\": \"{box_id}.{capability}\", \
+             \"idempotency\": \"none\", \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \
+             \"max_exposure\": \"external\", \"name\": \"{capability}\", \
              \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }} ], \
-             \"revision\": \"{REVISION}\", \"schema_format\": 1 }}"
+             \"provenance\": {{}}, \"revision\": \"{REVISION}\", \"schema_format\": 1, \
+             \"types\": [ {{ \"deprecation\": null, \"docs\": [], \"kind\": \"error\", \
+             \"name\": \"ImportError\", \"variants\": [ {{ \"deprecation\": null, \"docs\": [], \
+             \"name\": \"Failed\", \"payload\": \"unit\" }} ] }} ] }}"
         )
     }
 
@@ -330,8 +340,14 @@ mod tests {
             panic!("expected one capability");
         };
         assert_eq!(capability.name(), "greet");
-        assert_eq!(capability.input_type(), CanonicalType::String);
-        assert_eq!(capability.output_type(), CanonicalType::String);
+        assert_eq!(
+            capability.input_type(),
+            &TypeExpression::Leaf(CanonicalType::String)
+        );
+        assert_eq!(
+            capability.output_type(),
+            &TypeExpression::Leaf(CanonicalType::String)
+        );
     }
 
     #[test]
@@ -387,28 +403,34 @@ mod tests {
     fn invalid_capability_is_bxg0047() {
         let schema =
             valid_schema("hello", "greet").replace("\"shape\": \"unary\"", "\"shape\": \"stream\"");
-        let line = "BXG0047 imports/hello.json:1:1-1:1 offending=\"import hello capability shape\" rule=\"each imported capability must declare a unique valid name, its box-qualified id, a unary shape, and known boundary leaves\" source=\"specs/s2-contract-generator.md D4\"";
+        let line = "BXG0047 imports/hello.json:1:1-1:1 offending=\"import hello contract surface\" rule=\"an imported schema must be a strict format-1 contract whose unary capabilities use the supported structured boundary subset\" source=\"specs/s2-contract-generator.md D4\"";
         assert_line("greeter", &schema, "BXG0047", line);
     }
 
     /// Wraps `caps` as a `hello` schema's `capabilities` value, keeping the other fields valid.
     fn schema_with_capabilities(caps: &str) -> String {
         format!(
-            "{{ \"box_id\": \"hello\", \"capabilities\": {caps}, \"revision\": \"{REVISION}\", \
-             \"schema_format\": 1 }}"
+            "{{ \"box_id\": \"hello\", \"capabilities\": {caps}, \"provenance\": {{}}, \
+             \"revision\": \"{REVISION}\", \"schema_format\": 1, \"types\": [ {{ \
+             \"deprecation\": null, \"docs\": [], \"kind\": \"error\", \"name\": \"ImportError\", \
+             \"variants\": [ {{ \"deprecation\": null, \"docs\": [], \"name\": \"Failed\", \
+             \"payload\": \"unit\" }} ] }} ] }}"
         )
     }
 
     /// Spells one otherwise-valid `hello.{name}` capability entry as its JSON object.
     fn valid_capability(name: &str) -> String {
         format!(
-            "{{ \"id\": \"hello.{name}\", \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \
-             \"name\": \"{name}\", \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }}"
+            "{{ \"deprecation\": null, \"docs\": [], \"error\": \"ImportError\", \
+             \"id\": \"hello.{name}\", \"idempotency\": \"none\", \
+             \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \
+             \"max_exposure\": \"external\", \"name\": \"{name}\", \
+             \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }}"
         )
     }
 
     /// Parses a single-import `hello` schema and asserts its one BXG0047 carries `detail`.
-    fn assert_bxg0047(schema: &str, detail: &str) {
+    fn assert_bxg0047(schema: &str) {
         let request = request("greeter", &[("hello", "imports/hello.json", schema)]);
         let diagnostics = ImportModel::parse_all(&request).unwrap_err();
         let [diagnostic] = diagnostics.as_slice() else {
@@ -417,27 +439,24 @@ mod tests {
         assert_eq!(diagnostic.code(), "BXG0047");
         assert_eq!(
             diagnostic.offending_construct(),
-            format!("import hello {detail}")
+            "import hello contract surface"
         );
     }
 
     #[test]
     fn empty_capabilities_array_is_bxg0047() {
-        assert_bxg0047(&schema_with_capabilities("[]"), "capabilities");
+        assert_bxg0047(&schema_with_capabilities("[]"));
     }
 
     #[test]
     fn non_object_capability_entry_is_bxg0047() {
-        assert_bxg0047(&schema_with_capabilities("[ 1 ]"), "capability entry");
+        assert_bxg0047(&schema_with_capabilities("[ 1 ]"));
     }
 
     #[test]
     fn missing_capability_name_is_bxg0047() {
         let entry = valid_capability("greet").replace(" \"name\": \"greet\",", "");
-        assert_bxg0047(
-            &schema_with_capabilities(&format!("[ {entry} ]")),
-            "capability name",
-        );
+        assert_bxg0047(&schema_with_capabilities(&format!("[ {entry} ]")));
     }
 
     #[test]
@@ -447,16 +466,13 @@ mod tests {
             valid_capability("greet"),
             valid_capability("greet")
         );
-        assert_bxg0047(&schema_with_capabilities(&caps), "duplicate name");
+        assert_bxg0047(&schema_with_capabilities(&caps));
     }
 
     #[test]
     fn mismatched_capability_id_is_bxg0047() {
         let entry = valid_capability("greet").replace("\"hello.greet\"", "\"hello.wrong\"");
-        assert_bxg0047(
-            &schema_with_capabilities(&format!("[ {entry} ]")),
-            "capability id",
-        );
+        assert_bxg0047(&schema_with_capabilities(&format!("[ {entry} ]")));
     }
 
     #[test]
@@ -465,10 +481,7 @@ mod tests {
             "\"name\": \"name\", \"type\": \"String\"",
             "\"name\": \"name\", \"type\": \"u128\"",
         );
-        assert_bxg0047(
-            &schema_with_capabilities(&format!("[ {entry} ]")),
-            "input type",
-        );
+        assert_bxg0047(&schema_with_capabilities(&format!("[ {entry} ]")));
     }
 
     #[test]
@@ -477,29 +490,15 @@ mod tests {
             "\"output\": { \"type\": \"String\" }",
             "\"output\": { \"type\": \"usize\" }",
         );
-        assert_bxg0047(
-            &schema_with_capabilities(&format!("[ {entry} ]")),
-            "output type",
-        );
+        assert_bxg0047(&schema_with_capabilities(&format!("[ {entry} ]")));
     }
 
     #[test]
     fn full_emitter_schema_with_provenance_and_types_hydrates() {
-        // The full emitter schema carries provenance, a types map, and the complete per-capability
-        // field set (deprecation/docs/error/idempotency/max_exposure) the parser ignores. It must
-        // still hydrate exactly one model, proving the parser stays emitter-compatible.
-        let schema = format!(
-            "{{ \"box_id\": \"hello\", \"capabilities\": [ {{ \"deprecation\": null, \
-             \"docs\": [], \"error\": \"GreetError\", \"id\": \"hello.greet\", \
-             \"idempotency\": \"none\", \"input\": {{ \"name\": \"name\", \"type\": \"String\" }}, \
-             \"max_exposure\": \"external\", \"name\": \"greet\", \
-             \"output\": {{ \"type\": \"String\" }}, \"shape\": \"unary\" }} ], \
-             \"provenance\": {{ \"generator\": \"boxology-generator\", \
-             \"generator_version\": \"0.0.0\", \"semantic_digest\": \"sha256:00\" }}, \
-             \"revision\": \"{REVISION}\", \"schema_format\": 1, \
-             \"types\": {{ \"GreetError\": {{ \"kind\": \"error\" }} }} }}"
-        );
-        let request = request("greeter", &[("hello", "imports/hello.json", &schema)]);
+        let schema =
+            std::str::from_utf8(include_bytes!("../../fixtures/hello/generated/schema.json"))
+                .unwrap();
+        let request = request("greeter", &[("hello", "imports/hello.json", schema)]);
         let models = ImportModel::parse_all(&request).unwrap();
         let [model] = models.as_slice() else {
             panic!("expected one model, got {models:?}");
@@ -509,7 +508,104 @@ mod tests {
             panic!("expected one capability");
         };
         assert_eq!(capability.name(), "greet");
-        assert_eq!(capability.input_type(), CanonicalType::String);
-        assert_eq!(capability.output_type(), CanonicalType::String);
+        assert_eq!(
+            capability.input_type(),
+            &TypeExpression::Leaf(CanonicalType::String)
+        );
+        assert_eq!(
+            capability.output_type(),
+            &TypeExpression::Leaf(CanonicalType::String)
+        );
+    }
+
+    fn classifier_schema() -> &'static str {
+        std::str::from_utf8(include_bytes!(
+            "../../boxology-classifier/generated/schema.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn structured_classifier_schema_hydrates_ordered_provider_model() {
+        let request = request(
+            "checker",
+            &[("classifier", "imports/classifier.json", classifier_schema())],
+        );
+        let models = ImportModel::parse_all(&request).unwrap();
+        let [model] = models.as_slice() else {
+            panic!("expected classifier import")
+        };
+        assert_eq!(
+            model
+                .declarations()
+                .iter()
+                .map(|declaration| declaration.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "CompatibilityClass",
+                "ClassifyRequest",
+                "ClassifyFinding",
+                "ClassifyReport",
+                "ClassifyFailureStage",
+                "ClassifyFailure",
+                "ClassifyOutcome",
+            ]
+        );
+        let DataShape::Struct(request_fields) = &model.declarations()[1].shape else {
+            panic!("ClassifyRequest must be a struct")
+        };
+        assert_eq!(request_fields[0].name, "base");
+        assert_eq!(
+            request_fields[0].ty,
+            TypeExpression::Option(Box::new(TypeExpression::Vec(Box::new(
+                CanonicalType::U8.into(),
+            ))))
+        );
+        assert_eq!(request_fields[1].name, "submitted");
+        assert_eq!(
+            request_fields[1].ty,
+            TypeExpression::Vec(Box::new(CanonicalType::U8.into()))
+        );
+        let [capability] = model.capabilities() else {
+            panic!("expected classify capability")
+        };
+        assert_eq!(
+            capability.input_type(),
+            &TypeExpression::Local("ClassifyRequest".into())
+        );
+        assert_eq!(
+            capability.output_type(),
+            &TypeExpression::Local("ClassifyOutcome".into())
+        );
+    }
+
+    #[test]
+    fn malformed_unknown_and_unsupported_structured_imports_are_payload_safe_bxg0047() {
+        const SENTINEL: &str = "SecretSentinel";
+        let schemas = [
+            classifier_schema().replacen("\"kind\": \"enum\"", "\"kind\": \"union\"", 1),
+            classifier_schema().replacen(
+                "\"type\": \"ClassifyRequest\"",
+                "\"type\": \"SecretSentinel\"",
+                1,
+            ),
+            classifier_schema().replacen(
+                "\"type\": \"Option<Vec<u8>>\"",
+                "\"type\": \"Map<String,u8>\"",
+                1,
+            ),
+        ];
+        for schema in schemas {
+            let request = request(
+                "checker",
+                &[("classifier", "imports/classifier.json", &schema)],
+            );
+            let diagnostics = ImportModel::parse_all(&request).unwrap_err();
+            let [diagnostic] = diagnostics.as_slice() else {
+                panic!("expected one structured import diagnostic")
+            };
+            assert_eq!(diagnostic.code(), "BXG0047");
+            assert!(!diagnostic.to_string().contains(SENTINEL));
+        }
     }
 }
