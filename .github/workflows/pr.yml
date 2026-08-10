@@ -74,7 +74,7 @@ jobs:
           changed_manifests="$RUNNER_TEMP/boxology-changed-manifests"
           : > "$changed_manifests"
           if test "$EVENT_NAME" = pull_request; then
-            changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+            changed="$(git diff --name-only --no-renames "$BASE_SHA" HEAD)"
             if test -n "$changed" && ! grep -Evq '\.md$' <<<"$changed"; then
               run_rust=false
             fi

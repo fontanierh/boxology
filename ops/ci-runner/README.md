@@ -71,8 +71,9 @@ live yet:
    `supervise-macos.sh`, `supervise-slots.sh`, and base plist, then reload both owned services.
 3. Verify exactly one online JIT registration has `boxology-macos-pr-primary`, exactly four have
    `boxology-macos-pr`, and dispatch the smoke workflow.
-4. Merge a one-line `pr.yml` routing change to the primary label; that PR can self-validate on the
-   now-live label.
+4. Merge the exact two-file Phase-B change: route `pr.yml` to the primary label and change its
+   `REQUIRED_PR_RUNNER_LABEL` integrity expectation in `crates/xtask/src/main.rs`. That PR can
+   self-validate on the now-live label.
 
 Roll back by restoring the snapshot and reloading both services before reverting the workflow
 label. Do not substitute a persistent runner or weaken the exact label during activation.
@@ -91,11 +92,13 @@ after installation or a host/runner change. It verifies native `macOS`/`ARM64`,
 ## Current CI routing
 
 Pull requests have one required `pr.yml` `validation` job. The support PR uses the generic native
-label; phase B of the rollout above changes only that route to
+label; phase B of the rollout above changes that route and its paired integrity expectation to
 `boxology-macos-pr-primary`, which is the steady-state target. The job always runs
 `cargo xtask ci-hygiene --base <event base SHA>`. Code PRs add directly changed-crate tests.
 The complete xtask unit suite runs only when xtask, workflow, runner-ops, or the embedded Boxology
-skill source changes; deep validation owns that redundant pass for ordinary product work. Five
+skill source changes. Its path inventory disables rename detection so moving an authority file
+still exposes both its old and new paths. Deep validation owns that redundant pass for ordinary
+product work. Five
 expensive targets are deliberately dispatch-only even when
 their crate changes: `boxology-cli`'s `cli` and `surface_lock`, `boxology-workspace` and
 `boxology-classifier`'s `surface_lock`, and `boxology-generator-model`'s `purity_lock`. Those four

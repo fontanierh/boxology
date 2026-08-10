@@ -838,6 +838,68 @@ fn trailing_whitespace_lines(bytes: &[u8]) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    // Phase B changes this integrity expectation and the workflow route in the
+    // same two-file PR after the primary registration is proven live.
+    const REQUIRED_PR_RUNNER_LABEL: &str = "boxology-macos-pr";
+    const XTASK_AUTHORITY_SELECTOR: &str =
+        r"^(crates/xtask/|\.github/workflows/|ops/ci-runner/|\.agents/skills/boxology/SKILL\.md$)";
+
+    fn selector_matches(expression: &str, inventory: &str) -> bool {
+        use std::io::Write as _;
+
+        let mut child = Command::new("grep")
+            .args(["-Eq", expression])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(inventory.as_bytes())
+            .unwrap();
+        child.wait().unwrap().success()
+    }
+
+    struct ScopeRepo(std::path::PathBuf);
+
+    impl ScopeRepo {
+        fn new() -> Self {
+            for attempt in 0..1000 {
+                let path = std::env::temp_dir().join(format!(
+                    "boxology-pr-scope-{}-{attempt}",
+                    std::process::id()
+                ));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("cannot create scope repo: {error}"),
+                }
+            }
+            panic!("cannot allocate scope repo")
+        }
+
+        fn git(&self, args: &[&str]) -> String {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(&self.0)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        }
+    }
+
+    impl Drop for ScopeRepo {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
     #[test]
     fn toolchain_parser_and_comparison_are_exact() {
         assert_eq!(
@@ -1048,14 +1110,18 @@ mod tests {
     #[test]
     fn workflows_keep_product_dispatch_only_and_preserve_scoped_pr_gates() {
         let workflow = include_str!("../../../.github/workflows/pr.yml");
+        assert!(matches!(
+            REQUIRED_PR_RUNNER_LABEL,
+            "boxology-macos-pr" | "boxology-macos-pr-primary"
+        ));
+        let expected_route =
+            format!("runs-on: [self-hosted, macOS, ARM64, {REQUIRED_PR_RUNNER_LABEL}]");
         assert_eq!(
             workflow
-                .matches("runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr]")
+                .lines()
+                .filter(|line| line.trim() == expected_route)
                 .count(),
             1
-        );
-        assert!(
-            !workflow.contains("runs-on: [self-hosted, macOS, ARM64, boxology-macos-pr-primary]")
         );
         let scope = workflow
             .split_once("- name: Select test scope")
@@ -1078,8 +1144,51 @@ mod tests {
         assert!(!workflow.contains("--bin boxology -- check"));
         assert!(!workflow.contains("cargo xtask ci --base"));
         assert!(workflow.contains("cargo xtask ci-fixtures"));
-        assert!(workflow.contains("if: steps.scope.outputs.run_xtask == 'true'"));
-        assert!(scope.contains("crates/xtask/") && scope.contains("ops/ci-runner/"));
+        for exact in [
+            "run_xtask=false",
+            "run_xtask=true",
+            "echo \"run_xtask=$run_xtask\" | tee -a \"$GITHUB_OUTPUT\"",
+        ] {
+            assert_eq!(
+                scope.lines().filter(|line| line.trim() == exact).count(),
+                1,
+                "{exact}"
+            );
+        }
+        let selector = format!("if grep -Eq '{XTASK_AUTHORITY_SELECTOR}' <<<\"$changed\"; then");
+        assert_eq!(
+            scope.lines().filter(|line| line.trim() == selector).count(),
+            1
+        );
+        assert_eq!(
+            scope
+                .matches("git diff --name-only --no-renames \"$BASE_SHA\" HEAD")
+                .count(),
+            1
+        );
+        assert!(!scope.contains("git diff --name-only \"$BASE_SHA\" HEAD"));
+        for authority in [
+            "crates/xtask/src/main.rs\n",
+            ".github/workflows/pr.yml\n",
+            "ops/ci-runner/supervise-macos.sh\n",
+            ".agents/skills/boxology/SKILL.md\n",
+        ] {
+            assert!(
+                selector_matches(XTASK_AUTHORITY_SELECTOR, authority),
+                "{authority}"
+            );
+        }
+        assert!(!selector_matches(
+            XTASK_AUTHORITY_SELECTOR,
+            "crates/boxology-telegram/implementation/src/lib.rs\n"
+        ));
+        assert_eq!(
+            workflow
+                .lines()
+                .filter(|line| line.trim() == "if: steps.scope.outputs.run_xtask == 'true'")
+                .count(),
+            1
+        );
         assert!(workflow.contains("steps.scope.outputs.run_reaper == 'true'"));
         assert!(workflow.contains("steps.scope.outputs.run_delivery_worker == 'true'"));
         assert!(workflow.contains("cargo test -p xtask --locked"));
@@ -1168,6 +1277,42 @@ mod tests {
     }
 
     #[test]
+    fn pr_scope_inventory_keeps_a_renamed_authority_old_path() {
+        let repo = ScopeRepo::new();
+        repo.git(&["init", "-q"]);
+        repo.git(&["config", "user.email", "scope@example.invalid"]);
+        repo.git(&["config", "user.name", "Scope Test"]);
+        let old = repo.0.join(".github/workflows/legacy.yml");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, "name: legacy\n# stable bytes\n# rename proof\n").unwrap();
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-qm", "base"]);
+        let new = repo.0.join("crates/boxology-telegram/legacy.yml");
+        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+        std::fs::rename(old, new).unwrap();
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "-qm", "rename"]);
+
+        let default_inventory = repo.git(&["diff", "--name-only", "HEAD^", "HEAD"]);
+        assert_eq!(default_inventory, "crates/boxology-telegram/legacy.yml\n");
+        assert!(!selector_matches(
+            XTASK_AUTHORITY_SELECTOR,
+            &default_inventory
+        ));
+
+        let fail_closed_inventory =
+            repo.git(&["diff", "--name-only", "--no-renames", "HEAD^", "HEAD"]);
+        assert_eq!(
+            fail_closed_inventory,
+            ".github/workflows/legacy.yml\ncrates/boxology-telegram/legacy.yml\n"
+        );
+        assert!(selector_matches(
+            XTASK_AUTHORITY_SELECTOR,
+            &fail_closed_inventory
+        ));
+    }
+
+    #[test]
     fn base_runner_configures_one_primary_affinity_and_capacity_slots_stay_generic() {
         let supervisor = include_str!("../../../ops/ci-runner/supervise-macos.sh");
         assert!(supervisor.contains("RUNNER_LABEL=boxology-macos-pr\n"));
@@ -1184,7 +1329,20 @@ mod tests {
         let slots_plist = include_str!(
             "../../../ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots.plist"
         );
-        assert_eq!(slots.matches("export RUNNER_EXTRA_LABEL=").count(), 1);
+        assert_eq!(
+            slots
+                .lines()
+                .filter(|line| line.trim() == "export RUNNER_EXTRA_LABEL=")
+                .count(),
+            1
+        );
+        assert_eq!(
+            slots
+                .lines()
+                .filter(|line| line.trim().starts_with("export RUNNER_EXTRA_LABEL="))
+                .count(),
+            1
+        );
         assert!(!slots_plist.contains("boxology-macos-pr-primary"));
     }
 

@@ -58,14 +58,16 @@ but no active workflow currently compares platforms.
 `.github/workflows/pr.yml` has one required `validation` job with a 20-minute timeout and no
 Actions cache. Its support/configuration PR uses `[self-hosted, macOS, ARM64,
 boxology-macos-pr]`; after that merged configuration is deployed and the new label is verified
-online, a separate one-line workflow change selects `[self-hosted, macOS, ARM64,
-boxology-macos-pr-primary]` as the steady-state target. This gives required PRs one persistent
-Cargo cache instead of randomly choosing among four cache islands.
+online, an exact two-file change selects `[self-hosted, macOS, ARM64,
+boxology-macos-pr-primary]` in the workflow and updates `REQUIRED_PR_RUNNER_LABEL` in its xtask
+integrity test. This gives required PRs one persistent Cargo cache instead of randomly choosing
+among four cache islands while making the routing change self-validating.
 It always runs `ci-hygiene` against the pull-request base. Markdown-only changes stop there.
 
 Code changes run ordinary tests for directly changed crates. The xtask unit suite runs only for
 changes to xtask, workflows, runner operations, or the embedded Boxology skill source; the live
-hygiene command remains universal and deep validation retains the complete suite. The CLI
+hygiene command remains universal and deep validation retains the complete suite. Changed-path
+inventory disables rename detection, so an authority rename exposes both old and new paths. The CLI
 end-to-end target, CLI/workspace/classifier surface locks, and generator-model purity lock are
 dispatch-only regardless of the changed path; their four crates retain library/binary tests,
 explicit doctests, and every other integration target in required CI. `boxology-init` likewise
