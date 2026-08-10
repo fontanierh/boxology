@@ -347,7 +347,7 @@ pub(crate) fn deliver_ask(
     buttons: Value,
     chat_id: i64,
     ask_id: &str,
-) -> Result<Value, AppError> {
+) -> Result<SendReceipt, AppError> {
     let result = deliver(
         paths,
         Delivery {
@@ -367,11 +367,11 @@ pub(crate) fn deliver_ask(
         }
         Ok(())
     })?;
-    Ok(delivery_value(
-        dedup_key.to_owned(),
-        result.message_id,
-        result.deduplicated,
-    ))
+    Ok(SendReceipt {
+        dedup_key: dedup_key.to_owned(),
+        message_id: result.message_id,
+        deduplicated: result.deduplicated,
+    })
 }
 
 fn delivery_value(dedup_key: String, message_id: i64, deduplicated: bool) -> Value {

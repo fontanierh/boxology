@@ -17,16 +17,317 @@
         "type": "i64"
       },
       "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.send",
+      "idempotency": "inherent",
+      "input": {
+        "name": "request",
+        "type": "SendRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "send",
+      "output": {
+        "type": "DeliveryOutcome"
+      },
+      "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SendTextError",
+      "id": "telegram.ask",
+      "idempotency": "inherent",
+      "input": {
+        "name": "request",
+        "type": "AskRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "ask",
+      "output": {
+        "type": "AskOutcome"
+      },
+      "shape": "unary"
     }
   ],
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:dba14065bf25887afe41c866807f9fb4a5a7d45011318bab687d5e140c99794a"
+    "semantic_digest": "sha256:7222c303688322eaa9640907668896cf57a1a9566b9d7474afbd7e55a916a7a6"
   },
-  "revision": "sha256:7250c0ba2e596b4395907986eda71d75a60ef4c204aacc058d4884399b89133d",
+  "revision": "sha256:33b3d1017695734550d2c6ca9791dea49fa12985a8e0c829cec66dcfc94579a4",
   "schema_format": 1,
   "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "text",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "dedup_key",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "SendRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "key",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "label",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "text",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "AskAlternative"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "summary",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "recommendation",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "alternatives",
+          "type": "Option<Vec<AskAlternative>>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "lifecycle_key",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "dedup_key",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "AskRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "FailureClass",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Input"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Authorization"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Conflict"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Local"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Policy"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Transient"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Permanent"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Ambiguous"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Invariant"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "code",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "message",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "retryable",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "retry_after_seconds",
+          "type": "Option<u64>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "class",
+          "type": "FailureClass"
+        }
+      ],
+      "kind": "struct",
+      "name": "OperationError"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "dedup_key",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "message_id",
+          "type": "i64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "deduplicated",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "DeliveryReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "delivery",
+          "type": "Option<DeliveryReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "DeliveryOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "ask_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "lifecycle_key",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "delivery",
+          "type": "DeliveryReceipt"
+        }
+      ],
+      "kind": "struct",
+      "name": "AskReceipt"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "ask",
+          "type": "Option<AskReceipt>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "error",
+          "type": "Option<OperationError>"
+        }
+      ],
+      "kind": "struct",
+      "name": "AskOutcome"
+    },
     {
       "deprecation": null,
       "docs": [],

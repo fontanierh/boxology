@@ -5,7 +5,9 @@ use boxology_contract::{
     BoxId, CallContext, Caller, CancelToken, CapabilityId, ErasedCallError, ErasedCallTarget,
     ExposureLevel, SlotValue, TraceContext,
 };
-use boxology_runtime::{CompositionBuilder, TransportExposure, test_support::StubTransport};
+use boxology_runtime::{
+    Composition, CompositionBuilder, TransportExposure, test_support::StubTransport,
+};
 use serde_json::{Value, json};
 use std::fs;
 use std::future::Future;
@@ -209,7 +211,7 @@ fn run_ready<F: Future>(future: F) -> F::Output {
     }
 }
 
-struct ExposureTarget(TransportExposure);
+struct ExposureTarget(Vec<TransportExposure>);
 
 impl ErasedCallTarget for ExposureTarget {
     fn call<'a>(
@@ -218,9 +220,51 @@ impl ErasedCallTarget for ExposureTarget {
         context: CallContext,
         input: SlotValue,
     ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
-        assert_eq!(capability, self.0.descriptor().id());
-        self.0.dispatch(context, input)
+        self.0
+            .iter()
+            .find(|exposure| exposure.descriptor().id() == capability)
+            .expect("capability is exposed")
+            .dispatch(context, input)
     }
+}
+
+fn assembled_telegram(
+    capability_names: &[&str],
+) -> (Composition, boxology_generated_contract::TelegramHandle) {
+    let descriptor = generated::implementation_descriptor();
+    let capabilities = capability_names
+        .iter()
+        .map(|name| {
+            descriptor
+                .contract()
+                .capabilities()
+                .iter()
+                .find(|capability| capability.name().as_str() == *name)
+                .unwrap_or_else(|| panic!("missing generated capability {name}"))
+                .id()
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let transport = Arc::new(StubTransport::new());
+    let mut builder = CompositionBuilder::new();
+    builder.add_box(descriptor, |imports| {
+        generated::factory(TelegramService, imports)
+    });
+    for capability in capabilities {
+        builder.expose(
+            BoxId::new("telegram").unwrap(),
+            capability,
+            transport.clone(),
+            ExposureLevel::CodeOnly,
+        );
+    }
+    let composition = builder.start().expect("Telegram composition starts");
+    let runtime = transport.runtime().expect("stub transport starts");
+    assert_eq!(runtime.exposures().len(), capability_names.len());
+    let telegram = boxology_generated_contract::TelegramHandle::from_erased(Arc::new(
+        ExposureTarget(runtime.exposures().to_vec()),
+    ));
+    (composition, telegram)
 }
 
 #[test]
@@ -402,28 +446,7 @@ fn generated_typed_handle_sends_text_through_the_assembled_box() {
         response(&json!({"message_id": 574})),
     ]);
     paired_state(&Paths::from_env().unwrap());
-    let descriptor = generated::implementation_descriptor();
-    let capability = descriptor.contract().capabilities()[0].id().clone();
-    let transport = Arc::new(StubTransport::new());
-    let mut builder = CompositionBuilder::new();
-    builder.add_box(descriptor, |imports| {
-        generated::factory(TelegramService, imports)
-    });
-    builder.expose(
-        BoxId::new("telegram").unwrap(),
-        capability,
-        transport.clone(),
-        ExposureLevel::CodeOnly,
-    );
-
-    let composition = builder.start().expect("Telegram composition starts");
-    let runtime = transport.runtime().expect("stub transport starts");
-    let [exposure] = runtime.exposures() else {
-        panic!("Telegram must expose exactly one capability")
-    };
-    let telegram = boxology_generated_contract::TelegramHandle::from_erased(Arc::new(
-        ExposureTarget(exposure.clone()),
-    ));
+    let (composition, telegram) = assembled_telegram(&["send_text"]);
     assert_eq!(
         run_ready(telegram.send_text(call_context(), "typed dogfood".into())),
         Ok(573)
@@ -442,6 +465,122 @@ fn generated_typed_handle_sends_text_through_the_assembled_box() {
         assert_eq!(body["text"], "typed dogfood");
     }
     drop(requests);
+    drop(composition);
+}
+
+#[test]
+fn generated_handles_send_replay_and_structured_ask_end_to_end() {
+    let context = Context::new(vec![
+        response(&json!({"message_id": 575})),
+        response(&json!({"message_id": 576})),
+    ]);
+    let paths = Paths::from_env().unwrap();
+    paired_state(&paths);
+    let (composition, telegram) = assembled_telegram(&["send", "ask"]);
+    let send = boxology_generated_contract::SendRequest {
+        text: "typed notice".into(),
+        dedup_key: "typed-send-1".into(),
+    };
+
+    let first = run_ready(telegram.send(call_context(), send.clone())).unwrap();
+    assert_eq!(first.error, None);
+    assert_eq!(
+        first.delivery,
+        Some(boxology_generated_contract::DeliveryReceipt {
+            dedup_key: "typed-send-1".into(),
+            message_id: 575,
+            deduplicated: false,
+        })
+    );
+    let replay = run_ready(telegram.send(call_context(), send)).unwrap();
+    assert_eq!(replay.error, None);
+    assert_eq!(replay.delivery.unwrap().deduplicated, true);
+
+    let outcome = run_ready(telegram.ask(
+        call_context(),
+        boxology_generated_contract::AskRequest {
+            summary: "Choose how to proceed with the release.".into(),
+            recommendation: "Ship the typed path now.".into(),
+            alternatives: Some(vec![boxology_generated_contract::AskAlternative {
+                key: "pause".into(),
+                label: "Pause".into(),
+                text: "Wait for more evidence.".into(),
+            }]),
+            lifecycle_key: "release-choice".into(),
+            dedup_key: "typed-ask-1".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(outcome.error, None);
+    let ask = outcome.ask.expect("successful ask receipt");
+    assert_eq!(ask.lifecycle_key, "release-choice");
+    assert_eq!(ask.delivery.message_id, 576);
+    assert_eq!(ask.delivery.deduplicated, false);
+
+    let requests = context.fake.requests.lock().expect("fake requests");
+    assert_eq!(requests.len(), 2, "send replay must not write to Telegram");
+    let sent = request_body(&requests[0]);
+    assert_eq!(sent["chat_id"], 42);
+    assert_eq!(sent["text"], "typed notice");
+    let asked = request_body(&requests[1]);
+    assert_eq!(asked["chat_id"], 42);
+    assert!(
+        asked["text"]
+            .as_str()
+            .unwrap()
+            .contains("Pause: Wait for more evidence.")
+    );
+    assert_eq!(
+        asked["reply_markup"]["inline_keyboard"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    drop(requests);
+
+    let durable = state::read(&paths).unwrap();
+    assert_eq!(durable.outbound.len(), 2);
+    assert_eq!(durable.asks.len(), 1);
+    assert_eq!(durable.asks[0].ask_id, ask.ask_id);
+    assert_eq!(durable.asks[0].lifecycle_key, "release-choice");
+    assert_eq!(durable.asks[0].dedup_key, "typed-ask-1");
+    assert_eq!(durable.asks[0].message_id, Some(576));
+    assert_eq!(durable.asks[0].choices.len(), 3);
+    assert_eq!(durable.asks[0].choices[1].key.as_deref(), Some("pause"));
+    drop(composition);
+}
+
+#[test]
+fn disabled_generated_send_returns_structured_authorization_without_side_effects() {
+    let context = Context::new(vec![]);
+    unsafe { std::env::remove_var(ENABLED_VARIABLE) };
+    let paths = Paths::from_env().unwrap();
+    let (composition, telegram) = assembled_telegram(&["send"]);
+
+    let outcome = run_ready(telegram.send(
+        call_context(),
+        boxology_generated_contract::SendRequest {
+            text: "must not leave the process".into(),
+            dedup_key: "disabled-send-1".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(outcome.delivery, None);
+    assert_eq!(
+        outcome.error,
+        Some(boxology_generated_contract::OperationError {
+            code: "telegram_disabled".into(),
+            message: "Telegram requires BOXOLOGY_TELEGRAM_ENABLED=1".into(),
+            retryable: false,
+            retry_after_seconds: None,
+            class: boxology_generated_contract::FailureClass::Authorization,
+        })
+    );
+    assert_eq!(context.fake.request_count(), 0);
+    let durable = state::read(&paths).unwrap();
+    assert!(durable.outbound.is_empty());
+    assert!(durable.asks.is_empty());
     drop(composition);
 }
 
@@ -496,6 +635,12 @@ fn ask_callbacks_and_custom_replies_are_correlated() {
     let (ask, exit) = run(&["ask"], ask_request);
     assert_eq!(exit, ExitClass::Success, "{ask}");
     let ask_id = ok(&ask)["ask_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        ask,
+        format!(
+            r#"{{"schema":1,"ok":true,"command":"ask","data":{{"ask_id":"{ask_id}","dedup_key":"ask-1","deduplicated":false,"delivery":"delivered","lifecycle_key":"build-policy","message_id":80}}}}"#
+        )
+    );
     let callback_data = super::ask::token(&ask_id, "recommendation", None);
     context.replace_fake(vec![response(&json!([{"update_id": 31, "callback_query": {"id": "callback-1", "from": {"id": 42, "is_bot": false}, "message": {"message_id": 80, "chat": {"id": 42, "type": "private"}}, "data": callback_data}}])), response(&json!(true))]);
     let (choice, exit) = run(&["poll"], json!({"schema": SCHEMA, "timeout_seconds": 0}));
