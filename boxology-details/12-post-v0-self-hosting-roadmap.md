@@ -92,7 +92,10 @@ work under #575 may proceed in parallel with Telegram composition; they do not
 wait for Telegram parity. The first such T3 slice governs the classifier as a box:
 `boxology generate` now classifies regenerated schemas through its generated typed
 handle while `check`, generator, and installer remain ordinary code pending their
-named slices. The classifier's first checked-in derived tree is seeded by the exact
+named slices. Classifier parse and pairing failures now cross that handle as typed
+stage-tagged outcome data rather than an erased domain-error payload. Structured
+foreign imports are the remaining prerequisite before the governed `check` box can
+consume this boundary losslessly. The classifier's first checked-in derived tree is seeded by the exact
 pre-box `314dcab` executable; current-version regeneration is required byte-stable,
 but this is neither generator self-hosting nor prior-release reproduction evidence.
 Every PR remains at or below 600 hand-authored lines.

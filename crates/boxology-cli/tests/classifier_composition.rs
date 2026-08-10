@@ -7,8 +7,8 @@ use std::{
 use boxology_cli::{ClassifierComposition, classify};
 use boxology_contract::{CallContext, Caller, CancelToken, TraceContext};
 use classifier_contract::{
-    ClassifierHandle, ClassifyFinding, ClassifyReport, ClassifyRequest, CompatibilityClass,
-    test_support::ClassifierFake,
+    ClassifierHandle, ClassifyFailure, ClassifyFailureStage, ClassifyFinding, ClassifyOutcome,
+    ClassifyReport, ClassifyRequest, CompatibilityClass, test_support::ClassifierFake,
 };
 
 const HELLO: &[u8] = include_bytes!("../../fixtures/hello/generated/schema.json");
@@ -62,19 +62,22 @@ fn real_composition_preserves_reports_and_failures() {
 }
 
 #[test]
-fn generated_fake_carries_the_complete_typed_report() {
-    let expected = ClassifyReport {
-        verdict: CompatibilityClass::CompatibleWithConditions,
-        findings: vec![ClassifyFinding {
-            code: "BXC0068".into(),
-            path: "box/type/Mode/variant/Future".into(),
-            kind: "output enum variant added".into(),
-            class: CompatibilityClass::CompatibleWithConditions,
-            base_excerpt: None,
-            submitted_excerpt: Some("Future".into()),
-            condition: Some("unknown-variant tolerance".into()),
-        }],
-        rendered_text: "classification compatible_with_conditions\n".into(),
+fn generated_fake_carries_success_and_every_failure_stage() {
+    let expected = ClassifyOutcome {
+        report: Some(ClassifyReport {
+            verdict: CompatibilityClass::CompatibleWithConditions,
+            findings: vec![ClassifyFinding {
+                code: "BXC0068".into(),
+                path: "box/type/Mode/variant/Future".into(),
+                kind: "output enum variant added".into(),
+                class: CompatibilityClass::CompatibleWithConditions,
+                base_excerpt: None,
+                submitted_excerpt: Some("Future".into()),
+                condition: Some("unknown-variant tolerance".into()),
+            }],
+            rendered_text: "classification compatible_with_conditions\n".into(),
+        }),
+        failure: None,
     };
     let returned = expected.clone();
     let fake = ClassifierFake::new().with_classify(move |_context, request| {
@@ -91,6 +94,70 @@ fn generated_fake_carries_the_complete_typed_report() {
             submitted: vec![3, 4],
         },
     ))
-    .expect("programmed fake returns its typed report");
+    .expect("programmed fake returns its typed outcome");
     assert_eq!(actual, expected);
+
+    for stage in [
+        ClassifyFailureStage::Base,
+        ClassifyFailureStage::Submitted,
+        ClassifyFailureStage::Pairing,
+    ] {
+        let expected = ClassifyOutcome {
+            report: None,
+            failure: Some(ClassifyFailure {
+                stage,
+                diagnostics: "coded diagnostics".into(),
+            }),
+        };
+        let returned = expected.clone();
+        let fake = ClassifierFake::new().with_classify(move |_context, _request| {
+            let returned = returned.clone();
+            async move { Ok(returned) }
+        });
+        let actual = ready(fake.handle().classify(
+            context(),
+            ClassifyRequest {
+                base: None,
+                submitted: Vec::new(),
+            },
+        ))
+        .expect("programmed fake returns its typed failure");
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn generated_fake_carries_constructible_invalid_outcomes() {
+    for expected in [
+        ClassifyOutcome {
+            report: None,
+            failure: None,
+        },
+        ClassifyOutcome {
+            report: Some(ClassifyReport {
+                verdict: CompatibilityClass::Unchanged,
+                findings: Vec::new(),
+                rendered_text: "classification unchanged\n".into(),
+            }),
+            failure: Some(ClassifyFailure {
+                stage: ClassifyFailureStage::Base,
+                diagnostics: "diagnostic".into(),
+            }),
+        },
+    ] {
+        let returned = expected.clone();
+        let fake = ClassifierFake::new().with_classify(move |_context, _request| {
+            let returned = returned.clone();
+            async move { Ok(returned) }
+        });
+        let actual = ready(fake.handle().classify(
+            context(),
+            ClassifyRequest {
+                base: None,
+                submitted: Vec::new(),
+            },
+        ))
+        .expect("generated fake transports the invalid combination for consumer testing");
+        assert_eq!(actual, expected);
+    }
 }

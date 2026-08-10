@@ -14,7 +14,7 @@
       "max_exposure": "code_only",
       "name": "classify",
       "output": {
-        "type": "ClassifyReport"
+        "type": "ClassifyOutcome"
       },
       "shape": "unary"
     }
@@ -22,9 +22,9 @@
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:7b482462b11aace6b0939355f3d303794bf3db4c0b995a25a95e9a722a7f2964"
+    "semantic_digest": "sha256:6db8122a1f97a89b00816b26e762d758f0a32aeafe3bd4a859f6a9ff6499b45b"
   },
-  "revision": "sha256:15b0217864e7504475bc7a6393e277486ba4acf5948fd9f4898c6a13c8e10e88",
+  "revision": "sha256:c615a71958fd24f37973ef962d34a3c349bd87901bf92e83712a9e6ba367a536",
   "schema_format": 1,
   "types": [
     {
@@ -164,19 +164,77 @@
     {
       "deprecation": null,
       "docs": [],
+      "kind": "enum",
+      "name": "ClassifyFailureStage",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Base"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Submitted"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Pairing"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "stage",
+          "type": "ClassifyFailureStage"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "diagnostics",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "ClassifyFailure"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "report",
+          "type": "Option<ClassifyReport>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "failure",
+          "type": "Option<ClassifyFailure>"
+        }
+      ],
+      "kind": "struct",
+      "name": "ClassifyOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
       "kind": "error",
       "name": "ClassifierError",
       "variants": [
         {
           "deprecation": null,
           "docs": [],
-          "name": "Failure",
-          "payload": {
-            "deprecation": null,
-            "docs": [],
-            "kind": "value",
-            "type": "String"
-          }
+          "name": "Internal",
+          "payload": "unit"
         }
       ]
     }
