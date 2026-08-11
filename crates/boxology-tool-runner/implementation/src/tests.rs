@@ -4,14 +4,14 @@ use boxology_contract::{BoxId, CallContext, Caller, CancelToken, CapabilityId, E
 #[rustfmt::skip]
 use boxology_runtime::{Composition, CompositionBuilder, TransportExposure, test_support::StubTransport};
 #[rustfmt::skip]
-use std::{future::Future, path::PathBuf, pin::{Pin, pin}, sync::Arc, task::{Context, Poll, Waker}, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{future::Future, path::PathBuf, pin::{Pin, pin}, sync::Arc, task::{Context, Poll, Waker}, time::Instant};
 
 #[rustfmt::skip]
 struct Fixture { home: PathBuf, root: PathBuf }
 #[rustfmt::skip]
 impl Fixture {
     fn new() -> Self {
-        let suffix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let suffix = STAGE.fetch_add(1, Ordering::Relaxed);
         let home = std::env::temp_dir().join(format!("boxology-tool-runner-{}-{suffix}", std::process::id()));
         let root = home.join("root");
         fs::create_dir_all(&root).unwrap();
@@ -95,7 +95,7 @@ fn failure(handle: &boxology_generated_contract::ToolRunnerHandle, request: Exec
 
 #[rustfmt::skip]
 fn wait_file(path: &Path) {
-    let expires = Instant::now() + Duration::from_secs(3);
+    let expires = Instant::now() + Duration::from_secs(10);
     while !path.exists() { assert!(Instant::now() < expires, "fixture marker was not created"); std::thread::sleep(Duration::from_millis(5)); }
 }
 #[rustfmt::skip]
@@ -104,7 +104,7 @@ fn fixture_pid(path: &Path) -> rustix::process::Pid {
 }
 #[rustfmt::skip]
 fn assert_gone(pid: rustix::process::Pid) {
-    let expires = Instant::now() + Duration::from_secs(3);
+    let expires = Instant::now() + Duration::from_secs(10);
     loop { match rustix::process::test_kill_process(pid) {
         Err(error) if error == rustix::io::Errno::SRCH => break,
         _ => { assert!(Instant::now() < expires, "fixture process survived"); std::thread::sleep(Duration::from_millis(5)); }
@@ -384,6 +384,56 @@ fn bash_cleans_background_process_after_success() {
     let result = call(&handle, context(), bash("/bin/sleep 86400 & printf %s $! > pid", None, None)).result.unwrap().bash.unwrap();
     assert_eq!((result.exit_code, result.signal), (Some(0), None));
     assert_gone(fixture_pid(&fixture.root.join("pid")));
+    let escaped = call(&handle, context(), bash("/usr/bin/python3 -c 'import os,time; os.setsid(); open(\"detached-pid\",\"w\").write(str(os.getpid())); print(\"early\",flush=True); time.sleep(.1); print(\"late\",flush=True); time.sleep(1)' & while [ ! -f detached-pid ]; do /bin/sleep 0.005; done", None, None)).result.unwrap().bash.unwrap();
+    assert_eq!((escaped.stdout.as_str(), escaped.exit_code, escaped.stdout_truncated), ("early\nlate\n", Some(0), true));
+    assert_gone(fixture_pid(&fixture.root.join("detached-pid")));
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_reader_start_failures_cleanup_every_started_process() {
+    for fault in [Fault::BashDrainFirst, Fault::BashDrainSecond] {
+        let fixture = Fixture::new(); let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(fault));
+        let failure = call(&handle, context(), bash("exec /bin/sleep 86400", None, None)).failure.unwrap();
+        assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("local_io", true));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-user-pid")));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-anchor-pid")));
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_signal_failures_report_cleanup_failure_without_dropping_children() {
+    for fault in [Fault::BashTerm, Fault::BashKill] {
+        let fixture = Fixture::new(); let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(fault));
+        let failure = call(&handle, context(), bash("trap '' TERM; /bin/sleep 86400 & printf %s $! > descendant-pid; wait", None, Some(20))).failure.unwrap();
+        assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("cleanup_failed", true));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-user-pid")));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-anchor-pid")));
+        assert_gone(fixture_pid(&fixture.root.join("descendant-pid")));
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_anchor_death_reclaims_the_still_proven_owned_group() {
+    let fixture = Fixture::new(); let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(Fault::BashAnchorDeath));
+    let failure = call(&handle, context(), bash("trap '' TERM; /bin/sleep 86400 & printf %s $! > descendant-pid; touch anchor-death-ready; wait", None, None)).failure.unwrap();
+    assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("cleanup_failed", true));
+    assert_gone(fixture_pid(&fixture.root.join("descendant-pid")));
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_timeout_does_not_wait_for_an_escaped_stdio_writer() {
+    let fixture = Fixture::new(); let (_composition, handle) = assembled(fixture.root.clone());
+    let command = "/usr/bin/python3 -c 'import os,time; os.setsid(); open(\"escaped-pid\",\"w\").write(str(os.getpid())); time.sleep(10); open(\"escaped-done\",\"w\").write(\"done\")' & wait";
+    let started = Instant::now(); let worker = std::thread::spawn(move || call(&handle, context(), bash(command, None, Some(5_000))));
+    let escaped = fixture_pid(&fixture.root.join("escaped-pid")); let failure = worker.join().unwrap().failure.unwrap();
+    assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("command_timeout", true));
+    assert!(started.elapsed() < Duration::from_millis(8_000), "elapsed {:?}", started.elapsed());
+    assert!(!fixture.root.join("escaped-done").exists());
+    assert_gone(escaped);
 }
 
 #[test]

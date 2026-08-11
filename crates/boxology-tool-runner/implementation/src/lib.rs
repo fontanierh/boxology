@@ -31,9 +31,13 @@ boxology::contract! {
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq)]
 #[rustfmt::skip]
-enum Fault { StagedCancel, StagedCleanup, CleanupSync, PreRenameCancel, Rename, ParentSync }
+enum Fault {
+    StagedCancel, StagedCleanup, CleanupSync, PreRenameCancel, Rename, ParentSync,
+    BashDrainFirst, BashDrainSecond, BashTerm, BashKill, BashAnchorDeath,
+}
 
-/// Root-confined UTF-8 operations: functional confinement, not protection from external races, hard links, or multiple service instances.
+/// Root-confined UTF-8 file operations plus unsandboxed Bash with a root-confined initial cwd.
+/// File confinement is functional, not protection from external races, hard links, or multiple service instances.
 pub struct ToolRunnerService {
     root: PathBuf,
     environment: BTreeMap<OsString, OsString>,

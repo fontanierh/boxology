@@ -1,8 +1,10 @@
 use super::*;
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::io::Read;
+use std::os::unix::io::AsFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, atomic::AtomicBool};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -10,10 +12,16 @@ const SHELL: &str = "/bin/bash";
 const POLL: Duration = Duration::from_millis(5);
 const GRACE: Duration = Duration::from_millis(100);
 
-struct Capture {
-    retained: Vec<u8>,
-    bytes: u64,
-    truncated: bool,
+#[rustfmt::skip]
+struct Capture { retained: Vec<u8>, bytes: u64, truncated: bool }
+#[rustfmt::skip]
+struct Drain { join: JoinHandle<std::io::Result<Capture>>, stop: Arc<AtomicBool> }
+#[rustfmt::skip]
+impl Drain {
+    fn finish(self, eof: bool) -> Option<Capture> {
+        if eof { let expires = Instant::now() + GRACE * 5; while !self.join.is_finished() && Instant::now() < expires { thread::sleep(POLL); } }
+        self.stop.store(true, Ordering::Relaxed); self.join.join().ok().and_then(Result::ok)
+    }
 }
 
 impl ToolRunnerService {
@@ -72,8 +80,37 @@ impl ToolRunnerService {
                 ));
             }
         };
-        let stdout = drain(child.stdout.take().expect("piped stdout"));
-        let stderr = drain(child.stderr.take().expect("piped stderr"));
+        #[cfg(test)]
+        if matches!(
+            self.fault,
+            Some(Fault::BashDrainFirst | Fault::BashDrainSecond)
+        ) {
+            record_fault_pids(&self.root, group, &child);
+        }
+        let Some(stdout_pipe) = child.stdout.take() else {
+            let cleaned = cleanup_group(group, &mut child, &mut anchor, false, false);
+            return Err(post_spawn_failure(cleaned));
+        };
+        let stdout = match drain(stdout_pipe, cfg!(test) && self.drain_fault(true)) {
+            Ok(stdout) => stdout,
+            Err(_) => {
+                let cleaned = cleanup_group(group, &mut child, &mut anchor, false, false);
+                return Err(post_spawn_failure(cleaned));
+            }
+        };
+        let Some(stderr_pipe) = child.stderr.take() else {
+            let cleaned = cleanup_group(group, &mut child, &mut anchor, false, false);
+            let _ = stdout.finish(false);
+            return Err(post_spawn_failure(cleaned));
+        };
+        let stderr = match drain(stderr_pipe, cfg!(test) && self.drain_fault(false)) {
+            Ok(stderr) => stderr,
+            Err(_) => {
+                let cleaned = cleanup_group(group, &mut child, &mut anchor, false, false);
+                let _ = stdout.finish(false);
+                return Err(post_spawn_failure(cleaned));
+            }
+        };
         let expires = Instant::now() + Duration::from_millis(timeout);
         let (status, interruption) = loop {
             let now = Instant::now();
@@ -97,30 +134,45 @@ impl ToolRunnerService {
                 Ok(None) => {}
                 Err(_) => break (None, Some((ToolFailureClass::Local, "local_io"))),
             }
+            #[cfg(test)]
+            if self.fault == Some(Fault::BashAnchorDeath)
+                && self.root.join("anchor-death-ready").exists()
+            {
+                let _ = anchor.kill();
+            }
             if !alive(&mut anchor) {
-                reap_known(&mut child);
-                reap_known(&mut anchor);
+                let _ = cleanup_group(group, &mut child, &mut anchor, false, false);
+                let _ = stdout.finish(false);
+                let _ = stderr.finish(false);
                 return Err(fail(ToolFailureClass::Local, "cleanup_failed", true));
             }
             thread::sleep(POLL);
         };
-        if !cleanup_group(group, &mut child, &mut anchor) {
+        #[cfg(test)]
+        if matches!(self.fault, Some(Fault::BashTerm | Fault::BashKill)) {
+            record_fault_pids(&self.root, group, &child);
+        }
+        let cleaned = cleanup_group(
+            group,
+            &mut child,
+            &mut anchor,
+            cfg!(test) && self.signal_fault(Signal::TERM),
+            cfg!(test) && self.signal_fault(Signal::KILL),
+        );
+        let eof = cleaned && status.is_some() && interruption.is_none();
+        let stdout = stdout.finish(eof);
+        let stderr = stderr.finish(eof);
+        if !cleaned {
             return Err(fail(ToolFailureClass::Local, "cleanup_failed", true));
         }
-        let stdout = stdout
-            .join()
-            .ok()
-            .and_then(Result::ok)
-            .ok_or_else(|| fail(ToolFailureClass::Local, "local_io", true))?;
-        let stderr = stderr
-            .join()
-            .ok()
-            .and_then(Result::ok)
-            .ok_or_else(|| fail(ToolFailureClass::Local, "local_io", true))?;
+        let stdout = stdout.ok_or_else(|| fail(ToolFailureClass::Local, "local_io", true))?;
+        let stderr = stderr.ok_or_else(|| fail(ToolFailureClass::Local, "local_io", true))?;
         if let Some((class, code)) = interruption {
             return Err(fail(class, code, true));
         }
-        let status = status.expect("completed without interruption");
+        let Some(status) = status else {
+            return Err(fail(ToolFailureClass::Local, "local_io", true));
+        };
         let (exit_code, signal) = (status.code(), status.signal());
         if exit_code.is_some() == signal.is_some() {
             return Err(fail(ToolFailureClass::Local, "local_io", true));
@@ -137,13 +189,27 @@ impl ToolRunnerService {
         })
     }
 
+    #[rustfmt::skip]
+    fn drain_fault(&self, first: bool) -> bool {
+        #[cfg(test)] { self.fault == Some(if first { Fault::BashDrainFirst } else { Fault::BashDrainSecond }) }
+        #[cfg(not(test))] { let _ = first; false }
+    }
+
+    #[rustfmt::skip]
+    fn signal_fault(&self, signal: Signal) -> bool {
+        #[cfg(test)] { matches!((self.fault, signal), (Some(Fault::BashTerm), Signal::TERM) | (Some(Fault::BashKill), Signal::KILL)) }
+        #[cfg(not(test))] { let _ = signal; false }
+    }
+
     fn cwd(&self, raw: Option<&str>) -> Result<PathBuf, ToolFailure> {
         regular_dir(&self.root, false)?;
         let target = match raw {
             Some(raw) => self.resolve(raw)?.0,
             None => return Ok(self.root.clone()),
         };
-        let relative = target.strip_prefix(&self.root).expect("resolved path");
+        let relative = target
+            .strip_prefix(&self.root)
+            .map_err(|_| fail(ToolFailureClass::Boundary, "outside_root", false))?;
         let mut current = self.root.clone();
         for component in relative.components() {
             current.push(component);
@@ -174,9 +240,7 @@ impl ToolRunnerService {
         let ready = anchor
             .stdout
             .take()
-            .expect("piped readiness")
-            .read_exact(&mut readiness)
-            .is_ok()
+            .is_some_and(|mut pipe| pipe.read_exact(&mut readiness).is_ok())
             && readiness == *b"R"
             && alive(&mut anchor);
         if ready {
@@ -203,6 +267,9 @@ fn before_spawn(mut failure: ToolFailure, anchor: &mut Child) -> ToolFailure {
     failure
 }
 
+#[rustfmt::skip]
+fn post_spawn_failure(cleaned: bool) -> ToolFailure { fail(ToolFailureClass::Local, if cleaned { "local_io" } else { "cleanup_failed" }, true) }
+
 fn alive(child: &mut Child) -> bool {
     matches!(child.try_wait(), Ok(None))
 }
@@ -216,37 +283,73 @@ fn reap_known(child: &mut Child) -> bool {
     }
 }
 
-fn cleanup_group(group: Pid, child: &mut Child, anchor: &mut Child) -> bool {
-    if !alive(anchor) || kill_process_group(group, Signal::TERM).is_err() {
-        return false;
+#[rustfmt::skip]
+fn cleanup_group(group: Pid, child: &mut Child, anchor: &mut Child, fail_term: bool, fail_kill: bool) -> bool {
+    let mut cleaned = true;
+    if owns_group(group, child, anchor) {
+        if fail_term || kill_process_group(group, Signal::TERM).is_err() {
+            cleaned = false;
+        }
+        thread::sleep(GRACE);
+        if owns_group(group, child, anchor) {
+            let killed = !fail_kill && kill_process_group(group, Signal::KILL).is_ok();
+            if !killed {
+                cleaned = false;
+                if owns_group(group, child, anchor) {
+                    let _ = kill_process_group(group, Signal::KILL);
+                }
+            }
+        } else {
+            cleaned = false;
+        }
+    } else {
+        cleaned = false;
     }
-    thread::sleep(GRACE);
-    if !alive(anchor) || kill_process_group(group, Signal::KILL).is_err() {
-        return false;
-    }
-    let child_reaped = child.wait().is_ok();
-    let anchor_reaped = anchor.wait().is_ok();
-    child_reaped && anchor_reaped
+    if !reap_known(child) { cleaned = false; }
+    if !reap_known(anchor) { cleaned = false; }
+    cleaned
 }
 
-fn drain(mut pipe: impl Read + Send + 'static) -> JoinHandle<std::io::Result<Capture>> {
-    thread::spawn(move || {
-        let mut retained = Vec::with_capacity(LIMIT);
-        let mut bytes = 0_u64;
-        let mut buffer = [0_u8; 8192];
-        loop {
-            let count = pipe.read(&mut buffer)?;
-            if count == 0 {
-                break;
+#[rustfmt::skip]
+fn owns_group(group: Pid, child: &mut Child, anchor: &mut Child) -> bool { alive(anchor) || (alive(child) && rustix::process::getpgid(Some(Pid::from_child(child))) == Ok(group)) }
+
+#[rustfmt::skip]
+fn drain(mut pipe: impl Read + AsFd + Send + 'static, fail_start: bool) -> std::io::Result<Drain> {
+    if fail_start {
+        return Err(std::io::Error::other("injected reader start failure"));
+    }
+    rustix::io::ioctl_fionbio(&pipe, true)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let join = thread::Builder::new()
+        .name("boxology-bash-drain".into())
+        .spawn(move || {
+            let mut retained = Vec::with_capacity(LIMIT);
+            let mut bytes = 0_u64;
+            let mut buffer = [0_u8; 8192];
+            let mut stop_at = None; let mut eof = false;
+            loop {
+                if stop_at.is_none() && stopped.load(Ordering::Relaxed) { stop_at = Some(Instant::now() + GRACE); }
+                if stop_at.is_some_and(|expires| Instant::now() >= expires) { break; }
+                match pipe.read(&mut buffer) {
+                    Ok(0) => { eof = true; break; },
+                    Ok(count) => {
+                        bytes = bytes.saturating_add(count as u64);
+                        let keep = (LIMIT - retained.len()).min(count);
+                        retained.extend_from_slice(&buffer[..keep]);
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        if stop_at.is_some() { break; }
+                        thread::sleep(POLL);
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            bytes = bytes.saturating_add(count as u64);
-            let keep = (LIMIT - retained.len()).min(count);
-            retained.extend_from_slice(&buffer[..keep]);
-        }
-        Ok(Capture {
-            truncated: bytes > retained.len() as u64,
-            retained,
-            bytes,
-        })
-    })
+            Ok(Capture { truncated: bytes > retained.len() as u64 || !eof, retained, bytes })
+        })?;
+    Ok(Drain { join, stop })
 }
+
+#[cfg(test)]
+#[rustfmt::skip]
+fn record_fault_pids(root: &Path, group: Pid, child: &Child) { let _ = fs::write(root.join("bash-fault-anchor-pid"), group.as_raw_pid().to_string()); let _ = fs::write(root.join("bash-fault-user-pid"), child.id().to_string()); }
