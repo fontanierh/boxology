@@ -48,6 +48,21 @@ track_pid "$SUP"; GUARD=; for i in $(jot 100); do GUARD=$(/bin/ps -axo pid=,ppid
 for f in "$DW_STATE_DIR/writefail.identity" "$DW_STATE_DIR"/writefail.gate.* "$DW_STATE_DIR"/writefail.record* "$DW_STATE_DIR"/.writefail.launch.*; do [[ -e "$f" ]] && LEFT=$((LEFT+1)); done
 ok '[[ $RC -ne 0 && $LIVE -ne 0 && $LEFT -eq 0 ]]' 'record-write failure aborts gated group and partial state'
 
+# A hard crash after the durable gated record but before release leaves no command or signal target.
+new; : >"$DW_STATE_DIR/prestart.test-gated-arm"; /bin/chmod 600 "$DW_STATE_DIR/prestart.test-gated-arm"; printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >>"$DW_KILL_LOG"' 'exit 0' >"$B/prestart-kill"; /bin/chmod 700 "$B/prestart-kill"; export DW_KILL_LOG="$B/prestart-kill.log"
+/bin/bash "$S" run --run-id prestart --phase implement --harness codex --worktree "$WT" --cwd "$WT" -- /bin/sleep 300 >"$B/run.out" 2>&1 & SUP=$!
+track_pid "$SUP"; wait_record prestart || exit 1; for i in $(jot 500); do [[ -f "$DW_STATE_DIR/prestart.test-gated-trigger" ]] && break; /bin/sleep .01; done; [[ -f "$DW_STATE_DIR/prestart.test-gated-trigger" ]] || exit 1
+PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/prestart.record"); track_pid "$PID"; /bin/kill -KILL "$SUP"; wait "$SUP" 2>/dev/null; /bin/sleep .1
+BEFORE=$(/sbin/md5 -q "$DW_STATE_DIR/prestart.record"); OUT=$(DW_KILL="$B/prestart-kill" /bin/bash "$S" reap --run-id prestart --dry-run); DRY_RC=$?; AFTER=$(/sbin/md5 -q "$DW_STATE_DIR/prestart.record"); OUT2=$(DW_KILL="$B/prestart-kill" /bin/bash "$S" reap --run-id prestart); RC=$?; SIGNALS=0; [[ -e "$DW_KILL_LOG" ]] && SIGNALS=$(wc -l <"$DW_KILL_LOG"); /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
+ok '[[ $DRY_RC -eq 0 && $BEFORE == "$AFTER" && $RC -eq 0 && $SIGNALS -eq 0 && $LIVE -ne 0 && "$OUT" == *"action=would-clear reason=pre_start"* && "$OUT2" == *"action=clear reason=pre_start"* ]]' 'hard crash before gate release clears proven-empty pre-start state without signaling'
+
+# The same gated record tracks the tiny post-release window and requires normal exact cleanup.
+new; : >"$DW_STATE_DIR/startwindow.test-start-arm"; /bin/chmod 600 "$DW_STATE_DIR/startwindow.test-start-arm"; printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >>"$DW_KILL_LOG"' 'exec /bin/kill "$@"' >"$B/start-kill"; /bin/chmod 700 "$B/start-kill"; export DW_KILL_LOG="$B/start-kill.log"; MARKER="$B/started"
+/bin/bash "$S" run --run-id startwindow --phase implement --harness codex --worktree "$WT" --cwd "$WT" -- /bin/bash -c 'printf started >"$1"; exec /bin/sleep 300' fixture "$MARKER" >"$B/run.out" 2>&1 & SUP=$!
+track_pid "$SUP"; wait_record startwindow || exit 1; for i in $(jot 500); do [[ -f "$DW_STATE_DIR/startwindow.test-start-trigger" && -f "$MARKER" ]] && break; /bin/sleep .01; done; [[ -f "$DW_STATE_DIR/startwindow.test-start-trigger" && -f "$MARKER" ]] || exit 1
+PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/startwindow.record"); STAGE=$(/usr/bin/awk -F= '/^stage=/{print $2}' "$DW_STATE_DIR/startwindow.record"); track_group "$PID"; /bin/kill -KILL "$SUP"; wait "$SUP" 2>/dev/null; OUT=$(DW_KILL="$B/start-kill" /bin/bash "$S" reap --run-id startwindow --dry-run); DRY_RC=$?; DRY_SIGNALS=0; [[ -e "$DW_KILL_LOG" ]] && DRY_SIGNALS=$(wc -l <"$DW_KILL_LOG"); OUT2=$(DW_KILL="$B/start-kill" /bin/bash "$S" reap --run-id startwindow); RC=$?; KILLS=$(/usr/bin/grep -c -- '^-KILL ' "$DW_KILL_LOG")
+ok '[[ $STAGE == gated && $DRY_RC -eq 0 && $DRY_SIGNALS -eq 0 && "$OUT" == *"action=would-term reason=verified"* && $RC -eq 0 && $KILLS -eq 1 && "$OUT2" == *"action=clear reason=kill"* ]]' 'post-release command start remains durably tracked by gated state and exact cleanup'
+
 # If the supervisor is interrupted as the command exits, the exact anchor remains until release.
 new; /bin/bash "$S" run --run-id anchor --phase implement --harness codex --worktree "$WT" --cwd "$WT" -- /bin/sleep .1 >"$B/run.out" 2>&1 & SUP=$!
 track_pid "$SUP"; wait_record anchor || exit 1; PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/anchor.record"); track_pid "$PID"; /bin/kill -TERM "$SUP"; wait "$SUP" 2>/dev/null; /bin/sleep .2
@@ -126,14 +141,13 @@ PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/dry.record"); /bin/kil
 ok '[[ $RC -eq 0 && $BEFORE == "$AFTER" && $LIVE -eq 0 && "$OUT" == "run=dry phase=implement harness=codex pid=$PID pgid=$PID action=would-term reason=verified owned_lock=not_observed" ]]' 'dry-run has exact sanitized telemetry, zero signal, and zero state advance'
 /bin/bash "$S" reap --run-id dry >/dev/null
 
-# release_sent is irreversible: a fresh reaper has no inherited writer and never substitutes a signal.
-new; printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >>"$DW_KILL_LOG"' 'exit 0' >"$B/release-kill"; /bin/chmod 700 "$B/release-kill"; export DW_KILL_LOG="$B/release-kill.log"
-/bin/bash "$S" run --run-id releasehold --phase implement --harness codex --worktree "$WT" --cwd "$WT" -- /bin/sleep 300 >"$B/run.out" 2>&1 & SUP=$!
-track_pid "$SUP"; wait_record releasehold || exit 1; PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/releasehold.record"); track_group "$PID"; /bin/kill -TERM "$SUP"; wait "$SUP" 2>/dev/null
-/usr/bin/awk '/^stage=/{print "stage=release_sent"; next}{print}' "$DW_STATE_DIR/releasehold.record" >"$B/release.record"; /bin/mv "$B/release.record" "$DW_STATE_DIR/releasehold.record"; /bin/chmod 600 "$DW_STATE_DIR/releasehold.record"
-OUT=$(DW_KILL="$B/release-kill" /bin/bash "$S" reap --run-id releasehold 2>&1); RC=$?; SIGNALS=0; [[ -e "$DW_KILL_LOG" ]] && SIGNALS=$(wc -l <"$DW_KILL_LOG"); /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
-ok '[[ $RC -eq 70 && $SIGNALS -eq 0 && $LIVE -eq 0 && "$OUT" == *"reason=release_pending"* ]]' 'release_sent resume is signal-free without the inherited writer'
-/bin/kill -KILL "-$PID" 2>/dev/null; /bin/sleep .1
+# A hard crash after release intent leaves the stopped anchor recoverable by exact proof.
+new; : >"$DW_STATE_DIR/releasehold.test-release-arm"; /bin/chmod 600 "$DW_STATE_DIR/releasehold.test-release-arm"; printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >>"$DW_KILL_LOG"' 'exec /bin/kill "$@"' >"$B/release-kill"; /bin/chmod 700 "$B/release-kill"; export DW_KILL_LOG="$B/release-kill.log"
+/bin/bash "$S" run --run-id releasehold --phase implement --harness codex --worktree "$WT" --cwd "$WT" -- /usr/bin/true >"$B/run.out" 2>&1 & SUP=$!
+track_pid "$SUP"; wait_record releasehold || exit 1; for i in $(jot 500); do [[ -f "$DW_STATE_DIR/releasehold.test-release-trigger" ]] && break; /bin/sleep .01; done; [[ -f "$DW_STATE_DIR/releasehold.test-release-trigger" ]] || exit 1
+PID=$(/usr/bin/awk -F= '/^pid=/{print $2}' "$DW_STATE_DIR/releasehold.record"); track_pid "$PID"; /bin/kill -KILL "$SUP"; wait "$SUP" 2>/dev/null; /bin/sleep .1
+STAGE=$(/usr/bin/awk -F= '/^stage=/{print $2}' "$DW_STATE_DIR/releasehold.record"); BEFORE=$(/sbin/md5 -q "$DW_STATE_DIR/releasehold.record"); OUT=$(DW_KILL="$B/release-kill" /bin/bash "$S" reap --run-id releasehold --dry-run); DRY_RC=$?; AFTER=$(/sbin/md5 -q "$DW_STATE_DIR/releasehold.record"); DRY_SIGNALS=0; [[ -e "$DW_KILL_LOG" ]] && DRY_SIGNALS=$(wc -l <"$DW_KILL_LOG"); OUT2=$(DW_KILL="$B/release-kill" /bin/bash "$S" reap --run-id releasehold); RC=$?; KILLS=$(/usr/bin/grep -c -- '^-KILL ' "$DW_KILL_LOG"); /bin/kill -0 "$PID" 2>/dev/null; LIVE=$?
+ok '[[ $STAGE == release_sent && $DRY_RC -eq 0 && $BEFORE == "$AFTER" && $DRY_SIGNALS -eq 0 && "$OUT" == *"action=would-kill reason=release"* && $RC -eq 0 && $KILLS -eq 1 && $LIVE -ne 0 && "$OUT2" == *"action=clear reason=kill"* ]]' 'release crash window dry-runs without signal then re-proves and KILLs the exact stopped anchor'
 
 # term_prepared retries TERM with the same anchor; term_sent resumes directly at KILL.
 new; printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >>"$DW_KILL_LOG"' 'exit 1' >"$B/fail-signal"; printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >>"$DW_KILL_LOG"' 'exec /bin/kill "$@"' >"$B/pass-signal"; /bin/chmod 700 "$B/fail-signal" "$B/pass-signal"; FAIL_SIGNAL="$B/fail-signal"; PASS_SIGNAL="$B/pass-signal"; export DW_KILL_LOG="$B/intent.log"

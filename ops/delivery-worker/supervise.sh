@@ -89,7 +89,7 @@ read_record() {
   [[ "$R_SCHEMA" != 2 || ( "$R_SESSION" == "$R_PID" && "$R_IDENTITY_ID" =~ ^[0-9]+:[0-9]+$ && "$R_CONTROL_ID" =~ ^[0-9]+:[0-9]+$ && "$R_STATUS_ID" =~ ^[0-9]+:[0-9]+$ && "$R_LOCK_COMPLETE" =~ ^[01]$ ) ]] || return 1
   safe "$R_RUN" && safe "$R_PHASE" && safe "$R_HARNESS" && safe "$R_CMD" || return 1
   case "$R_PHASE" in implement|repair|validation) ;; *) return 1;; esac
-  case "$R_STAGE" in running|interrupted|exited|term_prepared|term_sent|release_sent|kill_intent) ;; *) return 1;; esac
+  case "$R_STAGE" in gated|running|interrupted|exited|term_prepared|term_sent|release_sent|kill_intent) ;; *) return 1;; esac
   [[ -z "$R_TERM" || "$R_TERM" =~ ^[0-9]+$ ]] || return 1
   local m mp; while IFS= read -r m; do [[ -z "$m" ]] && continue; mp=${m%%:*}; [[ "$m" =~ ^[1-9][0-9]*:[a-f0-9]{64}$ && "$mp" -gt 1 ]] || return 1; done <<<"$R_MEMBERS"
   [[ "$R_STAGE" != term_prepared || -n "$R_MEMBERS" ]] || return 1
@@ -251,8 +251,15 @@ classify_locks() {
 }
 
 locked() { exec 8>"$STATE/$R_RUN.lock" || return 1; "$LOCKF" -t 0 8 >/dev/null 2>&1; }
-clear_handles() { /bin/rm -f "$STATE/$R_RUN.identity" "$STATE/$R_RUN.control" "$STATE/$R_RUN.status" "$STATE/$R_RUN.gate.${R_PARENT:-0}" "$STATE/.$R_RUN.launch.${R_PARENT:-0}" "$STATE/.$R_RUN.exit.${R_PARENT:-0}" "$STATE/$R_RUN.test-arm" "$STATE/$R_RUN.test-trigger" "$STATE/$R_RUN.test-ready" "$STATE/$R_RUN.test-unstable" "$STATE/$R_RUN.test-unstable-trigger" "$STATE/$R_RUN.test-unstable-ready"; }
+clear_handles() { /bin/rm -f "$STATE/$R_RUN.identity" "$STATE/$R_RUN.control" "$STATE/$R_RUN.status" "$STATE/$R_RUN.gate.${R_PARENT:-0}" "$STATE/.$R_RUN.launch.${R_PARENT:-0}" "$STATE/.$R_RUN.exit.${R_PARENT:-0}" "$STATE/$R_RUN.test-arm" "$STATE/$R_RUN.test-trigger" "$STATE/$R_RUN.test-ready" "$STATE/$R_RUN.test-unstable" "$STATE/$R_RUN.test-unstable-trigger" "$STATE/$R_RUN.test-unstable-ready" "$STATE/$R_RUN.test-gated-arm" "$STATE/$R_RUN.test-gated-trigger" "$STATE/$R_RUN.test-start-arm" "$STATE/$R_RUN.test-start-trigger" "$STATE/$R_RUN.test-release-arm" "$STATE/$R_RUN.test-release-trigger"; }
 clear_record() { /bin/rm -f "$(record_path)"; clear_handles; }
+test_crash_barrier() {
+  local stage=$1 arm="$STATE/$R_RUN.test-$1-arm" trigger="$STATE/$R_RUN.test-$1-trigger"
+  [[ "$TEST_MODE" == 1 && -e "$arm" ]] || return 0
+  [[ -f "$arm" && ! -L "$arm" && "$("$STAT" -f '%u:%Lp' "$arm" 2>/dev/null)" == "$UID_N:600" ]] || return 1
+  : >"$trigger" && /bin/chmod 600 "$trigger" || return 1
+  while [[ -e "$arm" ]]; do "$SLEEP" .01; done
+}
 test_term_barrier() {
   local arm="$STATE/$R_RUN.test-arm" trigger="$STATE/$R_RUN.test-trigger" ready="$STATE/$R_RUN.test-ready" proof="$STATE/.$R_RUN.test-exec.$$" i x line
   [[ "$TEST_MODE" == 1 && -e "$arm" ]] || return 0
@@ -311,7 +318,7 @@ run_cmd() {
   R_IDENTITY_ID=$(fid "$STATE/$R_RUN.identity") || die fifo_identity; R_CONTROL_ID=$(fid "$control") || die fifo_identity; R_STATUS_ID=$(fid "$status") || die fifo_identity
   exec 5<>"$control" 6<>"$status" 7<>"$gate" || { /bin/rm -f "$gate"; clear_handles; die gate_open; }
   set +m; ( exec 8>&- 3>&- 4>&- 5>&- 6>&- 7>&-; exec /usr/bin/perl -MPOSIX -e 'POSIX::setsid() >= 0 or exit 125; exec {$ARGV[0]} @ARGV; exit 125' -- "$SELF" guardian "$R_RUN" "$R_CWD" "$STATE/$R_RUN.identity" "$control" "$status" "$gate" -- "${argv[@]}" ) & guardian=$!
-  R_SCHEMA=2; R_PID=$guardian; R_PGID=$guardian; R_MEMBERS=; R_LOCKS=; R_LOCK_COMPLETE=0; R_TERM=; R_CREATED=$(now); R_UPDATED=$R_CREATED; R_STAGE=running
+  R_SCHEMA=2; R_PID=$guardian; R_PGID=$guardian; R_MEMBERS=; R_LOCKS=; R_LOCK_COMPLETE=0; R_TERM=; R_CREATED=$(now); R_UPDATED=$R_CREATED; R_STAGE=gated
   local i released=0 snap="$STATE/.$R_RUN.launch.$$"
   trap 'if [[ "$released" == 0 ]]; then abort_launch; else trap - INT TERM HUP; [[ "$R_STAGE" == release_sent ]] || R_STAGE=interrupted; R_UPDATED=$(now); write_record 2>/dev/null; { printf "go\n" >&7; } 2>/dev/null; /bin/rm -f "$gate" "$snap"; exec 3>&- 4>&- 5>&- 6>&- 7>&-; fi; exit 143' INT TERM HUP
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do snapshot "$snap" && launch_guardian "$snap" && break; "$SLEEP" .05; done
@@ -320,7 +327,10 @@ run_cmd() {
   /bin/rm -f "$STATE/$R_RUN.identity" "$control" "$status"
   snapshot "$snap" && guardian "$snap" || { abort_launch; die launch_changed; }
   write_record || { abort_launch; die record_write; }; released=1
+  test_crash_barrier gated || { abort_launch; die test_barrier_failed; }
   printf 'go\n' >&7 || { exec 7>&-; R_STAGE=interrupted; R_UPDATED=$(now); write_record; die gate_release; }; exec 7>&-
+  test_crash_barrier start || die test_barrier_failed
+  R_STAGE=running; R_UPDATED=$(now); write_record || die record_write
   /bin/rm -f "$gate" "$snap"
   IFS= read -r report <&3 || { R_STAGE=interrupted; R_UPDATED=$(now); write_record; die status_read; }
   if IFS= read -r extra <&3; then R_STAGE=interrupted; R_UPDATED=$(now); write_record; die status_invalid; fi; exec 3>&-
@@ -328,6 +338,7 @@ run_cmd() {
   rc=${report#*:}; snap="$STATE/.$R_RUN.exit.$$"; snapshot "$snap" || { /bin/rm -f "$snap"; R_STAGE=interrupted; R_UPDATED=$(now); write_record; die ps_failed; }
   if ! session_members "$snap" || [[ "$C_MEMBERS" != "$R_PID:"* || "$C_MEMBERS" == *$'\n'* ]]; then /bin/rm -f "$snap"; R_STAGE=exited; R_UPDATED=$(now); write_record; emit retain group_not_empty; return 70; fi
   R_STAGE=release_sent; R_UPDATED=$(now); write_record || { /bin/rm -f "$snap"; die record_write; }
+  test_crash_barrier release || { /bin/rm -f "$snap"; emit retain test_barrier_failed; return 70; }
   snapshot "$snap" && session_members "$snap" && [[ "$C_MEMBERS" != *$'\n'* ]] || { /bin/rm -f "$snap"; emit retain changed_before_release; return 70; }
   printf 'release:%s\n' "$R_RUN" >&4 2>/dev/null || { /bin/rm -f "$snap"; emit retain release_failed; return 71; }; exec 4>&-
   wait "$guardian" || { /bin/rm -f "$snap"; emit retain release_failed; return 71; }
@@ -360,10 +371,22 @@ reap_cmd() {
   fi
   if [[ "$R_STAGE" == release_sent ]]; then
     if ! session_present "$snap"; then /bin/rm -f "$snap"; lock_state=$(classify_locks); [[ $dry == 1 ]] && emit would-clear release "$lock_state" || { clear_record; emit clear release "$lock_state"; }; return 0; fi
-    /bin/rm -f "$snap"; emit retain release_pending; return 70
+    session_members "$snap"; rc=$?
+    if [[ $rc -eq 2 ]]; then /bin/rm -f "$snap"; emit refuse session_escape; return 70; fi
+    [[ $rc -eq 0 ]] || { /bin/rm -f "$snap"; emit retain release_anchor_missing; return 70; }
+    if [[ $dry == 1 ]]; then /bin/rm -f "$snap"; emit would-kill release; return 0; fi
+    R_STAGE=kill_intent; R_UPDATED=$(now); write_record || { /bin/rm -f "$snap"; die record_write; }
+    snapshot "$snap"; rc=$?; [[ $rc -eq 0 ]] && session_members "$snap"; rc=$?
+    if [[ $rc -eq 2 ]]; then /bin/rm -f "$snap"; emit refuse session_escape; return 70; fi
+    [[ $rc -eq 0 ]] || { /bin/rm -f "$snap"; emit retain changed_before_kill; return 70; }
+    "$KILL" -KILL "-$R_PGID" 2>/dev/null || { /bin/rm -f "$snap"; emit retain kill_failed; return 71; }
+    "$SLEEP" .1; snapshot "$snap" || { /bin/rm -f "$snap"; die ps_failed; }
+    if session_present "$snap"; then /bin/rm -f "$snap"; emit retain post_kill_survivor; return 70; fi
+    /bin/rm -f "$snap"; lock_state=$(classify_locks); clear_record; emit clear kill "$lock_state"; return 0
   fi
   if ! session_present "$snap"; then
     /bin/rm -f "$snap"
+    if [[ "$R_STAGE" == gated ]]; then [[ $dry == 1 ]] && emit would-clear pre_start || { clear_record; emit clear pre_start; }; return 0; fi
     if [[ "$R_STAGE" != exited ]]; then emit refuse leader_missing; return 70; fi
     [[ $dry == 1 ]] && emit would-clear group_empty || { clear_record; emit clear group_empty; }; return 0
   fi

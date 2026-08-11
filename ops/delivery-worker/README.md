@@ -25,7 +25,8 @@ The caller supplies an argv vector, and secrets stay in the worker environment.
 
 ## Ownership and state
 
-The launcher gates the command until its guardian has used the macOS system
+The launcher durably records a `gated` stage, then gates the command until its
+guardian has used the macOS system
 Perl's `POSIX::setsid` to become both session and process-group leader. The
 guardian remains alive after launcher interruption and after the command exits;
 it ignores group TERM and holds exact identity/control descriptors. At launch,
@@ -34,8 +35,10 @@ their filesystem names before the command starts. The command closes every
 protocol descriptor. The guardian is the sole status writer, the supervisor is
 the sole status reader and release writer, and the guardian is the sole release
 reader. An exact command status is newline- and EOF-framed. Before sending its
-inherited release, the supervisor durably records the irreversible
-`release_sent` stage. The launcher writes all state beneath
+inherited release, the supervisor durably records `release_sent`. A hard crash
+before gate release leaves a proven-empty `gated` record; a crash after release
+intent leaves an exactly identifiable stopped anchor. The launcher writes all
+state beneath
 `/Users/jim/.codex/boxology-delivery-worker/runs` (`0700` directory, `0600`
 records). The record contains the run, phase, harness, guardian PID/PGID/SID,
 UID, start fingerprint, unlinked descriptor identities, canonical worktree/cwd,
@@ -79,8 +82,11 @@ SID/PGID; an absent or changed anchor never authorizes a numeric signal. Empty
 intent clears, while a surviving session without its anchor retains. Likewise,
 `term_prepared` may repeat TERM after full proof, whereas `term_sent` continues
 without repeating it. These are at-least-once-safe recovery semantics, not an
-exact-once guarantee. A live `release_sent` record is inspected but never
-signaled or resumed by a new writer.
+exact-once guarantee. An empty `gated` record clears without signaling. A live
+`gated` record follows normal proven cleanup because command start was released
+but not durably confirmed. A live `release_sent` record is fully re-proved,
+durably advances to `kill_intent`, and KILLs the stopped anchor; an empty one
+clears.
 Never replace a refusal with `kill`, `pkill`, or `killall`; inspect the retained
 evidence and fix the proof failure.
 
