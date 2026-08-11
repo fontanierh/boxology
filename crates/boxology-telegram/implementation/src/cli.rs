@@ -135,7 +135,7 @@ pub fn execute(
         "reply" => call::<ReplyJson, _>(input, |r| backend.reply(contract::ReplyRequest { event_id: r.event_id, text: r.text, dedup_key: r.dedup_key })).map_or_else(|e| failure(command, e), |o| select(command, o.delivery, o.error, delivery)),
         "resolve-send" => call::<ResolveJson, _>(input, |r| backend.resolve_send(contract::ResolveSendRequest { dedup_key: r.dedup_key, resolution: contract::DeliveryResolution { kind: match r.resolution.kind { kind if kind == "delivered" => contract::ResolutionKind::Delivered, kind if kind == "not_delivered" => contract::ResolutionKind::NotDelivered, tag => contract::ResolutionKind::Unknown { tag, payload: boxology_contract::OpaquePayload::new(boxology_contract::OpaqueTree::Null) } }, message_id: r.resolution.message_id } })).map_or_else(|e| failure(command, e), |o| select(command, o.resolution, o.error, resolution)),
         "poll" => call::<PollJson, _>(input, |r| backend.poll(contract::PollRequest { timeout_seconds: r.timeout_seconds })).map_or_else(|e| failure(command, e), |o| select(command, o.result, o.error, poll)),
-        "ack" => call::<AckJson, _>(input, |r| backend.ack(contract::AckRequest { event_id: r.event_id })).map_or_else(|e| failure(command, e), |o| select(command, o.acknowledgement, o.error, |r| Ok(json!({"event_id": r.event_id, "handled": r.handled, "already_handled": r.already_handled})))),
+        "ack" => call::<AckJson, _>(input, |r| backend.ack(contract::AckRequest { event_id: r.event_id })).map_or_else(|e| failure(command, e), |o| select(command, o.acknowledgement, o.error, |r| Ok(json!({"already_handled": r.already_handled, "event_id": r.event_id, "handled": r.handled})))),
         _ => failure(command, AppError::unsupported()),
     }
 }
@@ -197,12 +197,12 @@ fn delivery(r: contract::DeliveryReceipt) -> Result<Value, ()> {
 }
 fn ask(r: contract::AskReceipt) -> Result<Value, ()> {
     Ok(
-        json!({"ask_id": r.ask_id, "lifecycle_key": r.lifecycle_key, "dedup_key": r.delivery.dedup_key, "delivery": "delivered", "message_id": r.delivery.message_id, "deduplicated": r.delivery.deduplicated}),
+        json!({"ask_id": r.ask_id, "dedup_key": r.delivery.dedup_key, "deduplicated": r.delivery.deduplicated, "delivery": "delivered", "lifecycle_key": r.lifecycle_key, "message_id": r.delivery.message_id}),
     )
 }
 fn pair_begin(r: contract::PairBeginReceipt) -> Result<Value, ()> {
     Ok(
-        json!({"deep_link": r.deep_link, "expires_at": r.expires_at, "bot": {"id": r.bot.id, "username": r.bot.username}}),
+        json!({"bot": {"id": r.bot.id, "username": r.bot.username}, "deep_link": r.deep_link, "expires_at": r.expires_at}),
     )
 }
 fn pair_complete(r: contract::PairCompleteReceipt) -> Result<Value, ()> {
@@ -212,7 +212,7 @@ fn pair_complete(r: contract::PairCompleteReceipt) -> Result<Value, ()> {
         contract::PairConfirmation::NotAttempted => "not_attempted",
         contract::PairConfirmation::Unknown { .. } => return Err(()),
     };
-    let mut value = json!({"paired": true, "user_id": r.user_id, "chat_id": r.chat_id, "paired_at": r.paired_at, "confirmation": confirmation});
+    let mut value = json!({"chat_id": r.chat_id, "confirmation": confirmation, "paired": true, "paired_at": r.paired_at, "user_id": r.user_id});
     if confirmation == "ambiguous" {
         value["warnings"] = json!(["pairing confirmation delivery is ambiguous"]);
     }
@@ -221,7 +221,7 @@ fn pair_complete(r: contract::PairCompleteReceipt) -> Result<Value, ()> {
 fn resolution(r: contract::ResolveSendReceipt) -> Result<Value, ()> {
     match (r.resolved, r.message_id) {
         (contract::ResolutionKind::Delivered, Some(message_id)) => {
-            Ok(json!({"dedup_key": r.dedup_key, "resolved": "delivered", "message_id": message_id}))
+            Ok(json!({"dedup_key": r.dedup_key, "message_id": message_id, "resolved": "delivered"}))
         }
         (contract::ResolutionKind::NotDelivered, None) => {
             Ok(json!({"dedup_key": r.dedup_key, "resolved": "not_delivered"}))
@@ -237,7 +237,7 @@ fn poll(r: contract::PollResult) -> Result<Value, ()> {
                 return Err(());
             }
             let confirmed = r.receipt.telegram_confirmed.ok_or(())?;
-            json!({"event": event_value(event)?, "receipt": {"locally_durable": true, "telegram_confirmed": confirmed, "fetched": r.receipt.fetched}})
+            json!({"event": event_value(event)?, "receipt": {"fetched": r.receipt.fetched, "locally_durable": true, "telegram_confirmed": confirmed}})
         }
         None => {
             if r.receipt.locally_durable.is_some() || r.receipt.telegram_confirmed.is_some() {
@@ -266,7 +266,7 @@ pub fn event_value(e: contract::InboundEvent) -> Result<Value, ()> {
         ),
         (contract::InboundEventKind::AskReply, Some(text), Some(ask_id), Some(lifecycle), None) => {
             Ok(
-                json!({"event_id": base["event_id"], "kind": "ask_reply", "received_at": base["received_at"], "reply_to": base["reply_to"], "text": text, "ask_id": ask_id, "lifecycle_key": lifecycle}),
+                json!({"ask_id": ask_id, "event_id": base["event_id"], "kind": "ask_reply", "lifecycle_key": lifecycle, "received_at": base["received_at"], "reply_to": base["reply_to"], "text": text}),
             )
         }
         (
@@ -276,7 +276,7 @@ pub fn event_value(e: contract::InboundEvent) -> Result<Value, ()> {
             Some(lifecycle),
             Some(choice),
         ) => Ok(
-            json!({"event_id": base["event_id"], "kind": "ask_choice", "received_at": base["received_at"], "reply_to": base["reply_to"], "ask_id": ask_id, "lifecycle_key": lifecycle, "choice": {"kind": choice.kind, "key": choice.key}}),
+            json!({"ask_id": ask_id, "choice": {"key": choice.key, "kind": choice.kind}, "event_id": base["event_id"], "kind": "ask_choice", "lifecycle_key": lifecycle, "received_at": base["received_at"], "reply_to": base["reply_to"]}),
         ),
         _ => Err(()),
     }
@@ -285,10 +285,10 @@ pub fn event_value(e: contract::InboundEvent) -> Result<Value, ()> {
 fn status_value(probe: bool, r: contract::StatusResult) -> Result<Value, ()> {
     match (probe, r.local, r.probe) {
         (false, Some(l), None) => Ok(
-            json!({"probe": false, "enabled": l.enabled, "paired": l.paired, "next_offset": l.next_offset, "telegram_confirmed_before": l.telegram_confirmed_before, "consumer_locked": l.consumer_locked, "inbox": {"unhandled": l.inbox.unhandled, "bytes": l.inbox.bytes, "full": l.inbox.full}, "asks": {"active": l.asks.active, "total": l.asks.total}, "outbound": {"ambiguous": l.outbound.ambiguous, "total": l.outbound.total}, "pending_pair": l.pending_pair, "last_receive_at": l.last_receive_at, "last_error_code": l.last_error_code}),
+            json!({"asks": {"active": l.asks.active, "total": l.asks.total}, "consumer_locked": l.consumer_locked, "enabled": l.enabled, "inbox": {"bytes": l.inbox.bytes, "full": l.inbox.full, "unhandled": l.inbox.unhandled}, "last_error_code": l.last_error_code, "last_receive_at": l.last_receive_at, "next_offset": l.next_offset, "outbound": {"ambiguous": l.outbound.ambiguous, "total": l.outbound.total}, "paired": l.paired, "pending_pair": l.pending_pair, "probe": false, "telegram_confirmed_before": l.telegram_confirmed_before}),
         ),
         (true, None, Some(p)) => Ok(
-            json!({"probe": true, "api_reachable": p.api_reachable, "bot_matches": p.bot_matches, "webhook_configured": p.webhook_configured, "get_updates_compatible": p.get_updates_compatible}),
+            json!({"api_reachable": p.api_reachable, "bot_matches": p.bot_matches, "get_updates_compatible": p.get_updates_compatible, "probe": true, "webhook_configured": p.webhook_configured}),
         ),
         _ => Err(()),
     }
