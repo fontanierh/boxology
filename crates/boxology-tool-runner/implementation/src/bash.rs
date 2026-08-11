@@ -138,10 +138,9 @@ impl ToolRunnerService {
             if self.fault == Some(Fault::BashAnchorDeath)
                 && self.root.join("anchor-death-ready").exists()
                 && !self.root.join("bash-fault-anchor-pid").exists()
+                && anchor.kill().is_ok()
             {
-                if anchor.kill().is_ok() {
-                    record_fault_pids(&self.root, group, &child);
-                }
+                record_fault_pids(&self.root, group, &child);
             }
             if !anchor_reserved(&anchor) {
                 let _ = cleanup_group(group, &mut child, &mut anchor, false, false);
