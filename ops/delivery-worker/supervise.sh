@@ -129,14 +129,17 @@ row() {
 }
 cwd_of() { local n= line; while IFS= read -r line; do case "$line" in n*) n=${line#n};; esac; done < <("$LSOF" -n -P -a -p "$1" -d cwd -Fn 2>/dev/null); [[ -n "$n" ]] && canon "$n"; }
 anchor_handles() {
-  local fd= n= line; A_CWD=; A_IDENTITY_INO=; A_CONTROL_INO=; A_STATUS_INO=; A_IDENTITY_ACCESS=; A_CONTROL_ACCESS=; A_STATUS_ACCESS=
+  local fd= n= line; A_CWD=; A_IDENTITY_DEV=; A_IDENTITY_INO=; A_CONTROL_INO=; A_STATUS_INO=; A_IDENTITY_ACCESS=; A_CONTROL_ACCESS=; A_STATUS_ACCESS=
   while IFS= read -r line; do case "$line" in
     f*) fd=${line#f};;
     a*) case "$fd" in 9) A_IDENTITY_ACCESS=${line#a};; 10) A_CONTROL_ACCESS=${line#a};; 11) A_STATUS_ACCESS=${line#a};; esac;;
+    D*) [[ "$fd" == 9 ]] && A_IDENTITY_DEV=${line#D};;
     i*) case "$fd" in 9) A_IDENTITY_INO=${line#i};; 10) A_CONTROL_INO=${line#i};; 11) A_STATUS_INO=${line#i};; esac;;
     n*) [[ "$fd" == cwd ]] && { n=$(canon "${line#n}") || return 1; A_CWD=$n; };;
-  esac; done < <("$LSOF" -n -P -a -p "$1" -d cwd,9,10,11 -Ffain 2>/dev/null)
-  [[ -n "$A_CWD" && "$A_IDENTITY_INO" == "${R_IDENTITY_ID#*:}" && "$A_IDENTITY_ACCESS" == r && "$A_CONTROL_INO" == "${R_CONTROL_ID#*:}" && "$A_CONTROL_ACCESS" == r ]]
+  esac; done < <("$LSOF" -n -P -a -p "$1" -d cwd,9,10,11 -FfDain 2>/dev/null)
+  [[ "$A_IDENTITY_DEV" =~ ^0x[0-9a-fA-F]+$ ]] || return 1
+  A_IDENTITY_ID=$(printf '%d:%s' "$A_IDENTITY_DEV" "$A_IDENTITY_INO") || return 1
+  [[ -n "$A_CWD" && "$A_IDENTITY_ID" == "$R_IDENTITY_ID" && "$A_IDENTITY_ACCESS" == r && "$A_CONTROL_INO" == "${R_CONTROL_ID#*:}" && "$A_CONTROL_ACCESS" == r ]]
 }
 fingerprint() { printf '%s' "$P_PID|$P_PGID|$P_SESSION|$P_UID|$P_LSTART|$P_OBS|$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'; }
 
