@@ -74,6 +74,11 @@ cross generated handles. The listener-start handle retains the exclusive consume
 lease across same-service polling. The backend-neutral one-shot projection and
 composition-owned listener use generated request/outcome types without direct
 implementation state or network access.
+The immutable
+[Telegram self-hosting closeout record](../records/2026-08-11-telegram-self-hosting-closeout.md)
+pins the merged command map, cold-generation evidence, complete check, and operational
+limitations. Telegram product self-hosting is complete; live Telegram authorization remains
+separate under #248.
 
 ## Dependency order and milestones
 
@@ -289,7 +294,7 @@ still requires its own authorization.
 | Issue | Role and dependency |
 | --- | --- |
 | [#572](https://github.com/fontanierh/boxology/issues/572) | Epic and current-roadmap owner; closes only after its accepted child scope is completed or transferred explicitly |
-| [#573](https://github.com/fontanierh/boxology/issues/573) | Telegram product self-hosting: scalar and structured capabilities plus the governed CLI/listen composition are delivered; only final merged closeout evidence remains |
+| [#573](https://github.com/fontanierh/boxology/issues/573) | Delivered Telegram product self-hosting: scalar and structured capabilities, governed CLI/listen composition, cold generation, complete check, and the dated closeout record are merged |
 | [#574](https://github.com/fontanierh/boxology/issues/574) | Delivered minimum structured Telegram boundary; bounded slices from #102/#104 with fixture coordination under #100 |
 | [#575](https://github.com/fontanierh/boxology/issues/575) | Classifier/check/generator/installer use-case entrypoints; classifier and `check` branch from E3 generated-handle proof and may run parallel with Telegram composition, while later dependencies remain use-case-driven; advances #74 |
 | [#576](https://github.com/fontanierh/boxology/issues/576) | Minimum Pi-like harness; follows generated-handle dogfood and models completion as an application box rather than inventing a provider package kind or new kernel feature |

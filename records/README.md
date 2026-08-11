@@ -12,6 +12,7 @@ The strategy review of 2026-07-18 predates this directory and remains at [`boxol
 
 ## Index
 
+- [2026-08-11 — Telegram self-hosting closeout](2026-08-11-telegram-self-hosting-closeout.md)
 - [2026-08-09 — V0 completion evidence](2026-08-09-v0-completion-evidence.md)
 - [2026-08-04 — Full-transcript V0 situation report](2026-08-04-full-transcript-v0-sitrep.md)
 - [2026-08-04 — Fable V0 advancement and course-correction advisory](2026-08-04-fable-v0-advisory.md)
