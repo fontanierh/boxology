@@ -1375,6 +1375,7 @@ dependencies = [
  "boxology",
  "boxology-contract",
  "boxology-runtime",
+ "rustix",
  "tool-runner-contract",
 ]
 

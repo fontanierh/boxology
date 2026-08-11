@@ -80,6 +80,37 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
                         .expect("generated optional descriptor is valid"),
                     None,
                 ),
+                ::boxology_contract::FieldDescriptor::new(
+                    "bash",
+                    ::boxology_contract::TypeDescriptor::optional(
+                            ::boxology_contract::TypeDescriptor::structure([
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "command",
+                                        ::boxology_contract::TypeDescriptor::string(),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "cwd",
+                                        ::boxology_contract::TypeDescriptor::optional(
+                                                ::boxology_contract::TypeDescriptor::string(),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "timeout_ms",
+                                        ::boxology_contract::TypeDescriptor::optional(
+                                                ::boxology_contract::TypeDescriptor::u64(),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                ])
+                                .expect("generated struct descriptor is valid"),
+                        )
+                        .expect("generated optional descriptor is valid"),
+                    None,
+                ),
             ])
             .expect("generated struct descriptor is valid"),
         ::boxology_contract::TypeDescriptor::structure([
@@ -134,6 +165,62 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
                                                         ::boxology_contract::FieldDescriptor::new(
                                                             "changed",
                                                             ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "bash",
+                                        ::boxology_contract::TypeDescriptor::optional(
+                                                ::boxology_contract::TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stdout",
+                                                            ::boxology_contract::TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stderr",
+                                                            ::boxology_contract::TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stdout_bytes",
+                                                            ::boxology_contract::TypeDescriptor::u64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stderr_bytes",
+                                                            ::boxology_contract::TypeDescriptor::u64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stdout_truncated",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stderr_truncated",
+                                                            ::boxology_contract::TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "exit_code",
+                                                            ::boxology_contract::TypeDescriptor::optional(
+                                                                    ::boxology_contract::TypeDescriptor::i32(),
+                                                                )
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "signal",
+                                                            ::boxology_contract::TypeDescriptor::optional(
+                                                                    ::boxology_contract::TypeDescriptor::i32(),
+                                                                )
+                                                                .expect("generated optional descriptor is valid"),
                                                             None,
                                                         ),
                                                     ])
@@ -237,7 +324,7 @@ static __BOXOLOGY_CONTRACT_DESCRIPTOR: ::std::sync::LazyLock<
             box_id,
             [capability],
             ::boxology_contract::ContractRevision::new(
-                    "sha256:6493baa7fa8929bb296b82911222bbd0b4b74a96cb0d80c17a310d0bee2fc575",
+                    "sha256:cb6e9ba192734b8bf031ee2542ebf20ceca3f74a9a02cc10c8c14c6b3c693cb1",
                 )
                 .expect("generated contract revision is non-empty"),
         )
@@ -336,6 +423,58 @@ impl ToolRunnerHandle {
                                                         ::boxology_contract::FieldDescriptor::new(
                                                             "changed",
                                                             TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                    ])
+                                                    .expect("generated struct descriptor is valid"),
+                                            )
+                                            .expect("generated optional descriptor is valid"),
+                                        None,
+                                    ),
+                                    ::boxology_contract::FieldDescriptor::new(
+                                        "bash",
+                                        TypeDescriptor::optional(
+                                                TypeDescriptor::structure([
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stdout",
+                                                            TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stderr",
+                                                            TypeDescriptor::string(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stdout_bytes",
+                                                            TypeDescriptor::u64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stderr_bytes",
+                                                            TypeDescriptor::u64(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stdout_truncated",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "stderr_truncated",
+                                                            TypeDescriptor::bool(),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "exit_code",
+                                                            TypeDescriptor::optional(TypeDescriptor::i32())
+                                                                .expect("generated optional descriptor is valid"),
+                                                            None,
+                                                        ),
+                                                        ::boxology_contract::FieldDescriptor::new(
+                                                            "signal",
+                                                            TypeDescriptor::optional(TypeDescriptor::i32())
+                                                                .expect("generated optional descriptor is valid"),
                                                             None,
                                                         ),
                                                     ])
@@ -683,10 +822,319 @@ impl ::boxology_contract::ContractType for EditRequest {
     }
 }
 #[derive(Debug, Clone, PartialEq)]
+pub struct BashRequest {
+    pub command: ::std::string::String,
+    pub cwd: ::core::option::Option<::std::string::String>,
+    pub timeout_ms: ::core::option::Option<u64>,
+}
+impl ::boxology_contract::ContractType for BashRequest {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.command,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("command".into()))
+            })?
+        {
+            fields.push(("command".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.cwd)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("cwd".into()))
+            })?
+        {
+            fields.push(("cwd".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.timeout_ms,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("timeout_ms".into()))
+            })?
+        {
+            fields.push(("timeout_ms".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "command" | "cwd" | "timeout_ms" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            command: <::std::string::String as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("command"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(::boxology_contract::PathSegment::Field("command".into()))
+                })?,
+            cwd: <::core::option::Option<
+                ::std::string::String,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("cwd"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("cwd".into()))
+                })?,
+            timeout_ms: <::core::option::Option<
+                u64,
+            > as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("timeout_ms"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("timeout_ms".into()),
+                        )
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct BashResult {
+    pub stdout: ::std::string::String,
+    pub stderr: ::std::string::String,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub exit_code: ::core::option::Option<i32>,
+    pub signal: ::core::option::Option<i32>,
+}
+impl ::boxology_contract::ContractType for BashResult {
+    fn encode_value(
+        &self,
+    ) -> ::core::result::Result<
+        ::boxology_contract::ContractValue,
+        ::boxology_contract::EncodeError,
+    > {
+        let mut fields = ::std::vec::Vec::new();
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.stdout,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("stdout".into()))
+            })?
+        {
+            fields.push(("stdout".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.stderr,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("stderr".into()))
+            })?
+        {
+            fields.push(("stderr".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.stdout_bytes,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field("stdout_bytes".into()),
+                    )
+            })?
+        {
+            fields.push(("stdout_bytes".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.stderr_bytes,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field("stderr_bytes".into()),
+                    )
+            })?
+        {
+            fields.push(("stderr_bytes".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.stdout_truncated,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field(
+                            "stdout_truncated".into(),
+                        ),
+                    )
+            })?
+        {
+            fields.push(("stdout_truncated".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.stderr_truncated,
+            )
+            .map_err(|error| {
+                error
+                    .under(
+                        ::boxology_contract::PathSegment::Field(
+                            "stderr_truncated".into(),
+                        ),
+                    )
+            })?
+        {
+            fields.push(("stderr_truncated".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.exit_code,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("exit_code".into()))
+            })?
+        {
+            fields.push(("exit_code".into(), value));
+        }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(
+                &self.signal,
+            )
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("signal".into()))
+            })?
+        {
+            fields.push(("signal".into(), value));
+        }
+        ::boxology_contract::ContractValue::object(fields)
+            .map_err(|_| unreachable!("validated generated field identities are unique"))
+    }
+    fn decode_value(
+        value: &::boxology_contract::ContractValue,
+    ) -> ::core::result::Result<Self, ::boxology_contract::DecodeError> {
+        let ::boxology_contract::ValueRef::Object(fields) = value.view() else {
+            return Err(
+                ::boxology_contract::DecodeError::new(
+                    ::boxology_contract::DecodeErrorKind::KindMismatch,
+                ),
+            );
+        };
+        for (field, _) in fields.entries() {
+            match field {
+                "stdout" | "stderr" | "stdout_bytes" | "stderr_bytes"
+                | "stdout_truncated" | "stderr_truncated" | "exit_code" | "signal" => {}
+                _ => {
+                    return Err(
+                        ::boxology_contract::DecodeError::new(
+                                ::boxology_contract::DecodeErrorKind::UnknownField(
+                                    field.into(),
+                                ),
+                            )
+                            .under(::boxology_contract::PathSegment::Field(field.into())),
+                    );
+                }
+            }
+        }
+        Ok(Self {
+            stdout: <::std::string::String as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("stdout"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("stdout".into()))
+                })?,
+            stderr: <::std::string::String as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("stderr"),
+                )
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("stderr".into()))
+                })?,
+            stdout_bytes: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("stdout_bytes"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "stdout_bytes".into(),
+                            ),
+                        )
+                })?,
+            stderr_bytes: <u64 as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("stderr_bytes"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "stderr_bytes".into(),
+                            ),
+                        )
+                })?,
+            stdout_truncated: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("stdout_truncated"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "stdout_truncated".into(),
+                            ),
+                        )
+                })?,
+            stderr_truncated: <bool as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("stderr_truncated"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field(
+                                "stderr_truncated".into(),
+                            ),
+                        )
+                })?,
+            exit_code: <::core::option::Option<
+                i32,
+            > as ::boxology_contract::ContractType>::decode_field(
+                    fields.get("exit_code"),
+                )
+                .map_err(|error| {
+                    error
+                        .under(
+                            ::boxology_contract::PathSegment::Field("exit_code".into()),
+                        )
+                })?,
+            signal: <::core::option::Option<
+                i32,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("signal"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("signal".into()))
+                })?,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExecuteRequest {
     pub read: ::core::option::Option<ReadRequest>,
     pub write: ::core::option::Option<WriteRequest>,
     pub edit: ::core::option::Option<EditRequest>,
+    pub bash: ::core::option::Option<BashRequest>,
 }
 impl ::boxology_contract::ContractType for ExecuteRequest {
     fn encode_value(
@@ -717,6 +1165,13 @@ impl ::boxology_contract::ContractType for ExecuteRequest {
         {
             fields.push(("edit".into(), value));
         }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.bash)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("bash".into()))
+            })?
+        {
+            fields.push(("bash".into(), value));
+        }
         ::boxology_contract::ContractValue::object(fields)
             .map_err(|_| unreachable!("validated generated field identities are unique"))
     }
@@ -732,7 +1187,7 @@ impl ::boxology_contract::ContractType for ExecuteRequest {
         };
         for (field, _) in fields.entries() {
             match field {
-                "read" | "write" | "edit" => {}
+                "read" | "write" | "edit" | "bash" => {}
                 _ => {
                     return Err(
                         ::boxology_contract::DecodeError::new(
@@ -763,6 +1218,12 @@ impl ::boxology_contract::ContractType for ExecuteRequest {
             > as ::boxology_contract::ContractType>::decode_field(fields.get("edit"))
                 .map_err(|error| {
                     error.under(::boxology_contract::PathSegment::Field("edit".into()))
+                })?,
+            bash: <::core::option::Option<
+                BashRequest,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("bash"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("bash".into()))
                 })?,
         })
     }
@@ -1008,6 +1469,7 @@ impl ::boxology_contract::ContractType for FileResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecuteResult {
     pub file: ::core::option::Option<FileResult>,
+    pub bash: ::core::option::Option<BashResult>,
 }
 impl ::boxology_contract::ContractType for ExecuteResult {
     fn encode_value(
@@ -1024,6 +1486,13 @@ impl ::boxology_contract::ContractType for ExecuteResult {
         {
             fields.push(("file".into(), value));
         }
+        if let Some(value) = ::boxology_contract::ContractType::encode_field(&self.bash)
+            .map_err(|error| {
+                error.under(::boxology_contract::PathSegment::Field("bash".into()))
+            })?
+        {
+            fields.push(("bash".into(), value));
+        }
         ::boxology_contract::ContractValue::object(fields)
             .map_err(|_| unreachable!("validated generated field identities are unique"))
     }
@@ -1039,7 +1508,7 @@ impl ::boxology_contract::ContractType for ExecuteResult {
         };
         for (field, _) in fields.entries() {
             match field {
-                "file" => {}
+                "file" | "bash" => {}
                 _ => {
                     return Err(
                         ::boxology_contract::DecodeError::new(
@@ -1058,6 +1527,12 @@ impl ::boxology_contract::ContractType for ExecuteResult {
             > as ::boxology_contract::ContractType>::decode_field(fields.get("file"))
                 .map_err(|error| {
                     error.under(::boxology_contract::PathSegment::Field("file".into()))
+                })?,
+            bash: <::core::option::Option<
+                BashResult,
+            > as ::boxology_contract::ContractType>::decode_field(fields.get("bash"))
+                .map_err(|error| {
+                    error.under(::boxology_contract::PathSegment::Field("bash".into()))
                 })?,
         })
     }
@@ -1669,6 +2144,33 @@ pub mod test_support {
                                 .expect("generated optional descriptor is valid"),
                             None,
                         ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "bash",
+                            TypeDescriptor::optional(
+                                    TypeDescriptor::structure([
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "command",
+                                                TypeDescriptor::string(),
+                                                None,
+                                            ),
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "cwd",
+                                                TypeDescriptor::optional(TypeDescriptor::string())
+                                                    .expect("generated optional descriptor is valid"),
+                                                None,
+                                            ),
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "timeout_ms",
+                                                TypeDescriptor::optional(TypeDescriptor::u64())
+                                                    .expect("generated optional descriptor is valid"),
+                                                None,
+                                            ),
+                                        ])
+                                        .expect("generated struct descriptor is valid"),
+                                )
+                                .expect("generated optional descriptor is valid"),
+                            None,
+                        ),
                     ])
                     .expect("generated struct descriptor is valid")
                     .conform(DecodeRole::ProviderInput, input)
@@ -1704,8 +2206,8 @@ pub mod test_support {
 }
 #[doc(hidden)]
 pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [
-    152, 82, 148, 188, 181, 39, 233, 221, 194, 173, 146, 79, 110, 14, 48, 136, 19, 134,
-    232, 97, 5, 26, 129, 45, 243, 239, 232, 94, 136, 175, 143, 63,
+    37, 186, 182, 47, 75, 5, 52, 79, 54, 186, 176, 72, 140, 229, 241, 187, 154, 235, 126,
+    103, 199, 164, 102, 224, 178, 157, 222, 69, 127, 38, 28, 205,
 ];
 #[doc(hidden)]
 #[macro_export]

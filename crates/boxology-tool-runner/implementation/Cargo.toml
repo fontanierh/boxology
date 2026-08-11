@@ -8,6 +8,7 @@ boxology.workspace = true
 boxology-contract.workspace = true
 boxology-runtime.workspace = true
 boxology_generated_contract = { package = "tool-runner-contract", version = "=0.0.0", path = "../generated/contract" }
+rustix = { version = "=1.1.4", features = ["process"] }
 [dev-dependencies]
 boxology_generated_contract = { package = "tool-runner-contract", version = "=0.0.0", path = "../generated/contract", features = ["test-support"] }
 boxology-runtime = { workspace = true, features = ["test-support"] }
