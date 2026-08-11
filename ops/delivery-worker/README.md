@@ -26,14 +26,22 @@ The caller supplies an argv vector, and secrets stay in the worker environment.
 ## Ownership and state
 
 The launcher gates the command until its guardian has used the macOS system
-Perl's `POSIX::setsid` to become both session and process-group leader, then
-atomically writes a private record beneath
+Perl's `POSIX::setsid` to become both session and process-group leader. The
+guardian remains alive after launcher interruption and after the command exits;
+it ignores group TERM and holds exact identity/control descriptors. At launch,
+the supervisor and guardian open one-way status and release pipes, then unlink
+their filesystem names before the command starts. The command closes every
+protocol descriptor. The guardian is the sole status writer, the supervisor is
+the sole status reader and release writer, and the guardian is the sole release
+reader. An exact command status is newline- and EOF-framed. Before sending its
+inherited release, the supervisor durably records the irreversible
+`release_sent` stage. The launcher writes all state beneath
 `/Users/jim/.codex/boxology-delivery-worker/runs` (`0700` directory, `0600`
-records). The record contains the run, phase, harness, guardian PID/PGID,
-session, UID, start fingerprint, canonical worktree/cwd, reciprocal Git
-worktree identity, HEAD, lifecycle stage, exact member fingerprints, and any
-observed Cargo-lock device/inode/path/mode. It never records argv, environment,
-prompts, or credentials.
+records). The record contains the run, phase, harness, guardian PID/PGID/SID,
+UID, start fingerprint, unlinked descriptor identities, canonical worktree/cwd,
+reciprocal Git worktree identity, HEAD, lifecycle stage, exact lock-observation
+roster, completeness bit, and observed Cargo-lock device/inode/path/mode. It
+never records argv, environment, prompts, credentials, or a reopenable protocol.
 
 Only linked Boxology worktrees strictly below `/Users/jim/.codex/worktrees` are
 eligible. The main checkout, review and acceptance scratch, Crab paths, CI
@@ -51,21 +59,38 @@ ops/delivery-worker/supervise.sh reap --run-id ISSUE-PHASE --dry-run
 ```
 
 If the dry-run proves the recorded group, run `reap` without `--dry-run`.
-Immediately before TERM and KILL the tool revalidates worktree identity,
-guardian/member birth fingerprints, session, ancestry, cwd, and group
-membership. The exclusive session prevents an outside process from joining the
-owned process group. Verified descendants may naturally exit or spawn while
-the TERM roster is prepared; the last proven roster is persisted without
-requiring a quiescent group. TERM gets a bounded grace period; KILL applies only to
-surviving pre-TERM fingerprints. `term_prepared` and `term_sent` records are resumable.
-Ambiguity, stale identity, tool failure, or a changed member retains state and
-signals nothing further. Never replace a refusal with `kill`, `pkill`, or
-`killall`; inspect the retained evidence and fix the proof failure.
+Immediately before TERM and KILL the tool revalidates worktree identity, the
+guardian's birth/cwd/private descriptors, and every live member of the recorded
+POSIX SID. The exclusive session prevents an outside process from joining. An
+ordinary member found outside the guardian PGID is reported as an escape and
+signals nothing. While the guardian is alive, a bounded full-process ancestry
+walk also catches direct descendants that call `setsid()` and reports
+`session_escape`. Descendants may exit, spawn, or `exec` while the TERM roster
+is prepared; a fresh proof is authoritative while the exact guardian pins the
+PGID/SID.
 
-Before TERM the reaper observes only the four exact Cargo lock objects opened
-by verified owned members: `.package-cache`, `.cargo-build-lock`,
+If the supervisor disappears without sending its inherited release, pipe EOF
+leaves the anchor stopped indefinitely. The reaper never reopens or writes a
+control path. TERM gets a bounded grace period, after which the reaper persists
+a `kill_intent`, re-proves the anchor and whole SID, and sends group KILL
+including the guardian even when it is the sole member. A resumed `kill_intent`
+may repeat KILL only while the same guardian birth/descriptors still prove that
+SID/PGID; an absent or changed anchor never authorizes a numeric signal. Empty
+intent clears, while a surviving session without its anchor retains. Likewise,
+`term_prepared` may repeat TERM after full proof, whereas `term_sent` continues
+without repeating it. These are at-least-once-safe recovery semantics, not an
+exact-once guarantee. A live `release_sent` record is inspected but never
+signaled or resumed by a new writer.
+Never replace a refusal with `kill`, `pkill`, or `killall`; inspect the retained
+evidence and fix the proof failure.
+
+Before TERM the reaper first completes any deterministic test barrier, then
+observes only the four exact Cargo lock objects opened by one full-SID roster:
+`.package-cache`, `.cargo-build-lock`,
 `.cargo-artifact-lock`, and `.cargo-lock`. After cleanup it rechecks the same
-device/inode/path and emits one sanitized result:
+device/inode/path. The roster is re-proved before TERM; bounded churn that
+prevents an exact observation records `lock_complete=0` and can emit only
+`owned_lock=unknown`. Stable observations emit one sanitized result:
 
 - `owned_lock=released`
 - `owned_lock=released shared_lock=held_by_other`
@@ -75,6 +100,14 @@ device/inode/path and emits one sanitized result:
 An unrelated current holder is reported and never signaled. Full paths remain
 only in the private record; telemetry contains labels, numeric process IDs,
 actions, reasons, and the classification above.
+
+This is a same-user ownership guard, not a security boundary against arbitrary
+code already running as that user. Such code can directly signal or debug the
+anchor. That interference may force a safe leak or refusal, but stale/recycled
+identity is never used to broaden later signaling. A deliberately double-forked
+or otherwise reparented same-UID daemon can sever the observable ancestry chain
+after leaving the session; containing that behavior requires a real sandbox and
+is explicitly outside this primitive.
 
 ## Limits and rollback
 
