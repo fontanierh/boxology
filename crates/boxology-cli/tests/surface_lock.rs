@@ -9,14 +9,14 @@ use std::{
 };
 use syn::visit::Visit;
 const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs compare.rs classify.rs check.rs base.rs runner.rs main.rs";
-const FILES: &str = "Cargo.toml boxology.toml src/lib.rs src/main.rs tests/classifier_composition.rs tests/cli.rs tests/surface_lock.rs";
+const FILES: &str = "Cargo.toml boxology.toml src/bin/boxology-telegram.rs src/lib.rs src/main.rs src/telegram.rs tests/classifier_composition.rs tests/cli.rs tests/surface_lock.rs";
 const CORE_FILES: &str = "Cargo.toml src/base.rs src/check.rs src/classify.rs src/compare.rs src/execute.rs src/generate.rs src/lib.rs src/runner.rs src/walk.rs tests/bxw.golden tests/check.rs tests/classify.rs tests/compare.rs tests/execute.rs tests/generation_plan.rs tests/runner.rs";
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const CORE_PACKAGE: &str = include_str!("../../boxology-cli-core/Cargo.toml");
 const FACADE: &str = include_str!("../src/lib.rs");
-const PACKAGE_HASH: u64 = 17_235_805_067_759_198_328;
+const PACKAGE_HASH: u64 = 17_761_274_977_081_448_842;
 const CORE_PACKAGE_HASH: u64 = 1_604_661_066_284_442_872;
-const FACADE_HASH: u64 = 15_666_737_583_330_003_530;
+const FACADE_HASH: u64 = 1_575_577_998_161_145_320;
 const LIB: &str = include_str!("../../boxology-cli-core/src/lib.rs");
 const WALK: &str = include_str!("../../boxology-cli-core/src/walk.rs");
 const GENERATE: &str = include_str!("../../boxology-cli-core/src/generate.rs");

@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 pub use boxology_cli_core::*;
+mod telegram;
+pub use telegram::{TelegramComposition, run_telegram};
 
 use std::{
     future::Future,
@@ -64,7 +66,8 @@ impl ClassifierComposition {
         let [exposure] = runtime.exposures() else {
             return Err("classifier composition must expose exactly one capability".into());
         };
-        let handle = ClassifierHandle::from_erased(Arc::new(ExposureTarget(exposure.clone())));
+        let handle =
+            ClassifierHandle::from_erased(Arc::new(ExposureTarget(vec![exposure.clone()])));
         Ok(Self {
             _composition: composition,
             handle,
@@ -165,7 +168,7 @@ impl LocalBinding {
     fn runtime(&self) -> Option<Arc<TransportRuntime<()>>> {
         self.runtime
             .lock()
-            .expect("classifier binding lock poisoned")
+            .expect("local binding lock poisoned")
             .as_ref()
             .and_then(Weak::upgrade)
     }
@@ -209,18 +212,15 @@ impl TransportBinding for LocalBinding {
 
     fn start(&self, runtime: TransportRuntime<()>) -> Result<LocalHandle, Detail> {
         let runtime = Arc::new(runtime);
-        let mut retained = self
-            .runtime
-            .lock()
-            .expect("classifier binding lock poisoned");
+        let mut retained = self.runtime.lock().expect("local binding lock poisoned");
         if retained.replace(Arc::downgrade(&runtime)).is_some() {
-            return Err(Detail::new("classifier_binding_already_started"));
+            return Err(Detail::new("local_binding_already_started"));
         }
         Ok(LocalHandle { _runtime: runtime })
     }
 }
 
-struct ExposureTarget(TransportExposure);
+struct ExposureTarget(Vec<TransportExposure>);
 
 impl ErasedCallTarget for ExposureTarget {
     fn call<'a>(
@@ -229,12 +229,16 @@ impl ErasedCallTarget for ExposureTarget {
         context: CallContext,
         input: SlotValue,
     ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>> {
-        if capability != self.0.descriptor().id() {
-            return Box::pin(std::future::ready(Err(ErasedCallError::Internal(
-                Detail::new("classifier_capability_mismatch"),
-            ))));
+        match self
+            .0
+            .iter()
+            .find(|exposure| exposure.descriptor().id() == capability)
+        {
+            Some(exposure) => exposure.dispatch(context, input),
+            None => Box::pin(std::future::ready(Err(ErasedCallError::Internal(
+                Detail::new("local_capability_mismatch"),
+            )))),
         }
-        self.0.dispatch(context, input)
     }
 }
 
