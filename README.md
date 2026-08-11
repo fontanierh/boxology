@@ -19,6 +19,12 @@ native-macOS evidence, accepted boundary, and post-V0 residuals. PR
 [#342](https://github.com/fontanierh/boxology/issues/342): `cargo xtask ci` now owns one full
 `boxology check`, with the required PR lane intentionally kept lean.
 
+Telegram product self-hosting is complete through
+[#626](https://github.com/fontanierh/boxology/pull/626). Typed `check` under
+[#575](https://github.com/fontanierh/boxology/issues/575) is the current product critical path;
+independent minimum-harness work remains secondary under
+[#576](https://github.com/fontanierh/boxology/issues/576).
+
 Current product work follows the pragmatic
 [post-V0 self-hosting roadmap](boxology-details/12-post-v0-self-hosting-roadmap.md), tracked by
 [#572](https://github.com/fontanierh/boxology/issues/572), and the standing factory dogfood
