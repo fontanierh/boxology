@@ -105,6 +105,7 @@ const GEN_DEV: &[Dep] = &[path_dep("boxology-classifier", "../boxology-classifie
 const MODEL_DEPS: &[Dep] = &[
     path_dep("boxology-contract", "../boxology-contract"),
     path_dep("boxology-contract-syntax", "../boxology-contract-syntax"),
+    path_dep("boxology-schema", "../boxology-schema"),
     feat("proc-macro2", "=1.0.107", false, &["span-locations"]),
     ver("serde_json", "=1.0.150"),
     feat("syn", "=3.0.0", false, &["full", "parsing", "visit"]),
