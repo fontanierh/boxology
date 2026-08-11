@@ -286,21 +286,20 @@ fn reap_known(child: &mut Child) -> bool {
 #[rustfmt::skip]
 fn cleanup_group(group: Pid, child: &mut Child, anchor: &mut Child, fail_term: bool, fail_kill: bool) -> bool {
     let mut cleaned = true;
-    if owns_group(group, child, anchor) {
+    let anchored = alive(anchor);
+    if anchored {
         if fail_term || kill_process_group(group, Signal::TERM).is_err() {
             cleaned = false;
         }
         thread::sleep(GRACE);
-        if owns_group(group, child, anchor) {
-            let killed = !fail_kill && kill_process_group(group, Signal::KILL).is_ok();
-            if !killed {
-                cleaned = false;
-                if owns_group(group, child, anchor) {
-                    let _ = kill_process_group(group, Signal::KILL);
-                }
-            }
-        } else {
+    }
+    if (anchored && alive(anchor)) || (!anchored && owns_group(group, child, anchor)) {
+        let killed = !fail_kill && kill_process_group(group, Signal::KILL).is_ok();
+        if !killed {
             cleaned = false;
+            if (anchored && alive(anchor)) || (!anchored && owns_group(group, child, anchor)) {
+                let _ = kill_process_group(group, Signal::KILL);
+            }
         }
     } else {
         cleaned = false;
