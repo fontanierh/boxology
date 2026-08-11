@@ -4,14 +4,14 @@ use boxology_contract::{BoxId, CallContext, Caller, CancelToken, CapabilityId, E
 #[rustfmt::skip]
 use boxology_runtime::{Composition, CompositionBuilder, TransportExposure, test_support::StubTransport};
 #[rustfmt::skip]
-use std::{future::Future, path::PathBuf, pin::{Pin, pin}, sync::Arc, task::{Context, Poll, Waker}, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{future::Future, path::PathBuf, pin::{Pin, pin}, sync::Arc, task::{Context, Poll, Waker}, time::Instant};
 
 #[rustfmt::skip]
 struct Fixture { home: PathBuf, root: PathBuf }
 #[rustfmt::skip]
 impl Fixture {
     fn new() -> Self {
-        let suffix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let suffix = STAGE.fetch_add(1, Ordering::Relaxed);
         let home = std::env::temp_dir().join(format!("boxology-tool-runner-{}-{suffix}", std::process::id()));
         let root = home.join("root");
         fs::create_dir_all(&root).unwrap();
@@ -34,11 +34,13 @@ fn context() -> CallContext {
     CallContext::new(Caller::Anonymous, None, CancelToken::new(), TraceContext::empty(), None)
 }
 #[rustfmt::skip]
-fn read(path: &str) -> ExecuteRequest { ExecuteRequest { read: Some(ReadRequest { path: path.into() }), write: None, edit: None } }
+fn read(path: &str) -> ExecuteRequest { ExecuteRequest { read: Some(ReadRequest { path: path.into() }), write: None, edit: None, bash: None } }
 #[rustfmt::skip]
-fn write(path: &str, content: &str) -> ExecuteRequest { ExecuteRequest { read: None, write: Some(WriteRequest { path: path.into(), content: content.into() }), edit: None } }
+fn write(path: &str, content: &str) -> ExecuteRequest { ExecuteRequest { read: None, write: Some(WriteRequest { path: path.into(), content: content.into() }), edit: None, bash: None } }
 #[rustfmt::skip]
-fn edit(path: &str, old_text: &str, new_text: &str) -> ExecuteRequest { ExecuteRequest { read: None, write: None, edit: Some(EditRequest { path: path.into(), old_text: old_text.into(), new_text: new_text.into() }) } }
+fn edit(path: &str, old_text: &str, new_text: &str) -> ExecuteRequest { ExecuteRequest { read: None, write: None, edit: Some(EditRequest { path: path.into(), old_text: old_text.into(), new_text: new_text.into() }), bash: None } }
+#[rustfmt::skip]
+fn bash(command: &str, cwd: Option<&str>, timeout_ms: Option<u64>) -> ExecuteRequest { ExecuteRequest { read: None, write: None, edit: None, bash: Some(BashRequest { command: command.into(), cwd: cwd.map(Into::into), timeout_ms }) } }
 
 struct ExposureTarget(Vec<TransportExposure>);
 #[rustfmt::skip]
@@ -55,16 +57,16 @@ fn assembled(root: PathBuf) -> (Composition, boxology_generated_contract::ToolRu
 }
 #[rustfmt::skip]
 fn assembled_fault(root: PathBuf, fault: Option<Fault>) -> (Composition, boxology_generated_contract::ToolRunnerHandle) {
-    assembled_control(root, fault, None)
+    assembled_control(root, fault, None, Vec::new())
 }
 #[rustfmt::skip]
-fn assembled_control(root: PathBuf, fault: Option<Fault>, edit_pause: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>) -> (Composition, boxology_generated_contract::ToolRunnerHandle) {
+fn assembled_control(root: PathBuf, fault: Option<Fault>, edit_pause: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>, environment: Vec<(std::ffi::OsString, std::ffi::OsString)>) -> (Composition, boxology_generated_contract::ToolRunnerHandle) {
     let descriptor = generated::implementation_descriptor();
     let capability = descriptor.contract().capabilities()[0].id().clone();
     let transport = Arc::new(StubTransport::new());
     let mut builder = CompositionBuilder::new();
     builder.add_box(descriptor, move |imports| {
-        let mut service = ToolRunnerService::new(root).unwrap();
+        let mut service = ToolRunnerService::with_environment(root, environment).unwrap();
         service.fault = fault; service.edit_pause = edit_pause;
         generated::factory(service, imports)
     });
@@ -87,7 +89,26 @@ fn failure(handle: &boxology_generated_contract::ToolRunnerHandle, request: Exec
         .unwrap_or_else(|| panic!("expected failure {code}"));
     assert_eq!(failure.code, code);
     assert!(!failure.retryable);
+    assert!(!failure.side_effect_possible);
     assert!(!failure.message.contains(root.to_str().unwrap()));
+}
+
+#[rustfmt::skip]
+fn wait_file(path: &Path) {
+    let expires = Instant::now() + Duration::from_secs(10);
+    while !path.exists() { assert!(Instant::now() < expires, "fixture marker was not created"); std::thread::sleep(Duration::from_millis(5)); }
+}
+#[rustfmt::skip]
+fn fixture_pid(path: &Path) -> rustix::process::Pid {
+    wait_file(path); rustix::process::Pid::from_raw(fs::read_to_string(path).unwrap().parse().unwrap()).unwrap()
+}
+#[rustfmt::skip]
+fn assert_gone(pid: rustix::process::Pid) {
+    let expires = Instant::now() + Duration::from_secs(10);
+    loop { match rustix::process::test_kill_process(pid) {
+        Err(error) if error == rustix::io::Errno::SRCH => break,
+        _ => { assert!(Instant::now() < expires, "fixture process survived"); std::thread::sleep(Duration::from_millis(5)); }
+    }}
 }
 
 #[test]
@@ -100,12 +121,29 @@ fn generated_fake_runs_through_its_typed_handle() {
             ("note.txt", "old", "new"));
         Ok(ExecuteOutcome { result: Some(ExecuteResult { file: Some(file(
             FileOperation::Edit, "note.txt".into(), None, 3, true,
-        )) }), failure: None })
+        )), bash: None }), failure: None })
     });
     let result = call(&fake.handle(), context(), edit("note.txt", "old", "new"))
         .result.unwrap().file.unwrap();
     assert!(matches!(result.operation, FileOperation::Edit));
     assert_eq!((result.path.as_str(), result.bytes, result.changed), ("note.txt", 3, true));
+}
+
+#[test]
+#[rustfmt::skip]
+fn generated_fake_carries_bash_request_and_result() {
+    use boxology_generated_contract::test_support::ToolRunnerFake;
+    let fake = ToolRunnerFake::new().with_execute(|_, request| async move {
+        let request = request.bash.unwrap();
+        assert_eq!((request.command.as_str(), request.cwd.as_deref(), request.timeout_ms), ("printf ok", Some("nested"), Some(17)));
+        Ok(ExecuteOutcome { result: Some(ExecuteResult { file: None, bash: Some(BashResult {
+            stdout: "ok".into(), stderr: String::new(), stdout_bytes: 2, stderr_bytes: 0,
+            stdout_truncated: false, stderr_truncated: false, exit_code: Some(0), signal: None,
+        }) }), failure: None })
+    });
+    let result = call(&fake.handle(), context(), bash("printf ok", Some("nested"), Some(17)))
+        .result.unwrap().bash.unwrap();
+    assert_eq!((result.stdout.as_str(), result.exit_code, result.signal), ("ok", Some(0), None));
 }
 
 #[test]
@@ -180,11 +218,13 @@ fn invalid_shapes_cancellation_and_deadline_never_mutate() {
     use boxology_contract::Deadline;
     let fixture = Fixture::new();
     let (_composition, handle) = assembled(fixture.root.clone());
-    for invalid in [ExecuteRequest { read: None, write: None, edit: None },
+    for invalid in [ExecuteRequest { read: None, write: None, edit: None, bash: None },
         ExecuteRequest { read: Some(ReadRequest { path: "x".into() }), write: Some(WriteRequest {
-            path: "x".into(), content: "x".into() }), edit: None },
+            path: "x".into(), content: "x".into() }), edit: None, bash: None },
         ExecuteRequest { read: None, write: Some(WriteRequest { path: "x".into(), content: "x".into() }),
-            edit: Some(EditRequest { path: "x".into(), old_text: "x".into(), new_text: "y".into() }) }] {
+            edit: Some(EditRequest { path: "x".into(), old_text: "x".into(), new_text: "y".into() }), bash: None },
+        ExecuteRequest { read: Some(ReadRequest { path: "x".into() }), write: None, edit: None,
+            bash: Some(BashRequest { command: "touch escaped".into(), cwd: None, timeout_ms: None }) }] {
         failure(&handle, invalid, "request_invalid", &fixture.root);
     }
     let token = CancelToken::new();
@@ -198,6 +238,7 @@ fn invalid_shapes_cancellation_and_deadline_never_mutate() {
         "deadline_exceeded");
     assert!(!fixture.root.join("cancelled").exists());
     assert!(!fixture.root.join("expired").exists());
+    assert!(!fixture.root.join("escaped").exists());
 }
 
 #[test]
@@ -248,7 +289,7 @@ fn same_service_write_waits_for_edit_mutation() {
     let entered = Arc::new(std::sync::Barrier::new(2));
     let release = Arc::new(std::sync::Barrier::new(2));
     let (_composition, handle) = assembled_control(fixture.root.clone(), None,
-        Some((entered.clone(), release.clone())));
+        Some((entered.clone(), release.clone())), Vec::new());
     let handle = Arc::new(handle); let editing = handle.clone();
     let edit_thread = std::thread::spawn(move || call(&editing, context(), edit("target", "old", "new")));
     entered.wait();
@@ -283,6 +324,148 @@ fn mutation_faults_preserve_targets_cleanup_and_side_effect_truth() {
     let failure = call(&handle, context(), write("created/leaf", "x")).failure.unwrap();
     assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("local_io", true));
     assert!(fixture.root.join("created").is_dir()); assert!(!fixture.root.join("created/leaf").exists());
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_runs_in_nested_cwd_with_only_service_environment() {
+    let fixture = Fixture::new(); fs::create_dir(fixture.root.join("nested")).unwrap();
+    let environment = vec![("EXTRA".into(), "owned".into())];
+    let (_composition, handle) = assembled_control(fixture.root.clone(), None, None, environment);
+    let command = "printf '%s\n' \"$PWD\" \"$HOME\" \"$PATH\" \"$LANG\" \"$LC_ALL\" \"$TERM\" \"$EXTRA\" \"${CARGO_MANIFEST_DIR-unset}\"";
+    let result = call(&handle, context(), bash(command, Some("nested"), None)).result.unwrap().bash.unwrap();
+    assert_eq!(result.stdout, format!("{}\n{}\n/usr/bin:/bin:/usr/sbin:/sbin\nC\nC\ndumb\nowned\nunset\n",
+        fixture.root.join("nested").display(), fixture.root.display()));
+    assert_eq!((result.stderr.as_str(), result.exit_code, result.signal), ("", Some(0), None));
+    assert_eq!(result.stdout_bytes, result.stdout.len() as u64);
+    assert!(!result.stdout_truncated && !result.stderr_truncated);
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_validation_is_exact_and_does_not_execute() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new(); fs::write(fixture.root.join("file"), "x").unwrap();
+    symlink(&fixture.home, fixture.root.join("link")).unwrap();
+    let (_composition, handle) = assembled(fixture.root.clone());
+    for (request, code) in [
+        (bash("", None, None), "command_invalid"), (bash("bad\0command", None, None), "command_invalid"),
+        (bash(&"x".repeat(64 * 1024 + 1), None, None), "command_too_large"),
+        (bash("touch marker", None, Some(0)), "timeout_invalid"),
+        (bash("touch marker", None, Some(300_001)), "timeout_invalid"),
+        (bash("touch marker", Some(""), None), "path_invalid"),
+        (bash("touch marker", Some("missing"), None), "not_found"),
+        (bash("touch marker", Some("file"), None), "not_directory"),
+        (bash("touch marker", Some("link"), None), "symlink"),
+    ] { failure(&handle, request, code, &fixture.root); }
+    assert_eq!(ToolRunnerService::with_environment(fixture.root.clone(), vec![("BAD=KEY".into(), "x".into())]).err().unwrap().code, "environment_invalid");
+    assert!(!fixture.root.join("marker").exists());
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_nonzero_and_bounded_dual_capture_are_normal_results() {
+    let fixture = Fixture::new(); let (_composition, handle) = assembled(fixture.root.clone());
+    let exit = call(&handle, context(), bash("printf out; printf err >&2; exit 7", None, None)).result.unwrap().bash.unwrap();
+    assert_eq!((exit.stdout.as_str(), exit.stderr.as_str(), exit.exit_code, exit.signal), ("out", "err", Some(7), None));
+    let command = "/usr/bin/yes out | /usr/bin/head -c 262145; /usr/bin/yes err | /usr/bin/head -c 262146 >&2";
+    let output = call(&handle, context(), bash(command, None, None)).result.unwrap().bash.unwrap();
+    assert_eq!((output.stdout_bytes, output.stderr_bytes), (262_145, 262_146));
+    assert!(output.stdout_truncated && output.stderr_truncated);
+    assert_eq!((output.stdout.len(), output.stderr.len()), (LIMIT, LIMIT));
+    assert_eq!(output.stdout, "out\n".repeat(LIMIT / 4));
+    assert_eq!(output.stderr, "err\n".repeat(LIMIT / 4));
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_cleans_background_process_after_success() {
+    let fixture = Fixture::new(); let (_composition, handle) = assembled(fixture.root.clone());
+    let result = call(&handle, context(), bash("/bin/sleep 86400 & printf %s $! > pid", None, None)).result.unwrap().bash.unwrap();
+    assert_eq!((result.exit_code, result.signal), (Some(0), None));
+    assert_gone(fixture_pid(&fixture.root.join("pid")));
+    let escaped = call(&handle, context(), bash("/usr/bin/python3 -c 'import os,time; os.setsid(); open(\"detached-pid\",\"w\").write(str(os.getpid())); print(\"early\",flush=True); time.sleep(.1); print(\"late\",flush=True); time.sleep(1)' & while [ ! -f detached-pid ]; do /bin/sleep 0.005; done", None, None)).result.unwrap().bash.unwrap();
+    assert_eq!((escaped.stdout.as_str(), escaped.exit_code, escaped.stdout_truncated), ("early\nlate\n", Some(0), true));
+    assert_gone(fixture_pid(&fixture.root.join("detached-pid")));
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_reader_start_failures_cleanup_every_started_process() {
+    for fault in [Fault::BashDrainFirst, Fault::BashDrainSecond] {
+        let fixture = Fixture::new(); let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(fault));
+        let failure = call(&handle, context(), bash("exec /bin/sleep 86400", None, None)).failure.unwrap();
+        assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("local_io", true));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-user-pid")));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-anchor-pid")));
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_signal_failures_report_cleanup_failure_without_dropping_children() {
+    for fault in [Fault::BashTerm, Fault::BashKill] {
+        let fixture = Fixture::new(); let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(fault));
+        let failure = call(&handle, context(), bash("trap '' TERM; /bin/sleep 86400 & printf %s $! > descendant-pid; wait", None, Some(20))).failure.unwrap();
+        assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("cleanup_failed", true));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-user-pid")));
+        assert_gone(fixture_pid(&fixture.root.join("bash-fault-anchor-pid")));
+        assert_gone(fixture_pid(&fixture.root.join("descendant-pid")));
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_anchor_death_reclaims_the_still_proven_owned_group() {
+    let fixture = Fixture::new(); let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(Fault::BashAnchorDeath));
+    let result = call(&handle, context(), bash("(trap '' TERM; exec /bin/sleep 86400) & printf %s $! > descendant-pid; touch anchor-death-ready; while [ ! -f bash-fault-anchor-pid ]; do /bin/sleep 0.005; done", None, None)).result.unwrap().bash.unwrap();
+    assert_eq!((result.exit_code, result.signal), (Some(0), None));
+    assert_gone(fixture_pid(&fixture.root.join("descendant-pid")));
+    assert_gone(fixture_pid(&fixture.root.join("bash-fault-anchor-pid")));
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_timeout_does_not_wait_for_an_escaped_stdio_writer() {
+    let fixture = Fixture::new(); let (_composition, handle) = assembled(fixture.root.clone());
+    let command = "/usr/bin/python3 -c 'import os,time; os.setsid(); open(\"escaped-pid\",\"w\").write(str(os.getpid())); time.sleep(10); open(\"escaped-done\",\"w\").write(\"done\")' & wait";
+    let started = Instant::now(); let worker = std::thread::spawn(move || call(&handle, context(), bash(command, None, Some(5_000))));
+    let escaped = fixture_pid(&fixture.root.join("escaped-pid")); let failure = worker.join().unwrap().failure.unwrap();
+    assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("command_timeout", true));
+    assert!(started.elapsed() < Duration::from_millis(8_000), "elapsed {:?}", started.elapsed());
+    assert!(!fixture.root.join("escaped-done").exists());
+    assert_gone(escaped);
+}
+
+#[test]
+#[rustfmt::skip]
+fn bash_cancellation_timeout_and_deadlines_cleanup_owned_groups() {
+    use boxology_contract::Deadline;
+    let fixture = Fixture::new(); let (_composition, handle) = assembled(fixture.root.clone());
+    let token = CancelToken::new(); let cancel = token.clone(); let cancelling = handle.clone();
+    let ctx = CallContext::new(Caller::Anonymous, None, token, TraceContext::empty(), None);
+    let thread = std::thread::spawn(move || call(&cancelling, ctx, bash(
+        "trap 'printf term > term' TERM; /bin/sleep 86400 & printf %s $! > cancel-pid; printf ready > ready; wait", None, None)));
+    wait_file(&fixture.root.join("ready")); cancel.cancel();
+    let failure = thread.join().unwrap().failure.unwrap();
+    assert_eq!(failure.code, "cancelled"); assert!(failure.side_effect_possible);
+    wait_file(&fixture.root.join("term")); assert_gone(fixture_pid(&fixture.root.join("cancel-pid")));
+
+    let timeout = call(&handle, context(), bash(
+        "trap '' TERM; /bin/sleep 86400 & printf %s $! > timeout-pid; wait", None, Some(20))).failure.unwrap();
+    assert_eq!(timeout.code, "command_timeout"); assert!(timeout.side_effect_possible);
+    assert_gone(fixture_pid(&fixture.root.join("timeout-pid")));
+
+    let expired = CallContext::new(Caller::Anonymous, Some(Deadline::at(Instant::now())),
+        CancelToken::new(), TraceContext::empty(), None);
+    let failure = call(&handle, expired, bash("touch expired", None, None)).failure.unwrap();
+    assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("deadline_exceeded", false));
+    assert!(!fixture.root.join("expired").exists());
+
+    let earlier = CallContext::new(Caller::Anonymous,
+        Some(Deadline::at(Instant::now() + Duration::from_secs(1))), CancelToken::new(), TraceContext::empty(), None);
+    let failure = call(&handle, earlier, bash("trap '' TERM; /bin/sleep 86400 & wait", None, Some(3_000))).failure.unwrap();
+    assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("deadline_exceeded", true));
 }
 
 #[test]

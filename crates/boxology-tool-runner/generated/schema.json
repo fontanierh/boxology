@@ -22,9 +22,9 @@
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:985294bcb527e9ddc2ad924f6e0e30881386e861051a812df3efe85e88af8f3f"
+    "semantic_digest": "sha256:25bab62f4b05344f36bab0488ce5f1bb9aeb7e67c7a466e0b29dde457f261ccd"
   },
-  "revision": "sha256:6493baa7fa8929bb296b82911222bbd0b4b74a96cb0d80c17a310d0bee2fc575",
+  "revision": "sha256:cb6e9ba192734b8bf031ee2542ebf20ceca3f74a9a02cc10c8c14c6b3c693cb1",
   "schema_format": 1,
   "types": [
     {
@@ -94,6 +94,88 @@
         {
           "deprecation": null,
           "docs": [],
+          "name": "command",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "cwd",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "timeout_ms",
+          "type": "Option<u64>"
+        }
+      ],
+      "kind": "struct",
+      "name": "BashRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "stdout",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "stderr",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "stdout_bytes",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "stderr_bytes",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "stdout_truncated",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "stderr_truncated",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "exit_code",
+          "type": "Option<i32>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "signal",
+          "type": "Option<i32>"
+        }
+      ],
+      "kind": "struct",
+      "name": "BashResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
           "name": "read",
           "type": "Option<ReadRequest>"
         },
@@ -108,6 +190,12 @@
           "docs": [],
           "name": "edit",
           "type": "Option<EditRequest>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "bash",
+          "type": "Option<BashRequest>"
         }
       ],
       "kind": "struct",
@@ -183,6 +271,12 @@
           "docs": [],
           "name": "file",
           "type": "Option<FileResult>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "bash",
+          "type": "Option<BashResult>"
         }
       ],
       "kind": "struct",

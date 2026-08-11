@@ -13,10 +13,12 @@ boxology::contract! {
     pub struct ReadRequest { pub path: String }
     pub struct WriteRequest { pub path: String, pub content: String }
     pub struct EditRequest { pub path: String, pub old_text: String, pub new_text: String }
-    pub struct ExecuteRequest { pub read: Option<ReadRequest>, pub write: Option<WriteRequest>, pub edit: Option<EditRequest> }
+    pub struct BashRequest { pub command: String, pub cwd: Option<String>, pub timeout_ms: Option<u64> }
+    pub struct BashResult { pub stdout: String, pub stderr: String, pub stdout_bytes: u64, pub stderr_bytes: u64, pub stdout_truncated: bool, pub stderr_truncated: bool, pub exit_code: Option<i32>, pub signal: Option<i32> }
+    pub struct ExecuteRequest { pub read: Option<ReadRequest>, pub write: Option<WriteRequest>, pub edit: Option<EditRequest>, pub bash: Option<BashRequest> }
     pub enum FileOperation { Read, Write, Edit }
     pub struct FileResult { pub operation: FileOperation, pub path: String, pub content: Option<String>, pub bytes: u64, pub changed: bool }
-    pub struct ExecuteResult { pub file: Option<FileResult> }
+    pub struct ExecuteResult { pub file: Option<FileResult>, pub bash: Option<BashResult> }
     pub enum ToolFailureClass { Input, Boundary, Missing, Conflict, Resource, Local, Cancelled, Deadline }
     pub struct ToolFailure { pub class: ToolFailureClass, pub code: String, pub message: String, pub retryable: bool, pub side_effect_possible: bool }
     pub struct ExecuteOutcome { pub result: Option<ExecuteResult>, pub failure: Option<ToolFailure> }
@@ -29,11 +31,16 @@ boxology::contract! {
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq)]
 #[rustfmt::skip]
-enum Fault { StagedCancel, StagedCleanup, CleanupSync, PreRenameCancel, Rename, ParentSync }
+enum Fault {
+    StagedCancel, StagedCleanup, CleanupSync, PreRenameCancel, Rename, ParentSync,
+    BashDrainFirst, BashDrainSecond, BashTerm, BashKill, BashAnchorDeath,
+}
 
-/// Root-confined UTF-8 operations: functional confinement, not protection from external races, hard links, or multiple service instances.
+/// Root-confined UTF-8 file operations plus unsandboxed Bash with a root-confined initial cwd.
+/// File confinement is functional, not protection from external races, hard links, or multiple service instances.
 pub struct ToolRunnerService {
     root: PathBuf,
+    environment: BTreeMap<OsString, OsString>,
     mutation: Mutex<()>,
     #[cfg(test)]
     fault: Option<Fault>,
@@ -48,6 +55,12 @@ pub struct ToolRunnerService {
 impl ToolRunnerService {
     /// Uses an existing directory only when supplied in canonical, non-symlink spelling.
     pub fn new(root: PathBuf) -> Result<Self, ToolFailure> {
+        Self::with_environment(root, std::iter::empty())
+    }
+
+    /// Overlays validated service-owned child environment entries on deterministic defaults.
+    pub fn with_environment(root: PathBuf,
+        entries: impl IntoIterator<Item = (OsString, OsString)>) -> Result<Self, ToolFailure> {
         let metadata = fs::symlink_metadata(&root).map_err(|error| io(error, false))?;
         if metadata.file_type().is_symlink() {
             return Err(fail(ToolFailureClass::Boundary, "symlink", false));
@@ -59,7 +72,21 @@ impl ToolRunnerService {
         if canonical != root {
             return Err(fail(ToolFailureClass::Boundary, "outside_root", false));
         }
-        Ok(Self { root, mutation: Mutex::new(()), #[cfg(test)] fault: None,
+        let mut environment = BTreeMap::from([
+            (OsString::from("HOME"), root.clone().into_os_string()),
+            (OsString::from("PATH"), OsString::from("/usr/bin:/bin:/usr/sbin:/sbin")),
+            (OsString::from("LANG"), OsString::from("C")),
+            (OsString::from("LC_ALL"), OsString::from("C")),
+            (OsString::from("TERM"), OsString::from("dumb")),
+        ]);
+        for (key, value) in entries {
+            if key.is_empty() || key.as_encoded_bytes().contains(&b'=')
+                || key.as_encoded_bytes().contains(&0) || value.as_encoded_bytes().contains(&0) {
+                return Err(fail(ToolFailureClass::Input, "environment_invalid", false));
+            }
+            environment.insert(key, value);
+        }
+        Ok(Self { root, environment, mutation: Mutex::new(()), #[cfg(test)] fault: None,
             #[cfg(test)] edit_pause: None })
     }
 
@@ -316,20 +343,21 @@ impl ToolRunnerService {
         context: boxology::CallContext,
         request: ExecuteRequest,
     ) -> Result<ExecuteOutcome, ExecuteError> {
-        let operation = match (request.read, request.write, request.edit) {
-            (Some(request), None, None) => self.resolve(&request.path).and_then(|(target, path)| {
+        let operation = match (request.read, request.write, request.edit, request.bash) {
+            (Some(request), None, None, None) => self.resolve(&request.path).and_then(|(target, path)| {
                 let bytes = self.read_file(&context, &target, false)?;
                 let content = String::from_utf8(bytes)
                     .map_err(|_| fail(ToolFailureClass::Input, "not_utf8", false))?;
                 let length = content.len();
-                Ok(file(FileOperation::Read, path, Some(content), length, false))
+                Ok(ExecuteResult { file: Some(file(FileOperation::Read, path, Some(content), length, false)), bash: None })
             }),
-            (None, Some(request), None) => self.write(&context, request),
-            (None, None, Some(request)) => self.edit(&context, request),
+            (None, Some(request), None, None) => self.write(&context, request).map(|file| ExecuteResult { file: Some(file), bash: None }),
+            (None, None, Some(request), None) => self.edit(&context, request).map(|file| ExecuteResult { file: Some(file), bash: None }),
+            (None, None, None, Some(request)) => self.bash(&context, request).map(|bash| ExecuteResult { file: None, bash: Some(bash) }),
             _ => Err(fail(ToolFailureClass::Input, "request_invalid", false)),
         };
         Ok(match operation {
-            Ok(file) => ExecuteOutcome { result: Some(ExecuteResult { file: Some(file) }), failure: None },
+            Ok(result) => ExecuteOutcome { result: Some(result), failure: None },
             Err(failure) => ExecuteOutcome { result: None, failure: Some(failure) },
         })
     }
@@ -393,5 +421,9 @@ pub mod generated {
     include!("../../generated/adapter/adapter.rs");
 }
 
+mod bash;
 #[cfg(test)]
 mod tests;
+
+use std::collections::BTreeMap;
+use std::ffi::OsString;

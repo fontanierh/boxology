@@ -115,6 +115,37 @@ where
                             .expect("generated optional descriptor is valid"),
                         None,
                     ),
+                    ::boxology_contract::FieldDescriptor::new(
+                        "bash",
+                        ::boxology_contract::TypeDescriptor::optional(
+                                ::boxology_contract::TypeDescriptor::structure([
+                                        ::boxology_contract::FieldDescriptor::new(
+                                            "command",
+                                            ::boxology_contract::TypeDescriptor::string(),
+                                            None,
+                                        ),
+                                        ::boxology_contract::FieldDescriptor::new(
+                                            "cwd",
+                                            ::boxology_contract::TypeDescriptor::optional(
+                                                    ::boxology_contract::TypeDescriptor::string(),
+                                                )
+                                                .expect("generated optional descriptor is valid"),
+                                            None,
+                                        ),
+                                        ::boxology_contract::FieldDescriptor::new(
+                                            "timeout_ms",
+                                            ::boxology_contract::TypeDescriptor::optional(
+                                                    ::boxology_contract::TypeDescriptor::u64(),
+                                                )
+                                                .expect("generated optional descriptor is valid"),
+                                            None,
+                                        ),
+                                    ])
+                                    .expect("generated struct descriptor is valid"),
+                            )
+                            .expect("generated optional descriptor is valid"),
+                        None,
+                    ),
                 ])
                 .expect("generated struct descriptor is valid")
                 .conform(::boxology_contract::DecodeRole::ProviderInput, input)
