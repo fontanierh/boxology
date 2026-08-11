@@ -418,9 +418,10 @@ fn bash_signal_failures_report_cleanup_failure_without_dropping_children() {
 #[rustfmt::skip]
 fn bash_anchor_death_reclaims_the_still_proven_owned_group() {
     let fixture = Fixture::new(); let (_composition, handle) = assembled_fault(fixture.root.clone(), Some(Fault::BashAnchorDeath));
-    let failure = call(&handle, context(), bash("(trap '' TERM; exec /bin/sleep 86400) & printf %s $! > descendant-pid; touch anchor-death-ready; wait", None, None)).failure.unwrap();
-    assert_eq!((failure.code.as_str(), failure.side_effect_possible), ("cleanup_failed", true));
+    let result = call(&handle, context(), bash("(trap '' TERM; exec /bin/sleep 86400) & printf %s $! > descendant-pid; touch anchor-death-ready; while [ ! -f bash-fault-anchor-pid ]; do /bin/sleep 0.005; done", None, None)).result.unwrap().bash.unwrap();
+    assert_eq!((result.exit_code, result.signal), (Some(0), None));
     assert_gone(fixture_pid(&fixture.root.join("descendant-pid")));
+    assert_gone(fixture_pid(&fixture.root.join("bash-fault-anchor-pid")));
 }
 
 #[test]

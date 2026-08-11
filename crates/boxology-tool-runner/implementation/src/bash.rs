@@ -50,11 +50,11 @@ impl ToolRunnerService {
             Ok(cwd) => cwd,
             Err(failure) => return Err(before_spawn(failure, &mut anchor)),
         };
-        if !alive(&mut anchor) {
+        let group = Pid::from_child(&anchor);
+        if !anchor_reserved(&anchor) {
             reap_known(&mut anchor);
             return Err(fail(ToolFailureClass::Local, "cleanup_failed", false));
         }
-        let group = Pid::from_child(&anchor);
         let mut command = Command::new(SHELL);
         command
             .args(["--noprofile", "--norc", "-c", &request.command])
@@ -137,10 +137,13 @@ impl ToolRunnerService {
             #[cfg(test)]
             if self.fault == Some(Fault::BashAnchorDeath)
                 && self.root.join("anchor-death-ready").exists()
+                && !self.root.join("bash-fault-anchor-pid").exists()
             {
-                let _ = anchor.kill();
+                if anchor.kill().is_ok() {
+                    record_fault_pids(&self.root, group, &child);
+                }
             }
-            if !alive(&mut anchor) {
+            if !anchor_reserved(&anchor) {
                 let _ = cleanup_group(group, &mut child, &mut anchor, false, false);
                 let _ = stdout.finish(false);
                 let _ = stderr.finish(false);
@@ -242,7 +245,7 @@ impl ToolRunnerService {
             .take()
             .is_some_and(|mut pipe| pipe.read_exact(&mut readiness).is_ok())
             && readiness == *b"R"
-            && alive(&mut anchor);
+            && fresh_anchor(&anchor);
         if ready {
             Ok(anchor)
         } else {
@@ -270,10 +273,6 @@ fn before_spawn(mut failure: ToolFailure, anchor: &mut Child) -> ToolFailure {
 #[rustfmt::skip]
 fn post_spawn_failure(cleaned: bool) -> ToolFailure { fail(ToolFailureClass::Local, if cleaned { "local_io" } else { "cleanup_failed" }, true) }
 
-fn alive(child: &mut Child) -> bool {
-    matches!(child.try_wait(), Ok(None))
-}
-
 fn reap_known(child: &mut Child) -> bool {
     match child.try_wait() {
         Ok(Some(_)) => true,
@@ -286,20 +285,19 @@ fn reap_known(child: &mut Child) -> bool {
 #[rustfmt::skip]
 fn cleanup_group(group: Pid, child: &mut Child, anchor: &mut Child, fail_term: bool, fail_kill: bool) -> bool {
     let mut cleaned = true;
-    let anchored = alive(anchor);
-    if anchored {
+    if anchor_reserved(anchor) {
         if fail_term || kill_process_group(group, Signal::TERM).is_err() {
             cleaned = false;
         }
         thread::sleep(GRACE);
-    }
-    if (anchored && alive(anchor)) || (!anchored && owns_group(group, child, anchor)) {
-        let killed = !fail_kill && kill_process_group(group, Signal::KILL).is_ok();
-        if !killed {
-            cleaned = false;
-            if (anchored && alive(anchor)) || (!anchored && owns_group(group, child, anchor)) {
-                let _ = kill_process_group(group, Signal::KILL);
+        if anchor_reserved(anchor) {
+            let killed = !fail_kill && kill_process_group(group, Signal::KILL).is_ok();
+            if !killed {
+                cleaned = false;
+                if anchor_reserved(anchor) { let _ = kill_process_group(group, Signal::KILL); }
             }
+        } else {
+            cleaned = false;
         }
     } else {
         cleaned = false;
@@ -310,7 +308,9 @@ fn cleanup_group(group: Pid, child: &mut Child, anchor: &mut Child, fail_term: b
 }
 
 #[rustfmt::skip]
-fn owns_group(group: Pid, child: &mut Child, anchor: &mut Child) -> bool { alive(anchor) || (alive(child) && rustix::process::getpgid(Some(Pid::from_child(child))) == Ok(group)) }
+fn fresh_anchor(anchor: &Child) -> bool { let pid = Pid::from_child(anchor); anchor_reserved(anchor) && rustix::process::getpgid(Some(pid)) == Ok(pid) }
+#[rustfmt::skip]
+fn anchor_reserved(anchor: &Child) -> bool { rustix::process::test_kill_process(Pid::from_child(anchor)).is_ok() }
 
 #[rustfmt::skip]
 fn drain(mut pipe: impl Read + AsFd + Send + 'static, fail_start: bool) -> std::io::Result<Drain> {
