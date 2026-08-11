@@ -293,6 +293,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "check-contract"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
+
+[[package]]
+name = "check-implementation"
+version = "0.0.0"
+dependencies = [
+ "boxology",
+ "check-contract",
+]
+
+[[package]]
 name = "classifier-contract"
 version = "0.0.0"
 dependencies = [

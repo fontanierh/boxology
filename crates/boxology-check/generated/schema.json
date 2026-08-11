@@ -1,0 +1,332 @@
+{
+  "box_id": "check",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "CheckError",
+      "id": "check.check",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "CheckRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "check",
+      "output": {
+        "type": "CheckOutcome"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "generator": "boxology-generator",
+    "generator_version": "0.0.0",
+    "semantic_digest": "sha256:024d008c789769da6b7b82ca2209e92adeb3d936a8f15af54931772790698348"
+  },
+  "revision": "sha256:3990c9cd7afa80360c2051526516fafd71ab94890bf27f6aa4e057669f99754d",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "workspace",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "base",
+          "type": "Option<String>"
+        }
+      ],
+      "kind": "struct",
+      "name": "CheckRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "CheckStatus",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Passed"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Failed"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "CheckStepStatus",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Passed"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Failed"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Skipped"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "CheckFailureKind",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Validation"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Invocation"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "code",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "path",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "package",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "payload",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "rule",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "rule_source",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "span_start_line",
+          "type": "Option<u64>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "span_start_column",
+          "type": "Option<u64>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "span_end_line",
+          "type": "Option<u64>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "span_end_column",
+          "type": "Option<u64>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "offending",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "class",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "condition",
+          "type": "Option<String>"
+        }
+      ],
+      "kind": "struct",
+      "name": "CheckFinding"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "status",
+          "type": "CheckStepStatus"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "reason",
+          "type": "Option<String>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "findings",
+          "type": "Vec<CheckFinding>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "output",
+          "type": "Option<Vec<u8>>"
+        }
+      ],
+      "kind": "struct",
+      "name": "CheckStepReport"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "steps",
+          "type": "Vec<CheckStepReport>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "status",
+          "type": "CheckStatus"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "human",
+          "type": "Vec<u8>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "json",
+          "type": "Vec<u8>"
+        }
+      ],
+      "kind": "struct",
+      "name": "CheckReport"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "CheckFailureKind"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "human",
+          "type": "Vec<u8>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "json",
+          "type": "Vec<u8>"
+        }
+      ],
+      "kind": "struct",
+      "name": "CheckFailure"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "report",
+          "type": "Option<CheckReport>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "failure",
+          "type": "Option<CheckFailure>"
+        }
+      ],
+      "kind": "struct",
+      "name": "CheckOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "CheckError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Internal",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}
