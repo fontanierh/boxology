@@ -196,18 +196,18 @@ linear session event store with durable append, replay, restart, and torn-tail r
 Bash may intentionally escape its root-confined initial cwd through
 shell behavior, absolute paths, or a new process session.
 The agent loop and deterministic persisted compaction are governed and exercised
-through generated handles. Harness item 8a now assembles all four boxes locally and
-exposes strict bounded JSONL `run_turn` through only the generated agent-loop handle.
-Item 8b still owns compact exposure and the complete lifecycle/control matrix.
-Authorized live dogfood remains; no sandbox is claimed.
+through generated handles. Harness item 8 is complete: the four boxes assemble locally
+and strict bounded JSONL exposes correlated `run_turn` and `compact` through only the
+generated agent-loop handle, with process-lifetime IDs, request limits, and SIGINT
+cancellation/stop behavior. Authorized live dogfood remains; no sandbox is claimed.
 
 | Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
 | --- | --- | --- | --- | --- |
-| Model completion/agent loop | Governed loop plus item 8a four-box local harness and correlated `run_turn` protocol | Harness `compact` exposure and lifecycle controls (8b) | Generated fake drives an exact correlated `run_turn`; production binary assembly is exercised | Multiple calls, provider marketplace, multimodal or streaming protocol |
+| Model completion/agent loop | Governed loop plus complete four-box local harness with correlated `run_turn` and `compact` | Static checked-in context loading before live dogfood (8c) | Generated fakes drive exact sequential calls; production binary assembly is exercised | Multiple calls, provider marketplace, multimodal or streaming protocol |
 | Tool execution | Governed `tool-runner.execute` with root-confined read/write/edit and bounded unsandboxed bash starting in the selected root-confined cwd; explicit environment/process cleanup | Nothing for fixed H0 tools | Fake-model turn edits an isolated fixture only through the generated tool handle | Dynamic tool plugins and a general permission framework |
 | Sessions/resume | Governed linear JSONL events through `session-store.load/append`, integrated with the agent loop for replay, restart, and torn-tail recovery | Nothing for H0 | Stop and restart, load the same session, and complete the next turn deterministically | Session trees, list/delete, and distributed service |
 | Compaction | Governed `agent-loop.compact` persists a bounded caller-supplied summary and reconstructs from the latest valid checkpoint | Nothing for H0 | Fresh compositions continue after two separated checkpoints without pre-checkpoint context or old tool re-execution | Automatic summary generation and multiple compaction strategies |
-| Interactive/print/protocol modes | Item 8a strict bounded sequential LF-delimited `run_turn` protocol | Item 8b compact, duplicate/request lifecycle state, record-count and signal controls | Generated-fake result/failure, framing, output, deadline, and CLI boundaries are locked | JSON-RPC 2.0, batching, notifications, network daemon, streaming, and UI |
+| Interactive/print/protocol modes | Strict bounded sequential LF protocol with duplicate/request limits, deadlines, and active/idle SIGINT control | Nothing for H0 | Generated-fake result/failure, framing, lifecycle, cancellation, output, and CLI boundaries are locked | JSON-RPC 2.0, batching, notifications, network/daemon service, streaming, and UI |
 | Skills/prompt templates | Checked-in Agent Skills and repository instructions already exist | H0 statically loads selected checked-in skills and prompts | Deterministic turn includes the exact selected skill/prompt content in model context | Executable packages, hot-loading, and a marketplace |
 | Extensions/packages/themes | No dynamic harness extension ecosystem | Nothing for H0; statically compose required boxes | One checked-in composition selects its model implementation and tool set without dynamic loading | Package registry, themes, and hot-loading |
 | Security/sandbox | Boxology is not a sandbox and has no generic permission engine | Isolated worktree and explicit process/environment boundaries in acceptance | Live-model task changes only its assigned worktree and records commands/results | Built-in sandbox or permission framework |
