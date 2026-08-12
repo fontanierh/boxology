@@ -200,16 +200,18 @@ The agent loop and deterministic persisted compaction are governed and exercised
 through generated handles. Harness item 8 is complete: the four boxes assemble locally
 and strict bounded JSONL exposes correlated `run_turn` and `compact` through only the
 generated agent-loop handle, with process-lifetime IDs, request limits, and SIGINT
-cancellation/stop behavior. Authorized live dogfood remains; no sandbox is claimed.
+cancellation/stop behavior. Static repository context and authorized live Grok dogfood are
+complete; the dated closeout record captures the exact evidence and limitations. No sandbox
+is claimed.
 
 | Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
 | --- | --- | --- | --- | --- |
-| Model completion/agent loop | Governed loop plus complete four-box local harness with correlated `run_turn` and `compact` | Static checked-in context loading before live dogfood (8c) | Generated fakes drive exact sequential calls; production binary assembly is exercised | Multiple calls, provider marketplace, multimodal or streaming protocol |
+| Model completion/agent loop | Governed loop plus complete four-box local harness with correlated `run_turn` and `compact` | Nothing for H0 | Generated fakes drive exact sequential calls; production assembly and one live Grok write task pass | Multiple calls, provider marketplace, multimodal or streaming protocol |
 | Tool execution | Governed `tool-runner.execute` with root-confined read/write/edit and bounded unsandboxed bash starting in the selected root-confined cwd; explicit environment/process cleanup | Nothing for fixed H0 tools | Fake-model turn edits an isolated fixture only through the generated tool handle | Dynamic tool plugins and a general permission framework |
 | Sessions/resume | Governed linear JSONL events through `session-store.load/append`, integrated with the agent loop for replay, restart, and torn-tail recovery | Nothing for H0 | Stop and restart, load the same session, and complete the next turn deterministically | Session trees, list/delete, and distributed service |
 | Compaction | Governed `agent-loop.compact` persists a bounded caller-supplied summary and reconstructs from the latest valid checkpoint | Nothing for H0 | Fresh compositions continue after two separated checkpoints without pre-checkpoint context or old tool re-execution | Automatic summary generation and multiple compaction strategies |
 | Interactive/print/protocol modes | Strict bounded sequential LF protocol with duplicate/request limits, deadlines, and active/idle SIGINT control | Nothing for H0 | Generated-fake result/failure, framing, lifecycle, cancellation, output, and CLI boundaries are locked | JSON-RPC 2.0, batching, notifications, network/daemon service, streaming, and UI |
-| Skills/prompt templates | Checked-in Agent Skills and repository instructions already exist | H0 statically loads selected checked-in skills and prompts | Deterministic turn includes the exact selected skill/prompt content in model context | Executable packages, hot-loading, and a marketplace |
+| Skills/prompt templates | Checked-in Agent Skills and repository instructions are statically loaded into H0 | Nothing for H0 | Deterministic turn includes the exact selected skill/prompt content in model context | Executable packages, hot-loading, and a marketplace |
 | Extensions/packages/themes | No dynamic harness extension ecosystem | Nothing for H0; statically compose required boxes | One checked-in composition selects its model implementation and tool set without dynamic loading | Package registry, themes, and hot-loading |
 | Security/sandbox | Boxology is not a sandbox and has no generic permission engine | Isolated worktree and explicit process/environment boundaries in acceptance | Live-model task changes only its assigned worktree and records commands/results | Built-in sandbox or permission framework |
 
@@ -303,8 +305,8 @@ still requires its own authorization.
 | [#573](https://github.com/fontanierh/boxology/issues/573) | Delivered Telegram product self-hosting: scalar and structured capabilities, governed CLI/listen composition, cold generation, complete check, and the dated closeout record are merged |
 | [#574](https://github.com/fontanierh/boxology/issues/574) | Delivered minimum structured Telegram boundary; bounded slices from #102/#104 with fixture coordination under #100 |
 | [#575](https://github.com/fontanierh/boxology/issues/575) | Classifier/check/generator/installer use-case entrypoints; classifier, structured imports, and the real generated-`CheckHandle` parity capstone are delivered, while installed CLI cutover and generator/installer follow by concrete dependency; advances #74 |
-| [#576](https://github.com/fontanierh/boxology/issues/576) | Minimum Pi-like harness; follows generated-handle dogfood and models completion as an application box rather than inventing a provider package kind or new kernel feature |
-| [#74](https://github.com/fontanierh/boxology/issues/74) | Existing stage-3 tool-self-hosting forcing function; #575 is its executable rung, not a duplicate closure claim |
+| [#576](https://github.com/fontanierh/boxology/issues/576) | Delivered minimum Pi-like harness: deterministic generated-handle loop, static context, lifecycle, compaction, live Grok write dogfood, cold generation, and dated closeout evidence |
+| [#74](https://github.com/fontanierh/boxology/issues/74) | Its application-harness forcing-function criterion is delivered through H0; unfinished stage-3 installed check/generator/installer work remains explicitly under #575 rather than blocking this completed criterion |
 | [#100](https://github.com/fontanierh/boxology/issues/100) | Broader fixture/type-vocabulary evidence; #574 adds only the Telegram-forced cases |
 | [#102](https://github.com/fontanierh/boxology/issues/102) | Broader parser/model grammar; #574 is the accepted minimum local subset |
 | [#104](https://github.com/fontanierh/boxology/issues/104) | Broader named-field/type emission; #574 takes only the subset required for Telegram |
