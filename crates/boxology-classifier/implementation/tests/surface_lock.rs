@@ -2,8 +2,10 @@ use std::{fs, path::PathBuf};
 
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const LIB: &str = include_str!("../src/lib.rs");
+const CONTRACT: &str = include_str!("../src/contract.rs");
 const PACKAGE_HASH: u64 = 8_561_730_811_314_096_507;
-const LIB_HASH: u64 = 18_296_820_620_204_196_880;
+const LIB_HASH: u64 = 2_709_613_950_373_674_942;
+const CONTRACT_HASH: u64 = 4_186_782_839_223_558_405;
 
 fn hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
@@ -25,7 +27,10 @@ fn governed_classifier_surface_is_exact() {
     assert_eq!(files, ["Cargo.toml"]);
     assert_eq!(hash(PACKAGE.as_bytes()), PACKAGE_HASH);
     assert_eq!(hash(LIB.as_bytes()), LIB_HASH);
-    assert_eq!(LIB.matches("boxology::contract! {").count(), 1);
+    assert_eq!(hash(CONTRACT.as_bytes()), CONTRACT_HASH);
+    assert_eq!(LIB.matches("mod contract;").count(), 1);
+    assert_eq!(LIB.matches("pub use contract::*;").count(), 1);
+    assert_eq!(CONTRACT.matches("boxology::contract! {").count(), 1);
     assert_eq!(LIB.matches("#[boxology::implementation]").count(), 1);
     assert_eq!(
         LIB.matches("include!(\"../../generated/adapter/adapter.rs\")")

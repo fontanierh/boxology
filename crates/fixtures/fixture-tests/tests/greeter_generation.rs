@@ -56,6 +56,10 @@ fn request() -> GenerationRequest {
                 include_bytes!("../../greeter/implementation/src/lib.rs").to_vec(),
             ),
             (
+                "implementation/src/contract.rs".into(),
+                include_bytes!("../../greeter/implementation/src/contract.rs").to_vec(),
+            ),
+            (
                 HELLO_SCHEMA.into(),
                 include_bytes!("../../hello/generated/schema.json").to_vec(),
             ),
@@ -264,7 +268,7 @@ fn greeter_generation_is_cold_import_bearing_exact_and_matches_checked_in_tree()
     assert_quality_commands_are_exact();
     let request = request();
     assert_eq!(request.crate_root().as_str(), "implementation/src/lib.rs");
-    assert_eq!(request.inputs().len(), 3, "generated files are not inputs");
+    assert_eq!(request.inputs().len(), 4, "generated files are not inputs");
     assert_eq!(request.imports().len(), 1);
     let [import] = request.imports() else {
         panic!("greeter must declare exactly one import");
