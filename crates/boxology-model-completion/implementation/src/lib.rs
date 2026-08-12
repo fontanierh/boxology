@@ -84,16 +84,22 @@ impl XaiCompletionService {
             Ok(value) => value,
             Err(error) => return Ok(outcome(Err(error))),
         };
-        let response = self
-            .client
-            .post(format!("{}/chat/completions", self.origin))
-            .bearer_auth(&self.key)
-            .json(&body)
-            .send();
-        let result = match response {
-            Ok(response) => decode(response),
-            Err(_) => Err(simple(CompletionFailureClass::Transient, "transport", true)),
-        };
+        let client = self.client.clone();
+        let key = self.key.clone();
+        let origin = self.origin.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            match client
+                .post(format!("{origin}/chat/completions"))
+                .bearer_auth(key)
+                .json(&body)
+                .send()
+            {
+                Ok(response) => decode(response),
+                Err(_) => Err(simple(CompletionFailureClass::Transient, "transport", true)),
+            }
+        })
+        .await
+        .map_err(|_| CompleteError::Internal)?;
         Ok(outcome(result))
     }
 }
