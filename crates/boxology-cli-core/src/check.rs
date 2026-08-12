@@ -45,6 +45,21 @@ impl PackageSchemas {
             submitted,
         }
     }
+
+    /// Returns the package identity.
+    pub fn package(&self) -> &BoxId {
+        &self.package
+    }
+
+    /// Returns the optional base schema bytes.
+    pub fn base(&self) -> Option<&[u8]> {
+        self.base.as_deref()
+    }
+
+    /// Returns the submitted schema bytes.
+    pub fn submitted(&self) -> &[u8] {
+        &self.submitted
+    }
 }
 
 /// A coded check-classification failure with schema or classifier diagnostics.
@@ -182,9 +197,9 @@ fn classify_package(
             ClassificationFinding::new(
                 package_id.clone(),
                 finding.path().to_owned(),
-                finding.code(),
-                finding.class().canonical_name(),
-                finding.condition(),
+                finding.code().to_owned(),
+                finding.class().canonical_name().to_owned(),
+                finding.condition().map(str::to_owned),
             )
         })
         .collect())

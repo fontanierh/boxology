@@ -1984,18 +1984,18 @@ impl fmt::Display for SkipReason {
 pub struct ClassificationFinding {
     package: BoxId,
     path: String,
-    code: &'static str,
-    class: &'static str,
-    condition: Option<&'static str>,
+    code: String,
+    class: String,
+    condition: Option<String>,
 }
 impl ClassificationFinding {
     /// Constructs one finding from already-classified fields.
     pub fn new(
         package: BoxId,
         path: String,
-        code: &'static str,
-        class: &'static str,
-        condition: Option<&'static str>,
+        code: String,
+        class: String,
+        condition: Option<String>,
     ) -> Self {
         Self {
             package,
@@ -2006,16 +2006,16 @@ impl ClassificationFinding {
         }
     }
     /// Returns the stable classifier code.
-    pub fn code(&self) -> &'static str {
-        self.code
+    pub fn code(&self) -> &str {
+        &self.code
     }
     /// Returns the compatibility class name.
-    pub fn class(&self) -> &'static str {
-        self.class
+    pub fn class(&self) -> &str {
+        &self.class
     }
     /// Returns the migration condition, when the finding is conditional.
-    pub fn condition(&self) -> Option<&'static str> {
-        self.condition
+    pub fn condition(&self) -> Option<&str> {
+        self.condition.as_deref()
     }
     ref_getters! {
         #[doc = "Returns the package under comparison."] package: &BoxId = package;
@@ -2029,7 +2029,7 @@ impl fmt::Display for ClassificationFinding {
             "{} {} {} {}",
             self.code, self.package, self.path, self.class
         )?;
-        if let Some(condition) = self.condition {
+        if let Some(condition) = &self.condition {
             write!(formatter, " condition={0}{1}{0}", '"', condition)?;
         }
         Ok(())
@@ -2045,7 +2045,7 @@ impl ClassificationFindings {
             left.package
                 .cmp(&right.package)
                 .then_with(|| left.path.cmp(&right.path))
-                .then_with(|| left.code.cmp(right.code))
+                .then_with(|| left.code.cmp(&right.code))
         });
         (!findings.is_empty()).then_some(Self(findings))
     }
@@ -2726,9 +2726,9 @@ jobs:
         ClassificationFindings::new(vec![ClassificationFinding::new(
             id("alpha"),
             "alpha/type/T/variant/Other".to_owned(),
-            "FIND001",
-            "compatible_with_conditions",
-            Some("unknown-variant tolerance"),
+            "FIND001".to_owned(),
+            "compatible_with_conditions".to_owned(),
+            Some("unknown-variant tolerance".to_owned()),
         )])
         .expect("the classification fixture has findings")
     }
