@@ -26,7 +26,7 @@ check-implementation = { version = "=0.0.0", path = "../boxology-check/implement
 check_contract = { package = "check-contract", version = "=0.0.0", path = "../boxology-check/generated/contract" }
 classifier-implementation = { version = "=0.0.0", path = "../boxology-classifier/implementation" }
 classifier_contract = { package = "classifier-contract", version = "=0.0.0", path = "../boxology-classifier/generated/contract" }
-serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 
 [[test]]

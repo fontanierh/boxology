@@ -13,7 +13,7 @@ boxology-runtime = { version = "=0.0.0", path = "../../boxology-runtime" }
 boxology-workspace = { version = "=0.0.0", path = "../../boxology-workspace" }
 boxology_generated_contract = { package = "check-contract", version = "=0.0.0", path = "../generated/contract" }
 boxology_import_classifier = { package = "classifier-contract", version = "=0.0.0", path = "../../boxology-classifier/generated/contract" }
-serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 boxology_import_classifier = { package = "classifier-contract", version = "=0.0.0", path = "../../boxology-classifier/generated/contract", features = ["test-support"] }

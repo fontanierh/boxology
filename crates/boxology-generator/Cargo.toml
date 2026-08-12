@@ -16,7 +16,7 @@ boxology-contract-syntax = { version = "=0.0.0", path = "../boxology-contract-sy
 boxology-generator-model = { version = "=0.0.0", path = "../boxology-generator-model" }
 boxology-schema = { version = "=0.0.0", path = "../boxology-schema" }
 prettyplease = "=0.3.0"
-serde_json = "=1.0.150"
+serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing"] }
 
