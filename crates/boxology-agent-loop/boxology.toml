@@ -1,0 +1,30 @@
+schema = 1
+id = "agent-loop"
+kind = "box"
+owned = ["boxology.toml", "implementation/**"]
+
+[[imports]]
+package = "model-completion"
+contract = "model-completion"
+[[imports]]
+package = "tool-runner"
+contract = "tool-runner"
+[[imports]]
+package = "session-store"
+contract = "session-store"
+
+[quality]
+commands = ["cargo check -p agent-loop-contract --all-features", "cargo test -p agent-loop-implementation"]
+[[crates]]
+cargo_package = "agent-loop-implementation"
+path = "implementation"
+role = "box-implementation"
+[[crates]]
+cargo_package = "agent-loop-contract"
+path = "generated/contract"
+role = "box-contract"
+[[derived]]
+id = "contract"
+generator = "boxology-contract"
+inputs = ["boxology.toml", "implementation/src/**"]
+outputs = ["generated/contract/**", "generated/adapter/**", "generated/schema.json"]

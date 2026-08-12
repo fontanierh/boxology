@@ -3,6 +3,29 @@
 version = 4
 
 [[package]]
+name = "agent-loop-contract"
+version = "0.0.0"
+dependencies = [
+ "boxology-contract",
+]
+
+[[package]]
+name = "agent-loop-implementation"
+version = "0.0.0"
+dependencies = [
+ "agent-loop-contract",
+ "boxology",
+ "boxology-contract",
+ "boxology-runtime",
+ "model-completion-contract",
+ "serde",
+ "serde_json",
+ "session-store-contract",
+ "tokio",
+ "tool-runner-contract",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
