@@ -419,7 +419,8 @@ impl Parse for Contract {
             } else {
                 return Err(input.error("expected a local data declaration or #[error] enum"));
             };
-            debug_assert!(data_names.insert(declaration.name.clone()));
+            let inserted = data_names.insert(declaration.name.clone());
+            debug_assert!(inserted);
             data.push(declaration);
         };
         let mut capabilities = Vec::new();
