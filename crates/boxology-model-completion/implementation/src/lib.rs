@@ -275,6 +275,7 @@ fn decode(mut response: Response) -> Result<CompletionResult, Failure> {
     }
     let content = match choice.pointer("/message/content") {
         None | Some(Value::Null) => None,
+        Some(Value::String(value)) if value.is_empty() => None,
         Some(Value::String(value)) => Some(value.clone()),
         _ => return Err(malformed()),
     };

@@ -177,6 +177,16 @@ fn parallel_results_project_exactly_and_length_finishes() {
 
 #[test]
 #[rustfmt::skip]
+fn empty_provider_content_is_absent_but_nonempty_content_is_preserved() {
+    let tool = invoke(200, None, response(json!({"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]}), "tool_calls"), false).completion.unwrap();
+    assert!(tool.content.is_none());
+    assert_eq!(tool.tool_calls.len(), 1);
+    let text = invoke(200, None, response(json!({"role":"assistant","content":"done"}), "stop"), false).completion.unwrap();
+    assert_eq!(text.content.as_deref(), Some("done"));
+}
+
+#[test]
+#[rustfmt::skip]
 fn local_http_maps_tool_call_and_rate_limit_without_leaking_or_retrying() {
     let body = response(
         json!({"role":"assistant","content":null,"tool_calls":[
