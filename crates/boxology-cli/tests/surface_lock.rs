@@ -9,14 +9,14 @@ use std::{
 };
 use syn::visit::Visit;
 const NAMES: &str = "lib.rs walk.rs generate.rs execute.rs compare.rs classify.rs check.rs base.rs runner.rs main.rs";
-const FILES: &str = "Cargo.toml boxology.toml src/bin/boxology-telegram.rs src/lib.rs src/main.rs src/telegram.rs tests/classifier_composition.rs tests/cli.rs tests/surface_lock.rs";
+const FILES: &str = "Cargo.toml boxology.toml src/bin/boxology-telegram.rs src/lib.rs src/main.rs src/telegram.rs tests/check_composition.rs tests/classifier_composition.rs tests/cli.rs tests/surface_lock.rs";
 const CORE_FILES: &str = "Cargo.toml src/base.rs src/check.rs src/classify.rs src/compare.rs src/execute.rs src/generate.rs src/lib.rs src/runner.rs src/walk.rs tests/bxw.golden tests/check.rs tests/classify.rs tests/compare.rs tests/execute.rs tests/generation_plan.rs tests/runner.rs";
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const CORE_PACKAGE: &str = include_str!("../../boxology-cli-core/Cargo.toml");
 const FACADE: &str = include_str!("../src/lib.rs");
-const PACKAGE_HASH: u64 = 17_761_274_977_081_448_842;
+const PACKAGE_HASH: u64 = 2_834_303_165_361_264_608;
 const CORE_PACKAGE_HASH: u64 = 1_604_661_066_284_442_872;
-const FACADE_HASH: u64 = 1_575_577_998_161_145_320;
+const FACADE_HASH: u64 = 11_106_089_879_726_249_366;
 const LIB: &str = include_str!("../../boxology-cli-core/src/lib.rs");
 const WALK: &str = include_str!("../../boxology-cli-core/src/walk.rs");
 const GENERATE: &str = include_str!("../../boxology-cli-core/src/generate.rs");
@@ -50,9 +50,9 @@ const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 16_295_088_236_220_879_986;
 const BASE_HASH: u64 = 17_483_050_779_662_147_895;
 const RUNNER_HASH: u64 = 14_976_080_536_641_793_496;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute_plans(root, &plans)\nClassifierComposition::start()\n.classify(outcome.base_schema(), outcome.submitted_schema())\nreport.rendered_text\nplan(&workspace, None)\ncomposition_step(root, &workspace, &plans)\ncompare_plans(root, &workspace, &plans)\nCompareStepError::Execute(error)\nerror.render_json()\ndiagnostics.render_json()\nresolve_default_base(root)\nOk(DefaultBase::NoRepository) => Err(SkipReason::NoRepository)\nOk(DefaultBase::NoMergeBase) => Err(SkipReason::NoMergeBase)\nResolvedBase::from_oid(oid)\nresolve_base(root, revision)\nclassify_contracts(root, &base, &plans, stderr)\nbase_diff_inputs(root, base)\ndiff_ownership(inputs.packages(), inputs.changed())\nownership.lockfile_scope(&pairs)\nFindings::into_entries\nDiffOwnershipSkip::NoRepository\nDiffOwnershipSkip::NoMergeBase\nrun_lock_step(runner, root)\nrun_fmt_step(runner, root, &workspace)\nrun_clippy_step(runner, root)\nrun_test_step(runner, root)\nrun_quality_step(runner, root, &workspace)\nquality: quality_output\nfn report_spawn_failure\nreport.render_json()\nreport.exit_code()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\nSelection::Generate(package) => run_generate_setup(root, &package, stdout, stderr)\nSelection::Check { base, format } => run_check(base, format, stdout, stderr)\nfn run_generate_setup(\nwalk(root)\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ninputs.check()\nplan(&workspace, package.as_ref())\nexecute_plans(root, &plans)\nClassifierComposition::start()\n.classify(outcome.base_schema(), outcome.submitted_schema())\nreport.rendered_text\nCheckComposition::start()\nCheckFormat::Human => false\nCheckFormat::Json => true\nproject_check(check.check(base), json)\nstdout.write_all(&projected.stdout)\nstderr.write_all(&projected.stderr)\nprojected.code\nerror.render_json()\ndiagnostics.render_json()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 9_693_753_566_175_430_705;
+const MAIN_HASH: u64 = 14_825_791_424_239_279_845;
 const HASHES: [u64; 10] = [
     LIB_HASH,
     WALK_HASH,

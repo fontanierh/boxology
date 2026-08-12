@@ -12,8 +12,9 @@ path = "."
 role = "composition"
 
 [composition]
-boxes = ["classifier", "telegram"]
+boxes = ["check", "classifier", "telegram"]
 bindings = [
+    { box = "check", capability = "check.check", transport = "in-process" },
     { box = "classifier", capability = "classifier.classify", transport = "in-process" },
     { box = "telegram", capability = "telegram.send_text", transport = "in-process" },
     { box = "telegram", capability = "telegram.send", transport = "in-process" },

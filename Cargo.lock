@@ -99,6 +99,8 @@ dependencies = [
  "boxology-schema",
  "boxology-telegram",
  "boxology-workspace",
+ "check-contract",
+ "check-implementation",
  "classifier-contract",
  "classifier-implementation",
  "serde",

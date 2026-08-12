@@ -22,8 +22,11 @@ use boxology_contract::{
     TraceContext,
 };
 use boxology_runtime::{
-    Composition, CompositionBuilder, TransportBinding, TransportExposure, TransportHandle,
-    TransportJoinFuture, TransportRuntime,
+    Composition, CompositionBuilder, ImportTarget, TransportBinding, TransportExposure,
+    TransportHandle, TransportJoinFuture, TransportRuntime,
+};
+use check_contract::{
+    CheckFailureKind, CheckHandle, CheckOutcome, CheckRequest, CheckStatus, CheckStepStatus,
 };
 use classifier_contract::{
     ClassifierError, ClassifierHandle, ClassifyFailure, ClassifyFailureStage, ClassifyOutcome,
@@ -31,6 +34,150 @@ use classifier_contract::{
 };
 
 const INVALID_CLASSIFIER_OUTCOME: &str = "classifier call failed: invalid classifier outcome";
+const INVALID_CHECK_OUTCOME: &str = "check call failed: invalid check outcome\n";
+const CHECK_CALL_FAILED: &str = "check call failed\n";
+
+/// Live local classifier and check boxes assembled for the installed CLI.
+pub struct CheckComposition {
+    _composition: Composition,
+    handle: CheckHandle,
+}
+
+impl CheckComposition {
+    /// Assembles check behind its generated typed handle and resolves its classifier import locally.
+    pub fn start() -> Result<Self, String> {
+        let classifier = classifier_implementation::generated::implementation_descriptor();
+        let check = check_implementation::generated::implementation_descriptor();
+        let [capability] = check.contract().capabilities() else {
+            return Err("check contract must expose exactly one capability".into());
+        };
+        let binding = Arc::new(LocalBinding::default());
+        let mut builder = CompositionBuilder::new();
+        builder.add_box(classifier, |imports| {
+            classifier_implementation::generated::factory(
+                classifier_implementation::ClassifierService,
+                imports,
+            )
+        });
+        builder.add_box(check, |imports| {
+            let dependencies = check_implementation::generated::typed_imports(&imports);
+            check_implementation::generated::factory(
+                check_implementation::CheckService::new(dependencies.classifier),
+                imports,
+            )
+        });
+        let check_id = BoxId::new("check").expect("check box id is valid");
+        let classifier_id = BoxId::new("classifier").expect("classifier box id is valid");
+        builder.resolve_import(
+            check_id.clone(),
+            classifier_id.clone(),
+            ImportTarget::local(classifier_id),
+        );
+        builder.expose(
+            check_id,
+            capability.id().clone(),
+            binding.clone(),
+            ExposureLevel::CodeOnly,
+        );
+        let composition = builder.start().map_err(|error| error.to_string())?;
+        let runtime = binding
+            .runtime()
+            .ok_or_else(|| "check in-process binding did not start".to_owned())?;
+        let [exposure] = runtime.exposures() else {
+            return Err("check composition must expose exactly one capability".into());
+        };
+        let handle = CheckHandle::from_erased(Arc::new(ExposureTarget(vec![exposure.clone()])));
+        Ok(Self {
+            _composition: composition,
+            handle,
+        })
+    }
+
+    /// Runs check through the generated handle with the installed CLI's exact workspace request.
+    pub fn check(&self, base: Option<String>) -> Result<CheckOutcome, String> {
+        invoke_check(&self.handle, base)
+    }
+}
+
+/// Byte streams and exit status projected from the typed check boundary.
+#[doc(hidden)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct CheckProjection {
+    /// Process exit status.
+    pub code: u8,
+    /// Bytes written to standard output.
+    pub stdout: Vec<u8>,
+    /// Bytes written to standard error.
+    pub stderr: Vec<u8>,
+}
+
+/// Invokes a generated check handle with the installed CLI's exact request shape.
+#[doc(hidden)]
+pub fn invoke_check(handle: &CheckHandle, base: Option<String>) -> Result<CheckOutcome, String> {
+    ready(handle.check(
+        context(),
+        CheckRequest {
+            workspace: ".".into(),
+            base,
+        },
+    ))
+    .map_err(|_| "check call failed".to_owned())?
+    .map_err(|_| "check call failed".to_owned())
+}
+
+/// Projects a typed check outcome to the installed CLI's legacy streams and status.
+#[doc(hidden)]
+pub fn project_check(outcome: Result<CheckOutcome, String>, json: bool) -> CheckProjection {
+    let invalid = || CheckProjection {
+        code: 1,
+        stdout: Vec::new(),
+        stderr: INVALID_CHECK_OUTCOME.as_bytes().to_vec(),
+    };
+    let outcome = match outcome {
+        Ok(value) => value,
+        Err(_) => {
+            return CheckProjection {
+                code: 1,
+                stdout: Vec::new(),
+                stderr: CHECK_CALL_FAILED.as_bytes().to_vec(),
+            };
+        }
+    };
+    match (outcome.report, outcome.failure) {
+        (Some(report), None) => {
+            if report
+                .steps
+                .iter()
+                .any(|step| matches!(step.status, CheckStepStatus::Unknown { .. }))
+            {
+                return invalid();
+            }
+            let code = match report.status {
+                CheckStatus::Passed => 0,
+                CheckStatus::Failed => 1,
+                CheckStatus::Unknown { .. } => return invalid(),
+            };
+            CheckProjection {
+                code,
+                stdout: if json { report.json } else { report.human },
+                stderr: Vec::new(),
+            }
+        }
+        (None, Some(failure)) => {
+            let code = match failure.kind {
+                CheckFailureKind::Validation => 1,
+                CheckFailureKind::Invocation => 2,
+                CheckFailureKind::Unknown { .. } => return invalid(),
+            };
+            CheckProjection {
+                code,
+                stdout: Vec::new(),
+                stderr: if json { failure.json } else { failure.human },
+            }
+        }
+        _ => invalid(),
+    }
+}
 
 /// Live local classifier box assembled for the CLI composition.
 pub struct ClassifierComposition {
@@ -155,7 +302,7 @@ fn ready<F: Future>(future: F) -> Result<F::Output, String> {
         .poll(&mut Context::from_waker(Waker::noop()))
     {
         Poll::Ready(output) => Ok(output),
-        Poll::Pending => Err("pure classifier call unexpectedly pending".into()),
+        Poll::Pending => Err("local generated call unexpectedly pending".into()),
     }
 }
 
