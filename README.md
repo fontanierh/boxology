@@ -41,3 +41,9 @@ Start with the concise [white paper](boxology-whitepaper.md), then use its linke
 ## License
 
 Boxology is dual-licensed under [MIT](LICENSE-MIT) or [Apache License 2.0](LICENSE-APACHE), at your option.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change and [SECURITY.md](SECURITY.md)
+before reporting a vulnerability. Community participation is governed by the
+[Contributor Covenant](CODE_OF_CONDUCT.md).

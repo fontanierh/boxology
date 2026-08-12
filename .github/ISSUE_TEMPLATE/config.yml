@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/fontanierh/boxology/security/advisories/new
+    about: Submit a confidential security or Code of Conduct report.
