@@ -163,8 +163,8 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("f4c3ac3d7a75bd6b2c3882a909461023b82bc8bf34306dbc5a404e706a33ceac"),
-    source_digest: "50b8641327b54a40e40973d0394c0d6998797705d609ce70cc1f80ef2bfdf8fa",
-    body_digest: "22b894e80b8da524466a16723349316863ff83f42675ead294cf298ba44b2ba7",
+    source_digest: "34eb23a72c918b237f5351c83e4bb23afdf1a5d134c045e3fb00bc3016ef57d7",
+    body_digest: "546f10a68d744fea3b9ed1ff7b8eb38e47474d8ed7ee6231b67eb369df28b6c3",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-cli",
@@ -174,8 +174,8 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
     manifest_digest: Some("f4c3ac3d7a75bd6b2c3882a909461023b82bc8bf34306dbc5a404e706a33ceac"),
-    source_digest: "ce9b4ca7b0be9f567ba48985c3ea750a4060994310bac0430d4a20b464a682fa",
-    body_digest: "635fea2564bf43829c4536ee76d33b2e2c7ec985af258703dbed59ec1022e4b8",
+    source_digest: "9dfbee58cff321a7b78878bfaf9c075b85923a19faeccafd051c9bda02c847fe",
+    body_digest: "f942ebb3564aa64dd46e812dc47c6bdca5dda82e5fecd5b6345f74813c55982a",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),

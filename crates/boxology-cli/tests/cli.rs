@@ -170,6 +170,25 @@ impl Fixture {
         self.run_tools(args, mode, fake_cargo, None)
     }
 
+    fn run_in_parent_repository(&self, args: &[&str]) -> Output {
+        let _lock = env_lock();
+        let old_path = env::var_os("PATH").unwrap_or_default();
+        let path = format!(
+            "{}:{}",
+            self.cargo.parent().unwrap().display(),
+            old_path.display()
+        );
+        Command::new(env!("CARGO_BIN_EXE_boxology"))
+            .args(args)
+            .current_dir(&self.root)
+            .env("BOXOLOGY_ARG_LOG", &self.log)
+            .env("BOXOLOGY_METADATA", &self.metadata)
+            .env("BOXOLOGY_MODE", "ok")
+            .env("PATH", path)
+            .output()
+            .unwrap()
+    }
+
     fn run_tools(&self, args: &[&str], mode: &str, fake_cargo: bool, fail: Option<&str>) -> Output {
         let _lock = env_lock();
         let _ = fs::remove_file(&self.log);
@@ -1151,6 +1170,32 @@ fn check_base_reports_real_addition_and_unchanged_baseline_without_failing() {
 }
 
 #[test]
+fn check_base_resolves_git_objects_from_a_nested_managed_workspace() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.name", "Boxology Test"][..],
+        &["config", "user.email", "boxology@example.invalid"][..],
+        &["add", "."][..],
+        &["commit", "-q", "-m", "nested baseline"][..],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&fixture.cleanup)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output.stderr));
+    }
+
+    let output = fixture.run_in_parent_repository(&["check", "--base", "HEAD"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains("check contract-classification passed\n"));
+    assert!(text(&output.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
 fn check_base_git_boundary_uses_the_exact_nonmutating_argv() {
     let fixture = Fixture::new(false);
     assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
@@ -1170,10 +1215,10 @@ fn check_base_git_boundary_uses_the_exact_nonmutating_argv() {
         format!(
             "rev-parse\n--verify\n--end-of-options\nmain^{{commit}}\n--\n\
              ls-tree\n--name-only\n-z\n{oid}\n--\nping/generated/schema.json\n--\n\
-             cat-file\n-e\n{oid}:ping/generated/schema.json\n--\n\
-             cat-file\nblob\n{oid}:ping/generated/schema.json\n--\n\
-             ls-tree\n-r\n-z\n--full-tree\n{oid}\n--\n\
-             diff\n--name-only\n-z\n--no-renames\n--no-ext-diff\n{oid}\n--\n--\n"
+             cat-file\n-e\n{oid}:./ping/generated/schema.json\n--\n\
+             cat-file\nblob\n{oid}:./ping/generated/schema.json\n--\n\
+             ls-tree\n-r\n-z\n{oid}\n--\n.\n--\n\
+             diff\n--name-only\n--relative\n-z\n--no-renames\n--no-ext-diff\n{oid}\n--\n.\n--\n"
         )
     );
 }
@@ -1414,10 +1459,10 @@ fn check_default_base_git_boundary_uses_the_exact_nonmutating_argv() {
             "rev-parse\n--git-dir\n--\n\
              merge-base\nHEAD\nmain\n--\n\
              ls-tree\n--name-only\n-z\n{oid}\n--\nping/generated/schema.json\n--\n\
-             cat-file\n-e\n{oid}:ping/generated/schema.json\n--\n\
-             cat-file\nblob\n{oid}:ping/generated/schema.json\n--\n\
-             ls-tree\n-r\n-z\n--full-tree\n{oid}\n--\n\
-             diff\n--name-only\n-z\n--no-renames\n--no-ext-diff\n{oid}\n--\n--\n"
+             cat-file\n-e\n{oid}:./ping/generated/schema.json\n--\n\
+             cat-file\nblob\n{oid}:./ping/generated/schema.json\n--\n\
+             ls-tree\n-r\n-z\n{oid}\n--\n.\n--\n\
+             diff\n--name-only\n--relative\n-z\n--no-renames\n--no-ext-diff\n{oid}\n--\n.\n--\n"
         )
     );
 }
@@ -1598,7 +1643,7 @@ mod ingest {
         assert_eq!(
             fs::read_to_string(&f.git_log).unwrap(),
             format!(
-                "ls-tree\n-r\n-z\n--full-tree\n{OID40}\n--\ncat-file\nblob\n{m}\n--\ncat-file\nblob\n{l}\n--\ndiff\n--name-only\n-z\n--no-renames\n--no-ext-diff\n{OID40}\n--\n--\n"
+                "ls-tree\n-r\n-z\n{OID40}\n--\n.\n--\ncat-file\nblob\n{m}\n--\ncat-file\nblob\n{l}\n--\ndiff\n--name-only\n--relative\n-z\n--no-renames\n--no-ext-diff\n{OID40}\n--\n.\n--\n"
             )
         );
 
