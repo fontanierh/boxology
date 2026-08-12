@@ -88,8 +88,7 @@ for one job, emits state-only diagnostics, removes failed registrations, and del
 directory. A slot has a distinct lock, runtime root, runner root, and cache root. Cleanup ambiguity
 fails closed and backs off; never weaken path/identity checks to make cleanup succeed.
 
-Dispatch
-[`macos-self-hosted-runner-smoke.yml`](../../.github/workflows/macos-self-hosted-runner-smoke.yml)
+Historically, dispatch `macos-self-hosted-runner-smoke.yml`
 after installation or a host/runner change. It verifies native `macOS`/`ARM64`,
 `aarch64-apple-darwin`, host evidence, and the native determinism fixture.
 
@@ -151,7 +150,7 @@ Root dependency/toolchain, opaque fixture/golden, and process-reaper work retain
 conditional scopes. Required PR CI does not invoke `boxology check`; it does run the hygiene and
 conditional scoped tests described above.
 
-[`deep-validation.yml`](../../.github/workflows/deep-validation.yml) is manual, non-required, and
+The retired `deep-validation.yml` workflow was manual, non-required, and
 native-Mac-only. Its sole validation command is:
 
 ```sh

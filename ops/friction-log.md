@@ -75,7 +75,7 @@ Each entry is, in order: a `## YYYY-MM-DD — #issue` heading, one blank line, o
 
 - Classification: `mechanical`
 - Observation: S5 makes fmt, Clippy, and workspace tests part of `boxology check`; keeping the complete product command in required PR CI would duplicate those expanding full-workspace steps after directly changed-crate tests and recreate the merge bottleneck.
-- Evidence: [#327](https://github.com/fontanierh/boxology/issues/327) owns the real check-step execution; required CI retains hygiene, repository invariants, directly changed-crate tests, root build-graph checks, and scoped reaper coverage, while dispatch-only [`deep-validation.yml`](../.github/workflows/deep-validation.yml) retains both canonical xtask validation and the complete product check. [#530](https://github.com/fontanierh/boxology/pull/530) established the pre-expansion required lane at 3m10s.
+- Evidence: [#327](https://github.com/fontanierh/boxology/issues/327) owns the real check-step execution; required CI retained hygiene, repository invariants, directly changed-crate tests, root build-graph checks, and scoped reaper coverage, while the then-dispatch-only `deep-validation.yml` retained both canonical xtask validation and the complete product check. [#530](https://github.com/fontanierh/boxology/pull/530) established the pre-expansion required lane at 3m10s.
 
 ## 2026-08-04 — #525
 
