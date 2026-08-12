@@ -1,0 +1,354 @@
+{
+  "box_id": "session-store",
+  "capabilities": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SessionError",
+      "id": "session-store.load",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "LoadRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "load",
+      "output": {
+        "type": "LoadOutcome"
+      },
+      "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "SessionError",
+      "id": "session-store.append",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "AppendRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "append",
+      "output": {
+        "type": "AppendOutcome"
+      },
+      "shape": "unary"
+    }
+  ],
+  "provenance": {
+    "generator": "boxology-generator",
+    "generator_version": "0.0.0",
+    "semantic_digest": "sha256:8e067324d9e346941f8a3609a613953c5496d36fe5dc9307c06c7a7d958f62cd"
+  },
+  "revision": "sha256:c6a04473c7659d7e3a5ddda16cd7bcd3cc45088e23e857fc3ab639f377db211b",
+  "schema_format": 1,
+  "types": [
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "session_id",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "LoadRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "SessionEventKind",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "User"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Assistant"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "ToolCall"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "ToolResult"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "SessionEventKind"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "payload_json",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "NewSessionEvent"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "session_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "expected_sequence",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event",
+          "type": "NewSessionEvent"
+        }
+      ],
+      "kind": "struct",
+      "name": "AppendRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "sequence",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "kind",
+          "type": "SessionEventKind"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "payload_json",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "SessionEvent"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "events",
+          "type": "Vec<SessionEvent>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "next_sequence",
+          "type": "u64"
+        }
+      ],
+      "kind": "struct",
+      "name": "LoadResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "sequence",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "appended",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "AppendResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "enum",
+      "name": "SessionFailureClass",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Input"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Boundary"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Conflict"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Resource"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Corrupt"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Local"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Cancelled"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Deadline"
+        }
+      ]
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "class",
+          "type": "SessionFailureClass"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "code",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "message",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "retryable",
+          "type": "bool"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "side_effect_possible",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "SessionFailure"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "result",
+          "type": "Option<LoadResult>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "failure",
+          "type": "Option<SessionFailure>"
+        }
+      ],
+      "kind": "struct",
+      "name": "LoadOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "result",
+          "type": "Option<AppendResult>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "failure",
+          "type": "Option<SessionFailure>"
+        }
+      ],
+      "kind": "struct",
+      "name": "AppendOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "kind": "error",
+      "name": "SessionError",
+      "variants": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "Internal",
+          "payload": "unit"
+        }
+      ]
+    }
+  ]
+}

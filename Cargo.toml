@@ -27,6 +27,8 @@ members = [
     "crates/boxology-model-completion/generated/contract",
     "crates/boxology-tool-runner/implementation",
     "crates/boxology-tool-runner/generated/contract",
+    "crates/boxology-session-store/implementation",
+    "crates/boxology-session-store/generated/contract",
     "crates/boxology-workspace",
     "crates/boxology-cli",
     "crates/boxology-cli-core",
