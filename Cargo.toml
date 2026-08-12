@@ -31,6 +31,7 @@ members = [
     "crates/boxology-session-store/generated/contract",
     "crates/boxology-agent-loop/implementation",
     "crates/boxology-agent-loop/generated/contract",
+    "crates/boxology-agent-harness",
     "crates/boxology-workspace",
     "crates/boxology-cli",
     "crates/boxology-cli-core",
