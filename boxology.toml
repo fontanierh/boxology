@@ -11,6 +11,8 @@ owned = [
     ".gitignore",
     "AGENTS.md",
     "Cargo.toml",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
     "README.md",
     "boxology-details/**",
     "boxology-whitepaper.md",

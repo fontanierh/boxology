@@ -23,6 +23,7 @@ mod fixture_projects;
 mod generated_project_subject;
 mod generator_model_subject;
 mod links;
+mod oss_metadata;
 mod records;
 #[cfg(test)]
 mod scratch_test;
@@ -80,8 +81,8 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         default_source: "tests/purity_lock.rs",
         tests: GENERATOR_SOURCE_INVENTORY_TESTS,
         manifest_digest: None,
-        source_digest: "e164488085071ca4f4d66213d514a8e907f1b678ea1c30061dc8b5c7d7c21c9a",
-        body_digest: "566a20373d93bb4c6451bf3d77bf16ffa31e58cffbbb399c0c70f698600dfa3b",
+        source_digest: "c72c47a7e394c17ca474894d361ba46f9731943051bc04209d8c67412ff14ee2",
+        body_digest: "22a1037281a1d50464192ae5691ebc4a7244e0342e1257e53faad9a5d8d45c65",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",
@@ -162,7 +163,7 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     source: "crates/boxology-cli/tests/cli.rs",
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
-    manifest_digest: Some("7c03fc4d980115e39b3b7158917051dd5136dcdd2d3cf49ca80429f89d0bedfe"),
+    manifest_digest: Some("f4c3ac3d7a75bd6b2c3882a909461023b82bc8bf34306dbc5a404e706a33ceac"),
     source_digest: "50b8641327b54a40e40973d0394c0d6998797705d609ce70cc1f80ef2bfdf8fa",
     body_digest: "22b894e80b8da524466a16723349316863ff83f42675ead294cf298ba44b2ba7",
 };
@@ -173,9 +174,9 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     source: "crates/boxology-cli/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
-    manifest_digest: Some("7c03fc4d980115e39b3b7158917051dd5136dcdd2d3cf49ca80429f89d0bedfe"),
-    source_digest: "0f573d1d1757235b3194e1a678ef282e129ce81f19c8f43d068953e30879f188",
-    body_digest: "71904e9ec2a6e84d68e704c62682b54343597d2a72148d5af2d3c2c91001cace",
+    manifest_digest: Some("f4c3ac3d7a75bd6b2c3882a909461023b82bc8bf34306dbc5a404e706a33ceac"),
+    source_digest: "ce9b4ca7b0be9f567ba48985c3ea750a4060994310bac0430d4a20b464a682fa",
+    body_digest: "635fea2564bf43829c4536ee76d33b2e2c7ec985af258703dbed59ec1022e4b8",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),
@@ -209,7 +210,7 @@ const GENERATOR_SEALED_IMPORT_E2E: &str =
 const GENERATOR_PR_EXCLUDED_LIVE_TEST_SPEC: external_test::LiveTestSpec =
     external_test::LiveTestSpec {
         manifest: "crates/boxology-generator/Cargo.toml",
-        manifest_digest: "2a5d0e715e019c59f919d6b547a2e6c4830e75369d1a75d6ba1d654a718634be",
+        manifest_digest: "6c4d9d6e383e3693a595f120d3404408e2ef43a6eed76a2d57905b0a40efb260",
         source: "crates/boxology-generator/src/lib.rs",
         tests: &[GENERATOR_MULTI_CAPABILITY_E2E, GENERATOR_SEALED_IMPORT_E2E],
         body_digest: "43d1ae661136f78917180c6483811fc13f315569d67a7e4af650c279b3ddbe45",
@@ -261,6 +262,7 @@ const PR_CHECKS: &[&str] = &[
     "whitespace",
     "links",
     "records",
+    "oss-metadata",
     "deny",
     "determinism",
     "budget",
@@ -284,6 +286,7 @@ const DEEP_CHECKS: &[&str] = &[
     "whitespace",
     "links",
     "records",
+    "oss-metadata",
     "deny",
     "determinism",
 ];
@@ -377,6 +380,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
             records::run(&root(), Some(base))
         }
         [command] if command == "deny" => deny::run(&root()),
+        [command] if command == "oss-metadata" => oss_metadata::run(audit_root),
         [command, flag, repo] if command == "advisories" && flag == "--repo" => {
             advisories::run(&root(), repo, None)
         }
@@ -397,7 +401,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-hygiene --base <revision>\n       cargo xtask ci-fixtures\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-hygiene --base <revision>\n       cargo xtask ci-fixtures\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask oss-metadata\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -530,6 +534,10 @@ fn run_ci(base: Option<&str>) -> u8 {
         (
             "records",
             timed("records", || records::run(&root(), base) == 0),
+        ),
+        (
+            "oss-metadata",
+            timed("oss-metadata", || oss_metadata::run(&root()) == 0),
         ),
         ("deny", timed("deny", || deny::run(&root()) == 0)),
         (

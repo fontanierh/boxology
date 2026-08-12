@@ -30,7 +30,18 @@ const CRATES: &[&str] = &[
     "crates/boxology-generator-model",
 ];
 const ROOT_ENTRIES: &[&str] = &["Cargo.toml", "src", "tests"];
-const PACKAGE_KEYS: &[&str] = &["edition", "name", "publish", "version"];
+const PACKAGE_KEYS: &[&str] = &[
+    "description",
+    "edition",
+    "homepage",
+    "license",
+    "name",
+    "publish",
+    "readme",
+    "repository",
+    "rust-version",
+    "version",
+];
 const AUTO_FLAGS: &[&str] = &[
     "autolib",
     "autobins",
@@ -388,8 +399,14 @@ fn assert_manifest_closed(
     if package.get("name").and_then(Item::as_str) != Some(package_name) {
         return Err(format!("package_name: expected {package_name}"));
     }
-    if package.get("version").and_then(Item::as_str) != Some("0.0.0") {
-        return Err("package_version: package.version must be exactly \"0.0.0\"".into());
+    if package
+        .get("version")
+        .and_then(Item::as_table_like)
+        .and_then(|v| v.get("workspace"))
+        .and_then(Item::as_bool)
+        != Some(true)
+    {
+        return Err("package_version: package.version must inherit workspace metadata".into());
     }
 
     assert_deps("dependencies", doc.get("dependencies"), deps)?;
@@ -488,7 +505,7 @@ fn generator_manifests_are_closed_and_pin_exact_dependencies() {
 
 fn model_pkg(extra: &str) -> String {
     format!(
-        "[package]\nname=\"boxology-generator-model\"\nversion=\"0.0.0\"\nedition=\"2024\"\npublish=false\n{extra}"
+        "[package]\nname=\"boxology-generator-model\"\nversion.workspace=true\nedition.workspace=true\nrust-version.workspace=true\nlicense.workspace=true\nrepository.workspace=true\nhomepage.workspace=true\nreadme.workspace=true\ndescription=\"Pure generation planning\"\npublish=false\n{extra}"
     )
 }
 
@@ -502,10 +519,7 @@ fn closure_rules_reject_live_hostile_corpus() {
             model_pkg(&format!("build=\"build.rs\"\n{deps}")),
         ),
         ("package_links", model_pkg(&format!("links=\"n\"\n{deps}"))),
-        (
-            "package_keys",
-            model_pkg(&format!("readme=\"r.md\"\n{deps}")),
-        ),
+        ("package_keys", model_pkg(&format!("authors=[]\n{deps}"))),
         (
             "custom_target",
             model_pkg(&format!("[[example]]\nname=\"x\"\npath=\"e.rs\"\n{deps}")),
@@ -546,7 +560,7 @@ fn closure_rules_reject_live_hostile_corpus() {
         ),
         (
             "package_version",
-            "[package]\nname=\"boxology-generator-model\"\nversion=\"1.2.3\"\nedition=\"2024\"\npublish=false\n[dependencies]\nserde_json=\"=1.0.150\"\n".into(),
+            model_pkg(deps).replace("version.workspace=true", "version=\"1.2.3\""),
         ),
     ];
     for (rule, manifest) in &mans {

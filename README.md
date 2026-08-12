@@ -1,40 +1,14 @@
 # Boxology
 
-Boxology is a platform for building software as independent boxes that humans define and agents implement. Its portable onboarding content can be consumed by compatible coding-agent harnesses; that portability does not certify every host. An autonomous, Boxology-based software factory is the project's committed flagship application — built on the platform, not inside it.
+Boxology is an early-stage, source-only framework for building software as independent boxes that humans define and agents implement. Humans own box boundaries, typed interfaces, data models, and allowed connections; implementations can evolve behind compatible contracts.
 
-Humans define box boundaries, typed interfaces, data models, and allowed connections. Agents implement and evolve the code hidden inside each box. A box can be replaced without requiring its consumers to understand its implementation as long as its contract remains compatible.
+V0 was completed on 2026-08-09. The [completion record](records/2026-08-09-v0-completion-evidence.md) preserves the evidence and accepted boundary. Applications built with Boxology are separate products and are not included in this repository.
 
-Start with the concise [white paper](boxology-whitepaper.md), then use its linked sections to open the detailed documents.
-
-The [design interview](boxology-details/00-design-interview.md) records the complete Q&A and decisions that produced the current documents.
-
-The [product contract](boxology-details/07-product-contract.md) separates the long-term direction from the first end-to-end foundation milestone.
-
-## Current status
-
-**V0 completed on 2026-08-09.** The
-[completion record](records/2026-08-09-v0-completion-evidence.md) preserves the exact-main
-native-macOS evidence, accepted boundary, and post-V0 residuals. PR
-[#571](https://github.com/fontanierh/boxology/pull/571) subsequently completed
-[#342](https://github.com/fontanierh/boxology/issues/342): `cargo xtask ci` now owns one full
-`boxology check`, with the required PR lane intentionally kept lean.
-
-Telegram product self-hosting is complete through
-[#626](https://github.com/fontanierh/boxology/pull/626). The minimum agent harness under
-[#576](https://github.com/fontanierh/boxology/issues/576) is also complete, including live
-Grok write dogfood. Typed `check` under
-[#575](https://github.com/fontanierh/boxology/issues/575) is the current product critical path.
-
-Current product work follows the pragmatic
-[post-V0 self-hosting roadmap](boxology-details/12-post-v0-self-hosting-roadmap.md), tracked by
-[#572](https://github.com/fontanierh/boxology/issues/572). The original factory dogfood
-criterion in [#74](https://github.com/fontanierh/boxology/issues/74) is met by the completed
-application harness; remaining installed tool entrypoints are explicitly tracked by #575.
+The workspace packages are currently unpublished development packages: every package is version `0.0.0` with `publish = false`. Install only from a source checkout. Building this checkout requires Rust 1.97.1.
 
 ## Source-checkout quick start
 
-V0 is not published. From a Boxology source checkout, install the initializer and checker, then
-initialize an existing empty target directory (a lone `.git` is allowed):
+Install the initializer and checker from a Boxology source checkout, then initialize an existing empty target directory (a lone `.git` is allowed):
 
 ```sh
 cargo install --path <boxology-source>/crates/boxology-init
@@ -45,10 +19,11 @@ cargo build --workspace
 boxology check
 ```
 
-The generated README owns the invocation contract. Its current end-to-end command is
-`cargo test -p ping-app assembled_ping_answers_in_process_and_over_real_http`.
+The generated project README owns that project's invocation contract.
 
-## Detailed documents
+## Documentation
+
+Start with the concise [white paper](boxology-whitepaper.md), then use its linked sections to open the detailed documents. The [design interview](boxology-details/00-design-interview.md) records the Q&A and decisions behind them, and the [product contract](boxology-details/07-product-contract.md) separates long-term direction from the completed foundation milestone.
 
 - [Boxes](boxology-details/01-boxes.md)
 - [Packages, providers, and compositions](boxology-details/02-packages.md)
@@ -62,3 +37,7 @@ The generated README owns the invocation contract. Its current end-to-end comman
 - [Strategy review and self-hosting ladder](boxology-details/10-strategy-review.md)
 - [V0 streams](boxology-details/11-v0-streams.md)
 - [Post-V0 self-hosting roadmap](boxology-details/12-post-v0-self-hosting-roadmap.md)
+
+## License
+
+Boxology is dual-licensed under [MIT](LICENSE-MIT) or [Apache License 2.0](LICENSE-APACHE), at your option.
