@@ -20,6 +20,7 @@ struct Fixture {
     name: &'static str,
     manifest: &'static [u8],
     implementation: &'static [u8],
+    contract: &'static [u8],
     import_schema: Option<(&'static str, &'static str, &'static [u8])>,
     goldens: [(&'static str, &'static [u8]); 4],
 }
@@ -42,6 +43,11 @@ macro_rules! fixture {
                 "../../fixtures/",
                 $name,
                 "/implementation/src/lib.rs"
+            )),
+            contract: include_bytes!(concat!(
+                "../../fixtures/",
+                $name,
+                "/implementation/src/contract.rs"
             )),
             import_schema: $import_schema,
             goldens: [
@@ -262,6 +268,10 @@ fn fixture_request(fixture: &Fixture) -> Result<GenerationRequest, String> {
         (
             "implementation/src/lib.rs".into(),
             fixture.implementation.to_vec(),
+        ),
+        (
+            "implementation/src/contract.rs".into(),
+            fixture.contract.to_vec(),
         ),
     ];
     let mut imports = Vec::new();

@@ -90,8 +90,8 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     default_source: "tests/born_valid.rs",
     tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
     manifest_digest: None,
-    source_digest: "841e95f9178656cb6ecc064fa251d3074df4116864d04737b2fedec5e67a6e40",
-    body_digest: "746501b22aaef3883c0c7dae74d94cd9f9f1ea3dad47b426d8cf48a280de533c",
+    source_digest: "39f9cc5942c31a9f65dbce68579bfd45cf6784a05e7332dbe5253cebfabb62a1",
+    body_digest: "3dc223a36c9fe30196323239f500762e909def84e4e70ace1bcdd25f37d54e78",
 };
 const CLI_END_TO_END_TESTS: &[&str] = &[
     "check_base_absent_schema_is_a_valid_none_base",
@@ -161,7 +161,7 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     source: "crates/boxology-cli/tests/cli.rs",
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
-    manifest_digest: Some("866eca5522c2de93f72d05f16f96df0b4711c8e9bc85b02694dcb3eccba86d33"),
+    manifest_digest: Some("a5f38361736e346461ff181ca6d90f49f44d976424081c46d19b8c8cffd13731"),
     source_digest: "50b8641327b54a40e40973d0394c0d6998797705d609ce70cc1f80ef2bfdf8fa",
     body_digest: "22b894e80b8da524466a16723349316863ff83f42675ead294cf298ba44b2ba7",
 };
@@ -172,9 +172,9 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     source: "crates/boxology-cli/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
-    manifest_digest: Some("866eca5522c2de93f72d05f16f96df0b4711c8e9bc85b02694dcb3eccba86d33"),
-    source_digest: "8131697f12b88008afe78632e45ff0343b00f6aec702d3a1523a105830ad4ecb",
-    body_digest: "2ff2adde881dea8b3ebc69b823c2d71be991de82b2af81c46505585cd02729d8",
+    manifest_digest: Some("a5f38361736e346461ff181ca6d90f49f44d976424081c46d19b8c8cffd13731"),
+    source_digest: "3d1952b5b995a3d3eb4fa01ce9accc454666cf379efbb948efc734313987a80d",
+    body_digest: "68c2fa5d26fd67c2e95a0b478b4b25f9c6663298af94f97777885a3d1cc39fa1",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),
