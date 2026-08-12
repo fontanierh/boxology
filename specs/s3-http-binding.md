@@ -1,6 +1,6 @@
 # S3 Spec — HTTP Binding
 
-[Stream definition](../boxology-details/11-v0-streams.md#s3--http-binding) · Status: **delivered in V0** · [Completion evidence](../records/2026-08-09-v0-completion-evidence.md)
+[Stream definition](../boxology-details/11-v0-streams.md#s3--http-binding) · Status: **delivered in V0**
 
 S3 implements the v1 HTTP transport against S1's assembly API. The wire contract — routing, JSON mapping, envelopes, status table, headers — is normative in the [Foundation HTTP binding section of Runtime](../boxology-details/03-runtime.md); this spec does not restate it. It records implementation decisions, resolves the details the normative text delegates, and defines the conformance suite that makes every choice observable.
 

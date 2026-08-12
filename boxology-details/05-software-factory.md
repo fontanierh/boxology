@@ -2,14 +2,16 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
-> **Design status (2026-08-09):** V0 is complete; see the
-> [shipped evidence](../records/2026-08-09-v0-completion-evidence.md). This document preserves the
-> factory application's design direction, not delivered harness status. The minimum executable
-> harness path is tracked by the [post-V0 roadmap](12-post-v0-self-hosting-roadmap.md).
+> **Design status (2026-08-09):** V0 is complete. This document describes a possible factory
+> application built with Boxology; it does not describe framework features shipped by this
+> repository.
 
-This document expands the multi-agent coordination, task, merge, and continuous-analysis system discussed during the design interview.
+This document describes a possible multi-agent coordination, task, merge, and continuous-analysis
+system.
 
-**Scope note:** the factory described here is not part of the Boxology platform. It is the design direction for the Boxology-based factory *application* — the platform's committed flagship consumer. Boxology defines what a safe change is; the factory decides who makes changes and when they merge. The separation decision is recorded in the [design interview](00-design-interview.md#follow-up-the-platform-and-the-factory-are-separate-products).
+**Scope note:** the factory described here is not part of the Boxology framework. It is an example
+of a separate application that could be built with Boxology. Boxology defines what a safe change
+is; a factory decides who makes changes and when they merge.
 
 ## Purpose
 
@@ -17,7 +19,9 @@ The mature software factory is intended to coordinate development and maintenanc
 
 The package boundary gives the factory a universal unit of ownership, analysis, review, and merge accountability. Boxes are the most common target, but providers, compositions, and platform packages can also own work. Agents can work concurrently because every submitted change has one accountable package and cannot modify another package's non-derived files.
 
-The factory is a separate application built with the Boxology platform rather than a component of it. It is intended to become the first substantial application built with Boxology, following a progressive bootstrap in which early development does not depend on either system being complete.
+The factory is a possible separate application built with the Boxology framework rather than a
+component of it. A progressive bootstrap can validate each system without requiring either one to
+be complete first.
 
 An eventual shared factory substrate may supply mechanisms such as agent execution, isolated work, persistence, human interaction, and reporting. Its organization is policy. Leads, workers, reviewers, mergers, handoffs, and gates should be configurable rather than permanently hard-coded into the execution engine.
 
@@ -29,7 +33,10 @@ The governance hierarchy below is a mature direction. The v0 factory is delibera
 2. The skill explains Boxology's philosophy, box boundaries, contracts, compatibility rules, and way of working.
 3. The coding agent adopts the lead-agent role and works through whatever tools and human interface its harness provides.
 
-V0 has no Boxology-owned harness, gateway, sandbox, factory service, task or event ledger, GitHub Issues workflow, worker pool, area leads, reviewer, merger, dashboard, or required communication transport. The accepted portability claim is that the skill uses a portable content format. Boxology has no certification matrix establishing Codex, Claude Code, Pi, Hermes, or any other harness as an equally supported host; those names were design examples. Hermes with Slack is one possible operator setup, not part of Boxology.
+V0 has no Boxology-owned harness, gateway, sandbox, factory service, task or event ledger, issue
+workflow, worker pool, area leads, reviewer, merger, dashboard, or required communication
+transport. The accepted portability claim is only that the skill uses a portable content format;
+Boxology does not certify particular harnesses or operator setups.
 
 The skill does not promise session persistence, frozen execution, stop-and-resume, message catch-up, or recovery. Those properties belong to the chosen harness until a later Boxology-owned execution layer exists. V0 also does not prescribe a GitHub task or pull-request workflow; richer factory behavior is added iteratively after the box model itself is usable.
 
@@ -133,7 +140,8 @@ The worker performing rework receives the newly merged change and reasons about 
 
 Humans can push authoritative information into the selected harness through the lead. This is the mechanism for resolving ambiguous product questions, changing priorities, approving sensitive actions, or correcting the lead's understanding of the codebase.
 
-The lead can also initiate questions when analysis or implementation requires judgment that it should not invent. Boxology does not select the interface: it can be a local agent UI, remote control, Slack, WhatsApp, or anything else the harness or gateway supports.
+The lead can also initiate questions when analysis or implementation requires judgment that it
+should not invent. Boxology does not select the interface; that belongs to the harness or gateway.
 
 V0 contains no Boxology communication gateway, message-recovery protocol, or GitHub integration. The chosen harness and operator own access control, delivery, persistence, repository credentials, and external-effect behavior.
 
@@ -149,7 +157,8 @@ The foundation deliberately treats the lead as an agent operating with the autho
 
 The simple v0 skill focuses on Boxology principles rather than prescribing GitHub Issues, pull-request queues, or a human-merge protocol. A user may instruct the lead to follow any of those workflows through ordinary harness and repository configuration.
 
-Formal roles, enforced authority policy, structured approvals, revocation, and break-glass behavior are deferred to [issue #66](https://github.com/fontanierh/boxology/issues/66). The later multi-agent coordination substrate remains tracked in [issue #57](https://github.com/fontanierh/boxology/issues/57).
+Formal roles, enforced authority policy, structured approvals, revocation, break-glass behavior,
+and multi-agent coordination belong to a future external factory design.
 
 ## Execution and resumability
 
@@ -187,7 +196,7 @@ Passing CI is necessary but may not be sufficient when the target package, impor
 
 The discussion did not settle:
 
-- Factory architecture beyond the minimum harness slice defined by the [post-V0 roadmap](12-post-v0-self-hosting-roadmap.md), including broader model, tool, gateway, and durability choices.
+- Concrete factory architecture, including model, tool, gateway, and durability choices.
 - Whether a lead-authored checkpoint should be standardized and where it should live.
 - The exact priority model across areas after human overrides.
 - How the merger computes affected work beyond the identified signals.
@@ -195,6 +204,8 @@ The discussion did not settle:
 - Whether area-lead reassessment is performed by the same model instance or a fresh worker.
 - The precise waiting, callback, retry, and cancellation protocols.
 - Whether Boxology should eventually ship or select any human communication gateway.
-- The formal role and approval architecture beyond the permissive foundation model, tracked in [issue #66](https://github.com/fontanierh/boxology/issues/66).
+- Formal role and approval architecture beyond the permissive foundation model.
 
-The durable task schema, worker claims, leases and fencing, multi-agent messaging, split-brain prevention, stronger audit or provenance records, and eventual coordination backend are explicitly deferred to [issue #57](https://github.com/fontanierh/boxology/issues/57). This is an accepted product-sequencing decision, not an incomplete foundation acceptance criterion: those mechanisms should be specified when the factory introduces the agent pool that needs them.
+Durable task schemas, worker claims, leases and fencing, multi-agent messaging, split-brain
+prevention, stronger audit or provenance, and a coordination backend belong to an external factory
+and should be specified when a concrete agent pool needs them.

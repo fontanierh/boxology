@@ -1,9 +1,7 @@
 # Boxology: Independent Software Boxes
 
-> **Status (2026-08-09):** V0 is complete; the shipped boundary is recorded in
-> [V0 completion evidence](records/2026-08-09-v0-completion-evidence.md). This paper states the
-> long-term product thesis, not a checklist of delivered features. Current execution follows the
-> [post-V0 self-hosting roadmap](boxology-details/12-post-v0-self-hosting-roadmap.md).
+> **Status (2026-08-09):** V0 is complete. This paper states the long-term product thesis, not a
+> checklist of delivered features; the accepted [stream specs](specs/) describe current behavior.
 
 AI makes producing code increasingly cheap. The new bottleneck is safely coordinating many simultaneous changes.
 
@@ -13,15 +11,18 @@ Box-and-arrow diagrams are often dismissed as architectural slideware because no
 
 This approach trades additional scaffolding and smaller pull requests for isolation, comprehensibility, and safe parallelism.
 
-The justification that ages best is oversight. Model capability grows, but human attention does not scale, and humans remain accountable for what merges. Box-scoped pull requests with machine-classified contract diffs are a trust interface: they keep every unit of agent work reviewable by the people responsible for it. The [strategy review](boxology-details/10-strategy-review.md) records this positioning, the thesis risks, and the self-hosting ladder.
-
-[Read the complete design interview and Q&A](boxology-details/00-design-interview.md).
+The justification that ages best is oversight. Model capability grows, but human attention does not scale, and humans remain accountable for what merges. Box-scoped pull requests with machine-classified contract diffs are a trust interface: they keep every unit of agent work reviewable by the people responsible for it.
 
 ## [Product](boxology-details/07-product-contract.md)
 
-Boxology is the platform: the box model, runtime, contract generator, validation tooling, installer, and a portable-format skill. The skill's guidance uses a portable content format; Boxology does not certify coding-agent hosts. The autonomous software factory is not part of Boxology; it is the project's committed flagship application, built with Boxology, and the vehicle for the safe-parallelism thesis. The boundary is crisp: Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge. The platform constrains the blast radius of changes; a factory makes the additional coordination and scaffolding economically practical.
+Boxology is the framework: the box model, runtime, contract generator, validation tooling,
+initializer, and portable-format skill. The skill's guidance uses a portable content format;
+Boxology does not certify coding-agent hosts. A software factory is one possible external consumer,
+not part of this repository. The boundary is crisp: Boxology defines what a safe change is; a
+factory decides who makes changes and when they merge.
 
-Development bootstraps progressively. The Boxology foundation is built conventionally, the factory becomes the first substantial application built with it, and the project increasingly uses its own factory as the system matures.
+Development can bootstrap progressively: establish the framework conventionally, then validate it
+through independent applications without making those applications part of Boxology.
 
 The first end-to-end foundation milestone targets an individual developer or very small Rust team using a greenfield repository created by the platform. It reads one small, declaration-only Rust contract macro, generates its contract crate, and lets normal Rust compilation prove that an ordinary implementation matches. The result is callable both as Rust code and through HTTP. A small, portable skill explains the Boxology principles to the developer's existing coding agent and names it the lead agent. Boxology does not yet supply that agent's harness, gateway, sandbox, persistence, or GitHub workflow. This milestone tests the box model and portable guidance content, not multi-agent parallelism.
 
@@ -97,13 +98,17 @@ The generator always classifies the change. The configured harness decides wheth
 
 Client-binding boxes generate TypeScript, Swift, Kotlin, or other SDKs while keeping those consumers visible to the factory.
 
-## [Software Factory](boxology-details/05-software-factory.md) — the flagship application
+## [Software Factory](boxology-details/05-software-factory.md) — an external consumer concept
 
 A top-level lead coordinates the harness and interfaces with humans. Area leads maintain plans and publish prioritized tasks. Worker agents execute tasks independently.
 
 Those roles describe the intended mature organization, not a hard-coded minimum. V0 is only a portable-format Boxology skill: the coding agent using it is the human-facing lead. The skill explains the philosophy, boundaries, contracts, compatibility principles, and way of working. It does not yet prescribe GitHub Issues, workers, reviews, merging, or another coordination workflow.
 
-A coding-agent host that can consume the checked-in guidance may supply that lead. This is content-format portability, not a host certification matrix. The host's communication surfaces, permissions, persistence, and recovery behavior remain its own. Boxology supplies no v0 harness, Slack integration, sandbox, factory image, liveness monitor, message catch-up, or durability guarantee. Those capabilities can be introduced progressively when Boxology owns the execution substrate that can provide them.
+A coding-agent host that can consume the checked-in guidance may supply that lead. This is
+content-format portability, not a host certification matrix. The host's communication surfaces,
+permissions, persistence, and recovery behavior remain its own. Boxology supplies no v0 harness,
+communication integration, sandbox, factory image, liveness monitor, message catch-up, or
+durability guarantee.
 
 The merger serializes integration. After every merge, it detects Git conflicts, CI failures, changed packages, changed imported contracts, shared dependency-resolution changes, and superseded plans. Affected tasks are reassessed against the new system state before resubmission.
 

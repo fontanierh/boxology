@@ -3,9 +3,7 @@
 [Back to the white paper](../boxology-whitepaper.md)
 
 > **Status (2026-08-09):** this contract preserves long-term product intent and the delivered
-> foundation boundary; future surfaces are not thereby shipped. V0's current evidence is the
-> [completion record](../records/2026-08-09-v0-completion-evidence.md), and current execution follows
-> the [post-V0 self-hosting roadmap](12-post-v0-self-hosting-roadmap.md).
+> foundation boundary; future surfaces are not thereby shipped.
 
 This document separates the long-term product direction from the first falsifiable foundation milestone. It resolves the product-boundary questions without pretending that the eventual market, agent implementation, or deployment ecosystem is already known.
 
@@ -19,13 +17,18 @@ Boxology, the product, is the platform:
 - The installer CLI.
 - The portable Agent Skills-format guidance that teaches a coding agent to act as a lead.
 
-The autonomous software factory is deliberately **not** part of the Boxology product. It is the project's committed flagship application: built with Boxology, dogfooding it, and serving as the vehicle for the safe-parallelism thesis. The factory is customer number one of the platform, so platform deficiencies surface as a customer's complaints rather than internal compromises. V0 exercised the checked-in guidance through its acceptance run; portability is a content-format claim, not certification of a coding-agent harness matrix.
+An autonomous software factory is deliberately **not** part of the Boxology framework. It is one
+possible separate application built with Boxology and a useful forcing function for the
+safe-parallelism thesis. V0 exercised the checked-in guidance through an acceptance run;
+portability is a content-format claim, not certification of a coding-agent harness matrix.
 
 The boundary is: **Boxology defines what a safe change is; a factory — any factory — decides who makes changes and when they merge.** The merge-discipline substrate — validation, contract-change classification, ownership and edge rules, protected-artifact identification — is platform, because any factory consumes it. Orchestration — roles, queues, gateways, coordination — is factory.
 
-Separating the products must not become a way for the factory to dissolve: the factory remains this project's committed flagship application, governed by the forcing commitment in [issue #74](https://github.com/fontanierh/boxology/issues/74). Only the product boundary moved. The platform reduces the amount of code and context an agent can affect at once; the factory makes the resulting increase in scaffolding, pull requests, and coordinated migrations practical.
-
-The supported product journey combines both systems, but they are not fused technically. The Boxology runtime is delivered as a Rust dependency. V0 factory behavior is guidance used by the developer's existing coding agent, and only promises to describe work in repositories initialized by Boxology; arbitrary-repository migration is out of scope.
+The framework reduces the amount of code and context an agent can affect at once; a factory can
+make the resulting increase in scaffolding, pull requests, and coordinated migrations practical.
+The systems are not fused technically. The Boxology runtime is delivered as a Rust dependency,
+and the guidance only promises to describe work in repositories initialized by Boxology;
+arbitrary-repository migration is out of scope.
 
 ## Progressive bootstrap
 
@@ -40,7 +43,9 @@ The system cannot depend on itself before it exists. Development therefore proce
 
 The goal is comprehensive dogfooding, not circular bootstrapping. A broken factory must remain repairable without needing that same factory to function.
 
-The transition from the single-lead bootstrap to a box-built factory is governed by a standing forcing commitment recorded in [issue #74](https://github.com/fontanierh/boxology/issues/74) and the [strategy review](10-strategy-review.md): it must arrive uncomfortably early rather than when it feels justified. Its first concrete rung is boxifying Boxology's own tools — the generator, `boxology check`, and the installer become boxes as soon as a working generator exists, so the box tax lands on the platform's own development before it lands on any user. Further, any bootstrap-period friction is classified in advance as mechanical (the factory's future job) or semantic (evidence against the thesis), so relaxations of the discipline are recorded as data instead of rationalized.
+A factory can be used as an early external consumer so that the box tax lands on framework
+development before it lands on users. Mechanical integration pain is a candidate for automation;
+semantic pressure against the box boundaries is evidence against the thesis.
 
 ## Primary v1 operator and operating envelope
 
@@ -62,7 +67,8 @@ A monorepo is not treated as a monolith. Boxes retain separate contracts and own
 
 The system distinguishes:
 
-- **Product source repository:** contains the source of the Boxology platform and factory. Through progressive dogfooding, this repository can itself become a managed project repository.
+- **Framework source repository:** contains only the Boxology framework, its tests, documentation,
+  and repository validation.
 - **Managed project repository:** is initialized by the platform and contains application boxes, compositions, tests, generated artifacts, and repository-local Boxology configuration. It does not receive a copied agent harness.
 - **Lead environment:** is wherever the developer's selected coding-agent harness runs. It may be local, remote, containerized, or managed by another service; it is not a Boxology deployment object in v0.
 
@@ -98,11 +104,15 @@ It does not include a Boxology agent harness, communication gateway, factory ima
 
 ## Harness and deployment neutrality
 
-V0 runs inside the coding-agent harness selected by the user. Named harnesses and operator setups are examples rather than Boxology components, certified hosts, or conformance targets. Boxology does not build, fork, vendor, publish, or require Hermes and does not select Slack or another communication transport.
+V0 runs inside the coding-agent harness selected by the user. Specific harnesses and operator
+setups are not Boxology components, certified hosts, or conformance targets. Boxology does not
+build, fork, vendor, publish, or require a particular harness or communication transport.
 
 The operator may run that harness directly, in a container, on a managed sandbox, or on another target. Docker and Kubernetes remain useful deployment options for chosen harnesses and future Boxology-owned services, but neither belongs to the v0 product contract.
 
-Boxology makes no v0 promise about harness liveness, session persistence, frozen state, stop-and-resume, crash consistency, message catch-up, or recovery. Those properties belong entirely to the selected harness and operator. Stronger factory-owned execution and durability remain later work in [issue #57](https://github.com/fontanierh/boxology/issues/57); possible deployment recipes can be reconsidered when Boxology owns something that needs deployment.
+Boxology makes no v0 promise about harness liveness, session persistence, frozen state,
+stop-and-resume, crash consistency, message catch-up, or recovery. Those properties belong
+entirely to the selected harness and operator.
 
 ## Generated Hello World project
 
@@ -137,7 +147,10 @@ A TypeScript application or another foreign-language component can therefore app
 
 The developer uses the selected coding agent normally. Once given the Boxology skill, that agent is the lead agent: it understands the project in terms of boxes, their human-owned contracts and data models, compatible evolution, and the rule that communication crosses declared interfaces.
 
-The skill focuses on those principles. It does not yet define GitHub Issues, task pickup, worker communication, review roles, a merger, Slack behavior, pull-request stopping, or autonomous-merging policy. The user and chosen harness remain free to supply their ordinary workflow.
+The skill focuses on those principles. It does not define an issue system, task pickup, worker
+communication, review roles, a merger, transport-specific behavior, pull-request stopping, or
+autonomous-merging policy. The user and chosen harness remain free to supply their ordinary
+workflow.
 
 The runtime acceptance task is to add a backward-compatible `greet(name)` capability to the generated Hello box. Calling it with `Ada` returns `Hello, Ada!` through both Rust and HTTP. The resulting repository state must change no foreign package source, include only permitted deterministic artifacts outside the Hello box, and preserve consistent behavior through both bindings. This validates a real box ownership and binding invariant, not multi-agent coordination or the broader safe-parallelism thesis.
 
@@ -192,7 +205,7 @@ The foundation milestone does not promise:
 - A first-party managed hosting service.
 - A Boxology-owned coding-agent harness, sandbox, or execution service.
 - A Boxology communication gateway or required human interface.
-- Hermes, Slack, or any other specific harness and transport.
+- Any specific harness or communication transport.
 - A custom factory dashboard or task UI.
 - A dedicated GitHub App, bot, or first-class GitHub integration.
 - GitHub Issues as a task system.
@@ -208,7 +221,8 @@ The foundation milestone does not promise:
 
 Most are sequencing decisions rather than rejections of the broader direction. Reduced guarantees inside foreign-language implementation code are a deliberate boundary.
 
-The factory-control-plane items above are accepted deferrals, not missing foundation specifications. They do not block implementation or acceptance of the skill-only milestone. Their next design gate is the post-MVP harness and agent-pool work in [issue #57](https://github.com/fontanierh/boxology/issues/57), when concrete coordination requirements exist.
+The factory-control-plane items above are outside this framework repository. They do not block
+implementation or acceptance of the skill-only milestone.
 
 Brownfield adoption should be reconsidered only after the greenfield milestones provide evidence worth generalizing. Exit remains reversible: a managed project is an ordinary Cargo workspace in the developer's Git repository, the runtime is a normal Rust dependency, and the factory is external software. Turning off the factory leaves the complete source and Git history under the developer's control; removing the runtime can proceed as an ordinary code migration rather than a data export or repository conversion.
 
@@ -217,13 +231,13 @@ Brownfield adoption should be reconsidered only after the greenfield milestones 
 The product boundary can be fixed while these implementation questions remain open:
 
 - Whether and when Boxology should own an agent harness, gateway, execution service, or durability layer.
-- Sandbox substrates and deployment recipes if Boxology later owns a deployable factory component, tracked in [issue #67](https://github.com/fontanierh/boxology/issues/67).
+- Sandbox substrates and deployment recipes for separate factory applications.
 - Whether an optional lead-authored checkpoint should be standardized and where it should live.
 - The portable skill's distribution and host-specific installation wrappers.
 - Authentication and authorization for any future Boxology-owned gateway or factory service.
 - Additional deployment recipes and a possible managed service.
 - Kubernetes generation and operational conventions.
 - The configuration language for future roles, handoffs, queues, and gates.
-- The post-MVP multi-agent coordination and stronger durability guarantees tracked in [issue #57](https://github.com/fontanierh/boxology/issues/57).
+- Multi-agent coordination and stronger durability guarantees for separate factory applications.
 
 They should be resolved through separate focused design work rather than expanding the foundation milestone.

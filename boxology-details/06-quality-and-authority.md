@@ -98,7 +98,9 @@ Boxology releases and dependencies use ordinary GitHub and package-registry trus
 
 Compromise response is human-operated: stop the selected harness or destroy its environment, revoke supplied credentials, inspect affected external systems, and rebuild from trusted software and repository state. The MVP makes no claim that it can contain a malicious build script or prevent code in the lead environment from exfiltrating an available credential, so it does not add acceptance tests that pretend otherwise.
 
-Mediated egress, just-in-time credentials, mechanical redaction, automated containment, and stronger release verification are explicitly deferred to [issue #65](https://github.com/fontanierh/boxology/issues/65). Multi-agent and per-role security remains part of the later coordination milestone in [issue #57](https://github.com/fontanierh/boxology/issues/57).
+Mediated egress, just-in-time credentials, mechanical redaction, automated containment, stronger
+release verification, and multi-agent role security are future concepts outside this framework's
+current threat boundary.
 
 ## Protecting quality policy
 
@@ -124,7 +126,11 @@ Even in a permissive configuration, a policy downgrade should be explicit and au
 
 ## Top-level authority
 
-The coding agent using the Boxology skill is the lead agent. It receives authoritative user guidance through whatever interface its selected harness or gateway provides. Boxology defines no Slack channel, user allowlist, role system, or human-identity protocol in v0; access control and transport security belong to the harness and its operator. Any instruction that harness presents as an authorized user message is authoritative.
+The coding agent using the Boxology skill is the lead agent. It receives authoritative user
+guidance through whatever interface its selected harness or gateway provides. Boxology defines no
+communication channel, user allowlist, role system, or human-identity protocol in v0; access
+control and transport security belong to the harness and its operator. Any instruction that
+harness presents as an authorized user message is authoritative.
 
 The lead uses every capability supplied to it and follows its system prompt, project instructions, and agent judgment. The skill can ask it to explain sensitive actions and seek human review, but v0 has no structured approval protocol or platform-enforced authority ceiling.
 
@@ -149,4 +155,4 @@ The discussion did not settle:
 - How AI reviewer independence and disagreement are handled.
 - How evidence and approvals are represented in merge records.
 - Whether changing tests and implementation in one pull request needs special treatment beyond protected quality files.
-- Formal roles, capabilities, and hard limits beyond the permissive skill-only foundation, tracked in [issue #66](https://github.com/fontanierh/boxology/issues/66).
+- Formal roles, capabilities, and hard limits beyond the permissive skill-only foundation.

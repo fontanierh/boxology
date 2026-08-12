@@ -64,7 +64,32 @@ const DEPENDENCIES: &[&str] = &[
     "serde",
 ];
 const DEV_DEPENDENCIES: &[&str] = &["check_contract", "classifier_contract", "syn"];
-const SKILLS: &[&str] = &["boxology", "record", "repository-delivery-loop"];
+const SKILLS: &[&str] = &["boxology"];
+const PRIVATE_ROOTS: &[&str] = &["ops", "records"];
+const ROOT_ENTRIES: &[&str] = &[
+    ".agents",
+    ".cargo",
+    ".claude",
+    ".editorconfig",
+    ".gitattributes",
+    ".github",
+    ".gitignore",
+    "AGENTS.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "README.md",
+    "boxology-details",
+    "boxology-whitepaper.md",
+    "boxology.toml",
+    "crates",
+    "deny.toml",
+    "goldens",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    "specs",
+];
 
 pub(crate) fn check(root: &Path) -> bool {
     check_result(root).map_or_else(
@@ -77,6 +102,12 @@ pub(crate) fn check(root: &Path) -> bool {
 }
 
 fn check_result(root: &Path) -> Result<(), String> {
+    reject_private_roots(root)?;
+    let roots = root_entries(root)?;
+    let expected_roots = ROOT_ENTRIES.iter().map(|name| (*name).to_owned()).collect();
+    if roots != expected_roots {
+        return Err("repository root inventory differs from the public framework set".into());
+    }
     let workspace = read(root.join("Cargo.toml"))?;
     let cli = read(root.join("crates/boxology-cli/Cargo.toml"))?;
     let composition = read(root.join("crates/boxology-cli/boxology.toml"))?;
@@ -89,6 +120,34 @@ fn check_result(root: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn reject_private_roots(root: &Path) -> Result<(), String> {
+    for name in PRIVATE_ROOTS {
+        if root.join(name).exists() {
+            return Err(format!(
+                "private repository surface must not contain {name}/"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn root_entries(root: &Path) -> Result<BTreeSet<String>, String> {
+    fs::read_dir(root)
+        .map_err(|error| format!("{}: {error}", root.display()))?
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_name() == ".git" || entry.file_name() == "target" => None,
+            other => Some(other),
+        })
+        .map(|entry| {
+            entry
+                .map_err(|error| error.to_string())?
+                .file_name()
+                .into_string()
+                .map_err(|_| "root entry is not UTF-8".into())
+        })
+        .collect()
 }
 
 fn audit_documents(
@@ -281,5 +340,18 @@ mod tests {
             "boxes = [\"check\", \"classifier\", \"telegram\"]",
         );
         assert!(audit_documents(WORKSPACE, CLI, &third_box, &skills()).is_err());
+
+        let mut private_skill = skills();
+        private_skill.insert("private-operator-skill".into());
+        assert!(audit_documents(WORKSPACE, CLI, COMPOSITION, &private_skill).is_err());
+    }
+
+    #[test]
+    fn private_repository_roots_are_rejected() {
+        let root =
+            std::env::temp_dir().join(format!("boxology-public-roots-{}", std::process::id()));
+        fs::create_dir_all(root.join("ops")).unwrap();
+        assert!(reject_private_roots(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -3,9 +3,7 @@
 [Stream definition](../boxology-details/11-v0-streams.md#s0--product-repo-bootstrap-and-ci) ·
 Status: **delivered; live repository baseline**
 
-S0 is the live normative baseline for this repository's workspace and validation substrate. V0
-completion is evidenced in the
-[2026-08-09 record](../records/2026-08-09-v0-completion-evidence.md); PR
+S0 is the live normative baseline for this repository's workspace and validation substrate. PR
 [#571](https://github.com/fontanierh/boxology/pull/571) completed the post-V0 #342 absorption.
 
 ## Purpose and boundary
@@ -33,12 +31,11 @@ only squash PR merges, but branch protection is unavailable and direct pushes ar
 ### D2 — Canonical command ownership
 
 - `cargo xtask ci-hygiene --base <revision>` is the cheap PR tier: repository audit, root
-  formatting and manifest key order, tracked whitespace, Markdown links, records/friction
-  integrity, and the 600-line budget.
+  formatting and manifest key order, tracked whitespace, Markdown links, and the 600-line budget.
 - `cargo xtask ci --base <revision>` is the canonical local acceptance command. It owns exactly
   one full `boxology check` and runs the separately named repository checks that the product
   baseline does not subsume: skill audit, opaque fixture projects, the generated-style rustfmt
-  negative, external-test integrity (including born-valid), whitespace, links, records, dependency
+  negative, external-test integrity (including born-valid), whitespace, links, dependency
   policy, determinism, and the review budget.
 - `cargo xtask ci --no-budget` is the canonical full local/deep command. It owns exactly one full
   `boxology check`, omits the base-relative review budget, and adds editor loading, ignored
@@ -105,18 +102,13 @@ concurrency, and the public-safe hosted execution boundary.
 
 ## Delivered acceptance evidence
 
-1. The workspace, toolchain, formatting, links, records, budget, dependency, and determinism
+1. The workspace, toolchain, formatting, links, budget, dependency, and determinism
    checks are implemented and exercised by xtask tests.
 2. Hosted CI has one Linux job that runs canonical deep validation and the PR review budget;
    workflow invariant tests pin its inventory, authority, and security boundary.
 3. Each canonical `ci` aggregate invokes one product check; the deleted commands and bootstrap
    registries are absent, with manifest-derived selection pinned by tests.
-4. Historical native-macOS V0 proof is preserved by the completion record; PR #571 and closed
-   [#342](https://github.com/fontanierh/boxology/issues/342) preserve the absorption evidence.
+4. PR #571 and closed [#342](https://github.com/fontanierh/boxology/issues/342) preserve the
+   absorption evidence.
 5. Cross-platform proof, semantic self-protection, and external release support remain explicit
-   residuals under #525, #17, and the post-V0 roadmap rather than current claims.
-
-Historical task planning and superseded CI topologies remain available through
-[#93](https://github.com/fontanierh/boxology/issues/93),
-[#272](https://github.com/fontanierh/boxology/issues/272), and the repository's append-only
-records and friction log. They are not part of this live operational baseline.
+   residuals under #525 and #17 rather than current claims.
