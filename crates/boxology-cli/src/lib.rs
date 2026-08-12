@@ -6,8 +6,6 @@
 #![forbid(unsafe_code)]
 
 pub use boxology_cli_core::*;
-mod telegram;
-pub use telegram::{TelegramComposition, run_telegram};
 
 use std::{
     future::Future,

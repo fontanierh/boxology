@@ -1,7 +1,0 @@
-interface:
-  display_name: "Telegram Coordinator Channel"
-  short_description: "Explicit private Telegram coordinator channel"
-  default_prompt: "Use $telegram-coordinator-channel to exchange safe, private Telegram messages with the explicitly authorized human."
-
-policy:
-  allow_implicit_invocation: false
