@@ -1,6 +1,6 @@
 # S4 Spec — Contract-Change Classification
 
-[Stream definition](../boxology-details/11-v0-streams.md#s4--contract-change-classification) · Status: **delivered in V0** · [Completion evidence](../records/2026-08-09-v0-completion-evidence.md)
+[Stream definition](../boxology-details/11-v0-streams.md#s4--contract-change-classification) · Status: **delivered in V0**
 
 S4 delivers a pure, deterministic classifier that consumes two S2 schema documents — a base revision and a submitted revision — and reports every semantic difference under a precise compatibility taxonomy. S5's `boxology check` and `boxology generate` pass the report through; the harness applies policy to it. Normative inputs: [Contract Evolution and Deprecation](../boxology-details/04-evolution.md), [Canonical Capability Contract](../boxology-details/09-capability-contract.md), [Quality and Authority](../boxology-details/06-quality-and-authority.md), [Rust Build Topology](../boxology-details/08-rust-build-topology.md), and [S2](s2-contract-generator.md) D4/D6.
 

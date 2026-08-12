@@ -1,52 +1,42 @@
-# S7 Spec — Skill, Acceptance, and Stage-2 Self-Hosting
+# S7 Spec — Skill and Repository Adoption
 
 [Stream definition](../boxology-details/11-v0-streams.md#s7--skill-acceptance-and-stage-2-self-hosting) ·
-Status: **delivered; V0 complete**
+Status: **delivered in V0**
 
-S7 delivered the portable onboarding skill, one clean behavioral acceptance run, this repository's
-stage-2 manifest adoption, and the friction log. The exact-main milestone boundary is preserved in
-the [V0 completion record](../records/2026-08-09-v0-completion-evidence.md).
+S7 delivered the portable onboarding skill, behavioral acceptance of its greenfield workflow, and
+this repository's root manifest adoption. This specification describes the retained framework
+surface; harness-specific operations and application code are outside this repository.
 
 ## Boundary
 
-S7 did not build an agent, harness certification matrix, new validation layer, factory, or generic
-development CLI binding. It consumed S1–S6 as delivered. Harness-specific wrappers, richer
-onboarding, stage-3 tool boxification, and pinned-prior-release generator self-validation remain
-post-V0 work.
+S7 does not build an agent, harness, factory, gateway, or generic development CLI binding. It
+consumes S1–S6 as delivered. Agent execution, persistence, communication, review orchestration,
+and application-specific dogfooding belong to external consumers.
 
 ## Delivered decisions
 
 ### D1 — Portable onboarding skill
 
 The product skill is `.agents/skills/boxology/SKILL.md` in shared Agent Skills format. It teaches
-the box model, boundaries, compatible contract evolution, five-step greenfield flow, and names the
+the box model, boundaries, compatible contract evolution, the greenfield flow, and names the
 hosting agent the lead. It uses source-checkout installation, the explicit initializer interface,
-the first Cargo build that creates `Cargo.lock`, and `boxology check`. Its trigger is limited to
-managed-project onboarding, so it does not govern development of Boxology itself.
+the first Cargo build that creates `Cargo.lock`, and `boxology check`.
 
-Portability is a content property: the skill has no host-specific instructions. Additional-harness
-runs are useful evidence, not a milestone gate.
+Its trigger is limited to managed-project onboarding, so it does not govern development of
+Boxology itself. Portability is a content property: the skill has no host-specific instructions.
 
-### D2 — The skill's acceptance contract is behavioral
+### D2 — Behavioral acceptance
 
-The skill is accepted behaviorally through the
-[foundation runbook](../ops/s7-foundation-acceptance-runbook.md), with the skill as the only
-Boxology guidance. The developer may provide scripted task asks and answer anticipated project,
-target, and harness choices. Any utterance that supplies a file, command, procedure, or diagnosis
-is an intervention; an intervened run is recorded as failed rather than repaired invisibly.
+The acceptance scenario starts from an empty target, initializes a project, completes its first
+build, and asks the lead agent to add a backward-compatible `greet(name)` capability. Both Rust and
+HTTP calls return `Hello, Ada!`; `boxology check` reports the addition and no foreign package source
+changes. This proves the skill's workflow without claiming host certification.
 
-### D3 — The acceptance run and its evidence protocol
+### D3 — Repository adoption
 
-One clean run gates the milestone. Its record identifies the commit and greenfield state, both
-`boxology check` runs, the real additive `greet(name)` classification, the permitted file-change
-boundary, and Rust/HTTP `Hello, Ada!` transcripts. Failed attempts remain evidence.
-
-### D4 — Stage-2 repository adoption
-
-Root `boxology.toml` manifests classify every tracked file exactly once. The irreducible runtime
-core and all other repository packages are platform-kind at this rung; fixture projects are opaque
-owned data and their nested manifests do not enter root discovery. Fixture-generated trees are
-declared by their own manifests rather than duplicated in the root. Root `Cargo.lock` is the
+Root `boxology.toml` manifests classify every tracked file exactly once. Framework packages are
+platform-kind; fixture projects are opaque owned data, and their nested manifests do not enter root
+discovery. Fixture-generated trees are declared by their own manifests. Root `Cargo.lock` is the
 root-derived artifact.
 
 The root manifests declare CI and xtask as protected control-plane paths. That declaration reports
@@ -54,52 +44,23 @@ ownership; it does not make candidate-writable policy immutable. Human review re
 control and [#17](https://github.com/fontanierh/boxology/issues/17) owns stronger semantic
 self-protection.
 
-Stage-2 product proof is the adopted manifests plus the complete exact-main native-Mac check cited
-by the completion record. Required PR CI currently omits `boxology check`; it provides lean
-hygiene and conditional changed-scope tests instead. Continuous Linux/cross-platform proof is not claimed
-and remains [#525](https://github.com/fontanierh/boxology/issues/525) scope.
+### D4 — Canonical validation
 
-### D5 — The absorption, immediately post-v0
-
-PR #571 completed [#342](https://github.com/fontanierh/boxology/issues/342). Every canonical
-`cargo xtask ci` aggregate now owns exactly one `boxology check`; xtask retains only distinctly
-named repository semantics the product baseline does not cover. The bootstrap derived-output and
-format-selection registries are deleted and their selection is manifest-derived. The required PR
-lane stays free of `boxology check` because full checks exceeded its time budget.
-
-### D6 — Friction remains durable evidence
-
-`ops/friction-log.md` records each discipline relaxation as `mechanical` automatable toil or
-`semantic` thesis damage. Existing entries are immutable except for permitted appended status
-annotations, enforced through the records machinery. Dated analyses live in `records/`; neither
-history is rewritten when the normative baseline changes.
-
-### D7 — S7-COMPLETE is the v0 gate
-
-The [clean acceptance record](../records/2026-08-03-foundation-acceptance-clean.md) shows both
-invocations returned `Hello, Ada!`, `ping.greet` classified additive, and no foreign package source
-changed. The earlier
-[classification failure](../records/2026-08-03-foundation-acceptance-failed.md) and
-[skill-unavailable failure](../records/2026-08-03-foundation-acceptance-skill-unavailable-failed.md)
-remain failed-run evidence. Stream audits and the residual ledger culminated in S7-COMPLETE and
-the V0 record; invalidating required evidence would invalidate that completion claim.
+Every canonical `cargo xtask ci` aggregate owns exactly one `boxology check`; xtask retains only
+distinct repository semantics the product baseline does not cover. Hosted CI runs the canonical
+deep command on Ubuntu. General cross-platform equivalence is not claimed and remains
+[#525](https://github.com/fontanierh/boxology/issues/525) scope.
 
 ## Delivered acceptance criteria
 
 1. The scoped portable skill exists and passes its content audit.
-2. One unintervened run satisfies the full behavioral protocol; prior failures are preserved.
-3. Root manifests classify the repository with fixture opacity and a green exact-main product
-   check in the milestone evidence.
-4. The categorized friction log is append-only and contributor guidance points to it.
-5. #342 absorption is complete without a duplicated or silently dropped platform check.
+2. The behavioral scenario proves initialization, compatible evolution, and Rust/HTTP behavior.
+3. Root manifests classify the repository with fixture opacity.
+4. Canonical validation contains one complete product check without duplicated platform work.
 
 ## Live residuals
 
-- Stage-3 Telegram/tool/factory dogfood is sequenced by
-  [#572](https://github.com/fontanierh/boxology/issues/572) and
-  [#74](https://github.com/fontanierh/boxology/issues/74).
-- Skill distribution, host wrappers, optional checkpoints, richer onboarding, and harness
-  certification remain outside V0.
+- Skill distribution, richer onboarding, and host certification remain outside V0.
 - Pinned-prior-release generator validation becomes mandatory at the first release boundary.
-- Detecting that a relaxation omitted a friction entry remains a human-review responsibility;
-  append-only integrity, not entry completeness, is mechanical.
+- Framework self-hosting can proceed as focused product work without importing private application
+  operations into this repository.

@@ -1,6 +1,6 @@
 # S1 Spec — Runtime Core and Composition Assembly
 
-[Stream definition](../boxology-details/11-v0-streams.md#s1--runtime-core-and-composition-assembly) · Status: **delivered in V0** · [Completion evidence](../records/2026-08-09-v0-completion-evidence.md)
+[Stream definition](../boxology-details/11-v0-streams.md#s1--runtime-core-and-composition-assembly) · Status: **delivered in V0**
 
 S1 delivers the kernel crates: the contract-type model, descriptor ABI, call context, error model, handle machinery, composition assembly/lifecycle API, and in-process binding. Normative input: [Canonical Capability Contract](../boxology-details/09-capability-contract.md); this spec records the delivered baseline and does not reopen that contract.
 

@@ -24,7 +24,6 @@ mod generated_project_subject;
 mod generator_model_subject;
 mod links;
 mod oss_metadata;
-mod records;
 #[cfg(test)]
 mod scratch_test;
 mod skill_audit;
@@ -243,7 +242,6 @@ const HYGIENE_CHECKS: &[&str] = &[
     "authority-digests",
     "whitespace",
     "links",
-    "records",
     "budget",
 ];
 const PR_CHECKS: &[&str] = &[
@@ -261,7 +259,6 @@ const PR_CHECKS: &[&str] = &[
     "generator-pr-excluded-unit-integrity",
     "whitespace",
     "links",
-    "records",
     "oss-metadata",
     "deny",
     "determinism",
@@ -285,7 +282,6 @@ const DEEP_CHECKS: &[&str] = &[
     "generator-pr-excluded-unit-integrity",
     "whitespace",
     "links",
-    "records",
     "oss-metadata",
     "deny",
     "determinism",
@@ -370,15 +366,6 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
                 2
             }),
         [command] if command == "links" => run_links(),
-        [command] if command == "records" => records::run(&root(), None),
-        [command, flag, base]
-            if command == "records"
-                && flag == "--base"
-                && !base.is_empty()
-                && !base.starts_with('-') =>
-        {
-            records::run(&root(), Some(base))
-        }
         [command] if command == "deny" => deny::run(&root()),
         [command] if command == "oss-metadata" => oss_metadata::run(audit_root),
         [command, flag, repo] if command == "advisories" && flag == "--repo" => {
@@ -401,7 +388,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-hygiene --base <revision>\n       cargo xtask ci-fixtures\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask records [--base <revision>]\n       cargo xtask oss-metadata\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-hygiene --base <revision>\n       cargo xtask ci-fixtures\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask oss-metadata\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -532,10 +519,6 @@ fn run_ci(base: Option<&str>) -> u8 {
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
         ("links", timed("links", || links::check(&root()))),
         (
-            "records",
-            timed("records", || records::run(&root(), base) == 0),
-        ),
-        (
             "oss-metadata",
             timed("oss-metadata", || oss_metadata::run(&root()) == 0),
         ),
@@ -573,10 +556,6 @@ fn run_ci_hygiene(base: &str) -> u8 {
         ),
         ("whitespace", timed("whitespace", check_tracked_whitespace)),
         ("links", timed("links", || links::check(&root()))),
-        (
-            "records",
-            timed("records", || records::run(&root(), Some(base)) == 0),
-        ),
     ];
     for &(name, passed) in &checks {
         println!("{name}: {}", if passed { "PASS" } else { "FAIL" });

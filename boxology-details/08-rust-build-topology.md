@@ -253,20 +253,18 @@ The foundation `boxology check` baseline is:
 An intentional contract change is authored in Rust and followed by `boxology generate`; its generated diff and semantic classification are reviewed together. An accidental stale or hand-edited artifact fails `boxology check` with the regeneration command needed to repair it. The checker never hides an incompatible change merely because generated files match.
 
 The initializer emits golden-pinned repository-owned GitHub Actions workflow bytes for
-`ubuntu-latest` and `boxology check --base <pull-request-base>`. V0 proved those emitted bytes and
-anchors, not execution of the source-provisioned Linux workflow. Its first execution is deferred
-to [#525](https://github.com/fontanierh/boxology/issues/525) at the first pinned external release.
+`ubuntu-latest` and `boxology check --base <pull-request-base>`. This framework repository also
+validates its own canonical command on hosted Ubuntu CI.
 Developers and the lead can run `boxology check` through their ordinary workflow. The platform
 does not create branch-protection or required-check settings; the operator decides whether to make
 a visible check a merge requirement. There is no hidden factory-only validation layer.
 
 Package quality commands are trusted repository code and run with the sandbox's full ambient access, as defined by the [foundation threat boundary](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
 
-The current evidenced execution platform is native macOS ARM64. A chosen lead harness may run
-anywhere it supports, but Boxology makes no harness-host or additional CLI-host support claim.
-Generator outputs remain required to be platform-independent; Linux execution and wider
-cross-platform comparison are [#525](https://github.com/fontanierh/boxology/issues/525) evidence
-required before the first pinned external release.
+Hosted CI currently validates Linux, while the V0 evidence corpus was established on native macOS
+ARM64. A chosen lead harness may run anywhere it supports, but Boxology makes no general
+cross-platform equivalence claim. Generator outputs remain required to be platform-independent;
+wider comparison is [#525](https://github.com/fontanierh/boxology/issues/525) scope.
 
 ## Foundation milestone
 

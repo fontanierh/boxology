@@ -1,6 +1,6 @@
 # S2 Spec — Contract Generator
 
-[Stream definition](../boxology-details/11-v0-streams.md#s2--contract-generator) · Status: **delivered in V0** · [Completion evidence](../records/2026-08-09-v0-completion-evidence.md)
+[Stream definition](../boxology-details/11-v0-streams.md#s2--contract-generator) · Status: **delivered in V0**
 
 S2 delivers the deterministic contract generator: it parses one controlled contract block, emits the generated contract crate (types, descriptors, dispatch, handle, test support), language-neutral schema, and implementation-side adapter, then relies on the normal Rust build to prove the ordinary implementation matches. Normative inputs: [Rust Build Topology](../boxology-details/08-rust-build-topology.md), [Canonical Capability Contract](../boxology-details/09-capability-contract.md). Classification is *not* here — S2 emits schemas and revisions; S4 judges changes.
 

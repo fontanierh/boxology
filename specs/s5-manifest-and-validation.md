@@ -117,9 +117,8 @@ The merged S5 suite covers malformed manifests, every Cargo edge kind, determini
 green and tampered workspaces, no-op and selected generation, all exit codes and both renderings,
 base-relative incompatible/reporting cases, lock freshness, two independent quality-command
 fixtures, emitted-workflow goldens, and native-Mac repeated-root determinism. Completion evidence
-is tracked by [#328](https://github.com/fontanierh/boxology/issues/328),
-[#329](https://github.com/fontanierh/boxology/issues/329), and the
-[V0 record](../records/2026-08-09-v0-completion-evidence.md).
+is tracked by [#328](https://github.com/fontanierh/boxology/issues/328) and
+[#329](https://github.com/fontanierh/boxology/issues/329).
 
 ## Live residuals
 

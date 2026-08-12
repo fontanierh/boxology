@@ -2,25 +2,18 @@
 
 [Back to the white paper](../boxology-whitepaper.md)
 
-**Status: V0 complete (2026-08-09).** The
-[completion record](../records/2026-08-09-v0-completion-evidence.md) preserves the exact-main
-evidence and accepted boundary. This document now describes the capabilities delivered by the
-high-level workstreams under the [v0 execution methodology](../AGENTS.md#v0-execution-methodology).
+**Status: V0 complete (2026-08-09).** This document describes the capabilities delivered by the
+high-level workstreams. The linked specs are the current normative baselines.
 
 Streams partition the delivered v0 scope defined by the [product contract](07-product-contract.md).
-The dependency ordering below is historical; current work follows the
-[post-V0 self-hosting roadmap](12-post-v0-self-hosting-roadmap.md), tracked by
-[#572](https://github.com/fontanierh/boxology/issues/572), and
-[#74](https://github.com/fontanierh/boxology/issues/74).
+The dependency ordering below is historical.
 
 ## S0 — Product-repo bootstrap and CI
 
 The infrastructure every other stream stands on: the Cargo workspace scaffold, pinned toolchain,
-determinism harness, and repository validation. PR #571 completed #342: `cargo xtask ci` owns one
-full `boxology check`, while required PR validation is one lean native Apple-silicon Mac job with
-hygiene and conditional scoped tests but no `boxology check` invocation. Continuous
-Linux/x86/cross-platform proof is not claimed; #525 owns it before
-the first pinned external release. Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
+determinism harness, and repository validation. Hosted CI runs the canonical validation command in
+one public Ubuntu job. General cross-platform equivalence is not claimed; #525 owns that evidence.
+Spec: [S0 — Product-Repo Bootstrap and CI](../specs/s0-repo-bootstrap.md).
 
 ## S1 — Runtime core and composition assembly
 
@@ -49,9 +42,8 @@ The deterministic initializer: creating the Cargo workspace, the `ping` box (imp
 ## S7 — Skill, acceptance, and stage-2 self-hosting
 
 The delivered portable Agent Skills-format onboarding skill; the clean end-to-end foundation
-acceptance run, including the `greet(name)` task; and stage 2 of the
-[self-hosting ladder](10-strategy-review.md#self-hosting-ladder) — adopted root manifests,
-`boxology check`, and the standing friction log. Spec:
+acceptance run, including the `greet(name)` task; and the adopted root manifests and
+`boxology check`. Spec:
 [S7 — Skill, Acceptance, and Stage-2 Self-Hosting](../specs/s7-skill-acceptance-self-hosting.md).
 
 ## The v0 evidence corpus
@@ -72,18 +64,17 @@ These claims were previously written as v0 obligations but are not delivered by 
 | Residual | Owner | V0 posture |
 | --- | --- | --- |
 | `kitchen-sink` full-grammar fixture (structs, data enums, containers, `Field`/`Secret`/`Blob` authoring corpus) | [#100](https://github.com/fontanierh/boxology/issues/100) | Not built; fail-closed codes and kernel-level suites stand |
-| General structured/container authoring grammar (struct/data-enum declarations, `Option`/`Vec`/`BTreeMap`/`Field`/`Secret` authoring, forward-reference and recursion resolution) | [#102](https://github.com/fontanierh/boxology/issues/102) | No v0 E2E claim; unsupported emission paths retain their coded gates |
 | Named-field payload emission (`BXG0048`) and `Blob`/`Secret` end-to-end generator/binding coverage (`BXG0040`) | [#104](https://github.com/fontanierh/boxology/issues/104) | Fail-closed at generation; `Secret` redaction proven at kernel level only |
 | Capability `name` override (wire-vs-Rust identity split) | [#480](https://github.com/fontanierh/boxology/issues/480) | Partial parser/model handling is not v0 support; wire name = Rust fn name in v0 |
 | Transitive dependency-graph purity / identity-value extraction (`boxology-contract` → `tokio`) | [#358](https://github.com/fontanierh/boxology/issues/358) | [#107](https://github.com/fontanierh/boxology/issues/107) keeps own-source purity, source closure, uncoded-path catalog, deterministic generation, and no-project-code-execution gating; only the transitive graph-hygiene half is deferred |
-| Continuous Linux/x86/cross-platform validation and determinism comparison (including whether to reactivate, replace, or decommission the dormant Mac-hosted Linux ARM64 JIT lane) | [#525](https://github.com/fontanierh/boxology/issues/525) | V0 gates on native macOS ARM64 only; deep Mac validation is dispatch-only; cross-platform evidence required before the first pinned external release |
+| Cross-platform determinism comparison | [#525](https://github.com/fontanierh/boxology/issues/525) | Hosted CI validates Linux; equivalence across operating systems and architectures is not yet claimed |
 
 ## Recorded v0 exclusions
 
 Decided during stream review; recorded so their absence reads as intent rather than oversight:
 
 - **Distribution and publishing.** V0 is for this project's bootstrap phase; it is consumed from a source checkout (`cargo install --path`, local skill file). Packaging, versioning, crates.io/GitHub-release publishing, and skill delivery become in-scope with the first release intended for users who are not us, after v0. The product contract's release-bundle section describes that bundle's *contents*, not a v0 distribution channel.
-- **The generic development CLI binding** — post-v0; it arrives as part of the tool-boxification rung of [issue #74](https://github.com/fontanierh/boxology/issues/74).
+- **The generic development CLI binding** — outside the V0 boundary.
 - **Human-facing getting-started documentation** beyond the skill and the generated project's own README — minimal, inside S7.
 - **Cross-platform support.** V0 is evidenced only on native macOS ARM64. Linux/x86 and any wider
   support claim require the deliberate proof owned by [#525](https://github.com/fontanierh/boxology/issues/525).
@@ -92,7 +83,4 @@ Decided during stream review; recorded so their absence reads as intent rather t
 ## Historical sequencing notes
 
 - The dependency spine is S0 → S1 → S2 → {S3, S4} → S5 → S6 → S7, with S5's manifest/ownership portion parallelizable from the start.
-- Stage 3 of the self-hosting ladder — boxifying the tools themselves — follows v0 under the
-  current [post-V0 roadmap epic](https://github.com/fontanierh/boxology/issues/572) and the
-  [issue #74](https://github.com/fontanierh/boxology/issues/74) commitment.
 - Stream boundaries are also review boundaries: a pull request belongs to one task, a task to one stream, and cross-stream interface changes are made in the owning stream. S1 owns assembly semantics; transport streams implement against them.

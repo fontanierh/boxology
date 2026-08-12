@@ -41,8 +41,6 @@ owned = [
     "crates/fixtures/fixture-tests/**",
     "crates/xtask/**",
     "deny.toml",
-    "ops/**",
-    "records/**",
     "rust-toolchain.toml",
     "rustfmt.toml",
     "specs/**",

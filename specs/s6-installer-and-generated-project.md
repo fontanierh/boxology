@@ -1,6 +1,6 @@
 # S6 Spec — Installer and Generated Project
 
-[Stream definition](../boxology-details/11-v0-streams.md#s6--installer-and-generated-project) · Status: **delivered in V0** · [Completion evidence](../records/2026-08-09-v0-completion-evidence.md)
+[Stream definition](../boxology-details/11-v0-streams.md#s6--installer-and-generated-project) · Status: **delivered in V0**
 
 S6 delivers the deterministic initializer and generated project: a Cargo workspace, the `ping` box (implementation and generated contract), the `ping-app` composition with in-process and HTTP bindings, the root platform package, manifests, README, and golden-pinned CI workflow bytes. The installation flow and milestone scenario are normative in the [Product Contract](../boxology-details/07-product-contract.md); the manifest/check baseline lives in [Packages](../boxology-details/02-packages.md) and [Rust Build Topology](../boxology-details/08-rust-build-topology.md).
 
@@ -69,4 +69,4 @@ The complete end-to-end proof is one S6-owned integration test run natively on m
 ## Matters left open
 
 - Host-specific installer distribution, wrappers, and any interactive mode — post-v0 with the first outside-user release.
-- Boxifying the installer itself — current sequencing is in the [post-V0 self-hosting roadmap](../boxology-details/12-post-v0-self-hosting-roadmap.md) under #74.
+- Boxifying the installer itself is future framework dogfooding work.
