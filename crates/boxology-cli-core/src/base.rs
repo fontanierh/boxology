@@ -271,7 +271,9 @@ fn read_schema(
     oid: &str,
     plan: &GenerationPlan,
 ) -> Result<Option<Vec<u8>>, BaseSchemasError> {
-    let object = format!("{oid}:{}", plan.schema_path().as_str());
+    // Git's `<tree>:./<path>` spelling resolves from the command's working directory. Without
+    // `./`, object paths are always repository-root-relative and nested managed workspaces break.
+    let object = format!("{oid}:./{}", plan.schema_path().as_str());
     let listed = git(
         root,
         &[
@@ -380,7 +382,7 @@ pub fn base_diff_inputs(
     root: &Path,
     base: &ResolvedBase,
 ) -> Result<BaseDiffInputs, BaseInputsError> {
-    let listed = git_ok(root, &["ls-tree", "-r", "-z", "--full-tree", base.as_str()])?;
+    let listed = git_ok(root, &["ls-tree", "-r", "-z", base.as_str(), "--", "."])?;
     let mut files = Vec::new();
     let mut manifests = Vec::new();
     let mut objects = BTreeMap::new();
@@ -415,11 +417,13 @@ pub fn base_diff_inputs(
         &[
             "diff",
             "--name-only",
+            "--relative",
             "-z",
             "--no-renames",
             "--no-ext-diff",
             base.as_str(),
             "--",
+            ".",
         ],
     )?;
     let mut changed = parse_nul(&diffed.stdout, parse_path)?;
