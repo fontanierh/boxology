@@ -73,7 +73,13 @@ fn response(message: Value, reason: &str) -> Vec<u8> {
 }
 fn invoke(status: u16, retry: Option<u64>, body: Vec<u8>, short: bool) -> CompletionOutcome {
     let (origin, join) = server(status, retry, body, short);
-    let outcome = ready(XaiCompletionService::test(origin).complete(context(), request())).unwrap();
+    let service = XaiCompletionService::test(origin);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let outcome = runtime
+        .block_on(service.complete(context(), request()))
+        .unwrap();
     join.join().unwrap();
     outcome
 }

@@ -908,6 +908,7 @@ dependencies = [
  "model-completion-contract",
  "reqwest",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
