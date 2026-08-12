@@ -11,7 +11,7 @@ completion is evidenced in the
 ## Purpose and boundary
 
 S0 supplies the pinned Rust workspace, deterministic repository automation, dependency policy,
-review-budget enforcement, and a fast merge-critical check. It does not implement Boxology product
+review-budget enforcement, and public-safe hosted validation. It does not implement Boxology product
 features, publish releases, claim Windows/Linux/cross-platform support, or make the quality policy
 immutable. Cross-platform evidence is owned by
 [#525](https://github.com/fontanierh/boxology/issues/525); semantic self-protection is owned by
@@ -53,63 +53,31 @@ Commands that need a base take it explicitly; they do not infer GitHub event sta
 determinism subcommands remain available for local experiments and future cross-platform proof,
 but no active workflow currently compares platforms.
 
-### D3 — Required pull-request validation
+### D3 — Hosted validation
 
-`.github/workflows/pr.yml` has one required `validation` job with a 20-minute timeout and no
-Actions cache. It selects `[self-hosted, macOS, ARM64, boxology-macos-pr-primary]`, and
-`REQUIRED_PR_RUNNER_LABEL` pins the same route. The base runner's persistent Cargo target/cache
-gives required PRs stable warm-cache affinity; slots 2–4 retain generic capacity for independent
-work.
-It always runs `ci-hygiene` against the pull-request base. Markdown-only changes stop there.
+`.github/workflows/ci.yml` is the sole Actions workflow. Pull requests, pushes to `main`, and
+manual dispatch run one `validate` job on `ubuntu-latest`, bounded to 30 minutes with redundant
+runs cancelled. It installs the repository-pinned Rust toolchain and exact cargo-deny version,
+then runs the canonical `cargo xtask ci --no-budget` gate. Pull requests additionally run
+`cargo xtask budget --base <base-sha>` against the event's base commit; full checkout history makes
+that base available.
 
-Code changes run ordinary tests for directly changed crates. The xtask unit suite runs only for
-changes to xtask, workflows, runner operations, or the embedded Boxology skill source; the live
-hygiene command remains universal and deep validation retains the complete suite. Changed-path
-inventory disables rename detection, so an authority rename exposes both old and new paths. The CLI
-end-to-end target, CLI/workspace/classifier surface locks, and generator-model purity lock are
-dispatch-only regardless of the changed path; their four crates retain library/binary tests,
-explicit doctests, and every other integration target in required CI. `boxology-init` likewise
-retains those tests around its existing deep-only born-valid exclusion. `boxology-generator`
-retains ordinary unit, binary, doctest, and integration coverage but sends its two named
-nested-Cargo end-to-end unit tests to deep validation. `cargo xtask ci --no-budget` executes the
-non-ignored exclusions once through product workspace tests; integrity-only source/body/list guards bind all seven new exclusions without duplicate Cargo execution. A root `Cargo.toml`, `Cargo.lock`, or toolchain change
-conditionally checks the complete workspace build graph; opaque fixture/golden changes
-conditionally run `ci-fixtures`; process-reaper changes run that fixture suite. The required job
-does **not** invoke `boxology check`; it does run the hygiene and conditional scoped tests above.
-It therefore does not claim pre-merge full regeneration,
-classification, Cargo-edge, workspace-wide, declared-quality, mutation-lock, or CLI end-to-end
-enforcement.
+The workflow uses only top-level `contents: read`, pins checkout by full commit SHA, and disables
+credential persistence. It uses no caches, secrets, write permissions, `pull_request_target`, or
+self-hosted runners. Xtask tests bind the exact workflow inventory and required contract, with
+mutation cases for the security boundary and canonical gate.
 
-`.github/workflows/deep-validation.yml` is dispatch-only, non-required, and native-Mac-only. It
-runs only `cargo xtask ci --no-budget`; there is no separate `boxology check` step. Measured full
-checks exceeded the PR timeout, so the product baseline remains local/deep rather than acquiring a
-weakened policy-only mode.
+### D4 — Platform evidence
 
-### D4 — Runner topology
-
-Four native Apple-silicon Mac JIT slots are active. Each slot has an isolated disposable checkout
-and a private persistent Cargo target cache; concurrency is bounded to four build/test jobs per
-slot. The checked-in base service alone also configures the `boxology-macos-pr-primary` label for
-required-PR cache affinity; slots 2–4 retain the generic label for deep, advisory, smoke, and
-overflow capacity. The base slot carries both generic and primary labels and owns required PRs.
-The workflow route and its xtask integrity expectation must change atomically before any topology
-rollback removes the primary registration.
-Linux JIT source and assets remain in `ops/ci-runner/`, but Linux services, registrations, and the
-Colima profile are dormant. There is no active Linux, x86, or cross-platform workflow. Any
-reactivation is deliberate [#525](https://github.com/fontanierh/boxology/issues/525) work.
-
-Runner labels are capabilities, not immutable platform images. Actions are pinned by full commit
-SHA; checkout does not persist credentials. Native host execution is trusted only for this private
-repository and trusted collaborators. Exact runner, toolchain, and cargo-deny pins and the
-credential/JIT/rollback boundary are maintained in the
-[runner runbook](../ops/ci-runner/README.md).
+Hosted CI continuously validates Linux. It does not claim Windows, macOS, x86-wide, or general
+cross-platform support; broader platform evidence remains deliberate
+[#525](https://github.com/fontanierh/boxology/issues/525) work.
 
 ### D5 — Links, dependencies, and review budget
 
 `cargo xtask links` requires every tracked Markdown repository-relative link and heading anchor to
 resolve; external URLs are not fetched. `cargo-deny` is exact-version pinned with permissive
-license, crates.io source, and ban policy. Its bans/licenses/sources suite is deep/local rather
-than per-PR; the scheduled advisory workflow is non-gating.
+license, crates.io source, and ban policy. Its full policy suite runs in canonical hosted CI.
 
 `cargo xtask budget --base <revision>` fails above 600 hand-authored added lines with no override.
 Markdown counts. `Cargo.lock`, manifest-declared derived outputs, and pure renames are excluded;
@@ -132,19 +100,18 @@ CI and checker code are candidate-writable: a pull request can change the checks
 Protected-path declarations and human review are reporting-level controls, not immutable
 evaluation. No same-named green check proves semantic self-protection; #17 remains open.
 
-Runner credentials stay outside the checkout; JIT workers are single-job and cleaned after use.
-Dependency advisories never fail unrelated PRs. CI changes must preserve least privilege, pinned
-inputs, `persist-credentials: false`, bounded concurrency, and fail-closed cleanup.
+CI changes must preserve least privilege, pinned inputs, `persist-credentials: false`, bounded
+concurrency, and the public-safe hosted execution boundary.
 
 ## Delivered acceptance evidence
 
 1. The workspace, toolchain, formatting, links, records, budget, dependency, and determinism
    checks are implemented and exercised by xtask tests.
-2. Required PR validation is one lean native-Mac job with conditional positive scopes and no
-   `boxology check` invocation; workflow invariant tests pin that topology.
+2. Hosted CI has one Linux job that runs canonical deep validation and the PR review budget;
+   workflow invariant tests pin its inventory, authority, and security boundary.
 3. Each canonical `ci` aggregate invokes one product check; the deleted commands and bootstrap
    registries are absent, with manifest-derived selection pinned by tests.
-4. Exact-main native-macOS V0 proof is preserved by the completion record; PR #571 and closed
+4. Historical native-macOS V0 proof is preserved by the completion record; PR #571 and closed
    [#342](https://github.com/fontanierh/boxology/issues/342) preserve the absorption evidence.
 5. Cross-platform proof, semantic self-protection, and external release support remain explicit
    residuals under #525, #17, and the post-V0 roadmap rather than current claims.

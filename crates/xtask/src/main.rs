@@ -845,66 +845,66 @@ fn trailing_whitespace_lines(bytes: &[u8]) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    // Phase B changes this integrity expectation and the workflow route in the
-    // same two-file PR after the primary registration is proven live.
-    const REQUIRED_PR_RUNNER_LABEL: &str = "boxology-macos-pr-primary";
-    const XTASK_AUTHORITY_SELECTOR: &str =
-        r"^(crates/xtask/|\.github/workflows/|ops/ci-runner/|\.agents/skills/boxology/SKILL\.md$)";
+    const PUBLIC_CI_WORKFLOW: &str = include_str!("../../../.github/workflows/ci.yml");
+    const EXPECTED_PUBLIC_CI_WORKFLOW: &str = r#"name: ci
 
-    fn selector_matches(expression: &str, inventory: &str) -> bool {
-        use std::io::Write as _;
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-        let mut child = Command::new("grep")
-            .args(["-Eq", expression])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_DENY_VERSION: "0.20.2"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Install exact cargo-deny
+        run: |
+          cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+          test "$(cargo deny --version)" = "cargo-deny $CARGO_DENY_VERSION"
+
+      - name: Canonical validation
+        run: cargo xtask ci --no-budget
+
+      - name: Review budget
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: cargo xtask budget --base "$BASE_SHA"
+"#;
+
+    fn public_ci_contract(inventory: &[&str], workflow: &str) -> bool {
+        inventory == ["ci.yml"] && workflow == EXPECTED_PUBLIC_CI_WORKFLOW
+    }
+
+    fn workflow_inventory() -> Vec<String> {
+        let mut names = fs::read_dir(root().join(".github/workflows"))
             .unwrap()
-            .write_all(inventory.as_bytes())
-            .unwrap();
-        child.wait().unwrap().success()
-    }
-
-    struct ScopeRepo(std::path::PathBuf);
-
-    impl ScopeRepo {
-        fn new() -> Self {
-            for attempt in 0..1000 {
-                let path = std::env::temp_dir().join(format!(
-                    "boxology-pr-scope-{}-{attempt}",
-                    std::process::id()
-                ));
-                match std::fs::create_dir(&path) {
-                    Ok(()) => return Self(path),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => panic!("cannot create scope repo: {error}"),
-                }
-            }
-            panic!("cannot allocate scope repo")
-        }
-
-        fn git(&self, args: &[&str]) -> String {
-            let output = Command::new("git")
-                .args(args)
-                .current_dir(&self.0)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "git {args:?}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap()
-        }
-    }
-
-    impl Drop for ScopeRepo {
-        fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.0).unwrap();
-        }
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
     }
 
     #[test]
@@ -1115,242 +1115,47 @@ mod tests {
     }
 
     #[test]
-    fn workflows_keep_product_dispatch_only_and_preserve_scoped_pr_gates() {
-        let workflow = include_str!("../../../.github/workflows/pr.yml");
-        assert!(matches!(
-            REQUIRED_PR_RUNNER_LABEL,
-            "boxology-macos-pr" | "boxology-macos-pr-primary"
+    fn public_ci_workflow_and_inventory_are_exact_and_mutation_discriminating() {
+        let inventory = workflow_inventory();
+        let inventory = inventory.iter().map(String::as_str).collect::<Vec<_>>();
+        assert!(public_ci_contract(&inventory, PUBLIC_CI_WORKFLOW));
+        assert!(!public_ci_contract(
+            &["ci.yml", "legacy.yml"],
+            PUBLIC_CI_WORKFLOW
         ));
-        let expected_route =
-            format!("runs-on: [self-hosted, macOS, ARM64, {REQUIRED_PR_RUNNER_LABEL}]");
-        assert_eq!(
-            workflow
-                .lines()
-                .filter(|line| line.trim() == expected_route)
-                .count(),
-            1
-        );
-        let scope = workflow
-            .split_once("- name: Select test scope")
-            .expect("Select test scope step")
-            .1
-            .split_once("- name: Test repository invariants")
-            .expect("end of Select test scope")
-            .0;
-        assert!(
-            scope.contains(r"\.md$"),
-            "Markdown-only diffs must clear the Rust/product lane"
-        );
-        assert!(
-            scope.contains("crates/fixtures/")
-                && scope.contains("goldens/generated-project/")
-                && scope.contains("ops/process-reaper/")
-                && scope.contains("ops/delivery-worker/"),
-            "opaque fixtures and process owners retain scoped path gates"
-        );
-        assert!(!workflow.contains("--bin boxology -- check"));
-        assert!(!workflow.contains("cargo xtask ci --base"));
-        assert!(workflow.contains("cargo xtask ci-fixtures"));
-        for exact in [
-            "run_xtask=false",
-            "run_xtask=true",
-            "echo \"run_xtask=$run_xtask\" | tee -a \"$GITHUB_OUTPUT\"",
+
+        for (before, after) in [
+            ("runs-on: ubuntu-latest", "runs-on: self-hosted"),
+            ("  pull_request:\n", "  pull_request_target:\n"),
+            ("  contents: read", "  issues: write"),
+            ("  contents: read", "  actions: write"),
+            (
+                "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "actions/checkout@v7",
+            ),
+            ("cargo xtask ci --no-budget", "cargo xtask ci-fixtures"),
+            ("          fetch-depth: 0", "          fetch-depth: 1"),
+            (
+                "          persist-credentials: false",
+                "          persist-credentials: true",
+            ),
+            (
+                "cargo xtask budget --base \"$BASE_SHA\"",
+                "cargo xtask budget --base HEAD^",
+            ),
+            (
+                "jobs:\n  validate:",
+                "jobs:\n  injected:\n    runs-on: ubuntu-latest\n  validate:",
+            ),
+            (
+                "      - name: Canonical validation",
+                "      - name: Injected step\n        run: true\n\n      - name: Canonical validation",
+            ),
         ] {
-            assert_eq!(
-                scope.lines().filter(|line| line.trim() == exact).count(),
-                1,
-                "{exact}"
-            );
+            let mutation = PUBLIC_CI_WORKFLOW.replacen(before, after, 1);
+            assert_ne!(mutation, PUBLIC_CI_WORKFLOW, "mutation fixture {before}");
+            assert!(!public_ci_contract(&["ci.yml"], &mutation), "{after}");
         }
-        let selector = format!("if grep -Eq '{XTASK_AUTHORITY_SELECTOR}' <<<\"$changed\"; then");
-        assert_eq!(
-            scope.lines().filter(|line| line.trim() == selector).count(),
-            1
-        );
-        assert_eq!(
-            scope
-                .matches("git diff --name-only --no-renames \"$BASE_SHA\" HEAD")
-                .count(),
-            1
-        );
-        assert!(!scope.contains("git diff --name-only \"$BASE_SHA\" HEAD"));
-        for authority in [
-            "crates/xtask/src/main.rs\n",
-            ".github/workflows/pr.yml\n",
-            "ops/ci-runner/supervise-macos.sh\n",
-            ".agents/skills/boxology/SKILL.md\n",
-        ] {
-            assert!(
-                selector_matches(XTASK_AUTHORITY_SELECTOR, authority),
-                "{authority}"
-            );
-        }
-        assert!(!selector_matches(
-            XTASK_AUTHORITY_SELECTOR,
-            "crates/boxology-runtime/src/lib.rs\n"
-        ));
-        assert_eq!(
-            workflow
-                .lines()
-                .filter(|line| line.trim() == "if: steps.scope.outputs.run_xtask == 'true'")
-                .count(),
-            1
-        );
-        assert!(workflow.contains("steps.scope.outputs.run_reaper == 'true'"));
-        assert!(workflow.contains("steps.scope.outputs.run_delivery_worker == 'true'"));
-        assert!(workflow.contains("cargo test -p xtask --locked"));
-        assert!(workflow.contains("- name: Test changed crates"));
-        assert!(workflow.contains("- name: Check workspace build graph"));
-        let changed_crates = workflow
-            .split_once("- name: Test changed crates")
-            .unwrap()
-            .1
-            .split_once("- name: Check workspace build graph")
-            .unwrap()
-            .0;
-        assert_eq!(changed_crates.matches("--doc").count(), 1);
-        for (package, target) in PR_EXCLUDED_INTEGRATION_TARGETS {
-            let target = format!("{package}:{target}");
-            assert_eq!(changed_crates.matches(&target).count(), 1, "{target}");
-        }
-        assert_eq!(
-            changed_crates
-                .matches("crates/boxology-generator/Cargo.toml")
-                .count(),
-            2
-        );
-        for test in GENERATOR_PR_EXCLUDED_UNIT_TESTS {
-            assert_eq!(changed_crates.matches(test).count(), 1, "{test}");
-        }
-        let exact_skips = format!(
-            "--lib --bins -- \\\n                    --exact \\\n                    --skip {} \\\n                    --skip {}",
-            GENERATOR_MULTI_CAPABILITY_E2E, GENERATOR_SEALED_IMPORT_E2E
-        );
-        assert_eq!(changed_crates.matches(&exact_skips).count(), 1);
-        assert!(changed_crates.contains("--test \"$target\""));
-        let steps = workflow
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("- name: "))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            steps,
-            [
-                "Install pinned toolchain",
-                "Record runner evidence",
-                "CI hygiene",
-                "Select test scope",
-                "Test repository invariants",
-                "Test changed crates",
-                "Check workspace build graph",
-                "Test changed opaque fixtures",
-                "Test process reaper",
-                "Test delivery worker ownership",
-            ]
-        );
-        let cargo_tests = workflow
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim().strip_prefix("run: ").unwrap_or(line.trim());
-                line.starts_with("cargo test").then_some(line)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            cargo_tests,
-            [
-                "cargo test -p xtask --locked",
-                "cargo test --manifest-path \"$manifest\" --all-features --locked --lib --bins -- \\",
-                "cargo test --manifest-path \"$manifest\" --all-features --locked --lib --bins",
-                "cargo test --manifest-path \"$manifest\" --all-features --locked --doc",
-                "cargo test --manifest-path \"$manifest\" --all-features --locked --test \"$target\"",
-                "cargo test --manifest-path \"$manifest\" --all-features --locked",
-            ]
-        );
-        assert!(
-            scope.find("crates/fixtures/fixture-tests/*) ;;").unwrap()
-                < scope
-                    .find("crates/fixtures/*|goldens/generated-project/*")
-                    .unwrap()
-        );
-        assert_eq!(
-            include_str!("main.rs")
-                .matches("golden_inventory_and_comparison_fail_closed")
-                .count(),
-            2
-        );
-
-        let deep = include_str!("../../../.github/workflows/deep-validation.yml");
-        assert_eq!(deep.matches("cargo xtask ci --no-budget").count(), 1);
-        assert!(!deep.contains("--bin boxology -- check"));
-    }
-
-    #[test]
-    fn pr_scope_inventory_keeps_a_renamed_authority_old_path() {
-        let repo = ScopeRepo::new();
-        repo.git(&["init", "-q"]);
-        repo.git(&["config", "user.email", "scope@example.invalid"]);
-        repo.git(&["config", "user.name", "Scope Test"]);
-        let old = repo.0.join(".github/workflows/legacy.yml");
-        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
-        std::fs::write(&old, "name: legacy\n# stable bytes\n# rename proof\n").unwrap();
-        repo.git(&["add", "."]);
-        repo.git(&["commit", "-qm", "base"]);
-        let new = repo.0.join("crates/boxology-runtime/legacy.yml");
-        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
-        std::fs::rename(old, new).unwrap();
-        repo.git(&["add", "-A"]);
-        repo.git(&["commit", "-qm", "rename"]);
-
-        let default_inventory = repo.git(&["diff", "--name-only", "HEAD^", "HEAD"]);
-        assert_eq!(default_inventory, "crates/boxology-runtime/legacy.yml\n");
-        assert!(!selector_matches(
-            XTASK_AUTHORITY_SELECTOR,
-            &default_inventory
-        ));
-
-        let fail_closed_inventory =
-            repo.git(&["diff", "--name-only", "--no-renames", "HEAD^", "HEAD"]);
-        assert_eq!(
-            fail_closed_inventory,
-            ".github/workflows/legacy.yml\ncrates/boxology-runtime/legacy.yml\n"
-        );
-        assert!(selector_matches(
-            XTASK_AUTHORITY_SELECTOR,
-            &fail_closed_inventory
-        ));
-    }
-
-    #[test]
-    fn base_runner_configures_one_primary_affinity_and_capacity_slots_stay_generic() {
-        let supervisor = include_str!("../../../ops/ci-runner/supervise-macos.sh");
-        assert!(supervisor.contains("RUNNER_LABEL=boxology-macos-pr\n"));
-        assert!(supervisor.contains("RUNNER_EXTRA_LABEL=\"${RUNNER_EXTRA_LABEL:-}\""));
-        assert!(supervisor.contains("$RUNNER_EXTRA_LABEL\" != \"$RUNNER_LABEL"));
-        assert!(supervisor.contains("length) < 1"));
-        assert!(supervisor.contains("if $extra == \"\" then [] else [$extra] end"));
-
-        let base =
-            include_str!("../../../ops/ci-runner/com.fontanierh.boxology-ci-macos-runner.plist");
-        assert_eq!(base.matches("boxology-macos-pr-primary").count(), 1);
-
-        let slots = include_str!("../../../ops/ci-runner/supervise-slots.sh");
-        let slots_plist = include_str!(
-            "../../../ops/ci-runner/com.fontanierh.boxology-ci-macos-runner-slots.plist"
-        );
-        assert_eq!(
-            slots
-                .lines()
-                .filter(|line| line.trim() == "export RUNNER_EXTRA_LABEL=")
-                .count(),
-            1
-        );
-        assert_eq!(
-            slots
-                .lines()
-                .filter(|line| line.trim().starts_with("export RUNNER_EXTRA_LABEL="))
-                .count(),
-            1
-        );
-        assert!(!slots_plist.contains("boxology-macos-pr-primary"));
     }
 
     #[test]

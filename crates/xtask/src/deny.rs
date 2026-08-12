@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn workflow_pin_matches_xtask() {
-        let workflow = include_str!("../../../.github/workflows/pr.yml");
+        let workflow = include_str!("../../../.github/workflows/ci.yml");
         let pins: Vec<_> = workflow
             .lines()
             .filter_map(|line| line.trim().strip_prefix("CARGO_DENY_VERSION: "))
