@@ -108,6 +108,10 @@ fn encode(model: &str, request: CompletionRequest) -> Result<Value, Failure> {
     if request.messages.is_empty() || request.max_output_tokens == Some(0) {
         return Err(input());
     }
+    let follows_tool = matches!(
+        request.messages.last().map(|message| &message.role),
+        Some(MessageRole::Tool)
+    );
     let mut outstanding = Vec::<(String, String)>::new();
     let messages = request
         .messages
@@ -211,6 +215,8 @@ fn encode(model: &str, request: CompletionRequest) -> Result<Value, Failure> {
     let mut value = json!({"model": model, "messages": messages});
     if !tools.is_empty() {
         value["tools"] = json!(tools);
+        value["tool_choice"] = json!(if follows_tool { "none" } else { "required" });
+        value["parallel_tool_calls"] = json!(false);
     }
     if let Some(max) = request.max_output_tokens {
         value["max_tokens"] = json!(max);

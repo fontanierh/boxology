@@ -139,6 +139,33 @@ fn transcript_correlation_rejects_orphan_mismatch_duplicate_and_incomplete() {
 }
 
 #[test]
+fn tool_policy_matches_single_call_agent_phases() {
+    let after_tool = encode("grok-test", request()).unwrap();
+    assert_eq!(after_tool["tool_choice"], "none");
+    assert_eq!(after_tool["parallel_tool_calls"], false);
+
+    let mut first = request();
+    first.messages = vec![CompletionMessage {
+        role: MessageRole::User,
+        content: Some("write the file".into()),
+        tool_call_id: None,
+        name: None,
+        tool_calls: vec![],
+    }];
+    let first = encode("grok-test", first).unwrap();
+    assert_eq!(first["tool_choice"], "required");
+    assert_eq!(first["parallel_tool_calls"], false);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 1);
+
+    let mut no_tools = request();
+    no_tools.tools.clear();
+    let no_tools = encode("grok-test", no_tools).unwrap();
+    for field in ["tools", "tool_choice", "parallel_tool_calls"] {
+        assert!(no_tools.get(field).is_none());
+    }
+}
+
+#[test]
 #[rustfmt::skip]
 fn parallel_results_project_exactly_and_length_finishes() {
     let encoded = encode("grok-test", request()).unwrap();
