@@ -36,9 +36,15 @@ This does not weaken the single-owner rule. Both crates belong to the same box p
 
 ## Rust-first contract authoring
 
-Developers and agents write one declaration-only contract block beside ordinary Rust implementation code. The block is deliberately a small Rust-like grammar rather than arbitrary Rust:
+Developers and agents write the declaration-only contract block in
+`implementation/src/contract.rs`. The implementation crate root contains the exact unconditional
+items `mod contract;` and `pub use contract::*;`, followed by ordinary Rust implementation code.
+This is an authoring convention, not generator path inference: generation still traverses from its
+explicit request crate root across declared logical inputs. The block is deliberately a small
+Rust-like grammar rather than arbitrary Rust:
 
 ```rust
+// implementation/src/contract.rs
 boxology::contract! {
     #[error]
     pub enum GreetError {
@@ -48,6 +54,12 @@ boxology::contract! {
     #[capability(exposure = external)]
     pub async fn greet(name: String) -> Result<String, GreetError>;
 }
+```
+
+```rust
+// implementation/src/lib.rs
+mod contract;
+pub use contract::*;
 
 pub struct HelloService;
 

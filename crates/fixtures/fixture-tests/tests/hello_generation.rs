@@ -25,6 +25,10 @@ fn request() -> GenerationRequest {
                 "implementation/src/lib.rs".into(),
                 include_bytes!("../../hello/implementation/src/lib.rs").to_vec(),
             ),
+            (
+                "implementation/src/contract.rs".into(),
+                include_bytes!("../../hello/implementation/src/contract.rs").to_vec(),
+            ),
         ],
         vec![],
         OUTPUTS.iter().map(|path| (*path).to_owned()).collect(),
@@ -125,7 +129,7 @@ fn live_schema_digest_matches_the_generated_contract_marker() {
 fn hello_generation_is_cold_and_matches_checked_in_outputs() {
     let request = request();
     assert_eq!(request.crate_root().as_str(), "implementation/src/lib.rs");
-    assert_eq!(request.inputs().len(), 2, "generated files are not inputs");
+    assert_eq!(request.inputs().len(), 3, "generated files are not inputs");
     assert!(request.imports().is_empty());
     let generated = generate(request).expect("cold Hello generation succeeds");
 

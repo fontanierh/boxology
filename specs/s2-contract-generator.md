@@ -25,9 +25,14 @@ The generator mechanizes the shape S1 designs by hand: its correctness definitio
 - **`boxology-macros`** supplies the `boxology::contract!` facade and `#[boxology::implementation]` compile-time checks. It does not discover resolved types or produce checked-in artifacts.
 - The author-facing **`boxology` facade crate** re-exports exactly those two macros plus `boxology_contract::CallContext`; it does not re-export the wider kernel or runtime APIs. It is distinct from the `boxology-contract` ABI crate. Generated contract packages depend on `boxology-contract`; implementation crates use `boxology` plus the fixed dependency alias `boxology_generated_contract` for their box-specific generated package (for example `package = "hello-contract"`).
 
-The selected v0 shape is exact:
+The authoring convention places the controlled declaration in
+`implementation/src/contract.rs`; `implementation/src/lib.rs` contains the exact unconditional
+items `mod contract;` and `pub use contract::*;`. These are ordinary declared logical Rust inputs;
+the generation API still starts traversal at the explicit request crate root and does not infer
+paths from this convention. The selected declaration and implementation shape is exact:
 
 ```rust
+// implementation/src/contract.rs
 boxology::contract! {
     #[error]
     pub enum GreetError { EmptyName, }
@@ -35,6 +40,12 @@ boxology::contract! {
     #[capability(exposure = external)]
     pub async fn greet(name: String) -> Result<String, GreetError>;
 }
+```
+
+```rust
+// implementation/src/lib.rs
+mod contract;
+pub use contract::*;
 
 pub struct HelloService;
 

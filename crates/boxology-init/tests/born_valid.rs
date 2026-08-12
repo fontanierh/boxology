@@ -328,10 +328,11 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
     }
 
     let implementation_path = root.join("ping/implementation/src/lib.rs");
-    let implementation = fs::read_to_string(&implementation_path).expect("read ping source");
+    let contract_path = root.join("ping/implementation/src/contract.rs");
+    let contract = fs::read_to_string(&contract_path).expect("read ping contract");
     let contract_anchor = "    pub async fn ping(nonce: u64) -> Result<u64, HelloError>;\n";
-    assert_eq!(implementation.matches(contract_anchor).count(), 1);
-    let implementation = implementation.replacen(
+    assert_eq!(contract.matches(contract_anchor).count(), 1);
+    let contract = contract.replacen(
         contract_anchor,
         concat!(
             "    pub async fn ping(nonce: u64) -> Result<u64, HelloError>;\n\n",
@@ -340,6 +341,8 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
         ),
         1,
     );
+    fs::write(&contract_path, contract).expect("write additive ping contract evolution");
+    let implementation = fs::read_to_string(&implementation_path).expect("read ping source");
     let implementation_anchor = "        Ok(nonce)\n    }\n}";
     assert_eq!(implementation.matches(implementation_anchor).count(), 1);
     let implementation = implementation.replacen(
@@ -402,11 +405,11 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
         &[("BOXOLOGY_REQUIRE_GREET", "1")],
     );
 
-    let evolved = fs::read_to_string(&implementation_path).expect("read evolved ping source");
+    let evolved = fs::read_to_string(&contract_path).expect("read evolved ping contract");
     let external = "    #[capability(exposure = external)]\n    pub async fn greet";
     assert_eq!(evolved.matches(external).count(), 1);
     fs::write(
-        &implementation_path,
+        &contract_path,
         evolved.replacen(
             external,
             "    #[capability(exposure = internal)]\n    pub async fn greet",

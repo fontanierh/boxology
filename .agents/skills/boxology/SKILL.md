@@ -27,6 +27,12 @@ Prefer an additive expansion, then migrate consumers, then contract the old surf
 
 The lead agent reads the repository instructions, README, and manifests before editing. It identifies the one accountable package, changes only its authored controlled source, regenerates deterministic outputs, runs the package's declared quality commands, and runs `boxology check`. It surfaces any protected control-plane change for human attention instead of treating that change as ordinary package work.
 
+Author a box's controlled declaration in `implementation/src/contract.rs`. Its
+`implementation/src/lib.rs` exposes the declaration with the exact unconditional items
+`mod contract;` and `pub use contract::*;`, then contains the ordinary implementation. Both files
+are declared generation inputs; the crate root remains explicit rather than inferred from these
+paths.
+
 ## Five-step onboarding flow
 
 1. **Activate.** Apply this skill to the greenfield onboarding request; the coding agent becomes the lead agent for the new managed project.

@@ -28,6 +28,10 @@ fn request() -> GenerationRequest {
                 "implementation/src/lib.rs".into(),
                 include_bytes!("../../ping/implementation/src/lib.rs").to_vec(),
             ),
+            (
+                "implementation/src/contract.rs".into(),
+                include_bytes!("../../ping/implementation/src/contract.rs").to_vec(),
+            ),
         ],
         vec![],
         OUTPUTS.iter().map(|path| (*path).to_owned()).collect(),
@@ -172,7 +176,7 @@ fn ping_generation_is_cold_exact_and_matches_the_checked_in_tree() {
     assert_quality_commands_are_exact();
     let request = request();
     assert_eq!(request.crate_root().as_str(), "implementation/src/lib.rs");
-    assert_eq!(request.inputs().len(), 2, "generated files are not inputs");
+    assert_eq!(request.inputs().len(), 3, "generated files are not inputs");
     assert!(request.imports().is_empty());
     let generated = generate(request).expect("cold Ping generation succeeds");
     let generated_paths: BTreeSet<_> = generated
