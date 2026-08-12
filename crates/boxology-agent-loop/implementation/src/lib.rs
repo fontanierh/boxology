@@ -7,6 +7,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 const TEXT: usize = 64 * 1024;
 const LARGE: usize = 256 * 1024;
+const EVENT_WIRE: usize = 120 * 1024;
 
 #[rustfmt::skip]
 boxology::contract! {
@@ -57,27 +58,26 @@ impl AgentLoopService {
         if !request.system_prompt.is_empty() { messages.insert(0, message(model::MessageRole::System, Some(request.system_prompt.clone()))); }
         let existing = loaded.events.get(prefix..).unwrap_or(&[]);
         validate_turn_prefix(existing, &ids, &request.user_message)?;
-        if let Some(done) = complete(existing, &ids)? { return Ok(done); }
+        if let Some(done) = complete(existing, &ids,&request)? { return Ok(done); }
         let mut sequence = loaded.next_sequence;
         let user = TextEvent { schema: "agent-loop-event@1".into(), content: request.user_message.clone() };
         if existing.is_empty() { append(self, context, &request.session_id, &ids[0], sequence, session::SessionEventKind::User, canonical(&user)?, false).await?; sequence += 1; }
         messages.push(message(model::MessageRole::User, Some(request.user_message.clone())));
         let definitions: Vec<_> = request.tools.iter().map(|item| model::ToolDefinition { name: item.name.clone(), description: item.description.clone(), input_schema_json: item.input_schema_json.clone() }).collect();
-        let (call, first_usage) = if existing.len() >= 2 {
-            let call = parse_call(&existing[1])?; (model::ToolCall { id: call.tool_call_id, name: call.name, arguments_json: call.arguments_json }, zero())
+        let (call, first_usage, execution) = if existing.len() >= 2 {
+            let call = parse_call(&existing[1])?;let call=model::ToolCall { id: call.tool_call_id, name: call.name, arguments_json: call.arguments_json };let execution=validate_call(&call,&request)?;(call,zero(),execution)
         } else {
             let first = complete_model(self, context, messages.clone(), definitions.clone(), request.max_output_tokens, true).await?;
             let call = first.0.tool_calls.into_iter().next().expect("validated one call");
-            if !call_id(&call.id) || !request.tools.iter().any(|v| v.name == call.name) { return Err(protocol("tool_call_invalid", true)); }
-            execute(&call)?;
+            let execution=validate_call(&call,&request)?;
             append(self, context, &request.session_id, &ids[1], sequence, session::SessionEventKind::ToolCall, canonical(&CallEvent { schema: "agent-loop-event@1".into(), tool_call_id: call.id.clone(), name: call.name.clone(), arguments_json: call.arguments_json.clone() })?, true).await?; sequence += 1;
-            (call, first.1)
+            (call, first.1,execution)
         };
         let output_json = if existing.len() >= 3 { parse_result(&existing[2], &call)? }
         else {
-            let executed = self.tool.execute(context.child(), execute(&call)?).await.map_err(|_| internal())?;
-            let output = tool_output(&call, executed)?;
-            append(self, context, &request.session_id, &ids[2], sequence, session::SessionEventKind::ToolResult, canonical(&ResultEvent { schema: "agent-loop-event@1".into(), tool_call_id: call.id.clone(), name: call.name.clone(), output_json: output.clone() })?, true).await?; sequence += 1; output
+            let executed = self.tool.execute(context.child(), execution).await.map_err(|_| internal())?;
+            let (output, control) = tool_output(&call, executed)?;
+            append(self, context, &request.session_id, &ids[2], sequence, session::SessionEventKind::ToolResult, canonical(&ResultEvent { schema: "agent-loop-event@1".into(), tool_call_id: call.id.clone(), name: call.name.clone(), output_json: output.clone() })?, true).await?; sequence += 1; if let Some(failure)=control{return Err(failure)} output
         };
         messages.push(model::CompletionMessage { role: model::MessageRole::Assistant, content: None, tool_call_id: None, name: None, tool_calls: vec![call.clone()] });
         messages.push(model::CompletionMessage { role: model::MessageRole::Tool, content: Some(output_json.clone()), tool_call_id: Some(call.id.clone()), name: Some(call.name.clone()), tool_calls: vec![] });
@@ -104,7 +104,7 @@ impl AgentLoopService {
 async fn complete_model(service: &AgentLoopService, context: &boxology::CallContext, messages: Vec<model::CompletionMessage>, tools: Vec<model::ToolDefinition>, max: Option<u64>, first: bool) -> Result<(model::CompletionResult, TurnUsage), TurnFailure> {
     check(context, true)?; let outcome = service.model.complete(context.child(), model::CompletionRequest { messages, tools, max_output_tokens: max }).await.map_err(|_| internal())?;
     if outcome.completion.is_some() == outcome.failure.is_some() { return Err(internal()); }
-    if let Some(failure) = outcome.failure { return Err(fail(TurnFailureClass::Model, &failure.code, failure.retryable, true)); }
+    if let Some(failure) = outcome.failure { if matches!(failure.class,model::CompletionFailureClass::Unknown{..}){return Err(internal())} return Err(fail(TurnFailureClass::Model, &failure.code, failure.retryable, true)); }
     let result = outcome.completion.unwrap(); usage(&result.usage)?;
     let valid = if first { matches!(result.finish_reason, model::FinishReason::ToolCalls) && result.content.is_none() && result.tool_calls.len() == 1 }
         else { matches!(result.finish_reason, model::FinishReason::Stop) && result.tool_calls.is_empty() && result.content.as_ref().is_some_and(|v| !v.is_empty() && v.len() <= LARGE) };
@@ -115,7 +115,7 @@ async fn complete_model(service: &AgentLoopService, context: &boxology::CallCont
 #[allow(clippy::too_many_arguments)]
 #[rustfmt::skip]
 async fn append(service: &AgentLoopService, context: &boxology::CallContext, session_id: &str, id: &str, sequence: u64, kind: session::SessionEventKind, payload_json: String, side: bool) -> Result<(), TurnFailure> {
-    check(context, side)?; let request = session::AppendRequest { session_id: session_id.into(), expected_sequence: sequence, event: session::NewSessionEvent { event_id: id.into(), kind, payload_json: payload_json.clone() } };
+    if payload_json.len()>EVENT_WIRE{return Err(protocol("event_payload_too_large",side))}check(context, side)?; let request = session::AppendRequest { session_id: session_id.into(), expected_sequence: sequence, event: session::NewSessionEvent { event_id: id.into(), kind, payload_json: payload_json.clone() } };
     let outcome = service.sessions.append(context.child(), request.clone()).await.map_err(|_| internal())?;
     if let Some(result) = outcome.result { if outcome.failure.is_none() && result.sequence == sequence { return Ok(()); } return Err(internal()); }
     let failure = outcome.failure.ok_or_else(internal)?;
@@ -129,7 +129,7 @@ fn reconstruct(events: &[session::SessionEvent]) -> Result<Vec<model::Completion
     for event in events { if !ids.insert(event.event_id.as_str()) { return Err(protocol("history_invalid", false)); } match event.kind {
         session::SessionEventKind::User => messages.push(message(model::MessageRole::User, Some(parse_text(event)?.content))),
         session::SessionEventKind::Assistant => messages.push(message(model::MessageRole::Assistant, Some(parse_text(event)?.content))),
-        session::SessionEventKind::ToolCall if pending.is_none() => { let call = parse_call(event)?; messages.push(model::CompletionMessage { role: model::MessageRole::Assistant, content: None, tool_call_id: None, name: None, tool_calls: vec![model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json.clone() }] }); pending = Some(call); }
+        session::SessionEventKind::ToolCall if pending.is_none() => { let call = parse_call(event)?;let model_call=model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json.clone() };if !matches!(model_call.name.as_str(),"read"|"write"|"edit"|"bash")||execute(&model_call).is_err(){return Err(protocol("history_invalid",false))}messages.push(model::CompletionMessage { role: model::MessageRole::Assistant, content: None, tool_call_id: None, name: None, tool_calls: vec![model_call] }); pending = Some(call); }
         session::SessionEventKind::ToolResult => { let call = pending.take().ok_or_else(|| protocol("history_invalid", false))?; let output = parse_result(event, &model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json })?; messages.push(model::CompletionMessage { role: model::MessageRole::Tool, content: Some(output), tool_call_id: Some(call.tool_call_id), name: Some(call.name), tool_calls: vec![] }); }
         _ => return Err(protocol("history_invalid", false)),
     }} if pending.is_some() { return Err(protocol("history_invalid", false)); } Ok(messages)
@@ -145,22 +145,23 @@ fn execute(call: &model::ToolCall) -> Result<tool::ExecuteRequest, TurnFailure> 
         _ => return Err(protocol("tool_unknown", true)) }) }
 
 #[rustfmt::skip]
-fn tool_output(call: &model::ToolCall, outcome: tool::ExecuteOutcome) -> Result<String, TurnFailure> { if outcome.result.is_some() == outcome.failure.is_some() { return Err(internal()); }
-    if let Some(failure) = outcome.failure { if matches!(failure.class, tool::ToolFailureClass::Cancelled) { return Err(fail(TurnFailureClass::Cancelled, &failure.code, failure.retryable, true)); } else if matches!(failure.class, tool::ToolFailureClass::Deadline) { return Err(fail(TurnFailureClass::Deadline, &failure.code, failure.retryable, true)); } return canonical(&json!({"failure":{"code":failure.code,"message":failure.message,"retryable":failure.retryable,"side_effect_possible":failure.side_effect_possible} })); }
+fn tool_output(call: &model::ToolCall, outcome: tool::ExecuteOutcome) -> Result<(String,Option<TurnFailure>), TurnFailure> { if outcome.result.is_some() == outcome.failure.is_some() { return Err(internal()); }
+    if let Some(failure) = outcome.failure { if matches!(failure.class,tool::ToolFailureClass::Unknown{..}){return Err(internal())}let control=if matches!(failure.class,tool::ToolFailureClass::Cancelled){Some(fail(TurnFailureClass::Cancelled,&failure.code,failure.retryable,true))}else if matches!(failure.class,tool::ToolFailureClass::Deadline){Some(fail(TurnFailureClass::Deadline,&failure.code,failure.retryable,true))}else{None};return Ok((canonical(&json!({"failure":{"code":failure.code,"message":failure.message,"retryable":failure.retryable,"side_effect_possible":failure.side_effect_possible} }))?,control)); }
     let result = outcome.result.unwrap(); match call.name.as_str() {
-        "read"|"write"|"edit" => { let v=result.file.ok_or_else(internal)?; if result.bash.is_some(){return Err(internal())} canonical(&json!({"result":{"file":{"path":v.path,"content":v.content,"bytes":v.bytes,"changed":v.changed}}})) },
-        "bash" => { let v=result.bash.ok_or_else(internal)?; if result.file.is_some(){return Err(internal())} canonical(&json!({"result":{"bash":{"stdout":v.stdout,"stderr":v.stderr,"stdout_bytes":v.stdout_bytes,"stderr_bytes":v.stderr_bytes,"stdout_truncated":v.stdout_truncated,"stderr_truncated":v.stderr_truncated,"exit_code":v.exit_code,"signal":v.signal}}})) },
+        "read"|"write"|"edit" => { let v=result.file.ok_or_else(internal)?;let operation=matches!((&*call.name,&v.operation),("read",tool::FileOperation::Read)|("write",tool::FileOperation::Write)|("edit",tool::FileOperation::Edit)); if result.bash.is_some()||!operation{return Err(internal())} Ok((canonical(&json!({"result":{"file":{"path":v.path,"content":v.content,"bytes":v.bytes,"changed":v.changed}}}))?,None)) },
+        "bash" => { let v=result.bash.ok_or_else(internal)?; if result.file.is_some(){return Err(internal())} Ok((canonical(&json!({"result":{"bash":{"stdout":v.stdout,"stderr":v.stderr,"stdout_bytes":v.stdout_bytes,"stderr_bytes":v.stderr_bytes,"stdout_truncated":v.stdout_truncated,"stderr_truncated":v.stderr_truncated,"exit_code":v.exit_code,"signal":v.signal}}}))?,None)) },
         _ => Err(internal()) } }
 
 #[rustfmt::skip]
-fn validate(context: &boxology::CallContext, request: &RunTurnRequest) -> Result<(), TurnFailure> { check(context, false)?; if !id(&request.turn_id) || request.user_message.is_empty() || request.user_message.len() > TEXT || request.system_prompt.len() > TEXT || request.tools.is_empty() || request.tools.len() > 16 { return Err(input()); }
+fn validate(context: &boxology::CallContext, request: &RunTurnRequest) -> Result<(), TurnFailure> { check(context, false)?; if !id(&request.session_id)||!id(&request.turn_id) || request.user_message.is_empty() || request.user_message.len() > TEXT || request.system_prompt.len() > TEXT || request.tools.is_empty() || request.tools.len() > 16||request.max_output_tokens==Some(0) { return Err(input()); }
     let mut names = BTreeSet::new(); for item in &request.tools { if item.input_schema_json.len() > TEXT{return Err(input())} let schema: Value = serde_json::from_str(&item.input_schema_json).map_err(|_| input())?; if item.name.is_empty() || item.name.len() > 64 || !item.name.bytes().all(|v| v.is_ascii_alphanumeric() || matches!(v, b'-'|b'_')) || !matches!(item.name.as_str(), "read"|"write"|"edit"|"bash") || !names.insert(&item.name) || item.description.len() > 8192 || !schema.is_object() { return Err(input()); } } Ok(()) }
-#[rustfmt::skip] fn complete(events: &[session::SessionEvent], ids: &[String;4]) -> Result<Option<RunTurnResult>, TurnFailure> { if events.len() == 4 && events.iter().zip(ids).all(|(event,id)| &event.event_id == id) { let answer = parse_text(&events[3])?.content; let call = parse_call(&events[1])?; let output = parse_result(&events[2], &model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json })?; return Ok(Some(RunTurnResult { answer, tool_name: Some(call.name), tool_call_id: Some(call.tool_call_id), tool_output_json: Some(output), usage: zero() })); } else if events.len() == 2 { return Err(protocol("incomplete_tool_effect", true)); } else if events.len() > 3 { return Err(protocol("turn_history_invalid", true)); } Ok(None) }
+#[rustfmt::skip] fn complete(events: &[session::SessionEvent], ids: &[String;4],request:&RunTurnRequest) -> Result<Option<RunTurnResult>, TurnFailure> {if events.len()>=2{let raw=parse_call(&events[1])?;let call=model::ToolCall{id:raw.tool_call_id.clone(),name:raw.name.clone(),arguments_json:raw.arguments_json};validate_call(&call,request)?;if events.len()==2{return Err(protocol("incomplete_tool_effect",true))}else if events.len()==4&&events.iter().zip(ids).all(|(event,id)|&event.event_id==id){let answer=parse_text(&events[3])?.content;let output=parse_result(&events[2],&call)?;return Ok(Some(RunTurnResult{answer,tool_name:Some(raw.name),tool_call_id:Some(raw.tool_call_id),tool_output_json:Some(output),usage:zero()}))}}else if events.len()>3{return Err(protocol("turn_history_invalid",true))}Ok(None) }
+#[rustfmt::skip] fn validate_call(call:&model::ToolCall,request:&RunTurnRequest)->Result<tool::ExecuteRequest,TurnFailure>{if !call_id(&call.id)||!request.tools.iter().any(|item|item.name==call.name){return Err(protocol("tool_call_invalid",true))}execute(call)}
 #[rustfmt::skip] fn validate_turn_prefix(events:&[session::SessionEvent],ids:&[String;4],user:&str)->Result<(),TurnFailure>{let kinds=[session::SessionEventKind::User,session::SessionEventKind::ToolCall,session::SessionEventKind::ToolResult,session::SessionEventKind::Assistant];if events.len()>4{return Err(protocol("turn_history_invalid",true))}for(index,event)in events.iter().enumerate(){if event.event_id!=ids[index]||!same_kind(&event.kind,&kinds[index]){return Err(protocol("turn_history_invalid",true))}}if let Some(event)=events.first()&&parse_text(event)?.content!=user{return Err(protocol("turn_replay_conflict",true))}Ok(())}
-#[rustfmt::skip] fn parse_text(event: &session::SessionEvent) -> Result<TextEvent, TurnFailure> { let value:TextEvent=parse(&event.payload_json)?; schema(&value.schema)?; Ok(value) }
-#[rustfmt::skip] fn parse_call(event: &session::SessionEvent) -> Result<CallEvent, TurnFailure> { let value:CallEvent=parse(&event.payload_json)?;schema(&value.schema)?;if !call_id(&value.tool_call_id){return Err(protocol("history_invalid",false))}Ok(value) }
-#[rustfmt::skip] fn parse_result(event: &session::SessionEvent, call: &model::ToolCall) -> Result<String, TurnFailure> { let value: ResultEvent = parse(&event.payload_json)?; schema(&value.schema)?; if value.tool_call_id != call.id || value.name != call.name { return Err(protocol("history_invalid", false)); } Ok(value.output_json) }
-#[rustfmt::skip] fn parse<T: for<'a> Deserialize<'a>>(value: &str) -> Result<T, TurnFailure> { serde_json::from_str(value).map_err(|_| protocol("history_invalid", false)) }
+#[rustfmt::skip] fn parse_text(event: &session::SessionEvent) -> Result<TextEvent, TurnFailure> { let value:TextEvent=parse(&event.payload_json)?; schema(&value.schema)?;let limit=if matches!(event.kind,session::SessionEventKind::User){TEXT}else{LARGE};if value.content.is_empty()||value.content.len()>limit{return Err(protocol("history_invalid",false))}Ok(value) }
+#[rustfmt::skip] fn parse_call(event: &session::SessionEvent) -> Result<CallEvent, TurnFailure> { let value:CallEvent=parse(&event.payload_json)?;schema(&value.schema)?;if !call_id(&value.tool_call_id)||!tool_name(&value.name)||value.arguments_json.len()>LARGE{return Err(protocol("history_invalid",false))}let args:Value=serde_json::from_str(&value.arguments_json).map_err(|_|protocol("history_invalid",false))?;if !args.is_object(){return Err(protocol("history_invalid",false))}Ok(value) }
+#[rustfmt::skip] fn parse_result(event: &session::SessionEvent, call: &model::ToolCall) -> Result<String, TurnFailure> { let value: ResultEvent = parse(&event.payload_json)?; schema(&value.schema)?;if value.output_json.len()>LARGE{return Err(protocol("history_invalid",false))}let output:Value=serde_json::from_str(&value.output_json).map_err(|_|protocol("history_invalid",false))?;if value.tool_call_id != call.id || value.name != call.name||!output.is_object() { return Err(protocol("history_invalid", false)); } Ok(value.output_json) }
+#[rustfmt::skip] fn parse<T: for<'a> Deserialize<'a>>(value: &str) -> Result<T, TurnFailure> { if value.len()>EVENT_WIRE{return Err(protocol("history_invalid",false))}serde_json::from_str(value).map_err(|_| protocol("history_invalid", false)) }
 #[rustfmt::skip] fn decode<T: for<'a> Deserialize<'a>>(value: Value) -> Result<T, TurnFailure> { serde_json::from_value(value).map_err(|_| protocol("tool_arguments_invalid", true)) }
 #[rustfmt::skip] fn canonical<T: Serialize>(value: &T) -> Result<String, TurnFailure> { serde_json::to_string(value).map_err(|_| internal()) }
 #[rustfmt::skip] fn message(role: model::MessageRole, content: Option<String>) -> model::CompletionMessage { model::CompletionMessage { role, content, tool_call_id: None, name: None, tool_calls: vec![] } }
@@ -170,12 +171,13 @@ fn validate(context: &boxology::CallContext, request: &RunTurnRequest) -> Result
 #[rustfmt::skip] fn id(value: &str) -> bool { !value.is_empty() && value.len() <= 64 && value.bytes().all(|v| v.is_ascii_alphanumeric() || matches!(v,b'-'|b'_'|b'.')) }
 #[rustfmt::skip] fn event_id(value: &str) -> bool { !value.is_empty() && value.len() <= 128 && value.bytes().all(|v| v.is_ascii_alphanumeric() || matches!(v,b'-'|b'_'|b'.')) }
 #[rustfmt::skip] fn call_id(value:&str)->bool{!value.is_empty()&&value.len()<=128&&value.bytes().all(|v|v.is_ascii_alphanumeric()||matches!(v,b'-'|b'_'|b'.'))}
+#[rustfmt::skip] fn tool_name(value:&str)->bool{!value.is_empty()&&value.len()<=64&&value.bytes().all(|v|v.is_ascii_alphanumeric()||matches!(v,b'-'|b'_'))}
 #[rustfmt::skip] fn schema(value:&str)->Result<(),TurnFailure>{if value=="agent-loop-event@1"{Ok(())}else{Err(protocol("history_invalid",false))}}
 #[rustfmt::skip] fn same_kind(a:&session::SessionEventKind,b:&session::SessionEventKind)->bool{matches!((a,b),(session::SessionEventKind::User,session::SessionEventKind::User)|(session::SessionEventKind::Assistant,session::SessionEventKind::Assistant)|(session::SessionEventKind::ToolCall,session::SessionEventKind::ToolCall)|(session::SessionEventKind::ToolResult,session::SessionEventKind::ToolResult))}
 #[rustfmt::skip] fn check(context: &boxology::CallContext, side: bool) -> Result<(), TurnFailure> { if context.cancellation().is_cancelled() { Err(fail(TurnFailureClass::Cancelled,"cancelled",false,side)) } else if context.deadline().is_some_and(|v| v.remaining()==Duration::ZERO) { Err(fail(TurnFailureClass::Deadline,"deadline_exceeded",false,side)) } else { Ok(()) } }
 #[rustfmt::skip] fn one<T>(result: Option<T>, failure: Option<session::SessionFailure>, side: bool) -> Result<T, TurnFailure> { match (result,failure) { (Some(v),None)=>Ok(v), (None,Some(v))=>Err(session_failure(v,side)), _=>Err(internal()) } }
 #[rustfmt::skip] fn loaded_log(outcome:session::LoadOutcome)->Result<session::LoadResult,TurnFailure>{let log=one(outcome.result,outcome.failure,false)?;if log.events.len()>4096||log.next_sequence!=log.events.len()as u64{return Err(internal())}let mut ids=BTreeSet::new();for(index,event)in log.events.iter().enumerate(){if event.sequence!=index as u64||!event_id(&event.event_id)||!ids.insert(event.event_id.as_str())||!matches!(event.kind,session::SessionEventKind::User|session::SessionEventKind::Assistant|session::SessionEventKind::ToolCall|session::SessionEventKind::ToolResult){return Err(internal())}}Ok(log)}
-#[rustfmt::skip] fn session_failure(value: session::SessionFailure, side: bool) -> TurnFailure { if matches!(value.class,session::SessionFailureClass::Cancelled) { fail(TurnFailureClass::Cancelled,&value.code,value.retryable,side||value.side_effect_possible) } else if matches!(value.class,session::SessionFailureClass::Deadline) { fail(TurnFailureClass::Deadline,&value.code,value.retryable,side||value.side_effect_possible) } else { fail(TurnFailureClass::Session,&value.code,value.retryable,side||value.side_effect_possible) } }
+#[rustfmt::skip] fn session_failure(value: session::SessionFailure, side: bool) -> TurnFailure { if matches!(value.class,session::SessionFailureClass::Unknown{..}){internal()}else if matches!(value.class,session::SessionFailureClass::Cancelled) { fail(TurnFailureClass::Cancelled,&value.code,value.retryable,side||value.side_effect_possible) } else if matches!(value.class,session::SessionFailureClass::Deadline) { fail(TurnFailureClass::Deadline,&value.code,value.retryable,side||value.side_effect_possible) } else { fail(TurnFailureClass::Session,&value.code,value.retryable,side||value.side_effect_possible) } }
 #[rustfmt::skip] fn input() -> TurnFailure { fail(TurnFailureClass::Input,"input_invalid",false,false) }
 #[rustfmt::skip] fn protocol(code: &str, side: bool) -> TurnFailure { fail(TurnFailureClass::Protocol,code,false,side) }
 #[rustfmt::skip] fn internal() -> TurnFailure { fail(TurnFailureClass::Protocol,"internal",false,true) }
