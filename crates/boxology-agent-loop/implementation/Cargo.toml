@@ -1,0 +1,23 @@
+[package]
+name = "agent-loop-implementation"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+[dependencies]
+boxology.workspace = true
+boxology-contract.workspace = true
+boxology-runtime.workspace = true
+boxology_generated_contract = { package = "agent-loop-contract", version = "=0.0.0", path = "../generated/contract" }
+boxology_import_model_completion = { package = "model-completion-contract", version = "=0.0.0", path = "../../boxology-model-completion/generated/contract" }
+boxology_import_tool_runner = { package = "tool-runner-contract", version = "=0.0.0", path = "../../boxology-tool-runner/generated/contract" }
+boxology_import_session_store = { package = "session-store-contract", version = "=0.0.0", path = "../../boxology-session-store/generated/contract" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
+tokio = { version = "=1.53.0", default-features = false, features = ["sync", "time"] }
+[dev-dependencies]
+boxology_generated_contract = { package = "agent-loop-contract", version = "=0.0.0", path = "../generated/contract", features = ["test-support"] }
+boxology_import_model_completion = { package = "model-completion-contract", version = "=0.0.0", path = "../../boxology-model-completion/generated/contract", features = ["test-support"] }
+boxology_import_tool_runner = { package = "tool-runner-contract", version = "=0.0.0", path = "../../boxology-tool-runner/generated/contract", features = ["test-support"] }
+boxology_import_session_store = { package = "session-store-contract", version = "=0.0.0", path = "../../boxology-session-store/generated/contract", features = ["test-support"] }
+boxology-runtime = { workspace = true, features = ["test-support"] }
+tokio = { version = "=1.53.0", default-features = false, features = ["macros", "rt", "sync"] }

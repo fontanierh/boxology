@@ -29,6 +29,8 @@ members = [
     "crates/boxology-tool-runner/generated/contract",
     "crates/boxology-session-store/implementation",
     "crates/boxology-session-store/generated/contract",
+    "crates/boxology-agent-loop/implementation",
+    "crates/boxology-agent-loop/generated/contract",
     "crates/boxology-workspace",
     "crates/boxology-cli",
     "crates/boxology-cli-core",
