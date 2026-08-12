@@ -27,7 +27,7 @@ server = [
 client = ["dep:boxology-runtime", "dep:http", "dep:reqwest", "dep:tokio"]
 
 [dependencies]
-base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
+base64 = { version = "=0.23.1", default-features = false, features = ["alloc"] }
 boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
 boxology-runtime = { version = "=0.0.0", path = "../boxology-runtime", optional = true }
 bytes = { version = "=1.12.1", optional = true }
