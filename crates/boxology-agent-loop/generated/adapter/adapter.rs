@@ -910,106 +910,159 @@ where
             > + Send + 'a,
         >,
     > {
-        let expected = ::boxology_generated_contract::contract_descriptor()
-            .capabilities()
-            .first()
-            .expect("generated AgentLoop contract has one capability")
-            .id();
-        if capability != expected {
-            return Box::pin(::std::future::ready(Err(unknown_capability())));
+        let capabilities = ::boxology_generated_contract::contract_descriptor()
+            .capabilities();
+        if capability == capabilities[0].id() {
+            return Box::pin(async move {
+                let input = ::boxology_contract::TypeDescriptor::structure([
+                        ::boxology_contract::FieldDescriptor::new(
+                            "session_id",
+                            ::boxology_contract::TypeDescriptor::string(),
+                            None,
+                        ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "turn_id",
+                            ::boxology_contract::TypeDescriptor::string(),
+                            None,
+                        ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "user_message",
+                            ::boxology_contract::TypeDescriptor::string(),
+                            None,
+                        ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "system_prompt",
+                            ::boxology_contract::TypeDescriptor::string(),
+                            None,
+                        ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "tools",
+                            ::boxology_contract::TypeDescriptor::list(
+                                    ::boxology_contract::TypeDescriptor::structure([
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "name",
+                                                ::boxology_contract::TypeDescriptor::string(),
+                                                None,
+                                            ),
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "description",
+                                                ::boxology_contract::TypeDescriptor::string(),
+                                                None,
+                                            ),
+                                            ::boxology_contract::FieldDescriptor::new(
+                                                "input_schema_json",
+                                                ::boxology_contract::TypeDescriptor::string(),
+                                                None,
+                                            ),
+                                        ])
+                                        .expect("generated struct descriptor is valid"),
+                                )
+                                .expect("generated list descriptor is valid"),
+                            None,
+                        ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "max_output_tokens",
+                            ::boxology_contract::TypeDescriptor::optional(
+                                    ::boxology_contract::TypeDescriptor::u64(),
+                                )
+                                .expect("generated optional descriptor is valid"),
+                            None,
+                        ),
+                    ])
+                    .expect("generated struct descriptor is valid")
+                    .conform(::boxology_contract::DecodeRole::ProviderInput, input)
+                    .map_err(|error| {
+                        ::boxology_contract::ErasedCallError::ContractViolation(
+                            conversion_detail("input_decode", error),
+                        )
+                    })?;
+                let input = <::boxology_generated_contract::RunTurnRequest as ::boxology_contract::ContractType>::decode(
+                        &input,
+                    )
+                    .map_err(|error| {
+                        ::boxology_contract::ErasedCallError::ContractViolation(
+                            conversion_detail("input_decode", error),
+                        )
+                    })?;
+                match ::boxology_generated_contract::AgentLoopDispatch::run_turn(
+                        &self.service,
+                        context,
+                        input,
+                    )
+                    .await
+                {
+                    Ok(output) => {
+                        output
+                            .encode()
+                            .map_err(|error| {
+                                ::boxology_contract::ErasedCallError::InvalidResponse(
+                                    conversion_detail("output_encode", error),
+                                )
+                            })
+                    }
+                    Err(error) => {
+                        Err(::boxology_contract::ErasedCallError::from_domain(&error))
+                    }
+                }
+            });
         }
-        Box::pin(async move {
-            let input = ::boxology_contract::TypeDescriptor::structure([
-                    ::boxology_contract::FieldDescriptor::new(
-                        "session_id",
-                        ::boxology_contract::TypeDescriptor::string(),
-                        None,
-                    ),
-                    ::boxology_contract::FieldDescriptor::new(
-                        "turn_id",
-                        ::boxology_contract::TypeDescriptor::string(),
-                        None,
-                    ),
-                    ::boxology_contract::FieldDescriptor::new(
-                        "user_message",
-                        ::boxology_contract::TypeDescriptor::string(),
-                        None,
-                    ),
-                    ::boxology_contract::FieldDescriptor::new(
-                        "system_prompt",
-                        ::boxology_contract::TypeDescriptor::string(),
-                        None,
-                    ),
-                    ::boxology_contract::FieldDescriptor::new(
-                        "tools",
-                        ::boxology_contract::TypeDescriptor::list(
-                                ::boxology_contract::TypeDescriptor::structure([
-                                        ::boxology_contract::FieldDescriptor::new(
-                                            "name",
-                                            ::boxology_contract::TypeDescriptor::string(),
-                                            None,
-                                        ),
-                                        ::boxology_contract::FieldDescriptor::new(
-                                            "description",
-                                            ::boxology_contract::TypeDescriptor::string(),
-                                            None,
-                                        ),
-                                        ::boxology_contract::FieldDescriptor::new(
-                                            "input_schema_json",
-                                            ::boxology_contract::TypeDescriptor::string(),
-                                            None,
-                                        ),
-                                    ])
-                                    .expect("generated struct descriptor is valid"),
-                            )
-                            .expect("generated list descriptor is valid"),
-                        None,
-                    ),
-                    ::boxology_contract::FieldDescriptor::new(
-                        "max_output_tokens",
-                        ::boxology_contract::TypeDescriptor::optional(
-                                ::boxology_contract::TypeDescriptor::u64(),
-                            )
-                            .expect("generated optional descriptor is valid"),
-                        None,
-                    ),
-                ])
-                .expect("generated struct descriptor is valid")
-                .conform(::boxology_contract::DecodeRole::ProviderInput, input)
-                .map_err(|error| {
-                    ::boxology_contract::ErasedCallError::ContractViolation(
-                        conversion_detail("input_decode", error),
+        if capability == capabilities[1].id() {
+            return Box::pin(async move {
+                let input = ::boxology_contract::TypeDescriptor::structure([
+                        ::boxology_contract::FieldDescriptor::new(
+                            "session_id",
+                            ::boxology_contract::TypeDescriptor::string(),
+                            None,
+                        ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "checkpoint_id",
+                            ::boxology_contract::TypeDescriptor::string(),
+                            None,
+                        ),
+                        ::boxology_contract::FieldDescriptor::new(
+                            "summary",
+                            ::boxology_contract::TypeDescriptor::string(),
+                            None,
+                        ),
+                    ])
+                    .expect("generated struct descriptor is valid")
+                    .conform(::boxology_contract::DecodeRole::ProviderInput, input)
+                    .map_err(|error| {
+                        ::boxology_contract::ErasedCallError::ContractViolation(
+                            conversion_detail("input_decode", error),
+                        )
+                    })?;
+                let input = <::boxology_generated_contract::CompactRequest as ::boxology_contract::ContractType>::decode(
+                        &input,
                     )
-                })?;
-            let input = <::boxology_generated_contract::RunTurnRequest as ::boxology_contract::ContractType>::decode(
-                    &input,
-                )
-                .map_err(|error| {
-                    ::boxology_contract::ErasedCallError::ContractViolation(
-                        conversion_detail("input_decode", error),
+                    .map_err(|error| {
+                        ::boxology_contract::ErasedCallError::ContractViolation(
+                            conversion_detail("input_decode", error),
+                        )
+                    })?;
+                match ::boxology_generated_contract::AgentLoopDispatch::compact(
+                        &self.service,
+                        context,
+                        input,
                     )
-                })?;
-            match ::boxology_generated_contract::AgentLoopDispatch::run_turn(
-                    &self.service,
-                    context,
-                    input,
-                )
-                .await
-            {
-                Ok(output) => {
-                    output
-                        .encode()
-                        .map_err(|error| {
-                            ::boxology_contract::ErasedCallError::InvalidResponse(
-                                conversion_detail("output_encode", error),
-                            )
-                        })
+                    .await
+                {
+                    Ok(output) => {
+                        output
+                            .encode()
+                            .map_err(|error| {
+                                ::boxology_contract::ErasedCallError::InvalidResponse(
+                                    conversion_detail("output_encode", error),
+                                )
+                            })
+                    }
+                    Err(error) => {
+                        Err(::boxology_contract::ErasedCallError::from_domain(&error))
+                    }
                 }
-                Err(error) => {
-                    Err(::boxology_contract::ErasedCallError::from_domain(&error))
-                }
-            }
-        })
+            });
+        }
+        Box::pin(::std::future::ready(Err(unknown_capability())))
     }
 }
 fn conversion_detail(

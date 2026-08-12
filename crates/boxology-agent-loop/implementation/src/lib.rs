@@ -18,8 +18,12 @@ boxology::contract! {
     pub struct RunTurnResult { pub answer: String, pub tool_name: Option<String>, pub tool_call_id: Option<String>, pub tool_output_json: Option<String>, pub usage: TurnUsage }
     pub struct TurnFailure { pub class: TurnFailureClass, pub code: String, pub message: String, pub retryable: bool, pub side_effect_possible: bool }
     pub struct RunTurnOutcome { pub result: Option<RunTurnResult>, pub failure: Option<TurnFailure> }
+    pub struct CompactRequest { pub session_id: String, pub checkpoint_id: String, pub summary: String }
+    pub struct CompactResult { pub event_id: String, pub sequence: u64, pub appended: bool }
+    pub struct CompactOutcome { pub result: Option<CompactResult>, pub failure: Option<TurnFailure> }
     #[error] pub enum RunTurnError { Internal }
     #[capability] pub async fn run_turn(request: RunTurnRequest) -> Result<RunTurnOutcome, RunTurnError>;
+    #[capability] pub async fn compact(request: CompactRequest) -> Result<CompactOutcome, RunTurnError>;
 }
 
 #[rustfmt::skip] #[derive(Serialize, Deserialize)] #[serde(deny_unknown_fields)]
@@ -28,6 +32,8 @@ struct TextEvent { schema: String, content: String }
 struct CallEvent { schema: String, tool_call_id: String, name: String, arguments_json: String }
 #[rustfmt::skip] #[derive(Serialize, Deserialize)] #[serde(deny_unknown_fields)]
 struct ResultEvent { schema: String, tool_call_id: String, name: String, output_json: String }
+#[rustfmt::skip] #[derive(Serialize, Deserialize)] #[serde(deny_unknown_fields)]
+struct CheckpointEvent { schema: String, checkpoint_id: String, summary: String }
 #[rustfmt::skip] #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct ReadArgs { path: String }
 #[rustfmt::skip] #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct WriteArgs { path: String, content: String }
 #[rustfmt::skip] #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct EditArgs { path: String, old_text: String, new_text: String }
@@ -47,9 +53,11 @@ impl AgentLoopService {
     /// Constructs the loop from generated typed imports only.
     pub fn new(model: generated::ModelCompletionImport, tool: generated::ToolRunnerImport, sessions: generated::SessionStoreImport) -> Self { Self { model, tool, sessions, turn_lock: tokio::sync::Mutex::new(()) } }
 
+    async fn serial<'a>(&'a self, context:&boxology::CallContext)->Result<tokio::sync::MutexGuard<'a,()>,TurnFailure>{if let Some(deadline)=context.deadline(){tokio::select!{biased;_=context.cancellation().cancelled()=>Err(fail(TurnFailureClass::Cancelled,"cancelled",false,false)),_=tokio::time::sleep(deadline.remaining())=>Err(fail(TurnFailureClass::Deadline,"deadline_exceeded",false,false)),guard=self.turn_lock.lock()=>Ok(guard)}}else{tokio::select!{biased;_=context.cancellation().cancelled()=>Err(fail(TurnFailureClass::Cancelled,"cancelled",false,false)),guard=self.turn_lock.lock()=>Ok(guard)}}}
+
     async fn run(&self, context: &boxology::CallContext, request: RunTurnRequest) -> Result<RunTurnResult, TurnFailure> {
         validate(context, &request)?;
-        let _turn_guard = if let Some(deadline)=context.deadline(){tokio::select!{biased;_=context.cancellation().cancelled()=>return Err(fail(TurnFailureClass::Cancelled,"cancelled",false,false)),_=tokio::time::sleep(deadline.remaining())=>return Err(fail(TurnFailureClass::Deadline,"deadline_exceeded",false,false)),guard=self.turn_lock.lock()=>guard}}else{tokio::select!{biased;_=context.cancellation().cancelled()=>return Err(fail(TurnFailureClass::Cancelled,"cancelled",false,false)),guard=self.turn_lock.lock()=>guard}};
+        let _turn_guard = self.serial(context).await?;
         let loaded = self.sessions.load(context.child(), session::LoadRequest { session_id: request.session_id.clone() }).await.map_err(|_| internal())?;
         let loaded = loaded_log(loaded)?;
         let ids = [format!("{}.user", request.turn_id), format!("{}.call", request.turn_id), format!("{}.result", request.turn_id), format!("{}.assistant", request.turn_id)];
@@ -86,6 +94,11 @@ impl AgentLoopService {
         append(self, context, &request.session_id, &ids[3], sequence, session::SessionEventKind::Assistant, canonical(&TextEvent { schema: "agent-loop-event@1".into(), content: answer.clone() })?, true).await?;
         Ok(RunTurnResult { answer, tool_name: Some(call.name), tool_call_id: Some(call.id), tool_output_json: Some(output_json), usage: add(first_usage, second.1)? })
     }
+
+    async fn compact_inner(&self,context:&boxology::CallContext,request:CompactRequest)->Result<CompactResult,TurnFailure>{
+        check(context,false)?;if !id(&request.session_id)||!id(&request.checkpoint_id)||request.summary.is_empty()||request.summary.len()>TEXT{return Err(input())}let _guard=self.serial(context).await?;let loaded=self.sessions.load(context.child(),session::LoadRequest{session_id:request.session_id.clone()}).await.map_err(|_|internal())?;let loaded=loaded_log(loaded)?;let event_id=format!("checkpoint.{}",request.checkpoint_id);let payload=canonical(&CheckpointEvent{schema:"agent-loop-checkpoint@1".into(),checkpoint_id:request.checkpoint_id,summary:request.summary})?;
+        let mut prior=None;for event in &loaded.events{if event.event_id==event_id{if !matches!(event.kind,session::SessionEventKind::Assistant)||event.payload_json!=payload{return Err(protocol("checkpoint_conflict",false))}prior=Some(event.sequence)}}validate_history(&loaded.events)?;if let Some(sequence)=prior{return Ok(CompactResult{event_id,sequence,appended:false})}else if loaded.events.is_empty()||!regular_assistant(loaded.events.last().unwrap()){return Err(protocol("history_incomplete",false))}append(self,context,&request.session_id,&event_id,loaded.next_sequence,session::SessionEventKind::Assistant,payload,false).await?;Ok(CompactResult{event_id,sequence:loaded.next_sequence,appended:true})
+    }
 }
 
 #[boxology::implementation]
@@ -98,6 +111,7 @@ impl AgentLoopService {
             Err(failure) => Ok(RunTurnOutcome { result: None, failure: Some(failure) }),
         }
     }
+    pub async fn compact(&self,context:boxology::CallContext,request:CompactRequest)->Result<CompactOutcome,RunTurnError>{match self.compact_inner(&context,request).await{Ok(result)=>Ok(CompactOutcome{result:Some(result),failure:None}),Err(failure)if failure.code=="internal"=>Err(RunTurnError::Internal),Err(failure)=>Ok(CompactOutcome{result:None,failure:Some(failure)})}}
 }
 
 #[rustfmt::skip]
@@ -125,14 +139,15 @@ async fn append(service: &AgentLoopService, context: &boxology::CallContext, ses
 
 #[rustfmt::skip]
 fn reconstruct(events: &[session::SessionEvent]) -> Result<Vec<model::CompletionMessage>, TurnFailure> {
-    let mut messages = Vec::new(); let mut pending: Option<CallEvent> = None; let mut ids = BTreeSet::new();
-    for event in events { if !ids.insert(event.event_id.as_str()) { return Err(protocol("history_invalid", false)); } match event.kind {
-        session::SessionEventKind::User => messages.push(message(model::MessageRole::User, Some(parse_text(event)?.content))),
-        session::SessionEventKind::Assistant => messages.push(message(model::MessageRole::Assistant, Some(parse_text(event)?.content))),
-        session::SessionEventKind::ToolCall if pending.is_none() => { let call = parse_call(event)?;let model_call=model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json.clone() };if !matches!(model_call.name.as_str(),"read"|"write"|"edit"|"bash")||execute(&model_call).is_err(){return Err(protocol("history_invalid",false))}messages.push(model::CompletionMessage { role: model::MessageRole::Assistant, content: None, tool_call_id: None, name: None, tool_calls: vec![model_call] }); pending = Some(call); }
-        session::SessionEventKind::ToolResult => { let call = pending.take().ok_or_else(|| protocol("history_invalid", false))?; let output = parse_result(event, &model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json })?; messages.push(model::CompletionMessage { role: model::MessageRole::Tool, content: Some(output), tool_call_id: Some(call.tool_call_id), name: Some(call.name), tool_calls: vec![] }); }
+    let mut messages = Vec::new(); let mut pending: Option<CallEvent> = None; let mut ids = BTreeSet::new();let mut phase=0;let mut completed=false;
+    for event in events { if !ids.insert(event.event_id.as_str()) { return Err(protocol("history_invalid", false)); }
+        if let Some(value)=checkpoint(event)?{if phase!=0||!completed{return Err(protocol("history_invalid",false))}messages=vec![message(model::MessageRole::Assistant,Some(value.summary))];completed=false;continue}match event.kind {
+        session::SessionEventKind::User if phase==0 =>{messages.push(message(model::MessageRole::User, Some(parse_text(event)?.content)));phase=1},
+        session::SessionEventKind::Assistant if phase==1||phase==3 =>{messages.push(message(model::MessageRole::Assistant, Some(parse_text(event)?.content)));phase=0;completed=true},
+        session::SessionEventKind::ToolCall if phase==1 => { let call = parse_call(event)?;let model_call=model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json.clone() };if !matches!(model_call.name.as_str(),"read"|"write"|"edit"|"bash")||execute(&model_call).is_err(){return Err(protocol("history_invalid",false))}messages.push(model::CompletionMessage { role: model::MessageRole::Assistant, content: None, tool_call_id: None, name: None, tool_calls: vec![model_call] }); pending = Some(call);phase=2; }
+        session::SessionEventKind::ToolResult if phase==2 => { let call = pending.take().ok_or_else(|| protocol("history_invalid", false))?; let output = parse_result(event, &model::ToolCall { id: call.tool_call_id.clone(), name: call.name.clone(), arguments_json: call.arguments_json })?; messages.push(model::CompletionMessage { role: model::MessageRole::Tool, content: Some(output), tool_call_id: Some(call.tool_call_id), name: Some(call.name), tool_calls: vec![] });phase=3; }
         _ => return Err(protocol("history_invalid", false)),
-    }} if pending.is_some() { return Err(protocol("history_invalid", false)); } Ok(messages)
+    }} if phase!=0 { return Err(protocol("history_invalid", false)); } Ok(messages)
 }
 
 #[rustfmt::skip]
@@ -161,6 +176,9 @@ fn validate(context: &boxology::CallContext, request: &RunTurnRequest) -> Result
 #[rustfmt::skip] fn parse_text(event: &session::SessionEvent) -> Result<TextEvent, TurnFailure> { let value:TextEvent=parse(&event.payload_json)?; schema(&value.schema)?;let limit=if matches!(event.kind,session::SessionEventKind::User){TEXT}else{LARGE};if value.content.is_empty()||value.content.len()>limit{return Err(protocol("history_invalid",false))}Ok(value) }
 #[rustfmt::skip] fn parse_call(event: &session::SessionEvent) -> Result<CallEvent, TurnFailure> { let value:CallEvent=parse(&event.payload_json)?;schema(&value.schema)?;if !call_id(&value.tool_call_id)||!tool_name(&value.name)||value.arguments_json.len()>LARGE{return Err(protocol("history_invalid",false))}let args:Value=serde_json::from_str(&value.arguments_json).map_err(|_|protocol("history_invalid",false))?;if !args.is_object(){return Err(protocol("history_invalid",false))}Ok(value) }
 #[rustfmt::skip] fn parse_result(event: &session::SessionEvent, call: &model::ToolCall) -> Result<String, TurnFailure> { let value: ResultEvent = parse(&event.payload_json)?; schema(&value.schema)?;if value.output_json.len()>LARGE{return Err(protocol("history_invalid",false))}let output:Value=serde_json::from_str(&value.output_json).map_err(|_|protocol("history_invalid",false))?;if value.tool_call_id != call.id || value.name != call.name||!output.is_object() { return Err(protocol("history_invalid", false)); } Ok(value.output_json) }
+#[rustfmt::skip] fn checkpoint(event:&session::SessionEvent)->Result<Option<CheckpointEvent>,TurnFailure>{if !matches!(event.kind,session::SessionEventKind::Assistant){return Ok(None)}else if event.payload_json.len()>EVENT_WIRE{return Err(protocol("history_invalid",false))}let raw:Value=serde_json::from_str(&event.payload_json).map_err(|_|protocol("history_invalid",false))?;if raw.get("schema").and_then(Value::as_str)!=Some("agent-loop-checkpoint@1"){return Ok(None)}let value:CheckpointEvent=parse(&event.payload_json)?;if !id(&value.checkpoint_id)||value.summary.is_empty()||value.summary.len()>TEXT||event.event_id!=format!("checkpoint.{}",value.checkpoint_id){return Err(protocol("history_invalid",false))}Ok(Some(value))}
+#[rustfmt::skip] fn regular_assistant(event:&session::SessionEvent)->bool{matches!(event.kind,session::SessionEventKind::Assistant)&&matches!(checkpoint(event),Ok(None))&&parse_text(event).is_ok()}
+#[rustfmt::skip] fn validate_history(events:&[session::SessionEvent])->Result<(),TurnFailure>{reconstruct(events).map(|_|())}
 #[rustfmt::skip] fn parse<T: for<'a> Deserialize<'a>>(value: &str) -> Result<T, TurnFailure> { if value.len()>EVENT_WIRE{return Err(protocol("history_invalid",false))}serde_json::from_str(value).map_err(|_| protocol("history_invalid", false)) }
 #[rustfmt::skip] fn decode<T: for<'a> Deserialize<'a>>(value: Value) -> Result<T, TurnFailure> { serde_json::from_value(value).map_err(|_| protocol("tool_arguments_invalid", true)) }
 #[rustfmt::skip] fn canonical<T: Serialize>(value: &T) -> Result<String, TurnFailure> { serde_json::to_string(value).map_err(|_| internal()) }
