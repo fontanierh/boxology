@@ -14,6 +14,7 @@ dependencies = [
  "serde",
  "serde_json",
  "session-store-implementation",
+ "signal-hook",
  "tokio",
  "tool-runner-implementation",
 ]

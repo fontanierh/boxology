@@ -15,4 +15,5 @@ role = "composition"
 boxes = ["model-completion", "tool-runner", "session-store", "agent-loop"]
 bindings = [
   { box = "agent-loop", capability = "agent-loop.run_turn", transport = "in-process" },
+  { box = "agent-loop", capability = "agent-loop.compact", transport = "in-process" },
 ]

@@ -18,6 +18,7 @@ session-store-implementation = { version = "=0.0.0", path = "../boxology-session
 tool-runner-implementation = { version = "=0.0.0", path = "../boxology-tool-runner/implementation" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.150" }
+signal-hook = "=0.3.18"
 tokio = { version = "=1.53.0", features = ["macros", "rt", "time"] }
 
 [dev-dependencies]
