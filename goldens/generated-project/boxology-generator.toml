@@ -1,2 +1,2 @@
 boxology-version = "0.0.0"
-dependency-source = "../boxology"
+dependency-source = "https://github.com/fontanierh/boxology"

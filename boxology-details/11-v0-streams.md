@@ -73,7 +73,7 @@ These claims were previously written as v0 obligations but are not delivered by 
 
 Decided during stream review; recorded so their absence reads as intent rather than oversight:
 
-- **Distribution and publishing.** V0 is for this project's bootstrap phase; it is consumed from a source checkout (`cargo install --path`, local skill file). Packaging, versioning, crates.io/GitHub-release publishing, and skill delivery become in-scope with the first release intended for users who are not us, after v0. The product contract's release-bundle section describes that bundle's *contents*, not a v0 distribution channel.
+- **Distribution and publishing.** V0 was proved from a source checkout. Current outside-user onboarding uses standard `cargo install --git`; versioned crates.io/GitHub-release publishing remains post-v0 work. The product contract's release-bundle section describes that bundle's *contents*, not a V0 registry channel.
 - **The generic development CLI binding** — outside the V0 boundary.
 - **Human-facing getting-started documentation** beyond the skill and the generated project's own README — minimal, inside S7.
 - **Cross-platform support.** V0 is evidenced only on native macOS ARM64. Linux/x86 and any wider

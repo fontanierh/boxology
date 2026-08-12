@@ -2,7 +2,7 @@ use boxology_init::{InitRequest, confined_destination, initialize};
 use std::{fs, path::Path};
 
 pub(crate) fn run(out: &Path) -> Result<(), String> {
-    let request = InitRequest::new("example", "../boxology")
+    let request = InitRequest::new("example")
         .map_err(|error| format!("canonical initializer request failed: {error}"))?;
     let tree = initialize(&request)
         .map_err(|error| format!("canonical initialization failed: {error}"))?;

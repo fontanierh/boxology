@@ -140,14 +140,6 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
     let deadline = Instant::now() + TOTAL_TIMEOUT;
     let fixture = Fixture::new();
     let root = &fixture.root;
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("boxology-init is under the workspace crates directory")
-        .canonicalize()
-        .expect("canonicalize current source checkout");
-    let source_text = source.to_str().expect("source checkout path is UTF-8");
-
     run(deadline, root, Path::new("git"), &["init", "--quiet"]);
     let init = run(
         deadline,
@@ -156,15 +148,13 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
         &[
             "--name",
             "example",
-            "--dependency-source",
-            source_text,
             "--target",
             root.to_str().expect("temporary path is UTF-8"),
         ],
     );
     assert_eq!(init, "initialized example\n");
 
-    let request = InitRequest::new("example", source_text).expect("absolute request is valid");
+    let request = InitRequest::new("example").expect("request is valid");
     let tree = initialize(&request).expect("absolute-source tree initializes");
     let initialized: BTreeMap<_, _> = tree
         .files()
@@ -261,6 +251,10 @@ fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
         run_quality(deadline, root, command);
     }
 
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("boxology-init is under the workspace crates directory");
     let source_manifest = source.join("Cargo.toml");
     let source_manifest = source_manifest
         .to_str()
