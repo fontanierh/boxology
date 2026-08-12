@@ -12,20 +12,8 @@ path = "."
 role = "composition"
 
 [composition]
-boxes = ["check", "classifier", "telegram"]
+boxes = ["check", "classifier"]
 bindings = [
     { box = "check", capability = "check.check", transport = "in-process" },
     { box = "classifier", capability = "classifier.classify", transport = "in-process" },
-    { box = "telegram", capability = "telegram.send_text", transport = "in-process" },
-    { box = "telegram", capability = "telegram.send", transport = "in-process" },
-    { box = "telegram", capability = "telegram.ask", transport = "in-process" },
-    { box = "telegram", capability = "telegram.reply", transport = "in-process" },
-    { box = "telegram", capability = "telegram.resolve_send", transport = "in-process" },
-    { box = "telegram", capability = "telegram.pair_begin", transport = "in-process" },
-    { box = "telegram", capability = "telegram.pair_complete", transport = "in-process" },
-    { box = "telegram", capability = "telegram.pair_revoke", transport = "in-process" },
-    { box = "telegram", capability = "telegram.poll", transport = "in-process" },
-    { box = "telegram", capability = "telegram.listen_start", transport = "in-process" },
-    { box = "telegram", capability = "telegram.ack", transport = "in-process" },
-    { box = "telegram", capability = "telegram.status", transport = "in-process" },
 ]

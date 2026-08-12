@@ -6,6 +6,7 @@ use std::time::Instant;
 
 mod advisories;
 mod authority_digests;
+mod boundary_inventory;
 mod budget;
 mod classifier_subject;
 mod deny;
@@ -161,7 +162,7 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     source: "crates/boxology-cli/tests/cli.rs",
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
-    manifest_digest: Some("a5f38361736e346461ff181ca6d90f49f44d976424081c46d19b8c8cffd13731"),
+    manifest_digest: Some("7c03fc4d980115e39b3b7158917051dd5136dcdd2d3cf49ca80429f89d0bedfe"),
     source_digest: "50b8641327b54a40e40973d0394c0d6998797705d609ce70cc1f80ef2bfdf8fa",
     body_digest: "22b894e80b8da524466a16723349316863ff83f42675ead294cf298ba44b2ba7",
 };
@@ -172,9 +173,9 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     source: "crates/boxology-cli/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
-    manifest_digest: Some("a5f38361736e346461ff181ca6d90f49f44d976424081c46d19b8c8cffd13731"),
-    source_digest: "3d1952b5b995a3d3eb4fa01ce9accc454666cf379efbb948efc734313987a80d",
-    body_digest: "68c2fa5d26fd67c2e95a0b478b4b25f9c6663298af94f97777885a3d1cc39fa1",
+    manifest_digest: Some("7c03fc4d980115e39b3b7158917051dd5136dcdd2d3cf49ca80429f89d0bedfe"),
+    source_digest: "0f573d1d1757235b3194e1a678ef282e129ce81f19c8f43d068953e30879f188",
+    body_digest: "71904e9ec2a6e84d68e704c62682b54343597d2a72148d5af2d3c2c91001cace",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),
@@ -246,6 +247,7 @@ const HYGIENE_CHECKS: &[&str] = &[
 ];
 const PR_CHECKS: &[&str] = &[
     "product-boxology-check",
+    "boundary-inventory",
     "audit",
     "fixture-projects",
     "generated-style-fmt",
@@ -265,6 +267,7 @@ const PR_CHECKS: &[&str] = &[
 ];
 const DEEP_CHECKS: &[&str] = &[
     "product-boxology-check",
+    "boundary-inventory",
     "audit",
     "fixture-projects",
     "generated-style-fmt",
@@ -482,6 +485,10 @@ fn run_ci(base: Option<&str>) -> u8 {
             timed("product-boxology-check", || {
                 run_product_check(base, &mut |args| run_cargo(args))
             }),
+        ),
+        (
+            "boundary-inventory",
+            timed("boundary-inventory", || boundary_inventory::check(&root())),
         ),
         (
             "audit",
@@ -1180,7 +1187,7 @@ mod tests {
         }
         assert!(!selector_matches(
             XTASK_AUTHORITY_SELECTOR,
-            "crates/boxology-telegram/implementation/src/lib.rs\n"
+            "crates/boxology-runtime/src/lib.rs\n"
         ));
         assert_eq!(
             workflow
@@ -1287,14 +1294,14 @@ mod tests {
         std::fs::write(&old, "name: legacy\n# stable bytes\n# rename proof\n").unwrap();
         repo.git(&["add", "."]);
         repo.git(&["commit", "-qm", "base"]);
-        let new = repo.0.join("crates/boxology-telegram/legacy.yml");
+        let new = repo.0.join("crates/boxology-runtime/legacy.yml");
         std::fs::create_dir_all(new.parent().unwrap()).unwrap();
         std::fs::rename(old, new).unwrap();
         repo.git(&["add", "-A"]);
         repo.git(&["commit", "-qm", "rename"]);
 
         let default_inventory = repo.git(&["diff", "--name-only", "HEAD^", "HEAD"]);
-        assert_eq!(default_inventory, "crates/boxology-telegram/legacy.yml\n");
+        assert_eq!(default_inventory, "crates/boxology-runtime/legacy.yml\n");
         assert!(!selector_matches(
             XTASK_AUTHORITY_SELECTOR,
             &default_inventory
@@ -1304,7 +1311,7 @@ mod tests {
             repo.git(&["diff", "--name-only", "--no-renames", "HEAD^", "HEAD"]);
         assert_eq!(
             fail_closed_inventory,
-            ".github/workflows/legacy.yml\ncrates/boxology-telegram/legacy.yml\n"
+            ".github/workflows/legacy.yml\ncrates/boxology-runtime/legacy.yml\n"
         );
         assert!(selector_matches(
             XTASK_AUTHORITY_SELECTOR,

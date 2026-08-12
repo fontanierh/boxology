@@ -8,10 +8,6 @@ publish = false
 name = "boxology"
 path = "src/main.rs"
 
-[[bin]]
-name = "boxology-telegram"
-path = "src/bin/boxology-telegram.rs"
-
 [dependencies]
 boxology-classifier = { version = "=0.0.0", path = "../boxology-classifier" }
 boxology-cli-core = { version = "=0.0.0", path = "../boxology-cli-core" }
@@ -26,9 +22,6 @@ classifier-implementation = { version = "=0.0.0", path = "../boxology-classifier
 classifier_contract = { package = "classifier-contract", version = "=0.0.0", path = "../boxology-classifier/generated/contract" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
-signal-hook = "=0.3.18"
-telegram-implementation = { package = "boxology-telegram", version = "=0.0.0", path = "../boxology-telegram/implementation" }
-telegram_contract = { package = "telegram-contract", version = "=0.0.0", path = "../boxology-telegram/generated/contract" }
 
 [[test]]
 name = "surface_lock"
@@ -37,5 +30,4 @@ path = "tests/surface_lock.rs"
 [dev-dependencies]
 check_contract = { package = "check-contract", version = "=0.0.0", path = "../boxology-check/generated/contract", features = ["test-support"] }
 classifier_contract = { package = "classifier-contract", version = "=0.0.0", path = "../boxology-classifier/generated/contract", features = ["test-support"] }
-telegram_contract = { package = "telegram-contract", version = "=0.0.0", path = "../boxology-telegram/generated/contract", features = ["test-support"] }
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }
