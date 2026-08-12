@@ -105,6 +105,9 @@ fn check(root: &Path) -> Result<(), Vec<String>> {
             Ok(doc) => {
                 let Some(pkg) = doc.get("package").and_then(Item::as_table_like)
                     else { errors.push(format!("{path}: missing [package]")); continue; };
+                let keys: BTreeSet<_> = pkg.iter().map(|(key, _)| key).collect();
+                let expected: BTreeSet<_> = ["name", "description", "version", "edition", "rust-version", "license", "repository", "homepage", "readme", "publish"].into_iter().collect();
+                if keys != expected { errors.push(format!("{path}: [package] keys are not exact")); }
                 if string(pkg, "name") != Some(name) { errors.push(format!("{path}: package name must be {name}")); }
                 if string(pkg, "description") != Some(description) { errors.push(format!("{path}: description must be {description:?}")); }
                 for key in ["version", "edition", "rust-version", "license", "repository", "homepage", "readme"] {
@@ -122,6 +125,7 @@ fn check(root: &Path) -> Result<(), Vec<String>> {
                 let Some(pkg) = doc.get("package").and_then(Item::as_table_like)
                     else { errors.push(format!("{path}: missing [package]")); continue; };
                 if string(pkg, "name") != Some(name) { errors.push(format!("{path}: internal package name must be {name}")); }
+                if string(pkg, "version") != Some("0.0.0") { errors.push(format!("{path}: internal version must be 0.0.0")); }
                 if pkg.get("publish").and_then(Item::as_bool) != Some(false) { errors.push(format!("{path}: internal publish must be false")); }
             }
         }
@@ -169,11 +173,13 @@ mod tests {
         assert_eq!(run(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")), 0);
         for (file, from, to) in [
             ("crates/boxology/Cargo.toml", "publish = false", "publish = true"),
+            ("crates/boxology/Cargo.toml", "publish = false", "publish = false\nlicense-file = \"LICENSE\""),
             ("Cargo.toml", "MIT OR Apache-2.0", "MIT"),
             ("crates/boxology/Cargo.toml", "Authoring facade", "Facade"),
             ("Cargo.toml", REPOSITORY, "https://example.invalid/boxology"),
             ("Cargo.toml", "\"crates/xtask\",", "\"crates/xtask\",\n    \"crates/unknown\","),
             ("crates/xtask/Cargo.toml", "publish = false", "publish = true"),
+            ("crates/xtask/Cargo.toml", "version = \"0.0.0\"", "version = \"1.2.3\""),
             ("LICENSE-MIT", "Henry Fontanier", "H. Fontanier"),
             ("README.md", "Install only from a source checkout.", "Boxology is published on crates.io."),
         ] {
