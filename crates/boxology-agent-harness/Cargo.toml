@@ -1,0 +1,24 @@
+[package]
+name = "agent-harness"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "boxology-agent-harness"
+path = "src/main.rs"
+
+[dependencies]
+agent-loop-contract = { version = "=0.0.0", path = "../boxology-agent-loop/generated/contract" }
+agent-loop-implementation = { version = "=0.0.0", path = "../boxology-agent-loop/implementation" }
+boxology-contract.workspace = true
+boxology-runtime.workspace = true
+model-completion-implementation = { version = "=0.0.0", path = "../boxology-model-completion/implementation" }
+session-store-implementation = { version = "=0.0.0", path = "../boxology-session-store/implementation" }
+tool-runner-implementation = { version = "=0.0.0", path = "../boxology-tool-runner/implementation" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.150" }
+tokio = { version = "=1.53.0", features = ["macros", "rt", "time"] }
+
+[dev-dependencies]
+agent-loop-contract = { version = "=0.0.0", path = "../boxology-agent-loop/generated/contract", features = ["test-support"] }
