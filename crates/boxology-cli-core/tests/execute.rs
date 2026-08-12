@@ -17,6 +17,7 @@ const CONTRACT: &[u8] = br#"boxology::contract! {
     #[capability(exposure = external)]
     pub async fn ping(nonce: u64) -> Result<u64, HelloError>;
 }"#;
+const OUTLINE: &[u8] = b"mod contract;\npub use contract::*;\n";
 const METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -49,6 +50,7 @@ fn workspace(outputs: &str) -> Workspace {
         "ping/boxology.toml",
         "ping/implementation/Cargo.toml",
         "ping/implementation/src/lib.rs",
+        "ping/implementation/src/contract.rs",
         "ping/generated/contract/Cargo.toml",
     ]
     .into_iter()
@@ -75,15 +77,17 @@ fn fixture(outputs: &str) -> Fixture {
     ));
     fs::create_dir_all(root.join("ping/implementation/src")).unwrap();
     fs::write(root.join("ping/boxology.toml"), package_manifest(outputs)).unwrap();
-    fs::write(root.join("ping/implementation/src/lib.rs"), CONTRACT).unwrap();
+    fs::write(root.join("ping/implementation/src/lib.rs"), OUTLINE).unwrap();
+    fs::write(root.join("ping/implementation/src/contract.rs"), CONTRACT).unwrap();
     let [plan] = plan(&workspace(outputs), None).unwrap().try_into().unwrap();
     Fixture { root, plan }
 }
 
-const PROJECT_FILES: [&str; 7] = [
+const PROJECT_FILES: [&str; 8] = [
     "boxology.toml",
     "implementation/Cargo.toml",
     "implementation/src/lib.rs",
+    "implementation/src/contract.rs",
     "generated/contract/Cargo.toml",
     "generated/contract/src/lib.rs",
     "generated/adapter/adapter.rs",
@@ -98,6 +102,9 @@ fn fixture_bytes(package: &str, file: &str) -> &'static [u8] {
         }
         ("hello", "implementation/src/lib.rs") => {
             include_bytes!("../../fixtures/hello/implementation/src/lib.rs")
+        }
+        ("hello", "implementation/src/contract.rs") => {
+            include_bytes!("../../fixtures/hello/implementation/src/contract.rs")
         }
         ("hello", "generated/contract/Cargo.toml") => {
             include_bytes!("../../fixtures/hello/generated/contract/Cargo.toml")
@@ -117,6 +124,9 @@ fn fixture_bytes(package: &str, file: &str) -> &'static [u8] {
         }
         ("greeter", "implementation/src/lib.rs") => {
             include_bytes!("../../fixtures/greeter/implementation/src/lib.rs")
+        }
+        ("greeter", "implementation/src/contract.rs") => {
+            include_bytes!("../../fixtures/greeter/implementation/src/contract.rs")
         }
         ("greeter", "generated/contract/Cargo.toml") => {
             include_bytes!("../../fixtures/greeter/generated/contract/Cargo.toml")
@@ -717,7 +727,7 @@ fn stale_declared_output_is_pruned_and_neighbor_survives() {
 fn generator_diagnostics_are_rendered_verbatim() {
     let fixture = fixture("[\"generated/**\"]");
     fs::write(
-        package_dir(&fixture).join("implementation/src/lib.rs"),
+        package_dir(&fixture).join("implementation/src/contract.rs"),
         b"this is not a contract",
     )
     .unwrap();

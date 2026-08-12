@@ -267,7 +267,7 @@ mod tests {
             found.get("RUSTSEC-2020-0071").unwrap(),
             "Potential segfault in the time crate"
         );
-        let workflow = include_str!("../../../.github/workflows/advisories.yml");
+        let workflow = include_str!("../../../.github/workflows/ci.yml");
         let pins: Vec<_> = workflow
             .lines()
             .filter_map(|line| line.trim().strip_prefix("CARGO_DENY_VERSION: "))
