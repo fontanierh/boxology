@@ -884,6 +884,9 @@ jobs:
           cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
           test "$(cargo deny --version)" = "cargo-deny $CARGO_DENY_VERSION"
 
+      - name: Fetch excluded fixture dependencies
+        run: cargo fetch --locked --manifest-path crates/fixtures/ping-app/Cargo.toml
+
       - name: Canonical validation
         run: cargo xtask ci --no-budget
 
@@ -1134,6 +1137,10 @@ jobs:
                 "actions/checkout@v7",
             ),
             ("cargo xtask ci --no-budget", "cargo xtask ci-fixtures"),
+            (
+                "cargo fetch --locked --manifest-path crates/fixtures/ping-app/Cargo.toml",
+                "cargo fetch --manifest-path crates/fixtures/ping-app/Cargo.toml",
+            ),
             ("          fetch-depth: 0", "          fetch-depth: 1"),
             (
                 "          persist-credentials: false",
