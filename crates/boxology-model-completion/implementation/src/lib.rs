@@ -273,7 +273,7 @@ fn decode(mut response: Response) -> Result<CompletionResult, Failure> {
     {
         return Err(malformed());
     }
-    let content = match choice.pointer("/message/content") {
+    let mut content = match choice.pointer("/message/content") {
         None | Some(Value::Null) => None,
         Some(Value::String(value)) if value.is_empty() => None,
         Some(Value::String(value)) => Some(value.clone()),
@@ -285,6 +285,9 @@ fn decode(mut response: Response) -> Result<CompletionResult, Failure> {
         Some("length") => FinishReason::Length,
         _ => return Err(malformed()),
     };
+    if matches!(finish_reason, FinishReason::ToolCalls) {
+        content = None;
+    }
     let raw_calls = match choice.pointer("/message/tool_calls") {
         None => &[][..],
         Some(Value::Array(calls)) => calls.as_slice(),

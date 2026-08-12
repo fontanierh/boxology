@@ -187,6 +187,16 @@ fn empty_provider_content_is_absent_but_nonempty_content_is_preserved() {
 
 #[test]
 #[rustfmt::skip]
+fn tool_call_preamble_is_discarded_without_weakening_final_text() {
+    let tool = invoke(200, None, response(json!({"role":"assistant","content":"I will write the requested file now.","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]}), "tool_calls"), false).completion.unwrap();
+    assert!(tool.content.is_none());
+    assert_eq!((tool.tool_calls.len(),tool.tool_calls[0].name.as_str()),(1,"read"));
+    let final_text = invoke(200, None, response(json!({"role":"assistant","content":"done"}), "stop"), false).completion.unwrap();
+    assert_eq!(final_text.content.as_deref(),Some("done"));
+}
+
+#[test]
+#[rustfmt::skip]
 fn local_http_maps_tool_call_and_rate_limit_without_leaking_or_retrying() {
     let body = response(
         json!({"role":"assistant","content":null,"tool_calls":[
