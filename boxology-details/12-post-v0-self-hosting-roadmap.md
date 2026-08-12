@@ -195,15 +195,16 @@ configured xAI implementation, typed read/write/edit/bash tools, and a governed
 linear session event store with durable append, replay, restart, and torn-tail recovery.
 Bash may intentionally escape its root-confined initial cwd through
 shell behavior, absolute paths, or a new process session.
-Compaction, the agent loop, JSON/RPC,
-and authorized live dogfood remain; no sandbox is claimed.
+The agent loop and deterministic persisted compaction are governed and exercised
+through generated handles. JSON/RPC and authorized live dogfood remain; no sandbox
+is claimed.
 
 | Product/feature | Current support | Minimum missing | First dogfood evidence | Deferred |
 | --- | --- | --- | --- | --- |
-| Model completion/agent loop | Governed sequential `agent-loop.run_turn` imports completion, tool, and session handles for one deterministic tool call and resumable result | Compaction and harness composition | Deterministic fake model requests one tool, consumes its result, then returns a final answer | Multiple calls, provider marketplace, multimodal or streaming protocol |
+| Model completion/agent loop | Governed sequential `agent-loop.run_turn` imports completion, tool, and session handles for one deterministic tool call, resumable result, and deterministic compaction | Harness composition | Deterministic fake model requests one tool, consumes its result, then returns a final answer | Multiple calls, provider marketplace, multimodal or streaming protocol |
 | Tool execution | Governed `tool-runner.execute` with root-confined read/write/edit and bounded unsandboxed bash starting in the selected root-confined cwd; explicit environment/process cleanup | Nothing for fixed H0 tools | Fake-model turn edits an isolated fixture only through the generated tool handle | Dynamic tool plugins and a general permission framework |
-| Sessions/resume | Governed linear JSONL events through `session-store.load/append`, with replay, restart, and torn-tail recovery | Agent-loop integration | Stop and restart, load the same session, and complete the next turn deterministically | Session trees, list/delete, and distributed service |
-| Compaction | No agent-context compactor | Deterministic summary/checkpoint operation owned by the harness composition | Resume a fixture beyond its context threshold from a persisted compacted state | Multiple compaction strategies |
+| Sessions/resume | Governed linear JSONL events through `session-store.load/append`, integrated with the agent loop for replay, restart, and torn-tail recovery | Nothing for H0 | Stop and restart, load the same session, and complete the next turn deterministically | Session trees, list/delete, and distributed service |
+| Compaction | Governed `agent-loop.compact` persists a bounded caller-supplied summary and reconstructs from the latest valid checkpoint | Nothing for H0 | Fresh compositions continue after two separated checkpoints without pre-checkpoint context or old tool re-execution | Automatic summary generation and multiple compaction strategies |
 | Interactive/print/JSON/RPC modes | Product CLIs exist, including Telegram JSON, but no generic agent protocol | Stdio JSON/RPC composition; interactive or print adapter only when needed | RPC request drives one complete fake-model turn with ordered events | Network daemon protocol and UI |
 | Skills/prompt templates | Checked-in Agent Skills and repository instructions already exist | H0 statically loads selected checked-in skills and prompts | Deterministic turn includes the exact selected skill/prompt content in model context | Executable packages, hot-loading, and a marketplace |
 | Extensions/packages/themes | No dynamic harness extension ecosystem | Nothing for H0; statically compose required boxes | One checked-in composition selects its model implementation and tool set without dynamic loading | Package registry, themes, and hot-loading |
