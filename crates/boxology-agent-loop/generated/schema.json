@@ -17,14 +17,31 @@
         "type": "RunTurnOutcome"
       },
       "shape": "unary"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "error": "RunTurnError",
+      "id": "agent-loop.compact",
+      "idempotency": "none",
+      "input": {
+        "name": "request",
+        "type": "CompactRequest"
+      },
+      "max_exposure": "code_only",
+      "name": "compact",
+      "output": {
+        "type": "CompactOutcome"
+      },
+      "shape": "unary"
     }
   ],
   "provenance": {
     "generator": "boxology-generator",
     "generator_version": "0.0.0",
-    "semantic_digest": "sha256:7c11415baf5170ad179eae0a1adbbfa143a245efa277e4dedb961316e69634f8"
+    "semantic_digest": "sha256:10c034832ba2e64a1811a1fe3c239ab6f93f0457b981252861d4f1cc07070e6f"
   },
-  "revision": "sha256:28d5ef4a2382052b36c02d3a3c683643c823136fa7359a2fc01a23c528151218",
+  "revision": "sha256:f8ff18a6b90a3c42991c361addc7da186a0c5a7c6fc263812841e234027d4ddf",
   "schema_format": 1,
   "types": [
     {
@@ -261,6 +278,78 @@
       ],
       "kind": "struct",
       "name": "RunTurnOutcome"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "session_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "checkpoint_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "summary",
+          "type": "String"
+        }
+      ],
+      "kind": "struct",
+      "name": "CompactRequest"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "event_id",
+          "type": "String"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "sequence",
+          "type": "u64"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "appended",
+          "type": "bool"
+        }
+      ],
+      "kind": "struct",
+      "name": "CompactResult"
+    },
+    {
+      "deprecation": null,
+      "docs": [],
+      "fields": [
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "result",
+          "type": "Option<CompactResult>"
+        },
+        {
+          "deprecation": null,
+          "docs": [],
+          "name": "failure",
+          "type": "Option<TurnFailure>"
+        }
+      ],
+      "kind": "struct",
+      "name": "CompactOutcome"
     },
     {
       "deprecation": null,
