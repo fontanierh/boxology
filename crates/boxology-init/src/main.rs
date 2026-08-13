@@ -48,6 +48,10 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
+    if args == ["--help"] {
+        let _ = writeln!(stdout, "{USAGE}");
+        return 0;
+    }
     let args = match parse(args) {
         Ok(args) => args,
         Err(()) => return usage_failure(stderr),

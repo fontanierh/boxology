@@ -78,7 +78,8 @@ before claiming that release boundary.
 
 `check` is non-mutating, whole-workspace, and ordered. Validation defects exit `1`, invocation or
 tooling failures exit `2`, and success exits `0`. Human and schema-versioned JSON reports carry the
-same findings.
+same findings. The top-level `--help` path prints the stable command usage to stdout and exits `0`;
+malformed invocations continue to print usage to stderr and exit `2`.
 
 With `--base`, the CLI obtains base manifests and schemas from git. Contract changes are classified
 against that revision and reported without suppression or policy authorization. Changed paths are
