@@ -78,10 +78,7 @@ mod tests {
 
     #[test]
     fn generated_adapter_and_dispatch_are_send_sync() {
-        fn assert_dispatch<
-            T: hello_contract::HelloDispatch + Send + Sync + 'static,
-        >() {
-        }
+        fn assert_dispatch<T: hello_contract::HelloDispatch + Send + Sync + 'static>() {}
         fn assert_bounds<T: Send + Sync + 'static>() {}
 
         assert_dispatch::<HelloService>();
