@@ -620,7 +620,7 @@ fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detai
     Detail::new(code).with_message(error.to_string())
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckRequest {
     pub workspace: ::std::string::String,
     pub base: ::core::option::Option<::std::string::String>,
@@ -698,11 +698,18 @@ impl ::boxology_contract::ContractType for CheckRequest {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CheckStatus {
     Passed,
     Failed,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for CheckStatus {
+    fn default() -> Self {
+        Self::Passed
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckStatus {
@@ -801,12 +808,19 @@ impl ::boxology_contract::ContractType for CheckStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CheckStepStatus {
     Passed,
     Failed,
     Skipped,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for CheckStepStatus {
+    fn default() -> Self {
+        Self::Passed
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckStepStatus {
@@ -917,11 +931,18 @@ impl ::boxology_contract::ContractType for CheckStepStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CheckFailureKind {
     Validation,
     Invocation,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for CheckFailureKind {
+    fn default() -> Self {
+        Self::Validation
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckFailureKind {
@@ -1024,7 +1045,7 @@ impl ::boxology_contract::ContractType for CheckFailureKind {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckFinding {
     pub kind: ::std::string::String,
     pub code: ::std::string::String,
@@ -1345,7 +1366,7 @@ impl ::boxology_contract::ContractType for CheckFinding {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckStepReport {
     pub id: ::std::string::String,
     pub status: CheckStepStatus,
@@ -1471,7 +1492,7 @@ impl ::boxology_contract::ContractType for CheckStepReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckReport {
     pub steps: ::std::vec::Vec<CheckStepReport>,
     pub status: CheckStatus,
@@ -1574,7 +1595,7 @@ impl ::boxology_contract::ContractType for CheckReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckFailure {
     pub kind: CheckFailureKind,
     pub human: ::std::vec::Vec<u8>,
@@ -1661,7 +1682,7 @@ impl ::boxology_contract::ContractType for CheckFailure {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckOutcome {
     pub report: ::core::option::Option<CheckReport>,
     pub failure: ::core::option::Option<CheckFailure>,
@@ -1739,10 +1760,17 @@ impl ::boxology_contract::ContractType for CheckOutcome {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CheckError {
     Internal,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for CheckError {
+    fn default() -> Self {
+        Self::Internal
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckError {

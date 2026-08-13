@@ -127,10 +127,17 @@ fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detai
     Detail::new(code).with_message(error.to_string())
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum GreetLoudlyError {
     Refused,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for GreetLoudlyError {
+    fn default() -> Self {
+        Self::Refused
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for GreetLoudlyError {

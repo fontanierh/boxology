@@ -1658,6 +1658,7 @@ impl ::core::default::Default for GreetError {
         Self::EmptyName
     }
 }
+#[rustfmt::skip]
 impl ::boxology_contract::ContractType for GreetError {
     fn encode_value(
         &self,
@@ -3966,7 +3967,7 @@ macro_rules! __boxology_check_implementation {
             assert!(fake.contains(expected), "missing `{expected}` in {fake}");
         }
         assert!(adapter.contains(
-            "<crate::contract::__boxology_generated_contract::Profile as ::boxology_contract::ContractType>::decode(&input)"
+            "<::boxology_generated_contract::Profile as ::boxology_contract::ContractType>::decode(&input)"
         ));
         assert!(descriptor.contains("generated optional descriptor is valid"));
 

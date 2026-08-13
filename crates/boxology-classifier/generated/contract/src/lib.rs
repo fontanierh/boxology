@@ -498,7 +498,7 @@ fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detai
     Detail::new(code).with_message(error.to_string())
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CompatibilityClass {
     Unchanged,
     Documentation,
@@ -507,6 +507,13 @@ pub enum CompatibilityClass {
     CompatibleWithConditions,
     Incompatible,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for CompatibilityClass {
+    fn default() -> Self {
+        Self::Unchanged
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CompatibilityClass {
@@ -661,7 +668,7 @@ impl ::boxology_contract::ContractType for CompatibilityClass {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct ClassifyRequest {
     pub base: ::core::option::Option<::std::vec::Vec<u8>>,
     pub submitted: ::std::vec::Vec<u8>,
@@ -741,7 +748,7 @@ impl ::boxology_contract::ContractType for ClassifyRequest {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct ClassifyFinding {
     pub code: ::std::string::String,
     pub path: ::std::string::String,
@@ -918,7 +925,7 @@ impl ::boxology_contract::ContractType for ClassifyFinding {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct ClassifyReport {
     pub verdict: CompatibilityClass,
     pub findings: ::std::vec::Vec<ClassifyFinding>,
@@ -1023,12 +1030,19 @@ impl ::boxology_contract::ContractType for ClassifyReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ClassifyFailureStage {
     Base,
     Submitted,
     Pairing,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for ClassifyFailureStage {
+    fn default() -> Self {
+        Self::Base
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for ClassifyFailureStage {
@@ -1139,7 +1153,7 @@ impl ::boxology_contract::ContractType for ClassifyFailureStage {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct ClassifyFailure {
     pub stage: ClassifyFailureStage,
     pub diagnostics: ::std::string::String,
@@ -1218,7 +1232,7 @@ impl ::boxology_contract::ContractType for ClassifyFailure {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct ClassifyOutcome {
     pub report: ::core::option::Option<ClassifyReport>,
     pub failure: ::core::option::Option<ClassifyFailure>,
@@ -1296,10 +1310,17 @@ impl ::boxology_contract::ContractType for ClassifyOutcome {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ClassifierError {
     Internal,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
+}
+#[rustfmt::skip]
+#[allow(deprecated)]
+impl ::core::default::Default for ClassifierError {
+    fn default() -> Self {
+        Self::Internal
+    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for ClassifierError {
