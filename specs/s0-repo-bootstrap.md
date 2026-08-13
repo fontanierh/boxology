@@ -78,7 +78,10 @@ license, crates.io source, and ban policy. Its full policy suite runs in canonic
 
 `cargo xtask budget --base <revision>` fails above 600 hand-authored added lines with no override.
 Markdown counts. `Cargo.lock`, manifest-declared derived outputs, and pure renames are excluded;
-oversized work is split rather than exempted.
+oversized work is split rather than exempted. Move accounting also recognizes extracted files when
+Git can match the destination to content deleted from a source path. Credit is capped by the
+source's deleted lines and consumed once, so copying an unchanged file still counts in full,
+partial moves count their edits, and one deletion cannot subsidize duplicate destinations.
 
 ### D6 — Determinism
 

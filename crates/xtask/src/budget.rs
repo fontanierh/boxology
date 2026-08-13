@@ -1,5 +1,5 @@
 use boxology_manifest::{GlobPattern, Manifest, RelativePath};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -13,8 +13,16 @@ struct DerivedPattern {
 struct Entry {
     path: String,
     added: u64,
+    deleted: u64,
     binary: bool,
     excluded: bool,
+}
+
+struct NumstatEntry {
+    path: String,
+    preimage: Option<String>,
+    added: Option<u64>,
+    deleted: Option<u64>,
 }
 struct Report {
     base: String,
@@ -94,16 +102,12 @@ fn compute(root: &Path, revision: &str) -> Result<Report, String> {
             HISTORY_REMEDY
         )
     })?;
-    let output = git(
+    let baseline = git(
         root,
         &[
-            "-c",
-            "diff.renames=true",
-            "-c",
-            "diff.renameLimit=0",
             "diff",
             "--no-ext-diff",
-            "--find-renames",
+            "--no-renames",
             "--numstat",
             "-z",
             &merge_base,
@@ -111,16 +115,39 @@ fn compute(root: &Path, revision: &str) -> Result<Report, String> {
             "--",
         ],
     )?;
-    if !output.status.success() {
+    if !baseline.status.success() {
         return Err(format!(
             "git diff failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&baseline.stderr).trim()
+        ));
+    }
+    let detected = git(
+        root,
+        &[
+            "-c",
+            "diff.renameLimit=0",
+            "diff",
+            "--no-ext-diff",
+            "--find-renames",
+            "--find-copies-harder",
+            "--find-copies",
+            "--numstat",
+            "-z",
+            &merge_base,
+            &head,
+            "--",
+        ],
+    )?;
+    if !detected.status.success() {
+        return Err(format!(
+            "git move detection failed: {}",
+            String::from_utf8_lossy(&detected.stderr).trim()
         ));
     }
     Ok(Report {
         base,
         merge_base,
-        entries: parse_numstat(&output.stdout, &derived)?,
+        entries: account_moves(&baseline.stdout, &detected.stdout, &derived)?,
     })
 }
 pub(crate) const HISTORY_REMEDY: &str = "fetch the missing base object (use `git fetch --unshallow` for a shallow local clone); CI checkout must keep `fetch-depth: 0`";
@@ -140,7 +167,64 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<Output, String> {
         .output()
         .map_err(|error| format!("cannot run git: {error}"))
 }
-fn parse_numstat(bytes: &[u8], derived: &[DerivedPattern]) -> Result<Vec<Entry>, String> {
+fn account_moves(
+    baseline: &[u8],
+    detected: &[u8],
+    derived: &[DerivedPattern],
+) -> Result<Vec<Entry>, String> {
+    let baseline = parse_numstat(baseline)?;
+    let detected = parse_numstat(detected)?;
+    let mut entries: Vec<_> = baseline
+        .iter()
+        .map(|entry| {
+            let binary = entry.added.is_none() || entry.deleted.is_none();
+            Entry {
+                excluded: is_excluded(&entry.path, derived),
+                path: entry.path.clone(),
+                added: entry.added.unwrap_or(0),
+                deleted: entry.deleted.unwrap_or(0),
+                binary,
+            }
+        })
+        .collect();
+    let by_path: BTreeMap<_, _> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.path.clone(), index))
+        .collect();
+    let mut deletions: BTreeMap<_, _> = entries
+        .iter()
+        .filter(|entry| !entry.excluded && !entry.binary && entry.deleted > 0)
+        .map(|entry| (entry.path.clone(), entry.deleted))
+        .collect();
+
+    // Git's similarity engine identifies both renames and extractions where the
+    // old path remains as a smaller wrapper. A detected copy only earns credit
+    // for lines actually deleted from its source in this diff. Consequently an
+    // unchanged source copied to a new path still consumes the full budget, and
+    // one deletion cannot subsidize the same content more than once.
+    for moved in detected.iter().filter(|entry| entry.preimage.is_some()) {
+        let source = moved.preimage.as_ref().unwrap();
+        let Some(remaining) = deletions.get_mut(source) else {
+            continue;
+        };
+        let Some(&destination) = by_path.get(&moved.path) else {
+            continue;
+        };
+        let entry = &mut entries[destination];
+        if entry.excluded || entry.binary {
+            continue;
+        }
+        let changed = moved.added.unwrap_or(entry.added);
+        let destination_unchanged = entry.added.saturating_sub(changed);
+        let credit = destination_unchanged.min(*remaining);
+        entry.added -= credit;
+        *remaining -= credit;
+    }
+    Ok(entries)
+}
+
+fn parse_numstat(bytes: &[u8]) -> Result<Vec<NumstatEntry>, String> {
     let mut rest = bytes;
     let mut entries = Vec::new();
     while !rest.is_empty() {
@@ -152,21 +236,26 @@ fn parse_numstat(bytes: &[u8], derived: &[DerivedPattern]) -> Result<Vec<Entry>,
         let mut path = fields.next().ok_or("missing path")?;
         let added = dimension(added)?;
         let deleted = dimension(deleted)?;
-        let binary = added.is_none() || deleted.is_none();
+        let mut preimage = None;
         if path.is_empty() {
-            let (_, next) = take_nul(rest)?;
+            let (old, next) = take_nul(rest)?;
             let (postimage, next) = take_nul(next)?;
+            preimage = Some(
+                std::str::from_utf8(old)
+                    .map_err(|_| "git path is not UTF-8")?
+                    .to_string(),
+            );
             path = postimage;
             rest = next;
         }
         let path = std::str::from_utf8(path)
             .map_err(|_| "git path is not UTF-8")?
             .to_string();
-        entries.push(Entry {
-            excluded: is_excluded(&path, derived),
+        entries.push(NumstatEntry {
             path,
-            added: if binary { 0 } else { added.unwrap() },
-            binary,
+            preimage,
+            added,
+            deleted,
         });
     }
     Ok(entries)
@@ -390,18 +479,17 @@ mod tests {
               3\t2\t\0old\0Cargo.lock\0\
               -\t-\tblob.bin\0\
               -\t-\t\0old.bin\0new.bin\0",
-            &[],
         )
         .unwrap();
         let got: Vec<_> = entries
             .iter()
-            .map(|e| (e.path.as_str(), e.added, e.binary, e.excluded))
+            .map(|e| (e.path.as_str(), e.preimage.as_deref(), e.added, e.deleted))
             .collect();
         let expected = [
-            ("plain é name", 2, false, false),
-            ("Cargo.lock", 3, false, true),
-            ("blob.bin", 0, true, false),
-            ("new.bin", 0, true, false),
+            ("plain é name", None, Some(2), Some(1)),
+            ("Cargo.lock", Some("old"), Some(3), Some(2)),
+            ("blob.bin", None, None, None),
+            ("new.bin", Some("old.bin"), None, None),
         ];
         assert_eq!(got, expected);
     }
@@ -600,6 +688,44 @@ mod tests {
         let (code, error) = command_result(&repo.0, "not-a-revision");
         assert_eq!(code, 2);
         assert!(error.contains("unknown revision") && error.contains("fetch-depth: 0"));
+    }
+    #[test]
+    fn copied_new_code_counts_without_source_deletion() {
+        let repo = Repo::new();
+        repo.write("source.txt", lines(20));
+        let base = repo.commit("base");
+        repo.write("copy.txt", lines(20));
+        repo.commit("copy without move");
+        assert_eq!(compute(&repo.0, &base).unwrap().total(), 20);
+    }
+
+    #[test]
+    fn extracted_and_partially_moved_files_count_only_new_lines() {
+        let repo = Repo::new();
+        repo.write("source.txt", lines(20));
+        let copied = repo.commit("base");
+        repo.write("source.txt", "wrapper\n");
+        repo.write("moved.txt", lines(20));
+        repo.commit("extract source into moved file");
+        assert_eq!(compute(&repo.0, &copied).unwrap().total(), 1);
+
+        let extracted = repo.head();
+        fs::remove_file(repo.0.join("moved.txt")).unwrap();
+        repo.write("partial.txt", format!("{}edited\n", lines(20)));
+        repo.commit("partial move with edit");
+        assert_eq!(compute(&repo.0, &extracted).unwrap().total(), 1);
+    }
+
+    #[test]
+    fn one_deletion_cannot_credit_duplicate_destinations() {
+        let repo = Repo::new();
+        repo.write("source.txt", lines(20));
+        let before_duplicate = repo.commit("base");
+        fs::remove_file(repo.0.join("source.txt")).unwrap();
+        repo.write("duplicate-a.txt", lines(20));
+        repo.write("duplicate-b.txt", lines(20));
+        repo.commit("one deletion cannot credit two destinations");
+        assert_eq!(compute(&repo.0, &before_duplicate).unwrap().total(), 20);
     }
     #[test]
     fn merge_base_handles_advanced_base_and_ci_merge_commit() {
