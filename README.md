@@ -32,6 +32,20 @@ cargo install --git https://github.com/fontanierh/boxology --locked boxology-cli
 
 The generated project README owns that project's invocation contract.
 
+Hand-managed boxes may name their generated contract dependency after the domain instead of using
+a framework-shaped Cargo alias. Put the selected Rust crate name at the start of `contract.rs`:
+
+```rust
+boxology::contract! {
+    contract_crate = review_contract;
+    // declarations and capabilities
+}
+```
+
+and use the same key in `Cargo.toml`, for example
+`review_contract = { package = "review-contract", path = "../generated/contract" }`. Omitting
+`contract_crate` preserves the generated-project default, `boxology_generated_contract`.
+
 ## Release procedure
 
 Run `cargo xtask ci --base origin/main`, then `cargo xtask release preflight`. Preflight checks the

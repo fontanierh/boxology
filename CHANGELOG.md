@@ -31,6 +31,10 @@ This file records notable user-facing changes to Boxology.
   generated compositions so their setup reads like ordinary box code.
 - Fixed generated contract type registration, Git dependency resolution in nested workspaces, and
   initializer dependency portability.
+- Allowed a box to use a project-local Cargo name for its generated contract via
+  `contract_crate = <crate_name>;`, while keeping the existing alias as the default.
+- Generated `Default` for every boundary model and domain error, plus `Eq`, `Hash`, and ordering
+  whenever the complete shape supports them (floating-point leaves remain intentionally partial).
 
 ### Distribution
 

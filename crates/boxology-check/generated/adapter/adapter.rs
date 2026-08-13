@@ -3,7 +3,7 @@ use ::boxology_contract::ContractType;
 #[doc(hidden)]
 pub fn implementation_descriptor() -> ::boxology_contract::ImplementationDescriptor {
     ::boxology_contract::ImplementationDescriptor::new(
-            ::boxology_generated_contract::contract_descriptor(),
+            crate::contract::__boxology_generated_contract::contract_descriptor(),
             [
                 ::boxology_contract::ImportDescriptor::new(
                         ::boxology_contract::BoxId::new("classifier")
@@ -34,7 +34,8 @@ pub struct CheckAdapter<T> {
 #[doc(hidden)]
 pub fn factory<T>(service: T, imports: ::boxology_runtime::Imports) -> CheckAdapter<T>
 where
-    T: ::boxology_generated_contract::CheckDispatch + Send + Sync + 'static,
+    T: crate::contract::__boxology_generated_contract::CheckDispatch + Send + Sync
+        + 'static,
 {
     CheckAdapter {
         service,
@@ -46,7 +47,8 @@ pub fn register<T, F>(
     build: F,
 ) -> ::boxology_runtime::RegisteredBox
 where
-    T: ::boxology_generated_contract::CheckDispatch + Send + Sync + 'static,
+    T: crate::contract::__boxology_generated_contract::CheckDispatch + Send + Sync
+        + 'static,
     F: FnOnce(CheckImports) -> T,
 {
     composition
@@ -296,7 +298,8 @@ pub fn typed_imports(imports: &::boxology_runtime::Imports) -> CheckImports {
 }
 impl<T> ::boxology_contract::ErasedTarget for CheckAdapter<T>
 where
-    T: ::boxology_generated_contract::CheckDispatch + Send + Sync + 'static,
+    T: crate::contract::__boxology_generated_contract::CheckDispatch + Send + Sync
+        + 'static,
 {
     fn call<'a>(
         &'a self,
@@ -313,7 +316,7 @@ where
             > + Send + 'a,
         >,
     > {
-        let expected = ::boxology_generated_contract::contract_descriptor()
+        let expected = crate::contract::__boxology_generated_contract::contract_descriptor()
             .capabilities()
             .first()
             .expect("generated Check contract has one capability")
@@ -344,7 +347,7 @@ where
                         conversion_detail("input_decode", error),
                     )
                 })?;
-            let input = <::boxology_generated_contract::CheckRequest as ::boxology_contract::ContractType>::decode(
+            let input = <crate::contract::__boxology_generated_contract::CheckRequest as ::boxology_contract::ContractType>::decode(
                     &input,
                 )
                 .map_err(|error| {
@@ -352,7 +355,7 @@ where
                         conversion_detail("input_decode", error),
                     )
                 })?;
-            match ::boxology_generated_contract::CheckDispatch::check(
+            match crate::contract::__boxology_generated_contract::CheckDispatch::check(
                     &self.service,
                     context,
                     input,

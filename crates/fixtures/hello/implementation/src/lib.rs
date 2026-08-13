@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn generated_adapter_and_dispatch_are_send_sync() {
         fn assert_dispatch<
-            T: boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
+            T: hello_contract::HelloDispatch + Send + Sync + 'static,
         >() {
         }
         fn assert_bounds<T: Send + Sync + 'static>() {}
@@ -88,7 +88,7 @@ mod tests {
         assert_bounds::<generated::HelloAdapter<HelloService>>();
         assert!(std::ptr::eq(
             generated::implementation_descriptor().contract(),
-            boxology_generated_contract::contract_descriptor()
+            hello_contract::contract_descriptor()
         ));
     }
 

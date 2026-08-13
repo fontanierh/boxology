@@ -17,6 +17,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
 
 fn contract_expansion(input: TokenStream2) -> syn::Result<TokenStream2> {
     let model = boxology_contract_syntax::parse(input)?;
+    let dependency = Ident::new(&model.dependency_crate, Span::call_site());
     let data = model
         .data
         .iter()
@@ -24,15 +25,17 @@ fn contract_expansion(input: TokenStream2) -> syn::Result<TokenStream2> {
         .collect::<Vec<_>>();
     let error = Ident::new(&model.error.name, Span::call_site());
     let facade = if data.is_empty() {
-        quote!(pub use ::boxology_generated_contract::#error;)
+        quote!(pub use ::#dependency::#error;)
     } else {
-        quote!(pub use ::boxology_generated_contract::{#(#data,)* #error};)
+        quote!(pub use ::#dependency::{#(#data,)* #error};)
     };
     let expected = boxology_contract_syntax::semantic_digest(&model);
     let comparisons = expected.iter().enumerate().map(|(index, byte)| {
-        quote!(::boxology_generated_contract::__BOXOLOGY_SEMANTIC_DIGEST[#index] == #byte)
+        quote!(__boxology_generated_contract::__BOXOLOGY_SEMANTIC_DIGEST[#index] == #byte)
     });
     Ok(quote! {
+        #[doc(hidden)]
+        pub use ::#dependency as __boxology_generated_contract;
         #facade
         const _: () = {
             if !(#(#comparisons)&&*) {
@@ -95,7 +98,7 @@ pub fn implementation(arguments: TokenStream, input: TokenStream) -> TokenStream
     });
     quote! {
         #original
-        ::boxology_generated_contract::__boxology_check_implementation!(#receiver; #(#methods)*);
+        crate::contract::__boxology_generated_contract::__boxology_check_implementation!(#receiver; #(#methods)*);
     }
     .into()
 }
@@ -162,7 +165,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing facade name {name}: {expanded}"))
         });
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(expanded.matches("pub use").count(), 1);
+        assert_eq!(expanded.matches("pub use").count(), 2);
 
         let scalar = contract_expansion(quote! {
             #[error] pub enum Fault { Bad }
@@ -170,6 +173,21 @@ mod tests {
         })
         .unwrap()
         .to_string();
-        assert!(scalar.starts_with("pub use :: boxology_generated_contract :: Fault ;"));
+        assert!(scalar.contains("pub use :: boxology_generated_contract :: Fault ;"));
+    }
+
+    #[test]
+    fn contract_facade_accepts_a_project_local_dependency_name() {
+        let expanded = contract_expansion(quote! {
+            contract_crate = review_contract;
+            #[error] pub enum Fault { Bad }
+            #[capability] pub async fn save(input: String) -> Result<String, Fault>;
+        })
+        .unwrap()
+        .to_string();
+
+        assert!(expanded.contains("pub use :: review_contract as __boxology_generated_contract"));
+        assert!(expanded.contains("pub use :: review_contract :: Fault"));
+        assert!(!expanded.contains(":: boxology_generated_contract"));
     }
 }

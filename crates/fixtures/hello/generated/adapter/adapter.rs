@@ -3,7 +3,7 @@ use ::boxology_contract::ContractType;
 #[doc(hidden)]
 pub fn implementation_descriptor() -> ::boxology_contract::ImplementationDescriptor {
     ::boxology_contract::ImplementationDescriptor::new(
-            ::boxology_generated_contract::contract_descriptor(),
+            crate::contract::__boxology_generated_contract::contract_descriptor(),
             [],
         )
         .expect("generated adapter import descriptors are valid")
@@ -16,7 +16,7 @@ pub struct HelloAdapter<T> {
 #[doc(hidden)]
 pub fn factory<T>(service: T, imports: ::boxology_runtime::Imports) -> HelloAdapter<T>
 where
-    T: ::boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
+    T: crate::contract::__boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
 {
     HelloAdapter {
         service,
@@ -28,7 +28,7 @@ pub fn register<T>(
     service: T,
 ) -> ::boxology_runtime::RegisteredBox
 where
-    T: ::boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
+    T: crate::contract::__boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
 {
     composition
         .register(
@@ -38,7 +38,7 @@ where
 }
 impl<T> ::boxology_contract::ErasedTarget for HelloAdapter<T>
 where
-    T: ::boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
+    T: crate::contract::__boxology_generated_contract::HelloDispatch + Send + Sync + 'static,
 {
     fn call<'a>(
         &'a self,
@@ -55,7 +55,7 @@ where
             > + Send + 'a,
         >,
     > {
-        let expected = ::boxology_generated_contract::contract_descriptor()
+        let expected = crate::contract::__boxology_generated_contract::contract_descriptor()
             .capabilities()
             .first()
             .expect("generated Hello contract has one capability")
@@ -77,7 +77,7 @@ where
                         conversion_detail("input_decode", error),
                     )
                 })?;
-            match ::boxology_generated_contract::HelloDispatch::greet(
+            match crate::contract::__boxology_generated_contract::HelloDispatch::greet(
                     &self.service,
                     context,
                     input,
