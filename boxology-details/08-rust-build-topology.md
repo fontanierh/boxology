@@ -245,7 +245,7 @@ The foundation `boxology check` baseline is:
 2. Recreate required generated contracts and schemas byte-for-byte with the workspace generator while leaving untouched historical artifacts on their recorded compatible generator provenance.
 3. Classify contract changes against the base revision and report incompatible tightening or removal even when harness policy later authorizes it.
 4. Validate the complete Cargo graph, forbidden implementation edges, feature and target-specific edges, and shared-lockfile rules.
-5. Run `cargo fmt --check` over the hand-authored packages by explicit selection; declared generated Rust is excluded (it is printed deterministically by the pinned generator printer, and rustfmt's ignore configuration is not available on stable).
+5. Run `cargo fmt --check` over the hand-authored packages by explicit selection; declared generated Rust is excluded because its pinned generator printer is authoritative. Generated contract items carry stable outer `#[rustfmt::skip]` attributes so an incidental workspace-wide format remains a byte-for-byte no-op rather than creating regeneration drift.
 6. Run `cargo clippy --workspace --all-targets --all-features -- -D warnings` with the workspace's pinned Rust toolchain; changing that pin is a deliberate platform-package change.
 7. Run `cargo test --workspace --all-features`.
 8. Run each package's declared `[quality].commands`. The generated Hello project declares its in-process Rust and HTTP conformance tests there, including the accepted HTTP wire contract; the checker contains no Hello-specific branch.
