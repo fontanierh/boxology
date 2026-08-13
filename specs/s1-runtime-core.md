@@ -20,7 +20,7 @@ Every later stream consumes S1. It owns the descriptor ABI (S2 generates values,
 
 ### D1 — Two kernel crates; the invocation ABI lives in `boxology-contract`
 
-- **`boxology-contract`**: value model, `ContractType`/`ContractError`, presence and opacity types, descriptor types, `CallContext`, `CallError`, `Deadline`, `CancelToken`, `TraceContext`, the erased dispatch ABI. No I/O, no server; one async-adjacent dependency (`tokio-util` for `CancellationToken`, recorded and replaceable).
+- **`boxology-contract`**: value model, `ContractType`/`ContractError`, presence and opacity types, descriptor types, canonical JSON projection, `CallContext`, `CallError`, `Deadline`, `CancelToken`, `TraceContext`, the erased dispatch ABI. No I/O and no server; dependencies are `tokio-util` for `CancellationToken` plus the small JSON/Base64/float-formatting primitives used by the shared codec.
 - **`boxology-runtime`**: composition builder, import resolution, exposure, validation, lifecycle, in-process binding, `TransportBinding`.
 
 The author-facing `boxology` facade re-exports exactly the `contract` and `implementation` macros plus `boxology_contract::CallContext`; it does not re-export the wider kernel or runtime APIs and owns no competing ABI. Generated contract crates depend on `boxology-contract` only. Each implementation uses the facade and aliases its box-specific generated package to the fixed dependency name `boxology_generated_contract`.
@@ -28,6 +28,10 @@ The author-facing `boxology` facade re-exports exactly the `contract` and `imple
 ### D2 — Value model: `ContractValue`, `SlotValue`, and presence at every position
 
 `ContractValue` is an opaque struct (private representation, fallible constructors, read-only visitors): null, bool, i64, u64, f64/f32 (finite — non-finite rejected at construction), string, bytes, list, object (ordered, duplicate keys rejected), enum node (tag + payload slot), opaque node (D4), sensitive node (D9).
+
+`boxology_contract::json` owns the canonical descriptor-guided JSON projection for these values.
+Bindings and non-HTTP consumers share its encode/decode roles, deterministic representation, and
+explicit byte/depth limits; transports may wrap the projected value in their own envelopes.
 
 **Presence is modeled at every legal position, not only struct fields:**
 

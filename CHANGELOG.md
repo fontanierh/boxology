@@ -2,6 +2,17 @@
 
 This file records notable user-facing changes to Boxology.
 
+## Unreleased
+
+### Contract JSON
+
+- Added the binding-independent `boxology_contract::json` codec. Consumers can now call
+  `json::encode(&slot, &descriptor)` and `json::decode(bytes, &descriptor, role, limits)` for IPC,
+  CLI output, and files without depending on `boxology-http` or inventing another mapping.
+- The codec is the existing canonical HTTP projection moved into the published contract crate:
+  descriptor-guided integer/blob/enum/presence rules, deterministic key ordering and escaping,
+  strict versus tolerant decode roles, unknown-enum forwarding, and byte/depth caps remain shared.
+
 ## [0.1.0] - 2026-08-13
 
 ### Foundation
