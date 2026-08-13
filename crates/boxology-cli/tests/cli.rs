@@ -203,6 +203,7 @@ impl Fixture {
     }
 
     fn cargo_fmt_all(&self) -> Output {
+        let _lock = env_lock();
         Command::new("cargo")
             .args(["fmt", "--all"])
             .current_dir(&self.root)
