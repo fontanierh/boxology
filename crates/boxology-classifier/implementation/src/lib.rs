@@ -94,5 +94,5 @@ fn boundary_class(class: Class) -> CompatibilityClass {
 /// Generated implementation adapter for composition assembly.
 #[doc(hidden)]
 pub mod generated {
-    include!("../../generated/adapter/adapter.rs");
+    include!("generated_adapter.rs");
 }
