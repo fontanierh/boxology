@@ -257,6 +257,29 @@ impl WorkspaceInputs {
             cargo_members,
         })
     }
+
+    /// Validates the manifest-owned source model needed to plan generation without requiring the
+    /// Cargo graph to exist yet. This is the narrow bootstrap boundary for a generated contract
+    /// crate: discovery, ownership, symlink confinement, lockfile policy, and declared crate roles
+    /// still fail closed, while member matching and dependency-edge checks remain deferred until
+    /// the generated Cargo manifest exists.
+    pub fn check_for_generation(&self) -> Result<Workspace, Findings> {
+        let (mut packages, found) = self.discover();
+        if let Some(findings) = found {
+            return Err(findings);
+        }
+        let (classifications, mut defects) = self.classify(&packages);
+        defects.extend(roles(&packages));
+        if let Some(findings) = Findings::new(defects) {
+            return Err(findings);
+        }
+        packages.sort_by(|left, right| left.id().cmp(right.id()));
+        Ok(Workspace {
+            packages,
+            classifications,
+            cargo_members: Vec::new(),
+        })
+    }
     /// Reads the Cargo workspace members out of the `cargo metadata` document, or reports the one
     /// coded defect an unreadable document is.
     ///

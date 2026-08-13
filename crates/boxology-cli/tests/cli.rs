@@ -87,6 +87,7 @@ const CLEAN_CHECK_JSON: &str = "{\n  \"schema\": \"boxology.check-report@1\",\n 
 const ROOT_MANIFEST: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n";
 const PACKAGE_MANIFEST: &str = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n";
 const METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
+const IMPLEMENTATION_ONLY_METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
@@ -307,6 +308,21 @@ impl Fixture {
         fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    fn install_bootstrap_cargo(&self, initial_metadata: Option<&str>) {
+        let initial = initial_metadata.map_or_else(
+            || "printf '%s\\n' 'missing generated contract manifest' >&2; exit 17".to_owned(),
+            |metadata| format!("printf '%s\\n' '{metadata}'; exit 0"),
+        );
+        fs::write(
+            &self.cargo,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_ARG_LOG\"\nif [ ! -f ping/generated/contract/Cargo.toml ]; then {initial}; fi\n/bin/cat \"$BOXOLOGY_METADATA\"\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&self.cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     fn install_fake_git_default(&self, merge_base: &str, exists_status: u8) {
         let git = self.cargo.parent().unwrap().join("git");
         fs::write(
@@ -483,6 +499,62 @@ fn first_write_then_byte_identical_unchanged_run_uses_exact_argv() {
         fs::read_to_string(&fixture.log).unwrap(),
         "metadata\n--format-version\n1\n--locked\n--no-deps\n"
     );
+}
+
+#[test]
+fn generate_bootstraps_when_missing_contract_blocks_cargo_metadata() {
+    let fixture = Fixture::new(false);
+    fs::remove_dir_all(fixture.root.join("ping/generated")).unwrap();
+    fixture.install_bootstrap_cargo(None);
+
+    let output = fixture.run(&["generate", "--package", "ping"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains("generate ping written\n"));
+    assert!(
+        fixture
+            .root
+            .join("ping/generated/contract/Cargo.toml")
+            .is_file()
+    );
+    assert_eq!(
+        fixture.argv_log(),
+        format!("{METADATA_ARGV}{METADATA_ARGV}")
+    );
+}
+
+#[test]
+fn generate_bootstraps_when_metadata_has_only_the_existing_implementation() {
+    let fixture = Fixture::new(false);
+    fs::remove_dir_all(fixture.root.join("ping/generated")).unwrap();
+    fixture.install_bootstrap_cargo(Some(IMPLEMENTATION_ONLY_METADATA));
+
+    let output = fixture.run(&["generate", "--package", "ping"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains("generate result changed\n"));
+    assert!(fixture.root.join("ping/generated/schema.json").is_file());
+    assert_eq!(
+        fixture.argv_log(),
+        format!("{METADATA_ARGV}{METADATA_ARGV}")
+    );
+}
+
+#[test]
+fn bootstrap_still_rejects_unowned_source_before_writing() {
+    let fixture = Fixture::new(true);
+    fs::remove_dir_all(fixture.root.join("ping/generated")).unwrap();
+    fixture.install_bootstrap_cargo(None);
+
+    let output = fixture.run(&["generate", "--package", "ping"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert!(text(&output.stderr).contains("BXW0044 stray.txt"));
+    assert!(!fixture.root.join("ping/generated").exists());
+    assert_eq!(fixture.argv_log(), METADATA_ARGV);
 }
 
 #[test]

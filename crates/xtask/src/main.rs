@@ -96,6 +96,7 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     body_digest: "b73fe4aec5be8389677cc09aae95bf0013b7acb1b84b42405742fe2c945c6584",
 };
 const CLI_END_TO_END_TESTS: &[&str] = &[
+    "bootstrap_still_rejects_unowned_source_before_writing",
     "check_base_absent_schema_is_a_valid_none_base",
     "check_base_cat_file_failure_after_confirmed_presence_is_always_bxw0092",
     "check_base_git_boundary_uses_the_exact_nonmutating_argv",
@@ -137,6 +138,8 @@ const CLI_END_TO_END_TESTS: &[&str] = &[
     "corrupted_cargo_toml_is_reported_with_captured_cargo_output",
     "first_write_then_byte_identical_unchanged_run_uses_exact_argv",
     "generate_incompatible_classification_still_exits_zero",
+    "generate_bootstraps_when_metadata_has_only_the_existing_implementation",
+    "generate_bootstraps_when_missing_contract_blocks_cargo_metadata",
     "generate_package_ping_attaches_exact_additive_classification",
     "generate_unparseable_base_is_bxw0077_without_result_line",
     "generate_updates_provenance_digest_and_revision",
@@ -164,7 +167,7 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("117cee804bba1e3cef49fef5ed099668b64b23f7c5cc39becd8be760985a8ea5"),
-    source_digest: "34eb23a72c918b237f5351c83e4bb23afdf1a5d134c045e3fb00bc3016ef57d7",
+    source_digest: "165e6f55e343fb01f3c93438f827ebe721eb3d51d8233667f6ffcf62ecd504a6",
     body_digest: "546f10a68d744fea3b9ed1ff7b8eb38e47474d8ed7ee6231b67eb369df28b6c3",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
