@@ -82,9 +82,9 @@ fn inherited(table: &dyn TableLike, key: &str) -> bool {
 
 #[rustfmt::skip]
 fn check_readme(readme: &str, errors: &mut Vec<String>) {
-    for truth in ["early-stage, source-only framework", "V0 was completed on 2026-08-09",
+    for truth in ["early-stage framework", "V0 was completed on 2026-08-09",
         "Applications built with Boxology are separate products and are not included in this repository.",
-        "version `0.0.0` with `publish = false`", "Install only from a source checkout.",
+        "unpublished development packages at version `0.0.0`", "cargo install --git https://github.com/fontanierh/boxology",
         "requires Rust 1.97.1", "dual-licensed under [MIT](LICENSE-MIT) or [Apache License 2.0](LICENSE-APACHE)"] {
         if !readme.contains(truth) { errors.push(format!("README.md: missing required truth {truth:?}")); }
     }
@@ -432,7 +432,7 @@ mod tests {
             ("crates/xtask/Cargo.toml", "publish = false", "publish = true"),
             ("crates/xtask/Cargo.toml", "version = \"0.0.0\"", "version = \"1.2.3\""),
             ("LICENSE-MIT", "Henry Fontanier", "H. Fontanier"),
-            ("README.md", "Install only from a source checkout.", "Boxology is published on crates.io."),
+            ("README.md", "unpublished development packages", "published crates"),
         ] {
             let fixture = Fixture::new(); fixture.mutate(file, from, to);
             assert_eq!(run(&fixture.0), 1, "mutation survived: {file} {from}");

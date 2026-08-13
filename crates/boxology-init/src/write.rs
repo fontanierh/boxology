@@ -173,9 +173,7 @@ mod tests {
         assert_eq!(temp.0.join(staging).parent(), Some(temp.0.as_path()));
 
         let target = temp.0.to_str().unwrap();
-        let args = [
-            "--name", "example", "--dependency-source", "../boxology", "--target", target,
-        ].map(String::from);
+        let args = ["--name", "example", "--target", target].map(String::from);
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         assert_eq!(crate::run(&args, &mut stdout, &mut stderr), 1);
         assert_eq!(stdout, b"");

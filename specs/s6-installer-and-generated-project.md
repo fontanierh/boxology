@@ -10,7 +10,7 @@ The generated project is the platform's first user-facing artifact and its accep
 
 ## Non-goals
 
-- **No distribution or publishing.** The recorded v0 exclusion stands: the installer is consumed from a source checkout (`cargo install --path`); packaging, versioning channels, and release publishing arrive with the first post-v0 release for outside users.
+- **No crates.io publishing in V0.** Registry packaging and versioned release channels remain post-v0. The current outside-user bridge uses standard `cargo install --git`; this does not retroactively widen the V0 evidence claim.
 - **No interactivity.** The onboarding skill's agent asks the developer the minimum necessary questions and passes explicit flags; the CLI itself prompts for nothing. Harness-neutrality lives in the skill (S7), not here.
 - **No options.** One generated shape: the database-free `ping` project. No templates, feature menus, provider scaffolding, persistence, or alternative layouts. Every option is a post-v0 decision with its own evidence.
 - **No git, network, or toolchain execution.** The installer runs no `git`, `cargo`, `rustc`, or network access; it writes files. Brownfield and non-empty-target operation are excluded (fail-closed below).
@@ -24,7 +24,7 @@ The generated project is the platform's first user-facing artifact and its accep
 - The **CLI** (a `boxology-init` binary in the same crate) owns the effects: request assembly from flags, fail-closed target validation, and sentinel-gated staged write through D2's own staged-directory-plus-sentinel mechanism. It is a **separate binary from S5's `boxology`**: the release bundle names the installer as its own deliverable, the strategy review's stage 3 plans it as a standalone composition, and S5's command surface stays exactly `generate`/`check`.
 - Diagnostics carry stable codes in a **`BXI####`** namespace, disjoint from `BXG`/`BXC`/`BXW`; there is no uncoded failure path.
 
-`InitRequest` contains exactly the project name and the **platform dependency source**. Nothing is published, so the generated workspace keeps exact `=0.0.0` dependency declarations and redirects those packages to the platform source checkout through root `[patch.crates-io]` path overrides. The request carries that checkout path explicitly. This preserves same-checkout builds without making generated member crates declare external path edges that `boxology check` must reject. The source is recorded verbatim into generated manifests and provenance; determinism (D5) is defined over identical requests, and goldens pin a canonical placeholder. Published registry versions replace the overrides only at a future external release. The installer records its own version in generated provenance.
+`InitRequest` now contains exactly the project name. The generated workspace keeps exact `=0.0.0` dependency declarations and obtains framework crates from one full revision of the public Boxology Git repository. The first ordinary Cargo build also records that commit in `Cargo.lock`. No host checkout path is embedded and no root `[patch.crates-io]` override is emitted. The portable repository source is recorded in generated provenance. A versioned registry release can replace this Git bridge later without changing member-crate dependency declarations. The installer records its own version in generated provenance.
 
 ### D2 — Fail-closed target, sentinel-gated staged write
 
@@ -61,10 +61,10 @@ The complete end-to-end proof is one S6-owned integration test run natively on m
 1. The generated tree is byte-identical across repetition, roots, time, locale, and timezone in native macOS ARM64 V0 evidence; cross-platform proof is #525 scope.
 2. In one native-macOS born-valid run, the generated project passes `boxology check` after the documented first ordinary Cargo invocation, with no other repair step.
 3. The capability answers correctly through the in-process Rust binding and through HTTP against the same composition, via the generated quality commands — with no generated-project-specific branch in any checker.
-4. The embedded generation is byte-identical to standalone regeneration: `boxology generate` on the fresh project rewrites nothing. V0 assumes installer and `boxology` binaries built from the same source checkout (recorded with S5 D5's single-generator narrowing); cross-release skew handling arrives with the first published release.
+4. The embedded generation is byte-identical to standalone regeneration: `boxology generate` on the fresh project rewrites nothing. V0 assumed same-checkout tools; the current Git-installed bridge uses the generated project's lockfile to pin framework dependencies while registry release compatibility remains future work.
 5. Fail-closed behavior is proven: non-empty target (beyond `.git/`), re-run against a generated project, and invalid request each fail with asserted `BXI` codes; an interrupted write never yields a tree bearing the completion sentinel, and a sentinel-less partial tree is detected and reported by the re-run check.
 6. The emitted CI workflow byte-matches S5's golden document; the generated README documents build, both invocation paths, validation, and the first-build lockfile step.
-7. The installer builds and runs from a source checkout via `cargo install --path` in the native-macOS born-valid run. The real `greet(name)` evolution and its additive classification are proved once in S7's acceptance run (#340), not duplicated here with a synthetic fixture pair.
+7. The historical V0 proof installed from a source checkout. Current onboarding additionally proves the documented `cargo install --git` path; the real `greet(name)` evolution and its additive classification remain proved once in S7's acceptance run (#340), not duplicated here.
 
 ## Matters left open
 

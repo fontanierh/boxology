@@ -16,16 +16,14 @@ const CODES: [(&str, &str, &str); 5] = [
     ("BXI0006", "target entries", "target must contain no entry other than `.git`"),
     ("BXI0007", "generated project", "a target bearing the `boxology.toml` completion sentinel has already been initialized; re-running is refused"),
     ("BXI0008", "staged write", "an interrupted write leaves no tree bearing the completion sentinel; the partial tree is reported for manual cleanup"),
-    ("BXI0009", "invocation", "all parameters must be given as explicit flags: `--name`, `--dependency-source`, `--target`"),
+    ("BXI0009", "invocation", "all parameters must be given as explicit flags: `--name`, `--target`"),
 ];
 const D2: &str = "specs/s6-installer-and-generated-project.md D2";
 const D1: &str = "specs/s6-installer-and-generated-project.md D1";
-const USAGE: &str =
-    "usage: boxology-init --name <project-name> --dependency-source <path> --target <directory>";
+const USAGE: &str = "usage: boxology-init --name <project-name> --target <directory>";
 
 struct Args {
     name: String,
-    dependency_source: String,
     target: String,
 }
 
@@ -54,7 +52,7 @@ fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
         Ok(args) => args,
         Err(()) => return usage_failure(stderr),
     };
-    let request = match InitRequest::new(&args.name, &args.dependency_source) {
+    let request = match InitRequest::new(&args.name) {
         Ok(request) => request,
         Err(diagnostics) => {
             let _ = writeln!(stderr, "{diagnostics}");
@@ -86,7 +84,6 @@ fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
 
 fn parse(args: &[String]) -> Result<Args, ()> {
     let mut name = None;
-    let mut dependency_source = None;
     let mut target = None;
     let mut index = 0;
     while index < args.len() {
@@ -94,7 +91,6 @@ fn parse(args: &[String]) -> Result<Args, ()> {
         index += 1;
         let slot = match flag {
             "--name" => &mut name,
-            "--dependency-source" => &mut dependency_source,
             "--target" => &mut target,
             _ => return Err(()),
         };
@@ -106,7 +102,6 @@ fn parse(args: &[String]) -> Result<Args, ()> {
     }
     Ok(Args {
         name: name.ok_or(())?,
-        dependency_source: dependency_source.ok_or(())?,
         target: target.ok_or(())?,
     })
 }

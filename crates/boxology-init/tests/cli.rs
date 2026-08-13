@@ -49,14 +49,7 @@ impl Fixture {
             .unwrap()
     }
     fn run_init(&self, name: &str) -> Output {
-        self.run(&[
-            "--name",
-            name,
-            "--dependency-source",
-            "../boxology",
-            "--target",
-            self.root.to_str().unwrap(),
-        ])
+        self.run(&["--name", name, "--target", self.root.to_str().unwrap()])
     }
 }
 fn text(bytes: &[u8]) -> &str {
@@ -94,7 +87,7 @@ fn regular_files(root: &Path) -> Vec<String> {
 }
 
 fn assert_tree_matches_oracle(root: &Path) {
-    let oracle = initialize(&InitRequest::new("example", "../boxology").unwrap()).unwrap();
+    let oracle = initialize(&InitRequest::new("example").unwrap()).unwrap();
     assert!(!oracle.files().is_empty());
     let expected_paths: Vec<_> = oracle
         .files()
@@ -139,18 +132,18 @@ fn assert_usage(args: &[&str]) {
     assert!(text(&output.stdout).is_empty());
     let stderr = text(&output.stderr);
     assert!(stderr.starts_with("BXI0009 <argv>:"), "{stderr}");
-    assert!(stderr.contains("all parameters must be given as explicit flags: `--name`, `--dependency-source`, `--target`"));
-    assert!(stderr.contains("usage: boxology-init --name <project-name> --dependency-source <path> --target <directory>\n"));
+    assert!(stderr.contains("all parameters must be given as explicit flags: `--name`, `--target`"));
+    assert!(stderr.contains("usage: boxology-init --name <project-name> --target <directory>\n"));
 }
 
 #[test]
 #[rustfmt::skip]
 fn malformed_invocations_are_usage_failures() {
     for args in [
-        &[][..], &["--name"][..], &["--name", "demo", "--dependency-source", "s"][..],
-        &["--name", "demo", "--dependency-source", "s", "--target", "t", "extra"][..],
+        &[][..], &["--name"][..], &["--name", "demo"][..],
+        &["--name", "demo", "--target", "t", "extra"][..],
         &["--unknown", "x"][..], &["demo"][..],
-        &["--name=demo", "--dependency-source", "s", "--target", "t"][..],
+        &["--name=demo", "--target", "t"][..],
     ] {
         assert_usage(args);
     }
@@ -169,30 +162,13 @@ fn invalid_request_surfaces_before_target_checks() {
     assert!(text(&bad_name.stdout).is_empty());
     assert!(text(&bad_name.stderr).starts_with("BXI0001 "));
     assert!(!text(&bad_name.stderr).contains("BXI0006"));
-    let empty_source = fixture.run(&[
-        "--name",
-        "demo",
-        "--dependency-source",
-        "",
-        "--target",
-        fixture.root.to_str().unwrap(),
-    ]);
-    assert_eq!(empty_source.status.code(), Some(1));
-    assert!(text(&empty_source.stderr).starts_with("BXI0002 "));
 }
 
 #[test]
 fn missing_target_is_coded() {
     let fixture = Fixture::new();
     let missing = fixture.cleanup.join("absent");
-    let output = fixture.run(&[
-        "--name",
-        "demo",
-        "--dependency-source",
-        "../boxology",
-        "--target",
-        missing.to_str().unwrap(),
-    ]);
+    let output = fixture.run(&["--name", "demo", "--target", missing.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = text(&output.stderr);
     assert!(stderr.starts_with("BXI0005 "));
@@ -253,7 +229,7 @@ fn cli_written_tree_is_sentinel_refused_on_rerun() {
 #[test]
 fn generated_tree_rerun_is_sentinel_refusal() {
     let fixture = Fixture::new();
-    let tree = initialize(&InitRequest::new("example", "../boxology").unwrap()).unwrap();
+    let tree = initialize(&InitRequest::new("example").unwrap()).unwrap();
     for file in tree.files() {
         let path = fixture.root.join(file.path());
         if let Some(parent) = path.parent() {

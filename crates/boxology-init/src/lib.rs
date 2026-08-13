@@ -19,6 +19,8 @@ use std::{
 
 const RULE_SOURCE: &str = "specs/s6-installer-and-generated-project.md D1";
 const REQUEST_PATH: &str = "<request>";
+const BOXOLOGY_REPOSITORY: &str = "https://github.com/fontanierh/boxology";
+const BOXOLOGY_REVISION: &str = "6dae382948a0b41b61375163fc906c8002300131";
 const TOOLCHAIN: &[u8] = include_bytes!("../../../rust-toolchain.toml");
 const PING_MANIFEST: &[u8] = include_bytes!("../../fixtures/ping/boxology.toml");
 const PING_IMPLEMENTATION_MANIFEST: &[u8] =
@@ -43,7 +45,7 @@ const DIAGNOSTICS: [(&str, &str, &str); 4] = [
     (
         "BXI0002",
         "dependency source",
-        "dependency source must not be empty",
+        "reserved legacy dependency-source diagnostic",
     ),
     (
         "BXI0003",
@@ -56,12 +58,12 @@ const DIAGNOSTICS: [(&str, &str, &str); 4] = [
         "embedded generated paths must be confined relative paths",
     ),
 ];
-const DEPENDENCIES: [(&str, &str); 5] = [
-    ("boxology", "crates/boxology"),
-    ("boxology-contract", "crates/boxology-contract"),
-    ("boxology-http", "crates/boxology-http"),
-    ("boxology-manifest", "crates/boxology-manifest"),
-    ("boxology-runtime", "crates/boxology-runtime"),
+const DEPENDENCIES: [&str; 5] = [
+    "boxology",
+    "boxology-contract",
+    "boxology-http",
+    "boxology-manifest",
+    "boxology-runtime",
 ];
 const TOKIO_WORKSPACE_DEPENDENCY: &str = "tokio = { version = \"=1.53.0\", default-features = false, features = [\"io-util\", \"macros\", \"net\", \"rt\", \"time\"] }\n";
 
@@ -143,41 +145,25 @@ impl fmt::Display for Diagnostics {
 #[derive(Debug, Eq, PartialEq)]
 pub struct InitRequest {
     project_name: String,
-    dependency_source: String,
 }
 
 impl InitRequest {
     /// Validates and constructs an initializer request.
-    pub fn new(
-        project_name: impl Into<String>,
-        dependency_source: impl Into<String>,
-    ) -> Result<Self, Diagnostics> {
+    pub fn new(project_name: impl Into<String>) -> Result<Self, Diagnostics> {
         let project_name = project_name.into();
-        let dependency_source = dependency_source.into();
         let mut diagnostics = Vec::new();
         if !valid_project_name(&project_name) {
             diagnostics.push(Diagnostic(0));
         }
-        if dependency_source.is_empty() {
-            diagnostics.push(Diagnostic(1));
-        }
         match Diagnostics::new(diagnostics) {
             Some(diagnostics) => Err(diagnostics),
-            None => Ok(Self {
-                project_name,
-                dependency_source,
-            }),
+            None => Ok(Self { project_name }),
         }
     }
 
     /// Returns the validated project name.
     pub fn project_name(&self) -> &str {
         &self.project_name
-    }
-
-    /// Returns the dependency source with its exact caller-provided spelling.
-    pub fn dependency_source(&self) -> &str {
-        &self.dependency_source
     }
 }
 
@@ -224,15 +210,9 @@ pub fn initialize(request: &InitRequest) -> Result<GeneratedTree, Diagnostics> {
             ".github/workflows/check.yml",
             CHECK_WORKFLOW.as_bytes().to_vec(),
         ),
-        file(
-            "Cargo.toml",
-            cargo_manifest(request.dependency_source()).into_bytes(),
-        ),
+        file("Cargo.toml", cargo_manifest().into_bytes()),
         file("README.md", readme(request.project_name()).into_bytes()),
-        file(
-            "boxology-generator.toml",
-            generator_manifest(request.dependency_source()).into_bytes(),
-        ),
+        file("boxology-generator.toml", generator_manifest().into_bytes()),
         file(
             "boxology.toml",
             platform_manifest(request.project_name()).into_bytes(),
@@ -389,7 +369,7 @@ fn toml_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-fn cargo_manifest(source: &str) -> String {
+fn cargo_manifest() -> String {
     let mut members = WORKSPACE_MEMBERS.to_vec();
     members.sort_unstable();
     let mut text = String::from("[workspace]\nresolver = \"3\"\nmembers = [\n");
@@ -397,25 +377,22 @@ fn cargo_manifest(source: &str) -> String {
         text.push_str(&format!("    {},\n", toml_string(member)));
     }
     text.push_str("]\n\n[workspace.package]\nedition = \"2024\"\n\n[workspace.dependencies]\n");
-    for (name, _) in DEPENDENCIES {
-        text.push_str(&format!("{name} = \"=0.0.0\"\n"));
-    }
-    text.push_str(TOKIO_WORKSPACE_DEPENDENCY);
-    text.push_str("\n[patch.crates-io]\n");
-    for (name, path) in DEPENDENCIES {
+    for name in DEPENDENCIES {
         text.push_str(&format!(
-            "{name} = {{ path = {} }}\n",
-            toml_string(&format!("{source}/{path}"))
+            "{name} = {{ version = \"=0.0.0\", git = {}, rev = {} }}\n",
+            toml_string(BOXOLOGY_REPOSITORY),
+            toml_string(BOXOLOGY_REVISION)
         ));
     }
+    text.push_str(TOKIO_WORKSPACE_DEPENDENCY);
     text
 }
 
-fn generator_manifest(dependency_source: &str) -> String {
+fn generator_manifest() -> String {
     format!(
         "boxology-version = {}\ndependency-source = {}\n",
         toml_string(env!("CARGO_PKG_VERSION")),
-        toml_string(dependency_source)
+        toml_string(BOXOLOGY_REPOSITORY)
     )
 }
 
@@ -597,7 +574,7 @@ mod tests {
     }
 
     fn request() -> InitRequest {
-        InitRequest::new("example", "../boxology").expect("canonical request is valid")
+        InitRequest::new("example").expect("canonical request is valid")
     }
 
     fn generated<'a>(tree: &'a GeneratedTree, path: &str) -> &'a [u8] {
@@ -786,7 +763,6 @@ mod tests {
     fn canonical_request_emits_the_root_platform_subset() {
         let request = request();
         assert_eq!(request.project_name(), "example");
-        assert_eq!(request.dependency_source(), "../boxology");
         let tree = initialize(&request).expect("canonical initialization succeeds");
         compare_golden(&tree).expect("the generated tree matches its golden");
     }
@@ -842,12 +818,13 @@ mod tests {
                 "ping/implementation",
             ]
         );
-        for (name, path) in DEPENDENCIES {
-            let dependency = format!("{name} = \"=0.0.0\"");
-            let patch = format!("{name} = {{ path = \"../boxology/{path}\" }}");
+        for name in DEPENDENCIES {
+            let dependency = format!(
+                "{name} = {{ version = \"=0.0.0\", git = \"{BOXOLOGY_REPOSITORY}\", rev = \"{BOXOLOGY_REVISION}\" }}"
+            );
             assert!(text.lines().any(|line| line == dependency), "{dependency}");
-            assert!(text.lines().any(|line| line == patch), "{patch}");
         }
+        assert!(!text.contains("[patch.crates-io]"));
         assert!(
             text.lines()
                 .any(|line| line == TOKIO_WORKSPACE_DEPENDENCY.trim_end()),
@@ -881,7 +858,7 @@ mod tests {
             assert!(readme.contains(anchor), "missing README anchor {anchor:?}");
         }
 
-        let other = initialize(&InitRequest::new("demo-2", "../boxology").unwrap()).unwrap();
+        let other = initialize(&InitRequest::new("demo-2").unwrap()).unwrap();
         let other = std::str::from_utf8(generated(&other, "README.md")).unwrap();
         assert_eq!(
             other
@@ -982,68 +959,34 @@ mod tests {
     }
 
     #[test]
-    fn noncanonical_dependency_source_is_escaped_in_both_manifests() {
-        let source = r#"../boxology/"quoted"\checkout"#;
-        let request = InitRequest::new("example", source).unwrap();
-        let tree = initialize(&request).unwrap();
-
+    fn dependency_source_is_portable_and_not_host_specific() {
+        let tree = initialize(&request()).unwrap();
         assert_eq!(
             generated(&tree, "boxology-generator.toml"),
-            b"boxology-version = \"0.0.0\"\ndependency-source = \"../boxology/\\\"quoted\\\"\\\\checkout\"\n"
+            b"boxology-version = \"0.0.0\"\ndependency-source = \"https://github.com/fontanierh/boxology\"\n"
         );
         let cargo = std::str::from_utf8(generated(&tree, "Cargo.toml")).unwrap();
-        let expected = [
-            r#"boxology = { path = "../boxology/\"quoted\"\\checkout/crates/boxology" }"#,
-            r#"boxology-contract = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-contract" }"#,
-            r#"boxology-http = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-http" }"#,
-            r#"boxology-manifest = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-manifest" }"#,
-            r#"boxology-runtime = { path = "../boxology/\"quoted\"\\checkout/crates/boxology-runtime" }"#,
-        ];
-        for expected in expected {
-            assert_eq!(
-                cargo.lines().filter(|line| *line == expected).count(),
-                1,
-                "{expected}"
-            );
-        }
+        assert!(!cargo.contains("path ="));
+        assert!(!cargo.contains("[patch.crates-io]"));
         assert_eq!(
-            cargo
-                .lines()
-                .filter(|line| *line == TOKIO_WORKSPACE_DEPENDENCY.trim_end())
-                .count(),
-            1
+            cargo.matches(BOXOLOGY_REPOSITORY).count(),
+            DEPENDENCIES.len()
         );
     }
 
     #[test]
     fn request_validation_catalog_is_exact_and_payload_safe() {
-        let request_lines: Vec<_> = CODE_GOLDEN.lines().take(2).collect();
-        for ((project, dependency), expected) in [("Bad.Project\n", "../boxology"), ("example", "")]
-            .into_iter()
-            .zip(request_lines)
-        {
-            let diagnostics = InitRequest::new(project, dependency).unwrap_err();
-            assert_eq!(diagnostics.as_slice().len(), 1);
-            let diagnostic = &diagnostics.as_slice()[0];
-            assert_eq!(diagnostic.path(), "<request>");
-            let rendered = diagnostics.to_string();
-            assert_eq!(rendered, expected);
-        }
+        let diagnostics = InitRequest::new("Bad.Project\n").unwrap_err();
+        assert_eq!(diagnostics.as_slice().len(), 1);
+        assert_eq!(diagnostics.as_slice()[0].path(), "<request>");
+        assert_eq!(diagnostics.to_string(), CODE_GOLDEN.lines().next().unwrap());
         let catalog = [Diagnostic(0), Diagnostic(1), Diagnostic(2), Diagnostic(3)]
             .map(|diagnostic| diagnostic.to_string())
             .join("\n");
         let lib_golden = CODE_GOLDEN.lines().take(4).collect::<Vec<_>>().join("\n");
         assert_eq!(catalog, lib_golden);
-        let both = InitRequest::new("Bad", "").unwrap_err();
-        assert_eq!(
-            both.as_slice()
-                .iter()
-                .map(Diagnostic::code)
-                .collect::<Vec<_>>(),
-            ["BXI0001", "BXI0002"]
-        );
         for valid in ["a", "example", "a0-b9", "box-"] {
-            assert!(InitRequest::new(valid, "source").is_ok(), "{valid}");
+            assert!(InitRequest::new(valid).is_ok(), "{valid}");
         }
     }
 

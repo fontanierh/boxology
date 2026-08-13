@@ -1,24 +1,26 @@
 # Boxology
 
-Boxology is an early-stage, source-only framework for building software as independent boxes that humans define and agents implement. Humans own box boundaries, typed interfaces, data models, and allowed connections; implementations can evolve behind compatible contracts.
+Boxology is an early-stage framework for building software as independent boxes that humans define and agents implement. Humans own box boundaries, typed interfaces, data models, and allowed connections; implementations can evolve behind compatible contracts.
 
 V0 was completed on 2026-08-09. The accepted stream specs describe its delivered boundary.
 Applications built with Boxology are separate products and are not included in this repository.
 
-The workspace packages are currently unpublished development packages: every package is version `0.0.0` with `publish = false`. Install only from a source checkout. Building this checkout requires Rust 1.97.1.
+The workspace packages are currently unpublished development packages at version `0.0.0`. Cargo installs the tools directly from the public Git repository. Building this checkout requires Rust 1.97.1.
 
-## Source-checkout quick start
+## Quick start
 
-Install the initializer and checker from a Boxology source checkout, then initialize an existing empty target directory (a lone `.git` is allowed):
+Install the initializer and checker, then initialize an existing empty target directory (a lone `.git` is allowed):
 
 ```sh
-cargo install --path <boxology-source>/crates/boxology-init
-cargo install --path <boxology-source>/crates/boxology-cli
-boxology-init --name example --dependency-source <absolute-boxology-source> --target <empty-directory>
+cargo install --git https://github.com/fontanierh/boxology --locked boxology-init
+cargo install --git https://github.com/fontanierh/boxology --locked boxology-cli
+boxology-init --name example --target <empty-directory>
 cd <empty-directory>
 cargo build --workspace
 boxology check
 ```
+
+Re-run either `cargo install` command with `--force` to update that tool from the latest `main`.
 
 The generated project README owns that project's invocation contract.
 

@@ -18,15 +18,12 @@ const BODIES: &[&str] = &[
 ];
 const STEPS: &[&str] = &[
     "**Activate.** Apply this skill to the greenfield onboarding request; the coding agent becomes the lead agent for the new managed project.",
-    "**Ask only.** Ask for the project name, target root, source checkout, and confirmation that the target is empty except `.git`.",
-    "**Install both crates.** From the same source checkout, install both tools with the documented paths:\n`cargo install --path <source-checkout>/crates/boxology-init`\n`cargo install --path <source-checkout>/crates/boxology-cli`",
+    "**Ask only.** Ask for the project name, target root, and confirmation that the target is empty except `.git`.",
+    "**Install both crates.** Install both tools from the public repository with the README's exact\n`cargo install --git` commands. Re-run those commands with `--force` when updating.",
     "**Initialize explicitly.** Invoke `boxology-init` through its documented explicit interface with the answers from step 2. Consult that interface for the current flag spellings; this skill does not freeze flag spellings.",
     "**Build and check.** In the generated repository, run `cargo build` first so Cargo.lock is materialized, then run `boxology check`. The generated README owns the exact Rust and HTTP invocation detail.",
 ];
-const INSTALLS: &[&str] = &[
-    "`cargo install --path <source-checkout>/crates/boxology-init`",
-    "`cargo install --path <source-checkout>/crates/boxology-cli`",
-];
+const INSTALLS: &[&str] = &["`cargo install --git`", "`--force`"];
 const FORBIDDEN: &[&str] = &[
     "host",
     "factory",
@@ -179,7 +176,7 @@ fn audit_text(text: &str) -> Vec<Diagnostic> {
     {
         out.push(diag(
             INSTALL_CODE,
-            "both install commands must occur once and use <source-checkout>",
+            "the Git install and update instructions must each occur once",
         ));
     }
     let final_step = steps.get(4).map(|(_, body)| body.as_str()).unwrap_or("");
@@ -437,14 +434,8 @@ mod tests {
     }
 
     #[test]
-    fn installs_require_one_shared_checkout() {
-        rejects(
-            &mutate(
-                "<source-checkout>/crates/boxology-cli",
-                "<second-checkout>/crates/boxology-cli",
-            ),
-            INSTALL_CODE,
-        );
+    fn install_and_update_instructions_are_exact() {
+        rejects(&mutate(INSTALLS[0], "`cargo install --path`"), INSTALL_CODE);
         rejects(
             &mutate(INSTALLS[0], &format!("{}\n{}", INSTALLS[0], INSTALLS[0])),
             INSTALL_CODE,
