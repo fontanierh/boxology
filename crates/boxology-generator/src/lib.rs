@@ -4325,7 +4325,7 @@ fn main() {
             fs::write(root.join(file.path()), file.bytes()).unwrap();
         }
         let renamed_body = format!(
-            "let descriptor = boxology_generated_contract::contract_descriptor(); assert_ne!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.revision().as_str(), {:?}); assert!(matches!(descriptor.capabilities()[0].error().view(), DescriptorRef::Enum(variants) if variants.len() == 2 && variants[1].tag() == \"Busy\")); let value = HelloFailure::Busy; assert_eq!(value.error_tag(), \"Busy\"); assert_eq!(HelloFailure::decode_value(&value.encode_value().unwrap()).unwrap(), value); let _: boxology_generated_contract::HelloFailure = value;",
+            "let descriptor = review_contract::contract_descriptor(); assert_ne!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.revision().as_str(), {:?}); assert!(matches!(descriptor.capabilities()[0].error().view(), DescriptorRef::Enum(variants) if variants.len() == 2 && variants[1].tag() == \"Busy\")); let value = HelloFailure::Busy; assert_eq!(value.error_tag(), \"Busy\"); assert_eq!(HelloFailure::decode_value(&value.encode_value().unwrap()).unwrap(), value); let _: review_contract::HelloFailure = value;",
             revision(CONTRACT),
             revision(&renamed),
         );
@@ -4340,11 +4340,11 @@ fn main() {
             fs::write(root.join(file.path()), file.bytes()).unwrap();
         }
         let decorated_body = format!(
-            "let descriptor = boxology_generated_contract::contract_descriptor(); assert_eq!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.capabilities()[0].deprecation().unwrap().note(), Some(\"later\")); match descriptor.capabilities()[0].error().view() {{ DescriptorRef::Enum(variants) => assert_eq!(variants[0].deprecation().unwrap().note(), None), _ => panic!(), }};",
+            "let descriptor = review_contract::contract_descriptor(); assert_eq!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.capabilities()[0].deprecation().unwrap().note(), Some(\"later\")); match descriptor.capabilities()[0].error().view() {{ DescriptorRef::Enum(variants) => assert_eq!(variants[0].deprecation().unwrap().note(), None), _ => panic!(), }};",
             revision(decorated),
         );
         let decorated_source = format!(
-            "boxology::contract! {{ #[error] pub enum GreetError {{ #[deprecated] EmptyName }} #[deprecated(note = \"later\")] #[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, GreetError>; }}\nuse boxology_contract::{{DescriptorRef}};\nfn main() {{ {decorated_body} }}\n"
+            "boxology::contract! {{ contract_crate = review_contract; #[error] pub enum GreetError {{ #[deprecated] EmptyName }} #[deprecated(note = \"later\")] #[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, GreetError>; }}\nuse boxology_contract::{{DescriptorRef}};\nfn main() {{ {decorated_body} }}\n"
         );
         fs::write(consumer.join("src/main.rs"), decorated_source).unwrap();
         assert!(
@@ -4359,7 +4359,7 @@ fn main() {
         }
         let value_body = r#"
             use boxology_contract::{CallError, ErasedCallError};
-            let descriptor = boxology_generated_contract::contract_descriptor();
+            let descriptor = review_contract::contract_descriptor();
             let fault_descriptor = descriptor.capabilities()[0].error();
             assert!(matches!(
                 fault_descriptor.view(),
@@ -4398,7 +4398,7 @@ fn main() {
                 erased.into_typed::<Fault>(fault_descriptor),
                 CallError::Domain(Fault::Code(7))
             );
-            let _: boxology_generated_contract::Fault = known;
+            let _: review_contract::Fault = known;
         "#;
         fs::write(
             consumer.join("src/main.rs"),

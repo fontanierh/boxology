@@ -44,7 +44,15 @@ boxology::contract! {
 
 and use the same key in `Cargo.toml`, for example
 `review_contract = { package = "review-contract", path = "../generated/contract" }`. Omitting
-`contract_crate` preserves the generated-project default, `boxology_generated_contract`.
+`contract_crate` preserves the generated-project default, `boxology_generated_contract`. When a
+project-local name is selected, pass the same name to the implementation attribute:
+
+```rust
+#[boxology::implementation(contract_crate = review_contract)]
+impl ReviewService {
+    // ordinary async capability methods
+}
+```
 
 ## Release procedure
 

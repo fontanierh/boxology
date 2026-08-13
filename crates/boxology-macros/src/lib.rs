@@ -5,7 +5,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::quote;
-use syn::{FnArg, ImplItem, ItemImpl, ReturnType, Type, visit::Visit};
+use syn::{Expr, FnArg, ImplItem, ItemImpl, MetaNameValue, ReturnType, Type, visit::Visit};
 
 /// Validates a controlled contract and exposes its generated public boundary types.
 #[proc_macro]
@@ -36,13 +36,6 @@ fn contract_expansion(input: TokenStream2) -> syn::Result<TokenStream2> {
         .map(|(index, byte)| quote!(::#dependency::__BOXOLOGY_SEMANTIC_DIGEST[#index] == #byte));
     Ok(quote! {
         #facade
-        #[doc(hidden)]
-        #[macro_export]
-        macro_rules! __boxology_check_local_implementation {
-            ($receiver:ty; $($methods:tt)*) => {
-                ::#dependency::__boxology_check_implementation!($receiver; $($methods)*);
-            };
-        }
         const _: () = {
             if !(#(#comparisons)&&*) {
                 panic!("Boxology generated contract is stale");
@@ -55,12 +48,10 @@ fn contract_expansion(input: TokenStream2) -> syn::Result<TokenStream2> {
 #[proc_macro_attribute]
 pub fn implementation(arguments: TokenStream, input: TokenStream) -> TokenStream {
     let original = TokenStream2::from(input.clone());
-    if !arguments.is_empty() {
-        return append_error(
-            original,
-            syn::Error::new(Span::call_site(), "implementation accepts no arguments"),
-        );
-    }
+    let dependency = match implementation_dependency(arguments.into()) {
+        Ok(dependency) => dependency,
+        Err(error) => return append_error(original, error),
+    };
     let item = match syn::parse2::<ItemImpl>(original.clone()) {
         Ok(item) => item,
         Err(error) => return append_error(original, error),
@@ -104,9 +95,31 @@ pub fn implementation(arguments: TokenStream, input: TokenStream) -> TokenStream
     });
     quote! {
         #original
-        __boxology_check_local_implementation!(#receiver; #(#methods)*);
+        ::#dependency::__boxology_check_implementation!(#receiver; #(#methods)*);
     }
     .into()
+}
+
+fn implementation_dependency(arguments: TokenStream2) -> syn::Result<Ident> {
+    if arguments.is_empty() {
+        return Ok(Ident::new("boxology_generated_contract", Span::call_site()));
+    }
+    let assignment = syn::parse2::<MetaNameValue>(arguments)?;
+    if !assignment.path.is_ident("contract_crate") {
+        return Err(syn::Error::new_spanned(
+            assignment.path,
+            "expected `contract_crate = <crate_name>`",
+        ));
+    }
+    let Expr::Path(value) = assignment.value else {
+        return Err(syn::Error::new_spanned(
+            assignment.value,
+            "contract_crate must be a Rust crate identifier",
+        ));
+    };
+    value.path.get_ident().cloned().ok_or_else(|| {
+        syn::Error::new_spanned(value.path, "contract_crate must be a Rust crate identifier")
+    })
 }
 
 fn append_error(original: TokenStream2, error: syn::Error) -> TokenStream {
@@ -193,7 +206,20 @@ mod tests {
         .to_string();
 
         assert!(expanded.contains("pub use :: review_contract :: Fault"));
-        assert!(expanded.contains(":: review_contract :: __boxology_check_implementation"));
         assert!(!expanded.contains(":: boxology_generated_contract"));
+    }
+
+    #[test]
+    fn implementation_uses_default_or_project_local_dependency_name() {
+        assert_eq!(
+            implementation_dependency(TokenStream2::new()).unwrap(),
+            "boxology_generated_contract"
+        );
+        assert_eq!(
+            implementation_dependency(quote!(contract_crate = review_contract)).unwrap(),
+            "review_contract"
+        );
+        assert!(implementation_dependency(quote!(crate = review_contract)).is_err());
+        assert!(implementation_dependency(quote!(contract_crate = "review_contract")).is_err());
     }
 }

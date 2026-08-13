@@ -3,7 +3,7 @@ pub use contract::*;
 
 pub struct HelloService;
 
-#[boxology::implementation]
+#[boxology::implementation(contract_crate = hello_contract)]
 impl HelloService {
     pub async fn greet(
         &self,
