@@ -1,12 +1,18 @@
 [package]
 name = "check-contract"
-version = "0.0.0"
-edition = "2024"
-publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Generated workspace check contract"
+publish = true
 
 [features]
 default = []
 test-support = []
 
 [dependencies]
-boxology-contract = { workspace = true }
+boxology-contract = { version = "=0.1.0", path = "../../../boxology-contract" }

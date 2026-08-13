@@ -1,7 +1,7 @@
 schema = 1
 id = "classifier"
 kind = "box"
-owned = ["boxology.toml", "implementation/**"]
+owned = ["boxology.toml", "implementation/**", "LICENSE-APACHE", "LICENSE-MIT"]
 
 [quality]
 commands = [

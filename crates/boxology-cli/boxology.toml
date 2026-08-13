@@ -1,7 +1,7 @@
 schema = 1
 id = "boxology-cli"
 kind = "composition"
-owned = ["boxology.toml", "Cargo.toml", "src/**", "tests/**"]
+owned = ["boxology.toml", "Cargo.toml", "LICENSE-APACHE", "LICENSE-MIT", "src/**", "tests/**"]
 
 [quality]
 commands = ["cargo test -p boxology-cli"]

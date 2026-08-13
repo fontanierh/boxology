@@ -24,6 +24,7 @@ mod generated_project_subject;
 mod generator_model_subject;
 mod links;
 mod oss_metadata;
+mod release;
 #[cfg(test)]
 mod scratch_test;
 mod skill_audit;
@@ -80,8 +81,8 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         default_source: "tests/purity_lock.rs",
         tests: GENERATOR_SOURCE_INVENTORY_TESTS,
         manifest_digest: None,
-        source_digest: "c72c47a7e394c17ca474894d361ba46f9731943051bc04209d8c67412ff14ee2",
-        body_digest: "22a1037281a1d50464192ae5691ebc4a7244e0342e1257e53faad9a5d8d45c65",
+        source_digest: "1047e47d977782a8b508b6527c8a0eeb7d3613011d4acd700306d427b563b700",
+        body_digest: "8f12373a036cb57e62d569d782db99c5ab6cbee26716024bc75b028fa1fae577",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",
@@ -90,7 +91,7 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     source: "crates/boxology-init/tests/born_valid.rs",
     default_source: "tests/born_valid.rs",
     tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
-    manifest_digest: None,
+    manifest_digest: Some("f1e9135be063c105ca79bb492b7c272c2fd12629c4010a5a343fc61103947a01"),
     source_digest: "414c3b222666668c0404bc621fb9d5f473251a48b2dbec95c2e336e45b979dc3",
     body_digest: "f023135d1ad38032a79d9fce86116a236cad9a58f8d0e8dae5ccb0511bc85448",
 };
@@ -162,7 +163,7 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     source: "crates/boxology-cli/tests/cli.rs",
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
-    manifest_digest: Some("f4c3ac3d7a75bd6b2c3882a909461023b82bc8bf34306dbc5a404e706a33ceac"),
+    manifest_digest: Some("117cee804bba1e3cef49fef5ed099668b64b23f7c5cc39becd8be760985a8ea5"),
     source_digest: "34eb23a72c918b237f5351c83e4bb23afdf1a5d134c045e3fb00bc3016ef57d7",
     body_digest: "546f10a68d744fea3b9ed1ff7b8eb38e47474d8ed7ee6231b67eb369df28b6c3",
 };
@@ -173,9 +174,9 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     source: "crates/boxology-cli/tests/surface_lock.rs",
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
-    manifest_digest: Some("f4c3ac3d7a75bd6b2c3882a909461023b82bc8bf34306dbc5a404e706a33ceac"),
-    source_digest: "9dfbee58cff321a7b78878bfaf9c075b85923a19faeccafd051c9bda02c847fe",
-    body_digest: "f942ebb3564aa64dd46e812dc47c6bdca5dda82e5fecd5b6345f74813c55982a",
+    manifest_digest: Some("117cee804bba1e3cef49fef5ed099668b64b23f7c5cc39becd8be760985a8ea5"),
+    source_digest: "b62a4db8d8a200dcae13846936534712cc04a8a9ed1d6a90d3a8728c941de378",
+    body_digest: "b433caa46e0a9caf8f6a6dd9ecdebe979d2927358cd329db1b1f1c45e1552e01",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),
@@ -209,10 +210,10 @@ const GENERATOR_SEALED_IMPORT_E2E: &str =
 const GENERATOR_PR_EXCLUDED_LIVE_TEST_SPEC: external_test::LiveTestSpec =
     external_test::LiveTestSpec {
         manifest: "crates/boxology-generator/Cargo.toml",
-        manifest_digest: "6c4d9d6e383e3693a595f120d3404408e2ef43a6eed76a2d57905b0a40efb260",
+        manifest_digest: "6be806ad94ede7019408c191bbc47c100b343d3ab07ae32ed15c7d4f0706ede8",
         source: "crates/boxology-generator/src/lib.rs",
         tests: &[GENERATOR_MULTI_CAPABILITY_E2E, GENERATOR_SEALED_IMPORT_E2E],
-        body_digest: "43d1ae661136f78917180c6483811fc13f315569d67a7e4af650c279b3ddbe45",
+        body_digest: "1b898770da2c9d080ee934ef2e47d0715f4b3ebf84d461a79920fcca09014499",
     };
 #[cfg(test)]
 const GENERATOR_PR_EXCLUDED_UNIT_TESTS: &[&str] =
@@ -260,6 +261,7 @@ const PR_CHECKS: &[&str] = &[
     "whitespace",
     "links",
     "oss-metadata",
+    "release",
     "deny",
     "determinism",
     "budget",
@@ -283,6 +285,7 @@ const DEEP_CHECKS: &[&str] = &[
     "whitespace",
     "links",
     "oss-metadata",
+    "release",
     "deny",
     "determinism",
 ];
@@ -368,6 +371,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
         [command] if command == "links" => run_links(),
         [command] if command == "deny" => deny::run(&root()),
         [command] if command == "oss-metadata" => oss_metadata::run(audit_root),
+        [command, rest @ ..] if command == "release" => release::run(audit_root, rest),
         [command, flag, repo] if command == "advisories" && flag == "--repo" => {
             advisories::run(&root(), repo, None)
         }
@@ -388,7 +392,7 @@ fn dispatch(args: &[String], audit_root: &Path) -> u8 {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-hygiene --base <revision>\n       cargo xtask ci-fixtures\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory>\n       cargo xtask determinism-manifest --out <directory> --meta-cross\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask oss-metadata\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
+        "usage: cargo xtask advisories --repo <owner/repo> [--simulate <RUSTSEC-id>]\n       cargo xtask ci (--base <revision> | --no-budget)\n       cargo xtask ci-hygiene --base <revision>\n       cargo xtask ci-fixtures\n       cargo xtask budget --base <revision>\n       cargo xtask deny\n       cargo xtask determinism\n       cargo xtask determinism-manifest --out <directory> [--meta-cross]\n       cargo xtask determinism-compare <a> <b>\n       cargo xtask determinism-meta-cross <linux> <macos>\n       cargo xtask determinism-verify <directory> --target <triple> [--require-image]\n       cargo xtask skill-audit\n       cargo xtask links\n       cargo xtask oss-metadata\n       cargo xtask release preflight\n       cargo xtask release publish <crate-name>\n       cargo xtask test\n       cargo xtask subject-run <name> --out <directory>  (internal)"
     );
 }
 
@@ -521,6 +525,10 @@ fn run_ci(base: Option<&str>) -> u8 {
         (
             "oss-metadata",
             timed("oss-metadata", || oss_metadata::run(&root()) == 0),
+        ),
+        (
+            "release",
+            timed("release", || release::run(&root(), &[]) == 0),
         ),
         ("deny", timed("deny", || deny::run(&root()) == 0)),
         (

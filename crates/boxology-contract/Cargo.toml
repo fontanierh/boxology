@@ -8,7 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "Core identifiers, descriptors, and call types"
-publish = false
+publish = true
 
 [dependencies]
 tokio-util = { version = "0.7.18", default-features = false }

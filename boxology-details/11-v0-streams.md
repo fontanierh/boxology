@@ -73,7 +73,11 @@ These claims were previously written as v0 obligations but are not delivered by 
 
 Decided during stream review; recorded so their absence reads as intent rather than oversight:
 
-- **Distribution and publishing.** V0 was proved from a source checkout. Current outside-user onboarding uses standard `cargo install --git`; versioned crates.io/GitHub-release publishing remains post-v0 work. The product contract's release-bundle section describes that bundle's *contents*, not a V0 registry channel.
+- **Distribution and publishing.** V0 was proved from a source checkout. The post-V0 `0.1.0`
+  tool release uses crates.io for `boxology-cli` and `boxology-init`; the README documents install,
+  update, pinning, and the Git source-build fallback. Initializer-generated projects remain pinned
+  to their proven Git revision because their HTTP dependency is deliberately outside this first
+  registry closure. Broader registry, provenance, and revocation design remains #12 scope.
 - **The generic development CLI binding** — outside the V0 boundary.
 - **Human-facing getting-started documentation** beyond the skill and the generated project's own README — minimal, inside S7.
 - **Cross-platform support.** V0 is evidenced only on native macOS ARM64. Linux/x86 and any wider

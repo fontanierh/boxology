@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const LIB: &str = include_str!("../src/lib.rs");
 const CONTRACT: &str = include_str!("../src/contract.rs");
-const PACKAGE_HASH: u64 = 8_561_730_811_314_096_507;
+const PACKAGE_HASH: u64 = 10_992_116_127_845_274_933;
 const LIB_HASH: u64 = 2_709_613_950_373_674_942;
 const CONTRACT_HASH: u64 = 4_186_782_839_223_558_405;
 

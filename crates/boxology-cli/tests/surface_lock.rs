@@ -14,8 +14,8 @@ const CORE_FILES: &str = "Cargo.toml src/base.rs src/check.rs src/classify.rs sr
 const PACKAGE: &str = include_str!("../Cargo.toml");
 const CORE_PACKAGE: &str = include_str!("../../boxology-cli-core/Cargo.toml");
 const FACADE: &str = include_str!("../src/lib.rs");
-const PACKAGE_HASH: u64 = 16_835_766_948_266_050_876;
-const CORE_PACKAGE_HASH: u64 = 9_433_851_646_808_053_917;
+const PACKAGE_HASH: u64 = 5_541_864_649_659_326_172;
+const CORE_PACKAGE_HASH: u64 = 3_297_488_828_156_965_844;
 const FACADE_HASH: u64 = 17_028_389_826_028_418_546;
 const LIB: &str = include_str!("../../boxology-cli-core/src/lib.rs");
 const WALK: &str = include_str!("../../boxology-cli-core/src/walk.rs");
@@ -606,7 +606,13 @@ fn package_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> bool
                 return false;
             };
             files.push(name.replace(std::path::MAIN_SEPARATOR, "/"));
-        } else {
+        } else if !(kind.is_symlink()
+            && directory == root
+            && matches!(
+                entry.file_name().to_str(),
+                Some("LICENSE-APACHE" | "LICENSE-MIT")
+            ))
+        {
             return false;
         }
     }
