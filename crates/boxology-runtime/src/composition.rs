@@ -128,6 +128,24 @@ pub struct CompositionBuilder {
     exposures: Vec<ExposureRegistration>,
     bindings: Vec<BindingGroup>,
 }
+
+/// One box registered in a composition draft.
+///
+/// This typed token lets application code connect and expose a box without repeating its string
+/// identity or walking its implementation descriptor.
+#[derive(Clone)]
+pub struct RegisteredBox {
+    id: BoxId,
+    capabilities: Arc<[CapabilityId]>,
+}
+
+impl RegisteredBox {
+    /// Returns the registered box identity.
+    pub fn id(&self) -> &BoxId {
+        &self.id
+    }
+}
+
 impl CompositionBuilder {
     /// Constructs an empty composition builder.
     pub fn new() -> Self {
@@ -152,6 +170,51 @@ impl CompositionBuilder {
             handles,
             target,
         });
+        self
+    }
+    /// Registers a box and returns a token for concise typed wiring.
+    pub fn register<T, F>(
+        &mut self,
+        descriptor: ImplementationDescriptor,
+        factory: F,
+    ) -> RegisteredBox
+    where
+        T: ErasedTarget + 'static,
+        F: FnOnce(Imports) -> T,
+    {
+        let registered = RegisteredBox {
+            id: descriptor.contract().box_id().clone(),
+            capabilities: descriptor
+                .contract()
+                .capabilities()
+                .iter()
+                .map(|capability| capability.id().clone())
+                .collect(),
+        };
+        self.add_box(descriptor, factory);
+        registered
+    }
+    /// Connects the consumer import slot named by the provider box to that local provider.
+    pub fn connect(&mut self, consumer: &RegisteredBox, provider: &RegisteredBox) -> &mut Self {
+        self.resolve_import(
+            consumer.id.clone(),
+            provider.id.clone(),
+            ImportTarget::local(provider.id.clone()),
+        )
+    }
+    /// Exposes every capability of one registered box through a transport allocation.
+    pub fn expose_all<B>(
+        &mut self,
+        provider: &RegisteredBox,
+        transport: Arc<B>,
+        level: ExposureLevel,
+    ) -> &mut Self
+    where
+        B: TransportBinding,
+    {
+        for capability in provider.capabilities.iter().cloned() {
+            self.expose(provider.id.clone(), capability, transport.clone(), level);
+        }
         self
     }
     /// Records a target selection for one consumer import slot.
