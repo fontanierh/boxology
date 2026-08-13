@@ -10,12 +10,13 @@ use boxology_contract::{
     BoxId, CallContext, CallError, Caller, CancelToken, CapabilityDescriptor, CapabilityId,
     CapabilityName, CapabilityShape, ContractDescriptor, ContractError, ContractRevision,
     ContractType, ContractValue, Deadline, DecodeError, DecodeErrorKind, Detail, EncodeError,
-    ErasedCallError, ErasedTarget, ExposureLevel, Idempotency, ImplementationDescriptor,
-    ImportDescriptor, SlotValue, TraceContext, TypeDescriptor, VariantDescriptor, VariantPayload,
+    ErasedCallError, ErasedCallTarget, ErasedTarget, ExposureLevel, Idempotency,
+    ImplementationDescriptor, ImportDescriptor, SlotValue, TraceContext, TypeDescriptor,
+    VariantDescriptor, VariantPayload,
 };
 #[cfg(feature = "test-support")]
 use boxology_runtime::{AssemblyError, test_support::StubTransport};
-use boxology_runtime::{Composition, CompositionBuilder, ImportHandle, ImportTarget, Imports};
+use boxology_runtime::{Composition, CompositionBuilder, ImportHandle, Imports, LocalBinding};
 
 type ErasedFuture<'a> =
     Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>;
@@ -207,7 +208,7 @@ fn build_with_provider(provider_descriptor: ImplementationDescriptor) -> Unstart
     let mut captured = None;
     let mut builder = CompositionBuilder::new();
     let consumer = implementation("consumer", false, true);
-    builder.add_box(consumer, |imports: Imports| {
+    let consumer = builder.register(consumer, |imports: Imports| {
         captured = Some(GeneratedHandle {
             import: imports.handle(&provider).unwrap().clone(),
             capability: capability.clone(),
@@ -215,17 +216,15 @@ fn build_with_provider(provider_descriptor: ImplementationDescriptor) -> Unstart
         InertConsumer
     });
     assert!(captured.is_some(), "consumer factory did not run inline");
-    builder.add_box(provider_descriptor, |_| GeneratedAdapter {
+    let provider = builder.register(provider_descriptor, |_| GeneratedAdapter {
         capability: capability.clone(),
         service: Service {
             state: Arc::clone(&state),
         },
     });
-    builder.resolve_import(
-        box_id("consumer"),
-        provider.clone(),
-        ImportTarget::local(provider),
-    );
+    assert_eq!(consumer.id(), &box_id("consumer"));
+    assert_eq!(provider.id(), &box_id("provider"));
+    builder.connect(&consumer, &provider);
     (builder, captured.unwrap(), state)
 }
 
@@ -375,6 +374,32 @@ fn local_and_stub_paths_reach_the_same_provider_after_start() {
     assert_eq!(f32::decode(&output).unwrap(), 7.25);
     assert_eq!(state.counts(), (2, 2));
     drop(composition);
+}
+
+#[test]
+fn box_like_registration_exposure_and_local_calls_hide_descriptor_plumbing() {
+    let state = Arc::new(State::new());
+    let local = Arc::new(LocalBinding::new());
+    let mut builder = CompositionBuilder::new();
+    let provider = builder.register(implementation("provider", true, false), |_| {
+        GeneratedAdapter {
+            capability: capability(),
+            service: Service {
+                state: state.clone(),
+            },
+        }
+    });
+    builder.expose_all(&provider, local.clone(), ExposureLevel::CodeOnly);
+    let _composition = builder.start().unwrap();
+
+    let output = block_on(local.call(
+        &capability(),
+        context(None, CancelToken::new()),
+        41.0_f32.encode().unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(f32::decode(&output).unwrap(), 41.0);
+    assert_eq!(state.counts(), (1, 1));
 }
 
 #[cfg(feature = "test-support")]

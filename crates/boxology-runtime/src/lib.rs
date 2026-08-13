@@ -7,12 +7,14 @@
 
 mod assembly;
 mod composition;
+mod local;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod transport;
 
 pub use assembly::{AssemblyError, AssemblyErrors};
-pub use composition::{Composition, CompositionBuilder, ImportTarget};
+pub use composition::{Composition, CompositionBuilder, ImportTarget, RegisteredBox};
+pub use local::LocalBinding;
 pub use transport::{
     TransportBinding, TransportExposure, TransportHandle, TransportJoinFuture, TransportRuntime,
     TransportTaskTracker,
