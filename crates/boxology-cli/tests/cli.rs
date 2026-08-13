@@ -202,6 +202,14 @@ impl Fixture {
             .unwrap()
     }
 
+    fn cargo_fmt_all(&self) -> Output {
+        Command::new("cargo")
+            .args(["fmt", "--all"])
+            .current_dir(&self.root)
+            .output()
+            .unwrap()
+    }
+
     fn run_tools(&self, args: &[&str], mode: &str, fake_cargo: bool, fail: Option<&str>) -> Output {
         let _lock = env_lock();
         let _ = fs::remove_file(&self.log);
@@ -823,6 +831,67 @@ fn check_clean_workspace_reports_all_steps_and_exits_zero() {
     assert_eq!(second.status.code(), Some(0));
     assert_eq!(second.stdout, first.stdout);
     assert_eq!(second.stderr, first.stderr);
+}
+
+#[test]
+fn generated_contract_survives_workspace_fmt_and_check_byte_for_byte() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    let contract_dependency =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../boxology-contract");
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        format!(
+            "[workspace]\nmembers = [\"ping/implementation\", \"ping/generated/contract\"]\nresolver = \"3\"\n\n[workspace.dependencies]\nboxology-contract = {{ path = {contract_dependency:?} }}\n"
+        ),
+    )
+    .unwrap();
+    let generated = fixture.root.join("ping/generated/contract/src/lib.rs");
+    let before = fs::read(&generated).unwrap();
+    assert!(
+        before
+            .windows(b"#[rustfmt::skip]".len())
+            .any(|window| window == b"#[rustfmt::skip]")
+    );
+
+    let unprotected = String::from_utf8(before.clone())
+        .unwrap()
+        .replace("#[rustfmt::skip]\n", "");
+    const FORMATTED_ITEM: &str =
+        "pub fn contract_descriptor() -> &'static ::boxology_contract::ContractDescriptor {";
+    const UNFORMATTED_ITEM: &str =
+        "pub fn contract_descriptor( )->&'static ::boxology_contract::ContractDescriptor{";
+    assert_eq!(unprotected.matches(FORMATTED_ITEM).count(), 1);
+    let unprotected = unprotected.replacen(FORMATTED_ITEM, UNFORMATTED_ITEM, 1);
+    fs::write(&generated, &unprotected).unwrap();
+    let mutant_format = fixture.cargo_fmt_all();
+    assert!(
+        mutant_format.status.success(),
+        "stdout={} stderr={}",
+        text(&mutant_format.stdout),
+        text(&mutant_format.stderr)
+    );
+    assert_ne!(fs::read(&generated).unwrap(), unprotected.as_bytes());
+    fs::write(&generated, &before).unwrap();
+
+    let formatted = fixture.cargo_fmt_all();
+    assert!(
+        formatted.status.success(),
+        "stdout={} stderr={}",
+        text(&formatted.stdout),
+        text(&formatted.stderr)
+    );
+    assert_eq!(fs::read(&generated).unwrap(), before);
+
+    let checked = fixture.run(&["check"]);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        text(&checked.stdout),
+        text(&checked.stderr)
+    );
+    assert!(text(&checked.stdout).contains("check regeneration passed\n"));
 }
 
 #[test]
