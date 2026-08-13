@@ -18,6 +18,7 @@ const METADATA_SOURCE: &str = "specs/s5-manifest-and-validation.md D4";
 const METADATA_TEXT: &str =
     "cargo metadata could not be executed or did not return valid workspace metadata";
 const METADATA: Rule = ("BXW0075", METADATA_TEXT, METADATA_SOURCE);
+const USAGE: &str = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n       boxology check --format human|json";
 
 #[derive(Clone, Copy)]
 enum CheckFormat {
@@ -55,6 +56,10 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String], root: &Path, stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
+    if args == ["--help"] {
+        let _ = writeln!(stdout, "{USAGE}");
+        return 0;
+    }
     let selection = match parse(args) {
         Ok(selection) => selection,
         Err(()) => {
@@ -291,10 +296,7 @@ fn parse_check(args: &[String]) -> Result<Selection, ()> {
 }
 
 fn usage(stderr: &mut dyn Write) {
-    let _ = writeln!(
-        stderr,
-        "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n       boxology check --format human|json"
-    );
+    let _ = writeln!(stderr, "{USAGE}");
 }
 
 fn read_metadata(root: &Path) -> Result<String, MetadataFailure> {

@@ -56,6 +56,21 @@ fn text(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).unwrap()
 }
 
+#[test]
+fn help_is_a_stable_successful_installed_binary_path() {
+    let output = Command::new(env!("CARGO_BIN_EXE_boxology-init"))
+        .arg("--help")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        text(&output.stdout),
+        "usage: boxology-init --name <project-name> --target <directory>\n"
+    );
+    assert!(output.stderr.is_empty());
+}
+
 fn regular_files(root: &Path) -> Vec<String> {
     fn visit(root: &Path, directory: &Path, found: &mut Vec<String>) {
         for entry in fs::read_dir(directory).unwrap() {

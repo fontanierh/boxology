@@ -36,6 +36,18 @@ const CONTRACT_WITH_GREET: &[u8] = br#"boxology::contract! {
     pub async fn greet(name: String) -> Result<String, HelloError>;
 }"#;
 const USAGE: &str = "usage: boxology generate\n       boxology generate --package <id>\n       boxology check\n       boxology check --base <revision>\n       boxology check --format human|json\n";
+
+#[test]
+fn help_is_a_stable_successful_installed_binary_path() {
+    let output = Command::new(env!("CARGO_BIN_EXE_boxology"))
+        .arg("--help")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(text(&output.stdout), USAGE);
+    assert!(output.stderr.is_empty());
+}
 const METADATA_ARGV: &str = "metadata\n--format-version\n1\n--locked\n--no-deps\n";
 const REQUEST_DIAGNOSTICS_JSON: &str = r#"{
   "schema": "boxology.generator-diagnostics@1",
