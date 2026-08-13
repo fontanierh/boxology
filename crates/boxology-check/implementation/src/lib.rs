@@ -451,7 +451,7 @@ fn optional_string(value: &Value, key: &str) -> Option<String> {
 /// Generated adapter and typed classifier import.
 #[doc(hidden)]
 pub mod generated {
-    include!("../../generated/adapter/adapter.rs");
+    include!("generated_adapter.rs");
 }
 
 #[cfg(test)]
@@ -501,7 +501,11 @@ mod tests {
     #[test]
     fn generated_classifier_import_is_mandatory() {
         let source = include_str!("lib.rs");
-        let adapter = include_str!("../../generated/adapter/adapter.rs");
+        let adapter = include_str!("generated_adapter.rs");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        if !root.join("Cargo.toml.orig").is_file() {
+            assert_eq!(adapter.as_bytes(), std::fs::read(root.join("../generated/adapter/adapter.rs")).unwrap());
+        }
         let direct = ["boxology_classifier", "::classify"].concat();
         let legacy = ["boxology_cli_core", "::classify_step"].concat();
         assert!(!source.contains(&direct) && !source.contains(&legacy));
