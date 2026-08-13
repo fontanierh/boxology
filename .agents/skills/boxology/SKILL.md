@@ -43,7 +43,7 @@ paths.
 
 1. **Activate.** Apply this skill to the greenfield onboarding request; the coding agent becomes the lead agent for the new managed project.
 2. **Ask only.** Ask for the project name, target root, and confirmation that the target is empty except `.git`.
-3. **Install both crates.** Install both tools from the public repository with the README's exact
-   `cargo install --git` commands. Re-run those commands with `--force` when updating.
+3. **Install both crates.** Install both tools from crates.io with the README's exact
+   `cargo install` commands. Re-run those commands with `--force` when updating.
 4. **Initialize explicitly.** Invoke `boxology-init` through its documented explicit interface with the answers from step 2. Consult that interface for the current flag spellings; this skill does not freeze flag spellings.
 5. **Build and check.** In the generated repository, run `cargo build` first so Cargo.lock is materialized, then run `boxology check`. The generated README owns the exact Rust and HTTP invocation detail.

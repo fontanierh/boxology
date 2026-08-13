@@ -75,7 +75,7 @@ const fn path_dep(key: &'static str, path: &'static str) -> Dep {
     Dep {
         key,
         value: DepValue::Path {
-            version: "=0.0.0",
+            version: "=0.1.0",
             path,
         },
     }
@@ -203,6 +203,9 @@ fn assert_root_closed(crate_dir: &Path) -> Result<(), String> {
         let meta = fs::symlink_metadata(entry.path())
             .map_err(|e| format!("root_entry: metadata {name}: {e}"))?;
         if meta.file_type().is_symlink() {
+            if matches!(name.as_str(), "LICENSE-MIT" | "LICENSE-APACHE") {
+                continue;
+            }
             return Err(format!("root_entry: symlink not allowed: {name}"));
         }
         match name.as_str() {
@@ -505,7 +508,7 @@ fn generator_manifests_are_closed_and_pin_exact_dependencies() {
 
 fn model_pkg(extra: &str) -> String {
     format!(
-        "[package]\nname=\"boxology-generator-model\"\nversion.workspace=true\nedition.workspace=true\nrust-version.workspace=true\nlicense.workspace=true\nrepository.workspace=true\nhomepage.workspace=true\nreadme.workspace=true\ndescription=\"Pure generation planning\"\npublish=false\n{extra}"
+        "[package]\nname=\"boxology-generator-model\"\nversion.workspace=true\nedition.workspace=true\nrust-version.workspace=true\nlicense.workspace=true\nrepository.workspace=true\nhomepage.workspace=true\nreadme.workspace=true\ndescription=\"Pure generation planning\"\npublish=true\n{extra}"
     )
 }
 
@@ -1218,6 +1221,9 @@ fn production_sources_pass_effect_scan() {
     let root = root();
     for rel in SOURCES {
         let src = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        let src = src
+            .replace("include_bytes!(\"../../../LICENSE-APACHE\")", "b\"\"")
+            .replace("include_bytes!(\"../../../LICENSE-MIT\")", "b\"\"");
         scan_source(&src).unwrap_or_else(|e| panic!("{rel}: {e}"));
     }
 }

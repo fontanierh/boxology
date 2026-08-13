@@ -6,6 +6,6 @@ members = ["implementation", "generated/contract"]
 edition = "2024"
 
 [workspace.dependencies]
-boxology = { version = "=0.0.0", path = "../../boxology" }
-boxology-contract = { version = "=0.0.0", path = "../../boxology-contract" }
-boxology-runtime = { version = "=0.0.0", path = "../../boxology-runtime" }
+boxology = { version = "=0.1.0", path = "../../boxology" }
+boxology-contract = { version = "=0.1.0", path = "../../boxology-contract" }
+boxology-runtime = { version = "=0.1.0", path = "../../boxology-runtime" }

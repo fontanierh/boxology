@@ -8,8 +8,8 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "Authoring facade"
-publish = false
+publish = true
 
 [dependencies]
-boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
-boxology-macros = { version = "=0.0.0", path = "../boxology-macros" }
+boxology-contract = { version = "=0.1.0", path = "../boxology-contract" }
+boxology-macros = { version = "=0.1.0", path = "../boxology-macros" }

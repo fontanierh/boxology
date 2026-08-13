@@ -10,7 +10,7 @@ The generated project is the platform's first user-facing artifact and its accep
 
 ## Non-goals
 
-- **No crates.io publishing in V0.** Registry packaging and versioned release channels remain post-v0. The current outside-user bridge uses standard `cargo install --git`; this does not retroactively widen the V0 evidence claim.
+- **No crates.io publishing in V0.** This remains historical V0 truth. The post-V0 `0.1.0` tool release installs the CLI and initializer from crates.io without retroactively widening the V0 evidence claim.
 - **No interactivity.** The onboarding skill's agent asks the developer the minimum necessary questions and passes explicit flags; the CLI itself prompts for nothing. Harness-neutrality lives in the skill (S7), not here.
 - **No options.** One generated shape: the database-free `ping` project. No templates, feature menus, provider scaffolding, persistence, or alternative layouts. Every option is a post-v0 decision with its own evidence.
 - **No git, network, or toolchain execution.** The installer runs no `git`, `cargo`, `rustc`, or network access; it writes files. Brownfield and non-empty-target operation are excluded (fail-closed below).
@@ -24,7 +24,7 @@ The generated project is the platform's first user-facing artifact and its accep
 - The **CLI** (a `boxology-init` binary in the same crate) owns the effects: request assembly from flags, fail-closed target validation, and sentinel-gated staged write through D2's own staged-directory-plus-sentinel mechanism. It is a **separate binary from S5's `boxology`**: the release bundle names the installer as its own deliverable, the strategy review's stage 3 plans it as a standalone composition, and S5's command surface stays exactly `generate`/`check`.
 - Diagnostics carry stable codes in a **`BXI####`** namespace, disjoint from `BXG`/`BXC`/`BXW`; there is no uncoded failure path.
 
-`InitRequest` now contains exactly the project name. The generated workspace keeps exact `=0.0.0` dependency declarations and obtains framework crates from one full revision of the public Boxology Git repository. The first ordinary Cargo build also records that commit in `Cargo.lock`. No host checkout path is embedded and no root `[patch.crates-io]` override is emitted. The portable repository source is recorded in generated provenance. A versioned registry release can replace this Git bridge later without changing member-crate dependency declarations. The installer records its own version in generated provenance.
+`InitRequest` now contains exactly the project name. The generated workspace keeps exact `=0.0.0` dependency declarations and obtains framework crates from one full revision of the public Boxology Git repository. The first ordinary Cargo build also records that commit in `Cargo.lock`. No host checkout path is embedded and no root `[patch.crates-io]` override is emitted. The portable repository source is recorded in generated provenance. The `0.1.0` tool release keeps this Git bridge because generated projects also use `boxology-http`, which is deliberately outside the first crates.io closure; a registry-only generated project would not resolve. The installer records its own version in generated provenance.
 
 ### D2 — Fail-closed target, sentinel-gated staged write
 
@@ -68,5 +68,5 @@ The complete end-to-end proof is one S6-owned integration test run natively on m
 
 ## Matters left open
 
-- Host-specific installer distribution, wrappers, and any interactive mode — post-v0 with the first outside-user release.
+- Host-specific installer wrappers and any interactive mode remain post-v0; the initializer itself is distributed as the `boxology-init` crate.
 - Boxifying the installer itself is future framework dogfooding work.

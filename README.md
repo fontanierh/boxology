@@ -5,24 +5,46 @@ Boxology is an early-stage framework for building software as independent boxes 
 V0 was completed on 2026-08-09. The accepted stream specs describe its delivered boundary.
 Applications built with Boxology are separate products and are not included in this repository.
 
-The workspace packages are currently unpublished development packages at version `0.0.0`. Cargo installs the tools directly from the public Git repository. Building this checkout requires Rust 1.97.1.
+The first public tool release is version `0.1.0` on crates.io. Building this checkout requires Rust 1.97.1.
 
 ## Quick start
 
 Install the initializer and checker, then initialize an existing empty target directory (a lone `.git` is allowed):
 
 ```sh
-cargo install --git https://github.com/fontanierh/boxology --locked boxology-init
-cargo install --git https://github.com/fontanierh/boxology --locked boxology-cli
+cargo install boxology-init --locked
+cargo install boxology-cli --locked
 boxology-init --name example --target <empty-directory>
 cd <empty-directory>
 cargo build --workspace
 boxology check
 ```
 
-Re-run either `cargo install` command with `--force` to update that tool from the latest `main`.
+Update with `cargo install --force boxology-init --locked` and
+`cargo install --force boxology-cli --locked`. Add `--version 0.1.0` to pin this release.
+
+To build the current source instead, use the Git fallback:
+
+```sh
+cargo install --git https://github.com/fontanierh/boxology --locked boxology-init
+cargo install --git https://github.com/fontanierh/boxology --locked boxology-cli
+```
 
 The generated project README owns that project's invocation contract.
+
+## Release procedure
+
+Run `cargo xtask ci --base origin/main`, then `cargo xtask release preflight`. Preflight checks the
+exact `0.1.0` closure and order, inspects every crate's planned file inventory (including README and
+both licenses), and creates, verifies, and inspects the real dependency-free root `.crate`. It does
+not claim to package dependent crates: Cargo requires their predecessors to be visible on crates.io.
+
+Configure Cargo's crates.io credentials securely, then publish exactly the next crate shown by the
+order using `BOXOLOGY_RELEASE_PUBLISH=1 cargo xtask release publish <crate-name>`. Each invocation
+recognizes the already-visible prefix, rejects gaps or an out-of-order name, runs a real crates.io
+publish dry-run, and publishes only that crate. Wait for it to become visible before invoking the
+next. After the sequence, prove fresh registry installs with the Quick start commands and smoke-test
+`boxology --help` plus an initialized project. Tests and preflight never publish.
 
 ## Documentation
 

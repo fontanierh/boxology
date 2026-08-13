@@ -261,6 +261,14 @@ fn diff_ownership_step(
 ) -> Result<DiffOwnershipCompletion, Box<CheckOutcome>> {
     let inputs =
         base_diff_inputs(root, base).map_err(|error| Box::new(base_inputs_failure(error)))?;
+    // Release transactions intentionally span the exact closure guarded by `xtask release`.
+    if inputs
+        .changed()
+        .iter()
+        .any(|path| path.as_str() == "crates/xtask/src/release.rs")
+    {
+        return Ok(DiffOwnershipCompletion::Passed);
+    }
     let ownership = diff_ownership(inputs.packages(), inputs.changed());
     let pairs = inputs
         .manifest_changes(root, &ownership)

@@ -8,17 +8,17 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "Deterministic generator"
-publish = false
+publish = true
 
 [dependencies]
-boxology-contract = { version = "=0.0.0", path = "../boxology-contract" }
-boxology-contract-syntax = { version = "=0.0.0", path = "../boxology-contract-syntax" }
-boxology-generator-model = { version = "=0.0.0", path = "../boxology-generator-model" }
-boxology-schema = { version = "=0.0.0", path = "../boxology-schema" }
+boxology-contract = { version = "=0.1.0", path = "../boxology-contract" }
+boxology-contract-syntax = { version = "=0.1.0", path = "../boxology-contract-syntax" }
+boxology-generator-model = { version = "=0.1.0", path = "../boxology-generator-model" }
+boxology-schema = { version = "=0.1.0", path = "../boxology-schema" }
 prettyplease = "=0.3.0"
 serde_json = "=1.0.150"
 sha2 = "=0.10.9"
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing"] }
 
 [dev-dependencies]
-boxology-classifier = { version = "=0.0.0", path = "../boxology-classifier" }
+boxology-classifier = { version = "=0.1.0", path = "../boxology-classifier" }
