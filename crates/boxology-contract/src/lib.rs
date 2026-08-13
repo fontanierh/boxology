@@ -14,6 +14,7 @@ mod error;
 mod identifier;
 mod identity;
 mod implementation;
+pub mod json;
 mod opaque;
 mod presence;
 mod typed;

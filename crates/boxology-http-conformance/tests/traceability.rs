@@ -27,9 +27,11 @@ struct Ctx {
 impl Ctx {
     fn load() -> Self {
         const PATHS: &[&str] = &[
+            "crates/boxology-contract/src/json/encode.rs",
+            "crates/boxology-contract/src/json/semantic.rs",
             "crates/boxology-http/src/binding.rs", "crates/boxology-http/src/client.rs",
             "crates/boxology-http/src/encoder.rs", "crates/boxology-http/src/replay_tests.rs",
-            "crates/boxology-http/src/semantic.rs", "crates/boxology-http/src/server.rs",
+            "crates/boxology-http/src/server.rs",
         ];
         Self {
             runtime: read_repo("boxology-details/03-runtime.md"),

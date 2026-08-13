@@ -41,7 +41,7 @@ fn error_role(
     forbidden: Option<&str>,
 ) {
     let error = decode(raw, descriptor, role).unwrap_err();
-    assert_eq!(error.category(), category);
+    assert_eq!(error.kind(), category);
     assert_eq!(
         format!("{error:?}"),
         match category {

@@ -11,6 +11,9 @@ description = "Core identifiers, descriptors, and call types"
 publish = true
 
 [dependencies]
+base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
+ryu = "=1.0.23"
+serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 tokio-util = { version = "0.7.18", default-features = false }
 unicode-ident = "=1.0.24"
 unicode-normalization = "=0.1.25"
