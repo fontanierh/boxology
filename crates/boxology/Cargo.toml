@@ -11,5 +11,5 @@ description = "Authoring facade"
 publish = true
 
 [dependencies]
-boxology-contract = { version = "=0.1.0", path = "../boxology-contract" }
-boxology-macros = { version = "=0.1.0", path = "../boxology-macros" }
+boxology-contract = { version = "=0.1.1", path = "../boxology-contract" }
+boxology-macros = { version = "=0.1.1", path = "../boxology-macros" }

@@ -81,7 +81,7 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
             "Generated compatibility classifier contract"
         };
         format!(
-            "[package]\nname = \"{}-contract\"\nversion.workspace = true\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\nrepository.workspace = true\nhomepage.workspace = true\nreadme.workspace = true\ndescription = {description:?}\npublish = true\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ version = \"=0.1.0\", path = \"../../../boxology-contract\" }}\n",
+            "[package]\nname = \"{}-contract\"\nversion.workspace = true\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\nrepository.workspace = true\nhomepage.workspace = true\nreadme.workspace = true\ndescription = {description:?}\npublish = true\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = {{ version = \"=0.1.1\", path = \"../../../boxology-contract\" }}\n",
             request.box_id().as_str()
         )
     } else {
@@ -4043,7 +4043,7 @@ macro_rules! __boxology_check_implementation {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\nboxology-runtime={{version=\"=0.1.0\",path={:?},features=[\"test-support\"]}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\nboxology-runtime={{version=\"=0.1.1\",path={:?},features=[\"test-support\"]}}\n",
                 workspace.join("boxology"),
                 workspace.join("boxology-contract"),
                 workspace.join("boxology-runtime"),
@@ -4216,7 +4216,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\n",
                 workspace.join("boxology-contract")
             ),
         ).unwrap();
@@ -4481,7 +4481,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\n",
                 workspace.join("boxology-contract")
             ),
         )
@@ -4644,7 +4644,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\nboxology-runtime={{version=\"=0.1.0\",path={:?},features=[\"test-support\"]}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\nboxology-runtime={{version=\"=0.1.1\",path={:?},features=[\"test-support\"]}}\n",
                 workspace.join("boxology"),
                 workspace.join("boxology-contract"),
                 workspace.join("boxology-runtime"),
@@ -4796,7 +4796,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\nboxology-runtime={{version=\"=0.1.0\",path={:?}}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\nboxology-runtime={{version=\"=0.1.1\",path={:?}}}\n",
                 workspace.join("boxology"),
                 workspace.join("boxology-contract"),
                 workspace.join("boxology-runtime"),
@@ -4941,7 +4941,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"hello/generated/contract\",\"greeter/generated/contract\",\"hello-impl\",\"app\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\nboxology-runtime={{version=\"=0.1.0\",path={:?},features=[\"test-support\"]}}\n",
+                "[workspace]\nmembers=[\"hello/generated/contract\",\"greeter/generated/contract\",\"hello-impl\",\"app\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\nboxology-runtime={{version=\"=0.1.1\",path={:?},features=[\"test-support\"]}}\n",
                 workspace.join("boxology"),
                 workspace.join("boxology-contract"),
                 workspace.join("boxology-runtime"),
@@ -5156,7 +5156,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\nboxology-runtime={{version=\"=0.1.0\",path={:?},features=[\"test-support\"]}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"implementation\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology={{path={:?}}}\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\nboxology-runtime={{version=\"=0.1.1\",path={:?},features=[\"test-support\"]}}\n",
                 workspace.join("boxology"),
                 workspace.join("boxology-contract"),
                 workspace.join("boxology-runtime"),
@@ -5381,7 +5381,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\n",
                 workspace.join("boxology-contract")
             ),
         )
@@ -5467,7 +5467,7 @@ fn main() {
         fs::write(
             root.join("Cargo.toml"),
             format!(
-                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.0\",path={:?}}}\n",
+                "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\n",
                 workspace.join("boxology-contract")
             ),
         )

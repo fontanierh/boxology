@@ -29,9 +29,9 @@ name = "traceability"
 path = "tests/traceability.rs"
 
 [dev-dependencies]
-boxology-contract = { version = "=0.1.0", path = "../boxology-contract" }
-boxology-http = { version = "=0.1.0", path = "../boxology-http", default-features = false, features = ["client", "server"] }
-boxology-runtime = { version = "=0.1.0", path = "../boxology-runtime" }
+boxology-contract = { version = "=0.1.1", path = "../boxology-contract" }
+boxology-http = { version = "=0.1.1", path = "../boxology-http", default-features = false, features = ["client", "server"] }
+boxology-runtime = { version = "=0.1.1", path = "../boxology-runtime" }
 hello-contract = { version = "=0.0.0", path = "../fixtures/hello/generated/contract" }
 hello-implementation = { version = "=0.0.0", path = "../fixtures/hello/implementation" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }

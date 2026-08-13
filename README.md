@@ -5,7 +5,7 @@ Boxology is an early-stage framework for building software as independent boxes 
 V0 was completed on 2026-08-09. The accepted stream specs describe its delivered boundary.
 Applications built with Boxology are separate products and are not included in this repository.
 
-Boxology `0.1.0` tools are published on crates.io. Building this checkout requires Rust 1.97.1.
+Boxology `0.1.1` tools are published on crates.io. Building this checkout requires Rust 1.97.1.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ boxology check
 ```
 
 Update with `cargo install --force boxology-init --locked` and
-`cargo install --force boxology-cli --locked`; add `--version 0.1.0` to pin this release.
+`cargo install --force boxology-cli --locked`; add `--version 0.1.1` to pin this release.
 To install directly from the source repository instead:
 
 ```sh
@@ -57,7 +57,7 @@ impl ReviewService {
 ## Release procedure
 
 Run `cargo xtask ci --base origin/main`, then `cargo xtask release preflight`. Preflight checks the
-exact `0.1.0` closure and order, inspects every crate's planned file inventory (including README and
+exact `0.1.1` closure and order, inspects every crate's planned file inventory (including README and
 both licenses), and creates, verifies, and inspects the real dependency-free root `.crate`. It does
 not claim to package dependent crates: Cargo requires their predecessors to be visible on crates.io.
 
@@ -66,7 +66,8 @@ order using `BOXOLOGY_RELEASE_PUBLISH=1 cargo xtask release publish <crate-name>
 recognizes the already-visible prefix, rejects gaps or an out-of-order name, runs a real crates.io
 publish dry-run, and publishes only that crate. Wait for it to become visible before invoking the
 next. After the sequence, prove fresh registry installs with the Quick start commands and smoke-test
-`boxology --help` plus an initialized project. Tests and preflight never publish.
+`boxology --help` plus an initialized project. Tag the proven release commit and create its GitHub
+Release only after that registry smoke test passes. Tests and preflight never publish.
 
 ## Documentation
 
