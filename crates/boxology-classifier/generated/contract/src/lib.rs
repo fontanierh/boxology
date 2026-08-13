@@ -498,8 +498,9 @@ fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detai
     Detail::new(code).with_message(error.to_string())
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum CompatibilityClass {
+    #[default]
     Unchanged,
     Documentation,
     Deprecation,
@@ -507,13 +508,6 @@ pub enum CompatibilityClass {
     CompatibleWithConditions,
     Incompatible,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for CompatibilityClass {
-    fn default() -> Self {
-        Self::Unchanged
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CompatibilityClass {
@@ -1030,19 +1024,13 @@ impl ::boxology_contract::ContractType for ClassifyReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum ClassifyFailureStage {
+    #[default]
     Base,
     Submitted,
     Pairing,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for ClassifyFailureStage {
-    fn default() -> Self {
-        Self::Base
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for ClassifyFailureStage {
@@ -1310,17 +1298,11 @@ impl ::boxology_contract::ContractType for ClassifyOutcome {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum ClassifierError {
+    #[default]
     Internal,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for ClassifierError {
-    fn default() -> Self {
-        Self::Internal
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for ClassifierError {

@@ -77,11 +77,7 @@ where
                         conversion_detail("input_decode", error),
                     )
                 })?;
-            match ::hello_contract::HelloDispatch::greet(
-                    &self.service,
-                    context,
-                    input,
-                )
+            match ::hello_contract::HelloDispatch::greet(&self.service, context, input)
                 .await
             {
                 Ok(output) => {

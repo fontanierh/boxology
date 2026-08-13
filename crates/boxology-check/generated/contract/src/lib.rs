@@ -698,18 +698,12 @@ impl ::boxology_contract::ContractType for CheckRequest {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum CheckStatus {
+    #[default]
     Passed,
     Failed,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for CheckStatus {
-    fn default() -> Self {
-        Self::Passed
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckStatus {
@@ -808,19 +802,13 @@ impl ::boxology_contract::ContractType for CheckStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum CheckStepStatus {
+    #[default]
     Passed,
     Failed,
     Skipped,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for CheckStepStatus {
-    fn default() -> Self {
-        Self::Passed
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckStepStatus {
@@ -931,18 +919,12 @@ impl ::boxology_contract::ContractType for CheckStepStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum CheckFailureKind {
+    #[default]
     Validation,
     Invocation,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for CheckFailureKind {
-    fn default() -> Self {
-        Self::Validation
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckFailureKind {
@@ -1760,17 +1742,11 @@ impl ::boxology_contract::ContractType for CheckOutcome {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum CheckError {
+    #[default]
     Internal,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for CheckError {
-    fn default() -> Self {
-        Self::Internal
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for CheckError {
