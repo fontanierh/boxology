@@ -41,6 +41,23 @@ where
         _imports: imports,
     }
 }
+pub fn register<T, F>(
+    composition: &mut ::boxology_runtime::CompositionBuilder,
+    build: F,
+) -> ::boxology_runtime::RegisteredBox
+where
+    T: ::boxology_generated_contract::CheckDispatch + Send + Sync + 'static,
+    F: FnOnce(CheckImports) -> T,
+{
+    composition
+        .register(
+            implementation_descriptor(),
+            move |imports| {
+                let typed = typed_imports(&imports);
+                factory(build(typed), imports)
+            },
+        )
+}
 pub struct ClassifierImport {
     handle: ::boxology_runtime::ImportHandle,
 }

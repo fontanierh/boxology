@@ -10,9 +10,10 @@ members = [
 edition = "2024"
 
 [workspace.dependencies]
-boxology = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "6dae382948a0b41b61375163fc906c8002300131" }
-boxology-contract = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "6dae382948a0b41b61375163fc906c8002300131" }
-boxology-http = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "6dae382948a0b41b61375163fc906c8002300131" }
-boxology-manifest = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "6dae382948a0b41b61375163fc906c8002300131" }
-boxology-runtime = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "6dae382948a0b41b61375163fc906c8002300131" }
+boxology = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "e700b8358e3c5b42677406240fda8c3025d3d04f" }
+boxology-contract = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "e700b8358e3c5b42677406240fda8c3025d3d04f" }
+boxology-http = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "e700b8358e3c5b42677406240fda8c3025d3d04f" }
+boxology-manifest = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "e700b8358e3c5b42677406240fda8c3025d3d04f" }
+boxology-runtime = { version = "=0.0.0", git = "https://github.com/fontanierh/boxology", rev = "e700b8358e3c5b42677406240fda8c3025d3d04f" }
+ping-contract = { version = "=0.0.0", path = "ping/generated/contract" }
 tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }

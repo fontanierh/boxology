@@ -8,6 +8,7 @@ publish = false
 boxology-contract = { workspace = true }
 boxology-http = { workspace = true }
 boxology-runtime = { workspace = true, features = ["test-support"] }
+ping-contract = { workspace = true }
 ping-implementation = { version = "=0.0.0", path = "../../ping/implementation" }
 
 [dev-dependencies]

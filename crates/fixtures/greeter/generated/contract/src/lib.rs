@@ -89,6 +89,11 @@ impl GreeterHandle {
             .map_err(CallError::InvalidResponse)
     }
 }
+impl ::boxology_contract::BoxHandle for GreeterHandle {
+    fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {
+        Self::from_erased(target)
+    }
+}
 static GREETER_GREET_LOUDLY: LazyLock<CapabilityId> = LazyLock::new(|| {
     CapabilityId::new(
         BoxId::new("greeter").expect("generated box identity is valid"),
