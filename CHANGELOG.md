@@ -29,6 +29,35 @@ This file records notable user-facing changes to Boxology.
 - Added normal registry installation with `cargo install boxology-init --locked` and
   `cargo install boxology-cli --locked`.
 
+### Upgrading an existing setup
+
+Replace Git-installed or older copies of both command-line tools with the registry release:
+
+```sh
+cargo install --force --locked --version 0.1.0 boxology-init
+cargo install --force --locked --version 0.1.0 boxology-cli
+```
+
+`--force` replaces the existing `boxology-init` and `boxology` binaries. Keep `--version 0.1.0`
+when reproducibility matters; omit it when deliberately updating to the newest release. Confirm the
+updated setup by running `boxology check` in each managed project.
+
+Consumers do not add all 19 published crates to an application. Most handwritten box code uses the
+`boxology = "=0.1.0"` authoring facade. Generated contracts, runtime compositions, and the two tools
+bring in the narrower framework crates they require through normal transitive Cargo dependencies.
+For a hand-managed, non-HTTP crate, replace an older facade Git dependency with:
+
+```toml
+[dependencies]
+boxology = "=0.1.0"
+```
+
+Existing projects created by `boxology-init` need no dependency rewrite for this tool update. Keep
+their generated exact Git revision pins intact: the generated HTTP example still needs
+`boxology-http`, which is not in the `0.1.0` registry closure. Do not mechanically replace those
+generated entries with crates.io versions. New projects created by `boxology-init 0.1.0` preserve
+the same coherent pinning policy.
+
 ### Known boundaries
 
 - Generated projects remain pinned to a Boxology Git revision because `boxology-http` is outside
