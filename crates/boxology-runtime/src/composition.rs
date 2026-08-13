@@ -3,14 +3,14 @@
 use std::{collections::BTreeMap, future::Future, sync::Arc, task::Poll, time::Duration};
 
 use boxology_contract::{
-    BoxId, CallContext, CapabilityDescriptor, CapabilityId, Detail, ErasedCallError, ErasedTarget,
-    ExposureLevel, ImplementationDescriptor, SlotValue,
+    BoxHandle, BoxId, CallContext, CapabilityDescriptor, CapabilityId, Detail, ErasedCallError,
+    ErasedTarget, ExposureLevel, ImplementationDescriptor, SlotValue,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AssemblyError, AssemblyErrors, ImportHandle, Imports, RemoteImportTarget, TransportBinding,
-    TransportExposure, TransportHandle, TransportRuntime, TransportTaskTracker,
+    AssemblyError, AssemblyErrors, ImportHandle, Imports, LocalBinding, RemoteImportTarget,
+    TransportBinding, TransportExposure, TransportHandle, TransportRuntime, TransportTaskTracker,
 };
 
 /// A selected target for one declared import slot.
@@ -216,6 +216,15 @@ impl CompositionBuilder {
             self.expose(provider.id.clone(), capability, transport.clone(), level);
         }
         self
+    }
+    /// Creates a generated typed handle and exposes its box in-process.
+    pub fn handle<H>(&mut self, provider: &RegisteredBox) -> H
+    where
+        H: BoxHandle,
+    {
+        let local = Arc::new(LocalBinding::new());
+        self.expose_all(provider, local.clone(), ExposureLevel::CodeOnly);
+        H::from_erased(local)
     }
     /// Records a target selection for one consumer import slot.
     pub fn resolve_import(
