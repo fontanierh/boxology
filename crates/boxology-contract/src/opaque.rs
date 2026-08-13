@@ -7,7 +7,7 @@ use crate::{ContractValue, SlotValue, ValueRef};
 ///
 /// Objects preserve entry order and duplicate keys. Numbers preserve their
 /// original RFC 8259 token without imposing a magnitude limit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum OpaqueTree {
     Null,
     Bool(bool),
@@ -18,7 +18,7 @@ pub enum OpaqueTree {
 }
 
 /// A validated, exactly preserved RFC 8259 number token.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OpaqueNumber(String);
 
 impl OpaqueNumber {
@@ -53,7 +53,7 @@ impl fmt::Display for OpaqueNumberError {
 impl Error for OpaqueNumberError {}
 
 /// An opaque raw-value payload whose diagnostic representation is redacted.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OpaquePayload(OpaqueTree);
 
 impl OpaquePayload {

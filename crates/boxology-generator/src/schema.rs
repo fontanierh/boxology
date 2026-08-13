@@ -699,6 +699,7 @@ mod tests {
 
     fn unary(name: &str, exposure: ExposureLevel, idempotency: Idempotency) -> Contract {
         Contract {
+            dependency_crate: "boxology_generated_contract".into(),
             data: vec![],
             error: ErrorDeclaration {
                 docs: Vec::new(),
@@ -783,6 +784,7 @@ mod tests {
     #[test]
     fn document_bytes_are_the_model_bytes() {
         let contract = Contract {
+            dependency_crate: "boxology_generated_contract".into(),
             data: vec![],
             error: ErrorDeclaration {
                 docs: vec!["Why storing fails.".to_owned()],
@@ -871,6 +873,7 @@ mod tests {
     #[test]
     fn document_maps_every_payload_shape() {
         let contract = Contract {
+            dependency_crate: "boxology_generated_contract".into(),
             data: vec![],
             error: ErrorDeclaration {
                 docs: Vec::new(),

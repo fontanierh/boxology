@@ -7,6 +7,7 @@ use boxology_contract_syntax::{
     VariantPayload,
 };
 use boxology_generator_model::{Diagnostics, GenerationRequest, ImportModel, ParsedRustInputs};
+use std::collections::BTreeSet;
 
 mod schema;
 
@@ -92,13 +93,20 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
     let data_types = structured_types_source(contract.model());
     let error = &contract.model().error;
     let error_attrs = attributes(&error.docs, &error.deprecation);
+    let default_is_derivable = matches!(error.variants[0].payload, VariantPayload::Unit);
     let variants = error
         .variants
         .iter()
-        .map(|variant| match &variant.payload {
+        .enumerate()
+        .map(|(index, variant)| match &variant.payload {
             VariantPayload::Unit => format!(
-                "{}{},",
+                "{}{}{},",
                 attributes(&variant.docs, &variant.deprecation),
+                if index == 0 && default_is_derivable {
+                    "#[default]"
+                } else {
+                    ""
+                },
                 variant.name
             ),
             VariantPayload::Value(value) => format!(
@@ -113,6 +121,31 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
             }
         })
         .collect::<String>();
+    // Every generated error has an `Unknown` variant carrying the stable 0.1
+    // `OpaquePayload`, which only promises `PartialEq`. Derive eligibility must include that
+    // generated variant, not just the authored variants.
+    let error_derives = if default_is_derivable {
+        "Debug, Clone, PartialEq, Default"
+    } else {
+        "Debug, Clone, PartialEq"
+    };
+    let first_error = &error.variants[0];
+    let error_default = match &first_error.payload {
+        VariantPayload::Unit => format!("Self::{}", first_error.name),
+        VariantPayload::Value(_) => format!(
+            "Self::{}(::core::default::Default::default())",
+            first_error.name
+        ),
+        VariantPayload::Named(_) => unreachable!("named payloads remain BXG0048-gated"),
+    };
+    let error_default_impl = if default_is_derivable {
+        String::new()
+    } else {
+        format!(
+            "#[allow(deprecated)] impl ::core::default::Default for {} {{ fn default() -> Self {{ {} }} }}",
+            error.name, error_default
+        )
+    };
     let encode_arms = error
         .variants
         .iter()
@@ -211,8 +244,8 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
     let test_support = test_support_source(request.box_id().as_str(), contract.model());
     let adapter = adapter_source(request.box_id().as_str(), contract.model(), &imports);
     let mut syntax = syn::parse_file(&format!(
-        "{descriptor} {dispatch} {data_types} {error_attrs}#[derive(Debug, Clone, PartialEq)] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
-        error.name
+        "{descriptor} {dispatch} {data_types} {error_attrs}#[derive({error_derives})] pub enum {} {{{variants} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }}}} {error_default_impl} {error_abi} {test_support} #[doc(hidden)] pub const __BOXOLOGY_SEMANTIC_DIGEST: [u8; 32] = [{digest}]; {checker}",
+        error.name,
     ))
     .expect("validated names and fixed generator template must parse");
     protect_generated_items_from_rustfmt(&mut syntax);
@@ -302,10 +335,39 @@ fn protect_generated_items_from_rustfmt(file: &mut syn::File) {
 /// declaration subset. `require_v0_emittable` still gates residual `Blob` and named error payload
 /// shapes before this template runs.
 fn structured_types_source(contract: &Contract) -> String {
-    contract.data.iter().map(structured_type_source).collect()
+    let mut eq_types = BTreeSet::new();
+    contract
+        .data
+        .iter()
+        .map(|declaration| {
+            let supports_eq = match &declaration.shape {
+                // Tolerant enums always include `Unknown { payload: OpaquePayload }`; the stable
+                // contract ABI only promises `PartialEq` for that payload.
+                DataShape::Enum(_) => false,
+                DataShape::Struct(fields) => fields
+                    .iter()
+                    .all(|field| type_supports_eq(&field.ty, &eq_types)),
+            };
+            if supports_eq {
+                eq_types.insert(declaration.name.clone());
+            }
+            structured_type_source(declaration, supports_eq)
+        })
+        .collect()
 }
 
-fn structured_type_source(declaration: &DataDeclaration) -> String {
+fn type_supports_eq(expression: &TypeExpression, eq_types: &BTreeSet<String>) -> bool {
+    match expression {
+        TypeExpression::Leaf(CanonicalType::F32 | CanonicalType::F64) => false,
+        TypeExpression::Leaf(_) => true,
+        TypeExpression::Local(name) => eq_types.contains(name),
+        TypeExpression::Option(inner) | TypeExpression::Vec(inner) => {
+            type_supports_eq(inner, eq_types)
+        }
+    }
+}
+
+fn structured_type_source(declaration: &DataDeclaration, supports_eq: bool) -> String {
     let attrs = attributes(&declaration.docs, &declaration.deprecation);
     let name = &declaration.name;
     match &declaration.shape {
@@ -359,9 +421,14 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
             } else {
                 "let mut fields = ::std::vec::Vec::new();"
             };
+            let derives = if supports_eq {
+                "Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default"
+            } else {
+                "Debug, Clone, PartialEq, Default"
+            };
             format!(
                 r#"
-                {attrs}#[derive(Debug, Clone, PartialEq)] pub struct {name} {{ {definitions} }}
+                {attrs}#[derive({derives})] pub struct {name} {{ {definitions} }}
                 impl ::boxology_contract::ContractType for {name} {{
                     fn encode_value(&self) -> ::core::result::Result<::boxology_contract::ContractValue, ::boxology_contract::EncodeError> {{
                         {field_binding}
@@ -382,10 +449,12 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
         DataShape::Enum(variants) => {
             let definitions = variants
                 .iter()
-                .map(|variant| {
+                .enumerate()
+                .map(|(index, variant)| {
                     format!(
-                        "{}{},",
+                        "{}{}{},",
                         attributes(&variant.docs, &variant.deprecation),
+                        if index == 0 { "#[default]" } else { "" },
                         variant.name
                     )
                 })
@@ -408,7 +477,7 @@ fn structured_type_source(declaration: &DataDeclaration) -> String {
                 .collect::<String>();
             format!(
                 r#"
-                {attrs}#[derive(Debug, Clone, PartialEq)] pub enum {name} {{ {definitions} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }} }}
+                {attrs}#[derive(Debug, Clone, PartialEq, Default)] pub enum {name} {{ {definitions} Unknown {{ tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload }} }}
                 impl ::boxology_contract::ContractType for {name} {{
                     fn encode_value(&self) -> ::core::result::Result<::boxology_contract::ContractValue, ::boxology_contract::EncodeError> {{
                         let (tag, payload) = match self {{
@@ -845,14 +914,12 @@ fn adapter_source(
     imports: &[boxology_generator_model::ImportModel],
 ) -> String {
     let prefix = pascal_case(box_id);
+    let contract_crate = &contract.dependency_crate;
+    let contract_path = format!("::{contract_crate}::");
     // The per-capability decode/dispatch/encode body is identical between the single- and
     // multi-capability `call` shapes; only the routing envelope around it differs.
     let async_body = |capability: &CapabilityDeclaration| -> String {
-        let input_qualified = rust_type_expression(
-            &capability.input_type,
-            "::boxology_generated_contract::",
-            true,
-        );
+        let input_qualified = rust_type_expression(&capability.input_type, &contract_path, true);
         let input_decode = decode_call(
             &capability.input_type,
             &input_qualified,
@@ -875,7 +942,7 @@ fn adapter_source(
                             conversion_detail("input_decode", error),
                         )
                     }})?;
-                    match ::boxology_generated_contract::{prefix}Dispatch::{capability_name}(
+                    match ::{contract_crate}::{prefix}Dispatch::{capability_name}(
                         &self.service,
                         context,
                         input,
@@ -892,6 +959,7 @@ fn adapter_source(
                         )),
                     }}"#,
             prefix = prefix,
+            contract_crate = contract_crate,
             input_descriptor = schema::type_descriptor_source(
                 contract,
                 &capability.input_type,
@@ -907,7 +975,7 @@ fn adapter_source(
     let call_body = if contract.capabilities.len() == 1 {
         let capability = &contract.capabilities[0];
         format!(
-            r#"let expected = ::boxology_generated_contract::contract_descriptor()
+            r#"let expected = ::{contract_crate}::contract_descriptor()
                     .capabilities()
                     .first()
                     .expect("generated {prefix} contract has one capability")
@@ -919,6 +987,7 @@ fn adapter_source(
                     {async_body}
                 }})"#,
             prefix = prefix,
+            contract_crate = contract_crate,
             async_body = async_body(capability),
         )
     } else {
@@ -940,7 +1009,7 @@ fn adapter_source(
             })
             .collect::<String>();
         format!(
-            r#"let capabilities = ::boxology_generated_contract::contract_descriptor().capabilities();
+            r#"let capabilities = ::{contract_crate}::contract_descriptor().capabilities();
                 {branches}Box::pin(::std::future::ready(Err(unknown_capability())))"#,
         )
     };
@@ -958,7 +1027,7 @@ fn adapter_source(
             service: T,
         ) -> ::boxology_runtime::RegisteredBox
         where
-            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
         {{
             composition.register(implementation_descriptor(), move |imports| {{
                 factory(service, imports)
@@ -972,7 +1041,7 @@ fn adapter_source(
             build: F,
         ) -> ::boxology_runtime::RegisteredBox
         where
-            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
             F: FnOnce({prefix}Imports) -> T,
         {{
             composition.register(implementation_descriptor(), move |imports| {{
@@ -989,7 +1058,7 @@ fn adapter_source(
         #[doc(hidden)]
         pub fn implementation_descriptor() -> ::boxology_contract::ImplementationDescriptor {{
             ::boxology_contract::ImplementationDescriptor::new(
-                ::boxology_generated_contract::contract_descriptor(),
+                ::{contract_crate}::contract_descriptor(),
                 {import_list},
             )
             .expect("generated adapter import descriptors are valid")
@@ -1007,7 +1076,7 @@ fn adapter_source(
             imports: ::boxology_runtime::Imports,
         ) -> {prefix}Adapter<T>
         where
-            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
         {{
             {prefix}Adapter {{
                 service,
@@ -1021,7 +1090,7 @@ fn adapter_source(
 
         impl<T> ::boxology_contract::ErasedTarget for {prefix}Adapter<T>
         where
-            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
         {{
             fn call<'a>(
                 &'a self,
@@ -1057,6 +1126,7 @@ fn adapter_source(
         }}
         "#,
         prefix = prefix,
+        contract_crate = contract_crate,
         call_body = call_body,
         import_list = import_list,
         typed_imports = typed_imports,
@@ -1585,8 +1655,9 @@ mod tests {
     const CARGO: &[u8] = b"[package]\nname = \"hello-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ndefault = []\ntest-support = []\n\n[dependencies]\nboxology-contract = { workspace = true }\n";
     const RUST: &[u8] = br#"// Generated by boxology-generator 0.0.0
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum GreetError {
+    #[default]
     EmptyName,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
 }
@@ -1963,7 +2034,7 @@ macro_rules! __boxology_check_implementation {
         assert!(rust.starts_with("// Generated by boxology-generator 0.0.0\n"));
         let header_end = rust.find('\n').unwrap() + 1;
         let body_start = rust[header_end..]
-            .find("#[rustfmt::skip]\n#[derive(Debug, Clone, PartialEq)]")
+            .find("#[rustfmt::skip]\n#[derive(Debug, Clone, PartialEq, Default)]")
             .map(|offset| header_end + offset)
             .unwrap();
         let mut without_descriptor = rust.as_bytes()[..header_end].to_vec();
@@ -3737,7 +3808,8 @@ macro_rules! __boxology_check_implementation {
             "#[deprecated(note = \"old\")]",
             "///empty",
             "#[deprecated]",
-            "#[derive(Debug, Clone, PartialEq)]",
+            "#[derive(Debug, Clone, PartialEq, Default)]",
+            "#[default]",
         ] {
             assert!(rust.contains(expected), "missing {expected} in {rust}");
         }
@@ -3758,7 +3830,7 @@ macro_rules! __boxology_check_implementation {
             #[capability] pub async fn save(input: Profile) -> Result<Profile, Fault>;
         }"#;
         const SOURCE_SHA256: &str =
-            "1d310b0c762fceec5596e51e55144c6fc615b52ee8b37c718a7269bed4fd5ef5";
+            "eaff578d9f8231b647812fda1beccd775dd9ff6ef0b7011558e823290684244c";
         let contract = scalar_model(SOURCE);
         let source = structured_types_source(contract.model());
         assert_eq!(source, structured_types_source(contract.model()));
@@ -3775,10 +3847,11 @@ macro_rules! __boxology_check_implementation {
         });
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
         for expected in [
-            "#[derive(Debug, Clone, PartialEq)]\npub struct Empty {}",
+            "#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]\npub struct Empty {}",
             "let fields = ::std::vec::Vec::new();",
-            "///mood\n#[derive(Debug, Clone, PartialEq)]\npub enum Mood",
-            "#[deprecated]\n#[derive(Debug, Clone, PartialEq)]\npub struct Profile",
+            "///mood\n#[derive(Debug, Clone, PartialEq, Default)]\npub enum Mood",
+            "#[default]\n    Calm",
+            "#[deprecated]\n#[derive(Debug, Clone, PartialEq, Default)]\npub struct Profile",
             "///name\n    pub name: ::std::string::String",
             "pub scores: ::std::vec::Vec<u32>",
             "pub mood: ::core::option::Option<Mood>",
@@ -3800,6 +3873,18 @@ macro_rules! __boxology_check_implementation {
                 "missing `{expected}` in {printed}"
             );
         }
+
+        let floats = tree(
+            "boxology::contract! { pub struct Measurement { pub value: f64 } #[error] pub enum Fault { Bad(f32) } #[capability] pub async fn save(input: Measurement) -> Result<Measurement, Fault>; }",
+            false,
+        );
+        let floats =
+            std::str::from_utf8(file(&floats, "generated/contract/src/lib.rs").bytes()).unwrap();
+        assert!(
+            floats.contains("#[derive(Debug, Clone, PartialEq, Default)]\npub struct Measurement")
+        );
+        assert!(floats.contains("#[derive(Debug, Clone, PartialEq)]\npub enum Fault"));
+        assert!(!floats.contains("PartialEq, Eq, Hash"));
         let field_order = ["&self.name", "&self.scores", "&self.mood", "&self.history"]
             .map(|text| printed.find(text).unwrap());
         assert!(field_order.windows(2).all(|pair| pair[0] < pair[1]));
@@ -4140,19 +4225,19 @@ fn main() {
         fs::write(
             consumer.join("Cargo.toml"),
             format!(
-                "[package]\nname=\"consumer\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology={{path={:?}}}\nboxology-contract={{workspace=true}}\nboxology_generated_contract={{package=\"hello-contract\",path=\"../generated/contract\"}}\n",
+                "[package]\nname=\"consumer\"\nversion=\"0.0.0\"\nedition=\"2024\"\n\n[dependencies]\nboxology={{path={:?}}}\nboxology-contract={{workspace=true}}\nreview_contract={{package=\"hello-contract\",path=\"../generated/contract\"}}\n",
                 workspace.join("boxology")
             ),
         )
         .unwrap();
         let source = |error, variants, body| {
             format!(
-                "boxology::contract! {{ /* spelling is irrelevant */\n#[error] pub enum {error} {{ {variants} }}\n#[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, {error}>; }}\nuse boxology_contract::{{CapabilityShape, ContractError, ContractType, ContractValue, DecodeErrorKind, DescriptorRef, ExposureLevel, Idempotency, ImplementationDescriptor, OpaquePayload, OpaqueTree, PathSegment, SlotValue, VariantPayload}};\nfn main() {{ {body} }}\n"
+                "mod contract {{ boxology::contract! {{ contract_crate = review_contract; /* spelling is irrelevant */\n#[error] pub enum {error} {{ {variants} }}\n#[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, {error}>; }} }}\nuse contract::*;\nuse boxology_contract::{{CapabilityShape, ContractError, ContractType, ContractValue, DecodeErrorKind, DescriptorRef, ExposureLevel, Idempotency, ImplementationDescriptor, OpaquePayload, OpaqueTree, PathSegment, SlotValue, VariantPayload}};\nfn main() {{ {body} }}\n"
             )
         };
         let abi = r#"
-            let descriptor = boxology_generated_contract::contract_descriptor();
-            assert!(std::ptr::eq(descriptor, boxology_generated_contract::contract_descriptor()));
+            let descriptor = review_contract::contract_descriptor();
+            assert!(std::ptr::eq(descriptor, review_contract::contract_descriptor()));
             assert_eq!(descriptor.box_id().as_str(), "hello");
             assert_eq!(descriptor.revision().as_str(), __BASE_REVISION__);
             assert_eq!(descriptor.capabilities().len(), 1);
@@ -4169,6 +4254,9 @@ fn main() {
             let implementation = ImplementationDescriptor::new(descriptor, []).unwrap();
             assert!(std::ptr::eq(implementation.contract(), descriptor));
             let known = GreetError::EmptyName;
+            fn assert_model_traits<T: Default + PartialEq>() {}
+            assert_model_traits::<GreetError>();
+            assert_eq!(GreetError::default(), GreetError::EmptyName);
             let encoded = known.encode_value().unwrap();
             assert_eq!(encoded, ContractValue::enum_value("EmptyName", SlotValue::Null));
             assert_eq!(GreetError::decode_value(&encoded).unwrap(), known);
@@ -4187,7 +4275,7 @@ fn main() {
             assert_eq!(forwarded, unknown);
             assert_eq!(unknown.error_tag(), "Future");
             assert!(!format!("{unknown:?}").contains("secret"));
-            let _: boxology_generated_contract::GreetError = known;
+            let _: review_contract::GreetError = known;
         "#
         .replace("__BASE_REVISION__", &format!("{:?}", revision(CONTRACT)));
         fs::write(
@@ -4238,7 +4326,7 @@ fn main() {
             fs::write(root.join(file.path()), file.bytes()).unwrap();
         }
         let renamed_body = format!(
-            "let descriptor = boxology_generated_contract::contract_descriptor(); assert_ne!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.revision().as_str(), {:?}); assert!(matches!(descriptor.capabilities()[0].error().view(), DescriptorRef::Enum(variants) if variants.len() == 2 && variants[1].tag() == \"Busy\")); let value = HelloFailure::Busy; assert_eq!(value.error_tag(), \"Busy\"); assert_eq!(HelloFailure::decode_value(&value.encode_value().unwrap()).unwrap(), value); let _: boxology_generated_contract::HelloFailure = value;",
+            "let descriptor = review_contract::contract_descriptor(); assert_ne!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.revision().as_str(), {:?}); assert!(matches!(descriptor.capabilities()[0].error().view(), DescriptorRef::Enum(variants) if variants.len() == 2 && variants[1].tag() == \"Busy\")); let value = HelloFailure::Busy; assert_eq!(value.error_tag(), \"Busy\"); assert_eq!(HelloFailure::decode_value(&value.encode_value().unwrap()).unwrap(), value); let _: review_contract::HelloFailure = value;",
             revision(CONTRACT),
             revision(&renamed),
         );
@@ -4253,11 +4341,11 @@ fn main() {
             fs::write(root.join(file.path()), file.bytes()).unwrap();
         }
         let decorated_body = format!(
-            "let descriptor = boxology_generated_contract::contract_descriptor(); assert_eq!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.capabilities()[0].deprecation().unwrap().note(), Some(\"later\")); match descriptor.capabilities()[0].error().view() {{ DescriptorRef::Enum(variants) => assert_eq!(variants[0].deprecation().unwrap().note(), None), _ => panic!(), }};",
+            "let descriptor = review_contract::contract_descriptor(); assert_eq!(descriptor.revision().as_str(), {:?}); assert_eq!(descriptor.capabilities()[0].deprecation().unwrap().note(), Some(\"later\")); match descriptor.capabilities()[0].error().view() {{ DescriptorRef::Enum(variants) => assert_eq!(variants[0].deprecation().unwrap().note(), None), _ => panic!(), }};",
             revision(decorated),
         );
         let decorated_source = format!(
-            "boxology::contract! {{ #[error] pub enum GreetError {{ #[deprecated] EmptyName }} #[deprecated(note = \"later\")] #[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, GreetError>; }}\nuse boxology_contract::{{DescriptorRef}};\nfn main() {{ {decorated_body} }}\n"
+            "boxology::contract! {{ contract_crate = review_contract; #[error] pub enum GreetError {{ #[deprecated] EmptyName }} #[deprecated(note = \"later\")] #[capability(exposure = external)] pub async fn greet(name: String) -> Result<String, GreetError>; }}\nuse boxology_contract::{{DescriptorRef}};\nfn main() {{ {decorated_body} }}\n"
         );
         fs::write(consumer.join("src/main.rs"), decorated_source).unwrap();
         assert!(
@@ -4272,7 +4360,7 @@ fn main() {
         }
         let value_body = r#"
             use boxology_contract::{CallError, ErasedCallError};
-            let descriptor = boxology_generated_contract::contract_descriptor();
+            let descriptor = review_contract::contract_descriptor();
             let fault_descriptor = descriptor.capabilities()[0].error();
             assert!(matches!(
                 fault_descriptor.view(),
@@ -4311,7 +4399,7 @@ fn main() {
                 erased.into_typed::<Fault>(fault_descriptor),
                 CallError::Domain(Fault::Code(7))
             );
-            let _: boxology_generated_contract::Fault = known;
+            let _: review_contract::Fault = known;
         "#;
         fs::write(
             consumer.join("src/main.rs"),

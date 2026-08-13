@@ -7,12 +7,16 @@ use proc_macro2::TokenStream;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use syn::{
-    Attribute, Expr, FnArg, ItemEnum, Lit, Meta, ReturnType, Token, Type, Visibility, parse::Parse,
-    parse::ParseStream, spanned::Spanned,
+    Attribute, Expr, FnArg, Ident, ItemEnum, Lit, Meta, ReturnType, Token, Type, Visibility,
+    parse::Parse, parse::ParseStream, spanned::Spanned,
 };
 /// A controlled contract block, independent of source spelling and location.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Contract {
+    /// Rust dependency name used by implementation-side generated glue.
+    ///
+    /// This is an authoring concern and is deliberately excluded from canonical wire semantics.
+    pub dependency_crate: String,
     /// Local structured data declarations in source order.
     pub data: Vec<DataDeclaration>,
     /// The domain-error declaration.
@@ -391,6 +395,21 @@ pub fn parse(tokens: TokenStream) -> syn::Result<Contract> {
 
 impl Parse for Contract {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let dependency_crate = if input.peek(Ident) {
+            let ahead = input.fork();
+            let key: Ident = ahead.parse()?;
+            if key == "contract_crate" {
+                let _: Ident = input.parse()?;
+                input.parse::<Token![=]>()?;
+                let dependency: Ident = input.parse()?;
+                input.parse::<Token![;]>()?;
+                dependency.to_string()
+            } else {
+                "boxology_generated_contract".into()
+            }
+        } else {
+            "boxology_generated_contract".into()
+        };
         let mut data = Vec::new();
         let mut data_names = BTreeSet::new();
         let error = loop {
@@ -444,6 +463,7 @@ impl Parse for Contract {
             );
         }
         Ok(Self {
+            dependency_crate,
             data,
             error,
             capabilities,
@@ -1742,6 +1762,26 @@ mod tests {
             assert_eq!(error.to_string(), message, "{variant}");
             assert_eq!(&source[error.span().byte_range()], slice, "{variant}");
         }
+    }
+
+    #[test]
+    fn dependency_name_is_rust_only_and_does_not_change_contract_semantics() {
+        let source = format!("#[error] pub enum GreetError {{ Empty }} {CAP}");
+        let default = parse(source.parse().unwrap()).unwrap();
+        let renamed = parse(
+            format!("contract_crate = review_contract; {source}")
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(default.dependency_crate, "boxology_generated_contract");
+        assert_eq!(renamed.dependency_crate, "review_contract");
+        assert_eq!(
+            canonical_semantic_bytes(&default),
+            canonical_semantic_bytes(&renamed)
+        );
+        assert_eq!(semantic_digest(&default), semantic_digest(&renamed));
     }
 
     fn hex(bytes: &[u8]) -> String {

@@ -23,7 +23,7 @@ Every later stream consumes S1. It owns the descriptor ABI (S2 generates values,
 - **`boxology-contract`**: value model, `ContractType`/`ContractError`, presence and opacity types, descriptor types, canonical JSON projection, `CallContext`, `CallError`, `Deadline`, `CancelToken`, `TraceContext`, the erased dispatch ABI. No I/O and no server; dependencies are `tokio-util` for `CancellationToken` plus the small JSON/Base64/float-formatting primitives used by the shared codec.
 - **`boxology-runtime`**: composition builder, import resolution, exposure, validation, lifecycle, in-process binding, `TransportBinding`.
 
-The author-facing `boxology` facade re-exports exactly the `contract` and `implementation` macros plus `boxology_contract::CallContext`; it does not re-export the wider kernel or runtime APIs and owns no competing ABI. Generated contract crates depend on `boxology-contract` only. Each implementation uses the facade and aliases its box-specific generated package to the fixed dependency name `boxology_generated_contract`.
+The author-facing `boxology` facade re-exports exactly the `contract` and `implementation` macros plus `boxology_contract::CallContext`; it does not re-export the wider kernel or runtime APIs and owns no competing ABI. Generated contract crates depend on `boxology-contract` only. Each implementation uses the facade and names its box-specific generated package in the contract block; `boxology_generated_contract` remains the default when no `contract_crate = <rust_identifier>;` prelude is present.
 
 ### D2 — Value model: `ContractValue`, `SlotValue`, and presence at every position
 

@@ -1,4 +1,5 @@
 boxology::contract! {
+    contract_crate = hello_contract;
     #[error]
     pub enum GreetError {
         EmptyName,

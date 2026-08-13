@@ -620,7 +620,7 @@ fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detai
     Detail::new(code).with_message(error.to_string())
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckRequest {
     pub workspace: ::std::string::String,
     pub base: ::core::option::Option<::std::string::String>,
@@ -698,8 +698,9 @@ impl ::boxology_contract::ContractType for CheckRequest {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckStatus {
+    #[default]
     Passed,
     Failed,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
@@ -801,8 +802,9 @@ impl ::boxology_contract::ContractType for CheckStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckStepStatus {
+    #[default]
     Passed,
     Failed,
     Skipped,
@@ -917,8 +919,9 @@ impl ::boxology_contract::ContractType for CheckStepStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckFailureKind {
+    #[default]
     Validation,
     Invocation,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
@@ -1024,7 +1027,7 @@ impl ::boxology_contract::ContractType for CheckFailureKind {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct CheckFinding {
     pub kind: ::std::string::String,
     pub code: ::std::string::String,
@@ -1345,7 +1348,7 @@ impl ::boxology_contract::ContractType for CheckFinding {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckStepReport {
     pub id: ::std::string::String,
     pub status: CheckStepStatus,
@@ -1471,7 +1474,7 @@ impl ::boxology_contract::ContractType for CheckStepReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckReport {
     pub steps: ::std::vec::Vec<CheckStepReport>,
     pub status: CheckStatus,
@@ -1574,7 +1577,7 @@ impl ::boxology_contract::ContractType for CheckReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckFailure {
     pub kind: CheckFailureKind,
     pub human: ::std::vec::Vec<u8>,
@@ -1661,7 +1664,7 @@ impl ::boxology_contract::ContractType for CheckFailure {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckOutcome {
     pub report: ::core::option::Option<CheckReport>,
     pub failure: ::core::option::Option<CheckFailure>,
@@ -1739,8 +1742,9 @@ impl ::boxology_contract::ContractType for CheckOutcome {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckError {
+    #[default]
     Internal,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
 }

@@ -125,8 +125,9 @@ fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detai
     Detail::new(code).with_message(error.to_string())
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum GreetError {
+    #[default]
     EmptyName,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
 }
