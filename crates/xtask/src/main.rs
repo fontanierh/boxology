@@ -98,6 +98,7 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
 const CLI_END_TO_END_TESTS: &[&str] = &[
     "bootstrap_still_rejects_unowned_source_before_writing",
     "check_base_absent_schema_is_a_valid_none_base",
+    "check_base_bootstraps_a_nested_managed_workspace_absent_from_base",
     "check_base_cat_file_failure_after_confirmed_presence_is_always_bxw0092",
     "check_base_git_boundary_uses_the_exact_nonmutating_argv",
     "check_base_git_spawn_failure_is_invocation_exit_two",
@@ -167,8 +168,8 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("117cee804bba1e3cef49fef5ed099668b64b23f7c5cc39becd8be760985a8ea5"),
-    source_digest: "3b65a7c10ebb2975396997bf1153daa49d9e4e8b948c6f06246be8baa9384b53",
-    body_digest: "979ea985ef66fecd65d110d6f0f3084ba0ae102ad943449fc8bc16ad9e489525",
+    source_digest: "2f4f6a289121cc48a888b7aa04773f08ca4a2ec334dbbf5dcd42e4eb1a5b6007",
+    body_digest: "9694bd19b5775466abcf9af355e6ba834ac01e79c9ac50edbe0e6a250547e8ef",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-cli",
@@ -178,8 +179,8 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
     manifest_digest: Some("117cee804bba1e3cef49fef5ed099668b64b23f7c5cc39becd8be760985a8ea5"),
-    source_digest: "bd6b239670e0ceeaae5be638b87586fd84d4cece356e54e58d09bf7ced2345ba",
-    body_digest: "6eb0d9c4db047c433fdfc9c9523c32b6d5e5993082d44cb8c41f230321fdae7d",
+    source_digest: "699583449c68516efe091c755bd15046d96cd30bed20d775899d7ef15fda64a9",
+    body_digest: "6799ca5328c8a38cbfd00aa0f4e41752b9aae959e4e448addc0999a1647ced3b",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),

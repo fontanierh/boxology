@@ -388,7 +388,10 @@ fn typed_finding_preserves_exact_request_and_is_report_only() {
         .iter()
         .find(|step| step.id == "contract-classification")
         .unwrap();
-    assert_eq!(step.status, CheckStepStatus::Failed);
+    assert_eq!(step.status, CheckStepStatus::Passed);
+    assert!(String::from_utf8_lossy(&report.human).contains(
+        "check contract-classification passed\n  BXC9000 ping ping.value incompatible condition=\"migrate\"\n"
+    ));
     assert_eq!(
         step.findings,
         vec![CheckFinding {

@@ -1317,7 +1317,7 @@ fn check_base_reports_real_addition_and_unchanged_baseline_without_failing() {
     let addition = fixture.run(&["check", "--base", "HEAD"]);
     assert_eq!(addition.status.code(), Some(0));
     assert!(text(&addition.stderr).is_empty());
-    assert!(text(&addition.stdout).contains("check contract-classification failed\n"));
+    assert!(text(&addition.stdout).contains("check contract-classification passed\n"));
     assert!(text(&addition.stdout).contains("BXC0039 ping ping.greet additive\n"));
     assert!(text(&addition.stdout).ends_with("check result passed\n"));
 }
@@ -1346,6 +1346,52 @@ fn check_base_resolves_git_objects_from_a_nested_managed_workspace() {
     assert!(text(&output.stderr).is_empty());
     assert!(text(&output.stdout).contains("check contract-classification passed\n"));
     assert!(text(&output.stdout).ends_with("check result passed\n"));
+}
+
+#[test]
+fn check_base_bootstraps_a_nested_managed_workspace_absent_from_base() {
+    let fixture = Fixture::new(false);
+    assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.name", "Boxology Test"][..],
+        &["config", "user.email", "boxology@example.invalid"][..],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&fixture.cleanup)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output.stderr));
+    }
+    fs::write(fixture.cleanup.join("README.md"), "existing repository\n").unwrap();
+    for args in [
+        &["add", "README.md"][..],
+        &["commit", "-q", "-m", "base without managed root"][..],
+        &["add", "workspace"][..],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&fixture.cleanup)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output.stderr));
+    }
+
+    let output = fixture.run_in_parent_repository(&["check", "--base", "HEAD"]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(text(&output.stderr).is_empty());
+    assert!(stdout.contains("check contract-classification passed\n"));
+    assert!(stdout.contains("BXC0026 ping ping additive\n"));
+    assert!(stdout.contains("check diff-ownership passed\n"));
+    assert!(!stdout.contains("skipped"));
+    assert!(stdout.ends_with("check result passed\n"));
 }
 
 #[test]
@@ -1417,7 +1463,7 @@ fn check_base_absent_schema_is_a_valid_none_base() {
     let output = fixture.run(&["check", "--base", "HEAD"]);
     assert_eq!(output.status.code(), Some(0));
     assert!(text(&output.stderr).is_empty());
-    assert!(text(&output.stdout).contains("check contract-classification failed\n"));
+    assert!(text(&output.stdout).contains("check contract-classification passed\n"));
     assert!(text(&output.stdout).contains("check diff-ownership passed\n"));
     assert!(text(&output.stdout).ends_with("check result passed\n"));
 }
@@ -1505,7 +1551,7 @@ fn check_default_base_classifies_against_merge_base_with_main() {
     let addition = fixture.run(&["check"]);
     assert_eq!(addition.status.code(), Some(0));
     assert!(text(&addition.stderr).is_empty());
-    assert!(text(&addition.stdout).contains("check contract-classification failed\n"));
+    assert!(text(&addition.stdout).contains("check contract-classification passed\n"));
     assert!(text(&addition.stdout).contains("BXC0039 ping ping.greet additive\n"));
     assert!(text(&addition.stdout).ends_with("check result passed\n"));
 }

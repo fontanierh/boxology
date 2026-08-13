@@ -318,6 +318,7 @@ fn read_schema(
 pub struct BaseDiffInputs {
     packages: Vec<Package>,
     changed: Vec<RelativePath>,
+    bootstrapping: bool,
     /// Mode/type class and object id for every validated path, including gitlinks.
     objects: BTreeMap<RelativePath, (TreeKind, String)>,
 }
@@ -329,6 +330,10 @@ impl BaseDiffInputs {
     /// Returns the sorted, deduplicated changed-path set.
     pub fn changed(&self) -> &[RelativePath] {
         &self.changed
+    }
+    /// Returns whether candidate declarations were selected for a wholly absent base root.
+    pub fn is_bootstrapping(&self) -> bool {
+        self.bootstrapping
     }
     /// Loads base/candidate bytes for accountable changed `Cargo.toml` paths under `ownership`.
     ///
@@ -382,6 +387,43 @@ pub fn base_diff_inputs(
     root: &Path,
     base: &ResolvedBase,
 ) -> Result<BaseDiffInputs, BaseInputsError> {
+    base_diff_inputs_inner(root, base, None)
+}
+
+/// Loads diff inputs, using candidate declarations only when the managed root has no base object.
+///
+/// This narrow bootstrap path lets a complete managed workspace be introduced below an existing
+/// repository. Once the base contains any object below `root`, base declarations remain the sole
+/// ownership authority.
+///
+/// # Errors
+/// Returns coded listing/blob/discovery failures or [`GitToolError`] when Git cannot start.
+pub fn base_diff_inputs_with_candidate(
+    root: &Path,
+    base: &ResolvedBase,
+    candidate_files: &[FileEntry],
+    candidate_manifests: &[(RelativePath, Vec<u8>)],
+) -> Result<BaseDiffInputs, BaseInputsError> {
+    base_diff_inputs_inner(
+        root,
+        base,
+        Some(CandidateDeclarations {
+            files: candidate_files,
+            manifests: candidate_manifests,
+        }),
+    )
+}
+
+struct CandidateDeclarations<'a> {
+    files: &'a [FileEntry],
+    manifests: &'a [(RelativePath, Vec<u8>)],
+}
+
+fn base_diff_inputs_inner(
+    root: &Path,
+    base: &ResolvedBase,
+    candidate: Option<CandidateDeclarations<'_>>,
+) -> Result<BaseDiffInputs, BaseInputsError> {
     let listed = git_ok(root, &["ls-tree", "-r", "-z", base.as_str(), "--", "."])?;
     let mut files = Vec::new();
     let mut manifests = Vec::new();
@@ -429,6 +471,11 @@ pub fn base_diff_inputs(
     let mut changed = parse_nul(&diffed.stdout, parse_path)?;
     changed.sort();
     changed.dedup();
+    let bootstrapping = candidate.is_some() && objects.is_empty();
+    let (files, manifests) = match candidate.filter(|_| bootstrapping) {
+        Some(candidate) => (candidate.files.to_vec(), candidate.manifests.to_vec()),
+        None => (files, manifests),
+    };
     let inputs =
         WorkspaceInputs::new(files, manifests, "").map_err(|_| data(BaseError::listing()))?;
     let (packages, findings) = inputs.discover();
@@ -441,6 +488,7 @@ pub fn base_diff_inputs(
     Ok(BaseDiffInputs {
         packages,
         changed,
+        bootstrapping,
         objects,
     })
 }
