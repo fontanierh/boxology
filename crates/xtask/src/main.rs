@@ -92,8 +92,8 @@ const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::External
     default_source: "tests/born_valid.rs",
     tests: &["initialized_project_is_born_valid_and_regeneration_is_a_no_op"],
     manifest_digest: Some("f1e9135be063c105ca79bb492b7c272c2fd12629c4010a5a343fc61103947a01"),
-    source_digest: "414c3b222666668c0404bc621fb9d5f473251a48b2dbec95c2e336e45b979dc3",
-    body_digest: "f023135d1ad38032a79d9fce86116a236cad9a58f8d0e8dae5ccb0511bc85448",
+    source_digest: "364c64f16ad5431e43377346db3a1c429c8d15b4d7c5bfa1b22a7867cca4bdd7",
+    body_digest: "b73fe4aec5be8389677cc09aae95bf0013b7acb1b84b42405742fe2c945c6584",
 };
 const CLI_END_TO_END_TESTS: &[&str] = &[
     "check_base_absent_schema_is_a_valid_none_base",
