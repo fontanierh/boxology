@@ -905,14 +905,12 @@ fn adapter_source(
     imports: &[boxology_generator_model::ImportModel],
 ) -> String {
     let prefix = pascal_case(box_id);
+    let contract_crate = &contract.dependency_crate;
+    let contract_path = format!("::{contract_crate}::");
     // The per-capability decode/dispatch/encode body is identical between the single- and
     // multi-capability `call` shapes; only the routing envelope around it differs.
     let async_body = |capability: &CapabilityDeclaration| -> String {
-        let input_qualified = rust_type_expression(
-            &capability.input_type,
-            "crate::contract::__boxology_generated_contract::",
-            true,
-        );
+        let input_qualified = rust_type_expression(&capability.input_type, &contract_path, true);
         let input_decode = decode_call(
             &capability.input_type,
             &input_qualified,
@@ -935,7 +933,7 @@ fn adapter_source(
                             conversion_detail("input_decode", error),
                         )
                     }})?;
-                    match crate::contract::__boxology_generated_contract::{prefix}Dispatch::{capability_name}(
+                    match ::{contract_crate}::{prefix}Dispatch::{capability_name}(
                         &self.service,
                         context,
                         input,
@@ -952,6 +950,7 @@ fn adapter_source(
                         )),
                     }}"#,
             prefix = prefix,
+            contract_crate = contract_crate,
             input_descriptor = schema::type_descriptor_source(
                 contract,
                 &capability.input_type,
@@ -967,7 +966,7 @@ fn adapter_source(
     let call_body = if contract.capabilities.len() == 1 {
         let capability = &contract.capabilities[0];
         format!(
-            r#"let expected = crate::contract::__boxology_generated_contract::contract_descriptor()
+            r#"let expected = ::{contract_crate}::contract_descriptor()
                     .capabilities()
                     .first()
                     .expect("generated {prefix} contract has one capability")
@@ -979,6 +978,7 @@ fn adapter_source(
                     {async_body}
                 }})"#,
             prefix = prefix,
+            contract_crate = contract_crate,
             async_body = async_body(capability),
         )
     } else {
@@ -1000,7 +1000,7 @@ fn adapter_source(
             })
             .collect::<String>();
         format!(
-            r#"let capabilities = crate::contract::__boxology_generated_contract::contract_descriptor().capabilities();
+            r#"let capabilities = ::{contract_crate}::contract_descriptor().capabilities();
                 {branches}Box::pin(::std::future::ready(Err(unknown_capability())))"#,
         )
     };
@@ -1018,7 +1018,7 @@ fn adapter_source(
             service: T,
         ) -> ::boxology_runtime::RegisteredBox
         where
-            T: crate::contract::__boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
         {{
             composition.register(implementation_descriptor(), move |imports| {{
                 factory(service, imports)
@@ -1032,7 +1032,7 @@ fn adapter_source(
             build: F,
         ) -> ::boxology_runtime::RegisteredBox
         where
-            T: crate::contract::__boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
             F: FnOnce({prefix}Imports) -> T,
         {{
             composition.register(implementation_descriptor(), move |imports| {{
@@ -1049,7 +1049,7 @@ fn adapter_source(
         #[doc(hidden)]
         pub fn implementation_descriptor() -> ::boxology_contract::ImplementationDescriptor {{
             ::boxology_contract::ImplementationDescriptor::new(
-                crate::contract::__boxology_generated_contract::contract_descriptor(),
+                ::{contract_crate}::contract_descriptor(),
                 {import_list},
             )
             .expect("generated adapter import descriptors are valid")
@@ -1067,7 +1067,7 @@ fn adapter_source(
             imports: ::boxology_runtime::Imports,
         ) -> {prefix}Adapter<T>
         where
-            T: crate::contract::__boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
         {{
             {prefix}Adapter {{
                 service,
@@ -1081,7 +1081,7 @@ fn adapter_source(
 
         impl<T> ::boxology_contract::ErasedTarget for {prefix}Adapter<T>
         where
-            T: crate::contract::__boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            T: ::{contract_crate}::{prefix}Dispatch + Send + Sync + 'static,
         {{
             fn call<'a>(
                 &'a self,
@@ -1117,6 +1117,7 @@ fn adapter_source(
         }}
         "#,
         prefix = prefix,
+        contract_crate = contract_crate,
         call_body = call_body,
         import_list = import_list,
         typed_imports = typed_imports,

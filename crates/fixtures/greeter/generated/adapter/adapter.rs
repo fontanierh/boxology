@@ -3,7 +3,7 @@ use ::boxology_contract::ContractType;
 #[doc(hidden)]
 pub fn implementation_descriptor() -> ::boxology_contract::ImplementationDescriptor {
     ::boxology_contract::ImplementationDescriptor::new(
-            crate::contract::__boxology_generated_contract::contract_descriptor(),
+            ::boxology_generated_contract::contract_descriptor(),
             [
                 ::boxology_contract::ImportDescriptor::new(
                         ::boxology_contract::BoxId::new("hello")
@@ -34,7 +34,7 @@ pub struct GreeterAdapter<T> {
 #[doc(hidden)]
 pub fn factory<T>(service: T, imports: ::boxology_runtime::Imports) -> GreeterAdapter<T>
 where
-    T: crate::contract::__boxology_generated_contract::GreeterDispatch + Send + Sync + 'static,
+    T: ::boxology_generated_contract::GreeterDispatch + Send + Sync + 'static,
 {
     GreeterAdapter {
         service,
@@ -46,7 +46,7 @@ pub fn register<T, F>(
     build: F,
 ) -> ::boxology_runtime::RegisteredBox
 where
-    T: crate::contract::__boxology_generated_contract::GreeterDispatch + Send + Sync + 'static,
+    T: ::boxology_generated_contract::GreeterDispatch + Send + Sync + 'static,
     F: FnOnce(GreeterImports) -> T,
 {
     composition
@@ -114,7 +114,7 @@ pub fn typed_imports(imports: &::boxology_runtime::Imports) -> GreeterImports {
 }
 impl<T> ::boxology_contract::ErasedTarget for GreeterAdapter<T>
 where
-    T: crate::contract::__boxology_generated_contract::GreeterDispatch + Send + Sync + 'static,
+    T: ::boxology_generated_contract::GreeterDispatch + Send + Sync + 'static,
 {
     fn call<'a>(
         &'a self,
@@ -131,7 +131,7 @@ where
             > + Send + 'a,
         >,
     > {
-        let expected = crate::contract::__boxology_generated_contract::contract_descriptor()
+        let expected = ::boxology_generated_contract::contract_descriptor()
             .capabilities()
             .first()
             .expect("generated Greeter contract has one capability")
@@ -153,7 +153,7 @@ where
                         conversion_detail("input_decode", error),
                     )
                 })?;
-            match crate::contract::__boxology_generated_contract::GreeterDispatch::greet_loudly(
+            match ::boxology_generated_contract::GreeterDispatch::greet_loudly(
                     &self.service,
                     context,
                     input,

@@ -30,13 +30,19 @@ fn contract_expansion(input: TokenStream2) -> syn::Result<TokenStream2> {
         quote!(pub use ::#dependency::{#(#data,)* #error};)
     };
     let expected = boxology_contract_syntax::semantic_digest(&model);
-    let comparisons = expected.iter().enumerate().map(|(index, byte)| {
-        quote!(__boxology_generated_contract::__BOXOLOGY_SEMANTIC_DIGEST[#index] == #byte)
-    });
+    let comparisons = expected
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| quote!(::#dependency::__BOXOLOGY_SEMANTIC_DIGEST[#index] == #byte));
     Ok(quote! {
-        #[doc(hidden)]
-        pub use ::#dependency as __boxology_generated_contract;
         #facade
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! __boxology_check_local_implementation {
+            ($receiver:ty; $($methods:tt)*) => {
+                ::#dependency::__boxology_check_implementation!($receiver; $($methods)*);
+            };
+        }
         const _: () = {
             if !(#(#comparisons)&&*) {
                 panic!("Boxology generated contract is stale");
@@ -98,7 +104,7 @@ pub fn implementation(arguments: TokenStream, input: TokenStream) -> TokenStream
     });
     quote! {
         #original
-        crate::contract::__boxology_generated_contract::__boxology_check_implementation!(#receiver; #(#methods)*);
+        __boxology_check_local_implementation!(#receiver; #(#methods)*);
     }
     .into()
 }
@@ -165,7 +171,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing facade name {name}: {expanded}"))
         });
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(expanded.matches("pub use").count(), 2);
+        assert_eq!(expanded.matches("pub use").count(), 1);
 
         let scalar = contract_expansion(quote! {
             #[error] pub enum Fault { Bad }
@@ -186,8 +192,8 @@ mod tests {
         .unwrap()
         .to_string();
 
-        assert!(expanded.contains("pub use :: review_contract as __boxology_generated_contract"));
         assert!(expanded.contains("pub use :: review_contract :: Fault"));
+        assert!(expanded.contains(":: review_contract :: __boxology_check_implementation"));
         assert!(!expanded.contains(":: boxology_generated_contract"));
     }
 }

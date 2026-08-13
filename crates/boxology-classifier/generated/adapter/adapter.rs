@@ -3,7 +3,7 @@ use ::boxology_contract::ContractType;
 #[doc(hidden)]
 pub fn implementation_descriptor() -> ::boxology_contract::ImplementationDescriptor {
     ::boxology_contract::ImplementationDescriptor::new(
-            crate::contract::__boxology_generated_contract::contract_descriptor(),
+            ::boxology_generated_contract::contract_descriptor(),
             [],
         )
         .expect("generated adapter import descriptors are valid")
@@ -19,8 +19,7 @@ pub fn factory<T>(
     imports: ::boxology_runtime::Imports,
 ) -> ClassifierAdapter<T>
 where
-    T: crate::contract::__boxology_generated_contract::ClassifierDispatch + Send + Sync
-        + 'static,
+    T: ::boxology_generated_contract::ClassifierDispatch + Send + Sync + 'static,
 {
     ClassifierAdapter {
         service,
@@ -32,8 +31,7 @@ pub fn register<T>(
     service: T,
 ) -> ::boxology_runtime::RegisteredBox
 where
-    T: crate::contract::__boxology_generated_contract::ClassifierDispatch + Send + Sync
-        + 'static,
+    T: ::boxology_generated_contract::ClassifierDispatch + Send + Sync + 'static,
 {
     composition
         .register(
@@ -43,8 +41,7 @@ where
 }
 impl<T> ::boxology_contract::ErasedTarget for ClassifierAdapter<T>
 where
-    T: crate::contract::__boxology_generated_contract::ClassifierDispatch + Send + Sync
-        + 'static,
+    T: ::boxology_generated_contract::ClassifierDispatch + Send + Sync + 'static,
 {
     fn call<'a>(
         &'a self,
@@ -61,7 +58,7 @@ where
             > + Send + 'a,
         >,
     > {
-        let expected = crate::contract::__boxology_generated_contract::contract_descriptor()
+        let expected = ::boxology_generated_contract::contract_descriptor()
             .capabilities()
             .first()
             .expect("generated Classifier contract has one capability")
@@ -98,7 +95,7 @@ where
                         conversion_detail("input_decode", error),
                     )
                 })?;
-            let input = <crate::contract::__boxology_generated_contract::ClassifyRequest as ::boxology_contract::ContractType>::decode(
+            let input = <::boxology_generated_contract::ClassifyRequest as ::boxology_contract::ContractType>::decode(
                     &input,
                 )
                 .map_err(|error| {
@@ -106,7 +103,7 @@ where
                         conversion_detail("input_decode", error),
                     )
                 })?;
-            match crate::contract::__boxology_generated_contract::ClassifierDispatch::classify(
+            match ::boxology_generated_contract::ClassifierDispatch::classify(
                     &self.service,
                     context,
                     input,
