@@ -2,7 +2,7 @@
 use std::{collections::{BTreeMap, BTreeSet}, env, fs, path::Path, process::{Command, Output}};
 use toml_edit::{DocumentMut, Item, TableLike};
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = "0.1.1";
 const REQUIRED_FILES: [&str; 3] = ["README.md", "LICENSE-MIT", "LICENSE-APACHE"];
 // The checker proves this is a topological ordering of the exact CLI/init normal closure.
 #[rustfmt::skip]
@@ -213,7 +213,7 @@ fn check(root: &Path, order: &[(&str, &str)]) -> Result<(), Vec<String>> {
                 if dep.get("path").is_none() { continue; }
                 let dependency = dep.get("package").and_then(Item::as_str).unwrap_or(alias);
                 if !names.contains(dependency) { if released { errors.push(format!("{name}: {dependency} is unpublished")); } continue; }
-                if dep.get("version").and_then(Item::as_str) != Some("=0.1.0") { errors.push(format!("{name}: {dependency} must use =0.1.0 plus path")); }
+                if dep.get("version").and_then(Item::as_str) != Some("=0.1.1") { errors.push(format!("{name}: {dependency} must use =0.1.1 plus path")); }
                 local.push(dependency.to_owned());
                 if released && positions[dependency] >= positions[name.as_str()] { errors.push(format!("order places {dependency} after {name}")); }
             }

@@ -4,14 +4,57 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
-### Contract JSON
+## [0.1.1] - 2026-08-13
+
+### Added
 
 - Added the binding-independent `boxology_contract::json` codec. Consumers can now call
   `json::encode(&slot, &descriptor)` and `json::decode(bytes, &descriptor, role, limits)` for IPC,
   CLI output, and files without depending on `boxology-http` or inventing another mapping.
-- The codec is the existing canonical HTTP projection moved into the published contract crate:
-  descriptor-guided integer/blob/enum/presence rules, deterministic key ordering and escaping,
-  strict versus tolerant decode roles, unknown-enum forwarding, and byte/depth caps remain shared.
+- Allowed a box to use a project-local Cargo name for its generated contract via
+  `contract_crate = <crate_name>;`, while preserving `boxology_generated_contract` as the default.
+- Generated `Default` for boundary models and domain errors, plus `Eq`, `Hash`, and ordering when
+  the complete generated shape supports them. Tolerant enum/error shapes remain intentionally
+  partial because they carry an opaque `Unknown` payload.
+
+### Fixed
+
+- Made `boxology --help` and `boxology-init --help` conventional successful invocations: usage is
+  written to stdout with exit status 0.
+- Allowed generation to bootstrap a missing generated contract crate, while retaining strict
+  Cargo-backed validation after the write.
+- Corrected ownership and compatibility classification for wholly new nested managed workspaces.
+- Made generated contract sources byte-stable across `cargo fmt --all` and serialized the
+  regression test's process-wide Cargo environment.
+- Moved the canonical descriptor-guided JSON projection into `boxology-contract`; the HTTP binding
+  now consumes that shared implementation, including strict/tolerant roles and byte/depth limits.
+
+### Distribution
+
+- Published the ordered `0.1.1` crate closure on crates.io with exact dependency versions and the
+  existing resumable, one-crate-at-a-time release safeguards.
+
+### Upgrading an existing setup
+
+To upgrade from `0.1.0`, replace both installed tools with the new registry release:
+
+```sh
+cargo install --force --locked --version 0.1.1 boxology-init
+cargo install --force --locked --version 0.1.1 boxology-cli
+```
+
+Most handwritten boxes only need the authoring facade. Hand-managed consumers that pin the facade
+can update it directly:
+
+```toml
+[dependencies]
+boxology = "=0.1.1"
+```
+
+Existing generated projects should keep their exact Git revision pins. Their HTTP example still
+uses `boxology-http`, which is outside the registry release closure; do not mechanically replace
+those generated dependencies with crates.io versions. Regenerate deliberately when adopting the
+new contract alias or generated trait behavior, then run `cargo fmt --all` and `boxology check`.
 
 ## [0.1.0] - 2026-08-13
 
@@ -31,14 +74,6 @@ This file records notable user-facing changes to Boxology.
   generated compositions so their setup reads like ordinary box code.
 - Fixed generated contract type registration, Git dependency resolution in nested workspaces, and
   initializer dependency portability.
-- Allowed a box to use a project-local Cargo name for its generated contract via
-  `contract_crate = <crate_name>;`, while keeping the existing alias as the default. Custom names
-  are repeated on `#[boxology::implementation(contract_crate = <crate_name>)]` so implementation
-  checking remains independent of source-module layout.
-- Generated `Default` for every boundary model and domain error, plus `Eq`, `Hash`, and ordering
-  whenever the complete generated shape supports them. Tolerant enums and errors remain
-  `PartialEq` because their always-present opaque `Unknown` payload is part of that shape;
-  floating-point leaves likewise remain intentionally partial.
 
 ### Distribution
 

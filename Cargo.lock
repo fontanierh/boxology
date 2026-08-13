@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "boxology"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "boxology-macros",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-classifier"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "boxology-schema",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-classifier",
  "boxology-cli-core",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-cli-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-classifier",
  "boxology-contract",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-contract"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "ryu",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-contract-syntax"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "proc-macro2",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-generator"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-classifier",
  "boxology-contract",
@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-generator-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "boxology-contract-syntax",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-generator-writer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "boxology-generator",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-http"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "boxology-runtime",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-init"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "boxology-generator",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract-syntax",
  "proc-macro2",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-manifest"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "toml_edit",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "tokio",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-schema"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "serde_json",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-workspace"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
  "boxology-manifest",
@@ -269,14 +269,14 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "check-contract"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
 ]
 
 [[package]]
 name = "check-implementation"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology",
  "boxology-cli-core",
@@ -291,14 +291,14 @@ dependencies = [
 
 [[package]]
 name = "classifier-contract"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology-contract",
 ]
 
 [[package]]
 name = "classifier-implementation"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boxology",
  "boxology-classifier",

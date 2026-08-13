@@ -75,7 +75,7 @@ const fn path_dep(key: &'static str, path: &'static str) -> Dep {
     Dep {
         key,
         value: DepValue::Path {
-            version: "=0.1.0",
+            version: "=0.1.1",
             path,
         },
     }

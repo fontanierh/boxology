@@ -11,16 +11,16 @@ description = "Workspace check contract implementation"
 publish = true
 
 [dependencies]
-boxology = { version = "=0.1.0", path = "../../boxology" }
-boxology-cli-core = { version = "=0.1.0", path = "../../boxology-cli-core" }
-boxology-contract = { version = "=0.1.0", path = "../../boxology-contract" }
-boxology-manifest = { version = "=0.1.0", path = "../../boxology-manifest" }
-boxology-runtime = { version = "=0.1.0", path = "../../boxology-runtime" }
-boxology-workspace = { version = "=0.1.0", path = "../../boxology-workspace" }
-boxology_generated_contract = { package = "check-contract", version = "=0.1.0", path = "../generated/contract" }
-boxology_import_classifier = { package = "classifier-contract", version = "=0.1.0", path = "../../boxology-classifier/generated/contract" }
+boxology = { version = "=0.1.1", path = "../../boxology" }
+boxology-cli-core = { version = "=0.1.1", path = "../../boxology-cli-core" }
+boxology-contract = { version = "=0.1.1", path = "../../boxology-contract" }
+boxology-manifest = { version = "=0.1.1", path = "../../boxology-manifest" }
+boxology-runtime = { version = "=0.1.1", path = "../../boxology-runtime" }
+boxology-workspace = { version = "=0.1.1", path = "../../boxology-workspace" }
+boxology_generated_contract = { package = "check-contract", version = "=0.1.1", path = "../generated/contract" }
+boxology_import_classifier = { package = "classifier-contract", version = "=0.1.1", path = "../../boxology-classifier/generated/contract" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-boxology_import_classifier = { package = "classifier-contract", version = "=0.1.0", path = "../../boxology-classifier/generated/contract", features = ["test-support"] }
-boxology-runtime = { version = "=0.1.0", path = "../../boxology-runtime", features = ["test-support"] }
+boxology_import_classifier = { package = "classifier-contract", version = "=0.1.1", path = "../../boxology-classifier/generated/contract", features = ["test-support"] }
+boxology-runtime = { version = "=0.1.1", path = "../../boxology-runtime", features = ["test-support"] }

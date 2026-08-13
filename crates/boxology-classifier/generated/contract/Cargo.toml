@@ -15,4 +15,4 @@ default = []
 test-support = []
 
 [dependencies]
-boxology-contract = { version = "=0.1.0", path = "../../../boxology-contract" }
+boxology-contract = { version = "=0.1.1", path = "../../../boxology-contract" }
