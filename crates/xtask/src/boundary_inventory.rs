@@ -77,6 +77,7 @@ const ROOT_ENTRIES: &[&str] = &[
     "AGENTS.md",
     "Cargo.lock",
     "Cargo.toml",
+    "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
     "LICENSE-APACHE",

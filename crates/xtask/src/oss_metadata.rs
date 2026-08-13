@@ -84,12 +84,14 @@ fn inherited(table: &dyn TableLike, key: &str) -> bool {
 fn check_readme(readme: &str, errors: &mut Vec<String>) {
     for truth in ["early-stage framework", "V0 was completed on 2026-08-09",
         "Applications built with Boxology are separate products and are not included in this repository.",
-        "first public tool release is version `0.1.0` on crates.io", "cargo install boxology-init --locked",
+        "first public tool release is planned as version `0.1.0` on crates.io", "it has not been\npublished yet",
+        "cargo install boxology-init --locked",
         "cargo install boxology-cli --locked", "cargo install --git https://github.com/fontanierh/boxology",
         "requires Rust 1.97.1", "dual-licensed under [MIT](LICENSE-MIT) or [Apache License 2.0](LICENSE-APACHE)"] {
         if !readme.contains(truth) { errors.push(format!("README.md: missing required truth {truth:?}")); }
     }
-    for stale in ["cargo install boxology ", "committed flagship application", "current product critical path"] {
+    for stale in ["first public tool release is version `0.1.0` on crates.io",
+        "cargo install boxology ", "committed flagship application", "current product critical path"] {
         if readme.contains(stale) { errors.push(format!("README.md: stale claim {stale:?}")); }
     }
 }
@@ -387,6 +389,12 @@ fn check(root: &Path) -> Result<(), Vec<String>> {
         Err(error) => errors.push(format!("read README.md: {error}")),
         Ok(readme) => check_readme(&readme, &mut errors),
     }
+    match fs::read_to_string(root.join("CHANGELOG.md")) {
+        Err(error) => errors.push(format!("read CHANGELOG.md: {error}")),
+        Ok(text) if text.contains("## Unreleased") && text.contains("not published yet")
+            && text.contains("separate\n  projects rather than framework components") => {}
+        Ok(_) => errors.push("CHANGELOG.md: pending framework-only release truth is missing".into()),
+    }
     check_community(root, &mut errors);
     errors.is_empty().then_some(()).ok_or(errors)
 }
@@ -401,7 +409,7 @@ mod tests {
             let path = std::env::temp_dir().join(format!("boxology-oss-metadata-{}", std::process::id()));
             let _ = fs::remove_dir_all(&path); fs::create_dir(&path).unwrap();
             let live = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-            for file in ["Cargo.toml", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
+            for file in ["Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE-MIT", "LICENSE-APACHE"]
                 .into_iter().chain(PRODUCTS.iter().map(|(p, _, _, _)| *p)).chain(INTERNAL.iter().map(|(p, _)| *p)) {
                 let relative = if file.starts_with("crates/") { format!("{file}/Cargo.toml") } else { file.into() };
                 let target = path.join(&relative); fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -434,6 +442,7 @@ mod tests {
             ("crates/xtask/Cargo.toml", "version = \"0.0.0\"", "version = \"1.2.3\""),
             ("LICENSE-MIT", "Henry Fontanier", "H. Fontanier"),
             ("README.md", "crates.io", "registry.invalid"),
+            ("CHANGELOG.md", "not published yet", "published"),
         ] {
             let fixture = Fixture::new(); fixture.mutate(file, from, to);
             assert_eq!(run(&fixture.0), 1, "mutation survived: {file} {from}");

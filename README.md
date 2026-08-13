@@ -5,30 +5,32 @@ Boxology is an early-stage framework for building software as independent boxes 
 V0 was completed on 2026-08-09. The accepted stream specs describe its delivered boundary.
 Applications built with Boxology are separate products and are not included in this repository.
 
-The first public tool release is version `0.1.0` on crates.io. Building this checkout requires Rust 1.97.1.
+The first public tool release is planned as version `0.1.0` on crates.io, but it has not been
+published yet. Building this checkout requires Rust 1.97.1.
 
 ## Quick start
 
-Install the initializer and checker, then initialize an existing empty target directory (a lone `.git` is allowed):
+Until the crates.io release is published, install the initializer and checker from this repository,
+then initialize an existing empty target directory (a lone `.git` is allowed):
 
 ```sh
-cargo install boxology-init --locked
-cargo install boxology-cli --locked
+cargo install --git https://github.com/fontanierh/boxology --locked boxology-init
+cargo install --git https://github.com/fontanierh/boxology --locked boxology-cli
 boxology-init --name example --target <empty-directory>
 cd <empty-directory>
 cargo build --workspace
 boxology check
 ```
 
-Update with `cargo install --force boxology-init --locked` and
-`cargo install --force boxology-cli --locked`. Add `--version 0.1.0` to pin this release.
-
-To build the current source instead, use the Git fallback:
+After `0.1.0` is published, the registry installation commands will be:
 
 ```sh
-cargo install --git https://github.com/fontanierh/boxology --locked boxology-init
-cargo install --git https://github.com/fontanierh/boxology --locked boxology-cli
+cargo install boxology-init --locked
+cargo install boxology-cli --locked
 ```
+
+At that point, update with `cargo install --force boxology-init --locked` and
+`cargo install --force boxology-cli --locked`; add `--version 0.1.0` to pin the release.
 
 The generated project README owns that project's invocation contract.
 
@@ -48,9 +50,10 @@ next. After the sequence, prove fresh registry installs with the Quick start com
 
 ## Documentation
 
-Start with the concise [white paper](boxology-whitepaper.md), then use its linked sections to open
-the detailed documents. The [product contract](boxology-details/07-product-contract.md) separates
-long-term direction from the completed foundation milestone.
+See the [changelog](CHANGELOG.md) for release preparation and known boundaries. Start with the
+concise [white paper](boxology-whitepaper.md), then use its linked sections to open the detailed
+documents. The [product contract](boxology-details/07-product-contract.md) separates long-term
+direction from the completed foundation milestone.
 
 - [Boxes](boxology-details/01-boxes.md)
 - [Packages, providers, and compositions](boxology-details/02-packages.md)
