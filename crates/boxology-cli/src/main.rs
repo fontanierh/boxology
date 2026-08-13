@@ -81,24 +81,77 @@ fn run_generate_setup(
             return 1;
         }
     };
-    let metadata = match read_metadata(root) {
-        Ok(metadata) => metadata,
-        Err(error) => return report_metadata_failure(error, stderr),
-    };
-    let inputs = WorkspaceInputs::new(
-        walked.files().to_vec(),
-        walked.manifests().to_vec(),
-        &metadata,
-    )
-    .expect("the filesystem walk cannot produce duplicate logical paths");
-    let workspace = match inputs.check() {
+    let metadata = read_metadata(root);
+    let checked = metadata
+        .as_ref()
+        .ok()
+        .and_then(|metadata| workspace_inputs(&walked, metadata).check().ok());
+    if let Some(workspace) = checked {
+        return run_generate(root, workspace, package, stdout, stderr);
+    }
+
+    let bootstrap = match workspace_inputs(&walked, "").check_for_generation() {
         Ok(workspace) => workspace,
         Err(findings) => {
             let _ = writeln!(stderr, "{findings}");
             return 1;
         }
     };
-    run_generate(root, workspace, package, stdout, stderr)
+    let plans = match plan(&bootstrap, package.as_ref()) {
+        Ok(plans) => plans,
+        Err(error) => return report_plan_failure(error, CheckFormat::Human, stderr),
+    };
+    if !plans.iter().any(|plan| {
+        let package_root = plan
+            .package_root()
+            .map_or_else(|| root.to_owned(), |path| root.join(path.as_str()));
+        !package_root.join("generated/contract/Cargo.toml").is_file()
+    }) {
+        return match metadata {
+            Ok(metadata) => report_workspace_failure(workspace_inputs(&walked, &metadata), stderr),
+            Err(error) => report_metadata_failure(error, stderr),
+        };
+    }
+
+    let code = run_generate(root, bootstrap, package, stdout, stderr);
+    if code != 0 {
+        return code;
+    }
+    validate_generated_workspace(root, stderr)
+}
+
+fn workspace_inputs(walked: &boxology_cli::WalkedWorkspace, metadata: &str) -> WorkspaceInputs {
+    WorkspaceInputs::new(
+        walked.files().to_vec(),
+        walked.manifests().to_vec(),
+        metadata,
+    )
+    .expect("the filesystem walk cannot produce duplicate logical paths")
+}
+
+fn report_workspace_failure(inputs: WorkspaceInputs, stderr: &mut dyn Write) -> u8 {
+    match inputs.check() {
+        Ok(_) => 0,
+        Err(findings) => {
+            let _ = writeln!(stderr, "{findings}");
+            1
+        }
+    }
+}
+
+fn validate_generated_workspace(root: &Path, stderr: &mut dyn Write) -> u8 {
+    let walked = match walk(root) {
+        Ok(walked) => walked,
+        Err(error) => {
+            let _ = writeln!(stderr, "{error}");
+            return 1;
+        }
+    };
+    let metadata = match read_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) => return report_metadata_failure(error, stderr),
+    };
+    report_workspace_failure(workspace_inputs(&walked, &metadata), stderr)
 }
 
 fn run_generate(

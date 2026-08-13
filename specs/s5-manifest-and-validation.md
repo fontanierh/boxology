@@ -65,6 +65,10 @@ handle assembled by the CLI composition; generation and publication remain ordin
 `--package` selects one package; a byte-identical run writes nothing.
 For a `box-implementation` crate, path `.` projects to package-root `src/lib.rs`; a nested crate path
 projects to `<path>/src/lib.rs`.
+When a selected generated contract crate does not exist yet, `generate` plans from the otherwise
+validated manifest-owned source model, writes the derived tree, and then requires the ordinary
+Cargo-backed workspace validation to pass. This bootstrap exception does not apply to `check` or
+to a generation run whose generated contract manifest already exists.
 
 V0 assumes the source-tree generator is one byte-stable version. A published generator that
 changes representation for unchanged source must add the provenance-compatible historical skip
