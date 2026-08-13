@@ -41,14 +41,14 @@ const SOURCES: &[(&str, &str)] = &[
 ];
 const GOLDEN: &str = include_str!("../../boxology-cli-core/tests/bxw.golden");
 const CODES: &str = "BXW0061 BXW0062 BXW0063 BXW0064 BXW0065 BXW0066 BXW0067 BXW0069 BXW0070 BXW0071 BXW0072 BXW0073 BXW0075 BXW0076 BXW0077 BXW0078 BXW0079 BXW0080 BXW0081 BXW0082 BXW0083 BXW0084 BXW0085 BXW0086 BXW0091 BXW0092 BXW0093 BXW0094 BXW0095 BXW0096 BXW0097 BXW0103 BXW0104 BXW0105 BXW0106 BXW0107";
-const LIB_HASH: u64 = 10_011_101_472_945_035_346;
+const LIB_HASH: u64 = 11_652_192_000_931_803_304;
 const WALK_HASH: u64 = 12_408_747_065_446_683_334;
 const GENERATE_HASH: u64 = 5_898_066_629_614_279_057;
 const EXECUTE_HASH: u64 = 15_138_597_921_723_061_807;
 const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 16_295_088_236_220_879_986;
-const BASE_HASH: u64 = 4_705_798_899_895_614_300;
+const BASE_HASH: u64 = 7_079_987_618_006_371_728;
 const RUNNER_HASH: u64 = 14_976_080_536_641_793_496;
 const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\nargs == [\"--help\"]\nwriteln!(stdout, \"{USAGE}\")\nSelection::Generate(package) => run_generate_setup(root, &package, stdout, stderr)\nSelection::Check { base, format } => run_check(base, format, stdout, stderr)\nfn run_generate_setup(\nfn validate_generated_workspace(\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ncheck_for_generation()\nvalidate_generated_workspace(root, stderr)\nplan(&workspace, package.as_ref())\nexecute_plans(root, &plans)\nClassifierComposition::start()\n.classify(outcome.base_schema(), outcome.submitted_schema())\nreport.rendered_text\nCheckComposition::start()\nCheckFormat::Human => false\nCheckFormat::Json => true\nproject_check(check.check(base), json)\nstdout.write_all(&projected.stdout)\nstderr.write_all(&projected.stderr)\nprojected.code\nerror.render_json()\ndiagnostics.render_json()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
@@ -75,8 +75,8 @@ const CLASSIFY_ANCHORS: &str = "map_err(ClassifyError::base)\nmap_err(ClassifyEr
 const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify";
 const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED,\n            \"submitted\",\nCHECK_PAIRING,\n                \"pairing\",\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
 const CHECK_PUBLIC: &str = "DuplicatePackages PackageSchemas new package base submitted CheckClassificationError package code side detail diagnostics ClassifyStepError classify_step";
-const BASE_PUBLIC: &str = "GitToolError BaseError code location detail BaseSchemasError BaseInputsError DefaultBase ResolvedBase as_str from_oid resolve_default_base resolve_base base_package_schemas BaseDiffInputs packages changed manifest_changes base_diff_inputs";
-const BASE_ANCHORS: &str = "[\"rev-parse\", \"--git-dir\"]\n[\"merge-base\", \"HEAD\", \"main\"]\n[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n[\"ls-tree\", \"-r\", \"-z\", base.as_str(), \"--\", \".\"]\nformat!(\"{oid}:./{}\", plan.schema_path().as_str())\n\"--relative\",\n\"--no-ext-diff\",\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\n[\"cat-file\", \"blob\", oid]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(\nWorkspaceInputs::new(files, manifests, \"\")\ninputs.discover()";
+const BASE_PUBLIC: &str = "GitToolError BaseError code location detail BaseSchemasError BaseInputsError DefaultBase ResolvedBase as_str from_oid resolve_default_base resolve_base base_package_schemas BaseDiffInputs packages changed is_bootstrapping manifest_changes base_diff_inputs base_diff_inputs_with_candidate";
+const BASE_ANCHORS: &str = "[\"rev-parse\", \"--git-dir\"]\n[\"merge-base\", \"HEAD\", \"main\"]\n[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n[\"ls-tree\", \"-r\", \"-z\", base.as_str(), \"--\", \".\"]\nformat!(\"{oid}:./{}\", plan.schema_path().as_str())\n\"--relative\",\n\"--no-ext-diff\",\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\n[\"cat-file\", \"blob\", oid]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(\nbase_diff_inputs_inner(root, base, None)\nSome(CandidateDeclarations {\ncandidate.is_some() && objects.is_empty()\nWorkspaceInputs::new(files, manifests, \"\")\ninputs.discover()";
 const RUNNER_PUBLIC: &str = "CommandSpec new args render CapturedOutput new success combined SpawnError ToolStep into_parts run_command CommandRunner fmt_packages fmt_spec clippy_spec test_spec lock_spec run_fmt_step run_clippy_step run_test_step run_lock_step QualityCommand package manifest_path spec quality_specs run_quality_step";
 const RUNNER_ANCHORS: &str = "classified.derived_output().is_none()\n\"fmt\".to_owned()\n\"-D\"\nBXW0093\nBXW0095\nBXW0096\nBXW0097\nBXW0107\n[\"metadata\", \"--format-version\", \"1\", \"--locked\"]\nformat!(\"command=\\\"{}\\\"\", spec.render())\nsplit_ascii_whitespace()\nquality_specs(workspace)\nCommand::new(&spec.program)";
 static NEXT: AtomicU64 = AtomicU64::new(0);

@@ -846,6 +846,41 @@ pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwn
         findings: Findings::new(findings),
     }
 }
+
+/// Classifies a wholly introduced managed root under its submitted package declarations.
+///
+/// Bootstrap changes may introduce several non-derived package owners at once, so this mode
+/// requires exact path attribution but deliberately omits the ordinary sole-accountable-package
+/// and foreign-derived checks. It is valid only when the caller has proven that the base contains
+/// no Git object below the managed root.
+pub fn bootstrap_diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwnership {
+    let mut changed = changed.to_vec();
+    changed.sort();
+    changed.dedup();
+    let mut classifications = Vec::new();
+    let mut findings = Vec::new();
+    for path in changed {
+        match attribute_path(packages, &path) {
+            Attribution::Owned(package, output) => {
+                classifications.push(FileClassification::new(&path, package, output));
+            }
+            Attribution::Defect(rule, named) => {
+                let code = if rule == UNOWNED {
+                    DIFF_UNOWNED
+                } else {
+                    DIFF_AMBIGUOUS
+                };
+                findings.push(Entry::Workspace(ownership_finding(code, path, None, named)));
+            }
+        }
+    }
+    classifications.sort_by(|left, right| left.key().cmp(&right.key()));
+    DiffOwnership {
+        classifications,
+        accountable: None,
+        findings: Findings::new(findings),
+    }
+}
 fn ownership_finding(
     rule: Rule,
     path: RelativePath,
@@ -2092,7 +2127,10 @@ impl fmt::Display for ClassificationFindings {
 pub enum ContractClassificationCompletion {
     /// The base-relative classification found no contract changes.
     Passed,
-    /// The classification report contains structured findings for the harness to interpret.
+    /// Classification succeeded and contains structured findings for the harness to interpret.
+    ///
+    /// The variant name is retained for API compatibility; findings are report-only and render
+    /// with a passed step status.
     Failed(ClassificationFindings),
     /// The base-relative classification could not run for the named deterministic reason.
     Skipped(SkipReason),
@@ -2344,7 +2382,7 @@ impl CheckReport {
     fn render_json_contract(&self, out: &mut String) {
         let (status, reason, findings) = match &self.contract_classification {
             ContractClassificationCompletion::Passed => ("passed", None, None),
-            ContractClassificationCompletion::Failed(findings) => ("failed", None, Some(findings)),
+            ContractClassificationCompletion::Failed(findings) => ("passed", None, Some(findings)),
             ContractClassificationCompletion::Skipped(reason) => {
                 ("skipped", Some(reason.sentence()), None)
             }
@@ -2448,7 +2486,7 @@ impl CheckReport {
     fn contract_status(&self) -> &'static str {
         match &self.contract_classification {
             ContractClassificationCompletion::Passed => "passed",
-            ContractClassificationCompletion::Failed(_) => "failed",
+            ContractClassificationCompletion::Failed(_) => "passed",
             ContractClassificationCompletion::Skipped(_) => "skipped",
         }
     }
@@ -3112,15 +3150,15 @@ jobs:
         assert_eq!(report.status(), CheckStatus::Passed);
         assert_eq!(report.exit_code(), 0);
         let rendered = report.render_human();
-        assert!(rendered.contains("check contract-classification failed"));
+        assert!(rendered.contains("check contract-classification passed"));
         assert!(rendered.contains(
             "  FIND001 alpha alpha/type/T/variant/Other compatible_with_conditions condition=\"unknown-variant tolerance\""
         ));
         assert!(rendered.ends_with("check result passed"));
-        // Failed branch, fixed field order, non-null condition; report-only => result passed.
+        // Finding branch, fixed field order, non-null condition; report-only => result passed.
         assert_eq!(
             report.render_json(),
-            "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"failed\",\n      \"findings\": [\n        {\n          \"code\": \"FIND001\",\n          \"package\": \"alpha\",\n          \"path\": \"alpha/type/T/variant/Other\",\n          \"class\": \"compatible_with_conditions\",\n          \"condition\": \"unknown-variant tolerance\"\n        }\n      ]\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"passed\"\n}\n"
+            "{\n  \"schema\": \"boxology.check-report@1\",\n  \"steps\": [\n    {\n      \"id\": \"discovery\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"regeneration\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"contract-classification\",\n      \"status\": \"passed\",\n      \"findings\": [\n        {\n          \"code\": \"FIND001\",\n          \"package\": \"alpha\",\n          \"path\": \"alpha/type/T/variant/Other\",\n          \"class\": \"compatible_with_conditions\",\n          \"condition\": \"unknown-variant tolerance\"\n        }\n      ]\n    },\n    {\n      \"id\": \"diff-ownership\",\n      \"status\": \"passed\",\n      \"findings\": []\n    },\n    {\n      \"id\": \"cargo-graph\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"fmt\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"clippy\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"tests\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    },\n    {\n      \"id\": \"quality\",\n      \"status\": \"passed\",\n      \"findings\": [],\n      \"output\": null\n    }\n  ],\n  \"result\": \"passed\"\n}\n"
         );
     }
     #[test]
@@ -3841,6 +3879,31 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             "corpus/sample.rs"
         );
         assert_eq!(fixture.classifications()[0].derived_output(), None);
+    }
+    #[test]
+    fn bootstrap_ownership_accepts_multiple_exact_owners_but_not_an_unowned_path() {
+        let packages = ownership_packages();
+        let valid = bootstrap_diff_ownership(
+            &packages,
+            &changed(&["src/a.rs", "gen.rs", "ping/src/b.rs", "ping/generated.rs"]),
+        );
+        assert!(valid.findings().is_none());
+        assert_eq!(valid.accountable(), None);
+        assert_eq!(valid.classifications().len(), 4);
+        assert_eq!(
+            valid
+                .classifications()
+                .iter()
+                .map(|held| held.package().as_str())
+                .collect::<Vec<_>>(),
+            ["ping", "ping", "root", "root"]
+        );
+
+        let mutated = bootstrap_diff_ownership(&packages, &changed(&["src/a.rs", "orphan.rs"]));
+        assert_eq!(
+            finding_lines(mutated.findings()),
+            ["BXW0098 orphan.rs package= candidates=[]".to_owned()]
+        );
     }
     #[test]
     fn diff_ownership_reports_unowned_ambiguous_accountable_and_foreign_codes() {

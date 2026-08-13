@@ -4,10 +4,10 @@
 
 use boxology_cli_core::{
     BaseInputsError, BaseSchemasError, CompareDifference, CompareStepError, DefaultBase,
-    ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError, base_diff_inputs,
-    base_package_schemas, cargo_metadata_command, compare_plans, composition_step, plan,
-    resolve_base, resolve_default_base, run_clippy_step, run_command, run_fmt_step, run_lock_step,
-    run_quality_step, run_test_step, walk,
+    ExecuteError, GenerationPlan, PlanError, ResolvedBase, SpawnError,
+    base_diff_inputs_with_candidate, base_package_schemas, cargo_metadata_command, compare_plans,
+    composition_step, plan, resolve_base, resolve_default_base, run_clippy_step, run_command,
+    run_fmt_step, run_lock_step, run_quality_step, run_test_step, walk,
 };
 use boxology_contract::BoxId;
 use boxology_import_classifier::{
@@ -18,7 +18,7 @@ use boxology_workspace::{
     CheckReport as WorkspaceReport, CheckStatus as WorkspaceStatus, ClassificationFinding,
     ClassificationFindings, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
     DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, Workspace,
-    WorkspaceInputs, diff_ownership,
+    WorkspaceInputs, bootstrap_diff_ownership, diff_ownership,
 };
 use serde_json::Value;
 use std::{path::Path, process::Output};
@@ -133,7 +133,7 @@ impl CheckService {
                     Ok(value) => value,
                     Err(outcome) => return Ok(outcome),
                 };
-                let ownership = match diff_ownership_step(root, &base) {
+                let ownership = match diff_ownership_step(root, &base, &walked) {
                     Ok(value) => value,
                     Err(outcome) => return Ok(*outcome),
                 };
@@ -258,9 +258,11 @@ fn resolve_requested_base(root: &Path, base: Option<&str>) -> Result<Result<Reso
 fn diff_ownership_step(
     root: &Path,
     base: &ResolvedBase,
+    candidate: &boxology_cli_core::WalkedWorkspace,
 ) -> Result<DiffOwnershipCompletion, Box<CheckOutcome>> {
     let inputs =
-        base_diff_inputs(root, base).map_err(|error| Box::new(base_inputs_failure(error)))?;
+        base_diff_inputs_with_candidate(root, base, candidate.files(), candidate.manifests())
+            .map_err(|error| Box::new(base_inputs_failure(error)))?;
     // Release transactions intentionally span the exact closure guarded by `xtask release`.
     if inputs
         .changed()
@@ -269,7 +271,11 @@ fn diff_ownership_step(
     {
         return Ok(DiffOwnershipCompletion::Passed);
     }
-    let ownership = diff_ownership(inputs.packages(), inputs.changed());
+    let ownership = if inputs.is_bootstrapping() {
+        bootstrap_diff_ownership(inputs.packages(), inputs.changed())
+    } else {
+        diff_ownership(inputs.packages(), inputs.changed())
+    };
     let pairs = inputs
         .manifest_changes(root, &ownership)
         .map_err(|error| Box::new(base_inputs_failure(error)))?;
