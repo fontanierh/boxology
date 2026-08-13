@@ -698,7 +698,7 @@ impl ::boxology_contract::ContractType for CheckRequest {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckStatus {
     #[default]
     Passed,
@@ -802,7 +802,7 @@ impl ::boxology_contract::ContractType for CheckStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckStepStatus {
     #[default]
     Passed,
@@ -919,7 +919,7 @@ impl ::boxology_contract::ContractType for CheckStepStatus {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckFailureKind {
     #[default]
     Validation,
@@ -1348,7 +1348,7 @@ impl ::boxology_contract::ContractType for CheckFinding {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckStepReport {
     pub id: ::std::string::String,
     pub status: CheckStepStatus,
@@ -1474,7 +1474,7 @@ impl ::boxology_contract::ContractType for CheckStepReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckReport {
     pub steps: ::std::vec::Vec<CheckStepReport>,
     pub status: CheckStatus,
@@ -1577,7 +1577,7 @@ impl ::boxology_contract::ContractType for CheckReport {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckFailure {
     pub kind: CheckFailureKind,
     pub human: ::std::vec::Vec<u8>,
@@ -1664,7 +1664,7 @@ impl ::boxology_contract::ContractType for CheckFailure {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CheckOutcome {
     pub report: ::core::option::Option<CheckReport>,
     pub failure: ::core::option::Option<CheckFailure>,
@@ -1742,7 +1742,7 @@ impl ::boxology_contract::ContractType for CheckOutcome {
     }
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CheckError {
     #[default]
     Internal,

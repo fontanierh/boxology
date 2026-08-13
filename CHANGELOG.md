@@ -36,7 +36,9 @@ This file records notable user-facing changes to Boxology.
   are repeated on `#[boxology::implementation(contract_crate = <crate_name>)]` so implementation
   checking remains independent of source-module layout.
 - Generated `Default` for every boundary model and domain error, plus `Eq`, `Hash`, and ordering
-  whenever the complete shape supports them (floating-point leaves remain intentionally partial).
+  whenever the complete generated shape supports them. Tolerant enums and errors remain
+  `PartialEq` because their always-present opaque `Unknown` payload is part of that shape;
+  floating-point leaves likewise remain intentionally partial.
 
 ### Distribution
 
