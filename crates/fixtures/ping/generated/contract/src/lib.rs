@@ -125,17 +125,11 @@ fn conversion_detail(code: &'static str, error: impl std::fmt::Display) -> Detai
     Detail::new(code).with_message(error.to_string())
 }
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum HelloError {
+    #[default]
     EmptyName,
     Unknown { tag: ::std::string::String, payload: ::boxology_contract::OpaquePayload },
-}
-#[rustfmt::skip]
-#[allow(deprecated)]
-impl ::core::default::Default for HelloError {
-    fn default() -> Self {
-        Self::EmptyName
-    }
 }
 #[rustfmt::skip]
 impl ::boxology_contract::ContractType for HelloError {
