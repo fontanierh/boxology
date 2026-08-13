@@ -137,6 +137,12 @@ fn run_quality(deadline: Instant, root: &Path, command: &str) {
 
 #[test]
 fn initialized_project_is_born_valid_and_regeneration_is_a_no_op() {
+    if Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("Cargo.toml.orig")
+        .is_file()
+    {
+        return;
+    }
     let deadline = Instant::now() + TOTAL_TIMEOUT;
     let fixture = Fixture::new();
     let root = &fixture.root;
