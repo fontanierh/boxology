@@ -167,7 +167,7 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("117cee804bba1e3cef49fef5ed099668b64b23f7c5cc39becd8be760985a8ea5"),
-    source_digest: "c6540037eb19fdddda9166bdbf89fdc1ab0f27a205fcc4c1922e05b4d56a21de",
+    source_digest: "3b65a7c10ebb2975396997bf1153daa49d9e4e8b948c6f06246be8baa9384b53",
     body_digest: "979ea985ef66fecd65d110d6f0f3084ba0ae102ad943449fc8bc16ad9e489525",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
