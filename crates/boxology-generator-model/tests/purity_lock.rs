@@ -1222,8 +1222,8 @@ fn production_sources_pass_effect_scan() {
     for rel in SOURCES {
         let src = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
         let src = src
-            .replace("include_bytes!(\"../../../LICENSE-APACHE\")", "b\"\"")
-            .replace("include_bytes!(\"../../../LICENSE-MIT\")", "b\"\"");
+            .replace("include_bytes!(\"../LICENSE-APACHE\")", "b\"\"")
+            .replace("include_bytes!(\"../LICENSE-MIT\")", "b\"\"");
         scan_source(&src).unwrap_or_else(|e| panic!("{rel}: {e}"));
     }
 }

@@ -81,8 +81,8 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         default_source: "tests/purity_lock.rs",
         tests: GENERATOR_SOURCE_INVENTORY_TESTS,
         manifest_digest: None,
-        source_digest: "1047e47d977782a8b508b6527c8a0eeb7d3613011d4acd700306d427b563b700",
-        body_digest: "8f12373a036cb57e62d569d782db99c5ab6cbee26716024bc75b028fa1fae577",
+        source_digest: "6542def0404c06bea0678f8c1abfc14e5cb7b091c242007717d1017279c0b571",
+        body_digest: "66f13d5e70cbbb70ffaa007668e3739e6eaec9db82f4ef7f96c756e1484d81d9",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",

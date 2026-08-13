@@ -251,11 +251,11 @@ pub fn generate(request: GenerationRequest) -> Result<GeneratedTree, Diagnostics
         files.extend([
             GeneratedFile {
                 path: "generated/contract/LICENSE-APACHE".into(),
-                bytes: include_bytes!("../../../LICENSE-APACHE").to_vec(),
+                bytes: include_bytes!("../LICENSE-APACHE").to_vec(),
             },
             GeneratedFile {
                 path: "generated/contract/LICENSE-MIT".into(),
-                bytes: include_bytes!("../../../LICENSE-MIT").to_vec(),
+                bytes: include_bytes!("../LICENSE-MIT").to_vec(),
             },
         ]);
     }
