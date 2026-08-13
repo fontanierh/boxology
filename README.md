@@ -66,7 +66,8 @@ order using `BOXOLOGY_RELEASE_PUBLISH=1 cargo xtask release publish <crate-name>
 recognizes the already-visible prefix, rejects gaps or an out-of-order name, runs a real crates.io
 publish dry-run, and publishes only that crate. Wait for it to become visible before invoking the
 next. After the sequence, prove fresh registry installs with the Quick start commands and smoke-test
-`boxology --help` plus an initialized project. Tests and preflight never publish.
+`boxology --help` plus an initialized project. Tag the proven release commit and create its GitHub
+Release only after that registry smoke test passes. Tests and preflight never publish.
 
 ## Documentation
 
