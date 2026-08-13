@@ -112,5 +112,18 @@ mod tests {
             encode(&opaque, &TypeDescriptor::bool()).unwrap_err().kind(),
             EncodeErrorKind::RepresentationMismatch
         );
+
+        let descriptor =
+            TypeDescriptor::secret(TypeDescriptor::optional(TypeDescriptor::string()).unwrap())
+                .unwrap();
+        let decoded = decode(
+            b"null",
+            &descriptor,
+            DecodeRole::ProviderInput,
+            Limits::new(4, 1),
+        )
+        .unwrap();
+        assert_eq!(decoded, SlotValue::Value(V::sensitive(V::null())));
+        assert_eq!(encode(&decoded, &descriptor).unwrap(), b"null");
     }
 }

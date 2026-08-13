@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
-description = "Core contract values, descriptors, JSON codec, and call types"
+description = "Core identifiers, descriptors, and call types"
 publish = true
 
 [dependencies]

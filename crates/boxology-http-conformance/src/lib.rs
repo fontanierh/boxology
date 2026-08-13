@@ -282,7 +282,7 @@ rt/conformance-must-exercise-surface :: runtime :: Binding conformance tests mus
 "#;
 
 pub const RUNTIME_AUTHORITY_DIGEST: u64 = 0x26c3dfeebfe05084;
-pub const SPEC_AUTHORITY_DIGEST: u64 = 0xf8ed7d447dd7c5f9;
+pub const SPEC_AUTHORITY_DIGEST: u64 = 0xa114a30cdd7b93ba;
 const MAX_ANCHOR_BYTES: usize = 80;
 
 pub fn fnv1a64(bytes: &[u8]) -> u64 {

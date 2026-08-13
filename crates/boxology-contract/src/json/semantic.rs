@@ -77,6 +77,9 @@ pub fn decode_tree(
         (tree @ OpaqueTree::Null, DescriptorRef::Enum(variants)) => {
             SlotValue::Value(decode_enum(tree, variants, role)?)
         }
+        (tree @ OpaqueTree::Null, DescriptorRef::Secret(_)) => {
+            SlotValue::Value(decode_value(tree, descriptor, role)?)
+        }
         (OpaqueTree::Null, _) => SlotValue::Null,
         (tree, _) => SlotValue::Value(decode_value(tree, descriptor, role)?),
     };
@@ -1433,10 +1436,15 @@ mod tests {
     }
 
     #[test]
-    fn nullable_secrets_keep_sensitive_null_in_aggregates_and_enums() {
+    fn nullable_secrets_keep_sensitive_null_at_every_nesting_level() {
         let nullable_secret =
             TypeDescriptor::secret(TypeDescriptor::optional(TypeDescriptor::string()).unwrap())
                 .unwrap();
+        slot_both(
+            OpaqueTree::Null,
+            &nullable_secret,
+            SlotValue::Value(Value::sensitive(Value::null())),
+        );
         let list = TypeDescriptor::list(nullable_secret.clone()).unwrap();
         ok_both(
             OpaqueTree::List(vec![OpaqueTree::Null]),
