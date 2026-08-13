@@ -7,16 +7,16 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use boxology_contract::{
-    BoxId, CallContext, CallError, Caller, CancelToken, CapabilityDescriptor, CapabilityId,
-    CapabilityName, CapabilityShape, ContractDescriptor, ContractError, ContractRevision,
-    ContractType, ContractValue, Deadline, DecodeError, DecodeErrorKind, Detail, EncodeError,
-    ErasedCallError, ErasedCallTarget, ErasedTarget, ExposureLevel, Idempotency,
+    BoxHandle, BoxId, CallContext, CallError, Caller, CancelToken, CapabilityDescriptor,
+    CapabilityId, CapabilityName, CapabilityShape, ContractDescriptor, ContractError,
+    ContractRevision, ContractType, ContractValue, Deadline, DecodeError, DecodeErrorKind, Detail,
+    EncodeError, ErasedCallError, ErasedCallTarget, ErasedTarget, ExposureLevel, Idempotency,
     ImplementationDescriptor, ImportDescriptor, SlotValue, TraceContext, TypeDescriptor,
     VariantDescriptor, VariantPayload,
 };
 #[cfg(feature = "test-support")]
 use boxology_runtime::{AssemblyError, test_support::StubTransport};
-use boxology_runtime::{Composition, CompositionBuilder, ImportHandle, Imports, LocalBinding};
+use boxology_runtime::{Composition, CompositionBuilder, ImportHandle, Imports};
 
 type ErasedFuture<'a> =
     Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>;
@@ -28,6 +28,28 @@ const ORDER: Ordering = Ordering::SeqCst;
 struct FailingDomain;
 
 type TypedResult = Result<f32, CallError<FailingDomain>>;
+
+struct TypedBoxHandle(Arc<dyn ErasedCallTarget>);
+
+impl BoxHandle for TypedBoxHandle {
+    fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {
+        Self(target)
+    }
+}
+
+impl TypedBoxHandle {
+    async fn call(&self, input: f32) -> Result<f32, ErasedCallError> {
+        let output = self
+            .0
+            .call(
+                &capability(),
+                context(None, CancelToken::new()),
+                input.encode().unwrap(),
+            )
+            .await?;
+        Ok(f32::decode(&output).unwrap())
+    }
+}
 
 impl ContractType for FailingDomain {
     fn encode_value(&self) -> Result<ContractValue, EncodeError> {
@@ -379,7 +401,6 @@ fn local_and_stub_paths_reach_the_same_provider_after_start() {
 #[test]
 fn box_like_registration_exposure_and_local_calls_hide_descriptor_plumbing() {
     let state = Arc::new(State::new());
-    let local = Arc::new(LocalBinding::new());
     let mut builder = CompositionBuilder::new();
     let provider = builder.register(implementation("provider", true, false), |_| {
         GeneratedAdapter {
@@ -389,16 +410,10 @@ fn box_like_registration_exposure_and_local_calls_hide_descriptor_plumbing() {
             },
         }
     });
-    builder.expose_all(&provider, local.clone(), ExposureLevel::CodeOnly);
+    let handle: TypedBoxHandle = builder.handle(&provider);
     let _composition = builder.start().unwrap();
 
-    let output = block_on(local.call(
-        &capability(),
-        context(None, CancelToken::new()),
-        41.0_f32.encode().unwrap(),
-    ))
-    .unwrap();
-    assert_eq!(f32::decode(&output).unwrap(), 41.0);
+    assert_eq!(block_on(handle.call(41.0)), Ok(41.0));
     assert_eq!(state.counts(), (1, 1));
 }
 

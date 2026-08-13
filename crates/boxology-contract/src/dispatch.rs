@@ -4,6 +4,7 @@ use std::any::Any;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::{CallContext, CapabilityId, Detail, ErasedCallError, SlotValue};
@@ -31,6 +32,13 @@ pub trait ErasedCallTarget: Send + Sync {
         context: CallContext,
         input: SlotValue,
     ) -> Pin<Box<dyn Future<Output = Result<SlotValue, ErasedCallError>> + Send + 'a>>;
+}
+
+/// Construction hook implemented by every generated typed box handle.
+#[doc(hidden)]
+pub trait BoxHandle: Sized {
+    /// Wraps an activated erased call target.
+    fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self;
 }
 
 /// Invokes erased dispatch without allowing a handler panic to cross the boundary.
