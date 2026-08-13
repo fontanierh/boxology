@@ -392,6 +392,9 @@ fn check(root: &Path) -> Result<(), Vec<String>> {
     match fs::read_to_string(root.join("CHANGELOG.md")) {
         Err(error) => errors.push(format!("read CHANGELOG.md: {error}")),
         Ok(text) if text.contains("## [0.1.0] - 2026-08-13") && text.contains("Published the ordered `0.1.0` crate closure")
+            && text.contains("### Upgrading an existing setup")
+            && text.contains("Consumers do not add all 19 published crates")
+            && text.contains("Do not mechanically replace those\ngenerated entries with crates.io versions")
             && text.contains("separate\n  projects rather than framework components") => {}
         Ok(_) => errors.push("CHANGELOG.md: released framework-only truth is missing".into()),
     }
@@ -443,6 +446,7 @@ mod tests {
             ("LICENSE-MIT", "Henry Fontanier", "H. Fontanier"),
             ("README.md", "crates.io", "registry.invalid"),
             ("CHANGELOG.md", "Published the ordered `0.1.0` crate closure", "Prepared the ordered `0.1.0` crate closure"),
+            ("CHANGELOG.md", "Consumers do not add all 19 published crates", "Consumers add all 19 published crates"),
         ] {
             let fixture = Fixture::new(); fixture.mutate(file, from, to);
             assert_eq!(run(&fixture.0), 1, "mutation survived: {file} {from}");
