@@ -30,9 +30,7 @@ fn hello_greet() -> &'static CapabilityDescriptor {
 
 fn hello_builder(binding: &Arc<HttpServerBinding>) -> CompositionBuilder {
     let mut builder = CompositionBuilder::new();
-    builder.add_box(generated::implementation_descriptor(), |imports| {
-        generated::factory(hello_implementation::HelloService, imports)
-    });
+    generated::register(&mut builder, hello_implementation::HelloService);
     builder.expose(
         BoxId::new("hello").unwrap(),
         hello_greet().id().clone(),

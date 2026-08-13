@@ -20,7 +20,7 @@ use std::{
 const RULE_SOURCE: &str = "specs/s6-installer-and-generated-project.md D1";
 const REQUEST_PATH: &str = "<request>";
 const BOXOLOGY_REPOSITORY: &str = "https://github.com/fontanierh/boxology";
-const BOXOLOGY_REVISION: &str = "6dae382948a0b41b61375163fc906c8002300131";
+const BOXOLOGY_REVISION: &str = "e700b8358e3c5b42677406240fda8c3025d3d04f";
 const TOOLCHAIN: &[u8] = include_bytes!("../../../rust-toolchain.toml");
 const PING_MANIFEST: &[u8] = include_bytes!("../../fixtures/ping/boxology.toml");
 const PING_IMPLEMENTATION_MANIFEST: &[u8] =
@@ -384,6 +384,7 @@ fn cargo_manifest() -> String {
             toml_string(BOXOLOGY_REVISION)
         ));
     }
+    text.push_str("ping-contract = { version = \"=0.0.0\", path = \"ping/generated/contract\" }\n");
     text.push_str(TOKIO_WORKSPACE_DEPENDENCY);
     text
 }
@@ -966,7 +967,11 @@ mod tests {
             b"boxology-version = \"0.0.0\"\ndependency-source = \"https://github.com/fontanierh/boxology\"\n"
         );
         let cargo = std::str::from_utf8(generated(&tree, "Cargo.toml")).unwrap();
-        assert!(!cargo.contains("path ="));
+        assert_eq!(cargo.matches("path =").count(), 1);
+        assert!(cargo.contains(
+            "ping-contract = { version = \"=0.0.0\", path = \"ping/generated/contract\" }"
+        ));
+        assert!(!cargo.contains("/Users/"));
         assert!(!cargo.contains("[patch.crates-io]"));
         assert_eq!(
             cargo.matches(BOXOLOGY_REPOSITORY).count(),

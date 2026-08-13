@@ -582,6 +582,11 @@ impl CheckHandle {
             .map_err(CallError::InvalidResponse)
     }
 }
+impl ::boxology_contract::BoxHandle for CheckHandle {
+    fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {
+        Self::from_erased(target)
+    }
+}
 static CHECK_CHECK: LazyLock<CapabilityId> = LazyLock::new(|| {
     CapabilityId::new(
         BoxId::new("check").expect("generated box identity is valid"),

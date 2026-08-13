@@ -17,6 +17,12 @@ A box is a managed package with one accountable owner. A box owns its implementa
 
 Keep each boundary explicit. Do not reach into another package's implementation or create an undocumented communication path. Human-owned package boundaries and composition decisions are the guardrails that let the lead agent change one box without silently changing its neighbours.
 
+Write compositions through the box-like runtime surface: register each generated implementation,
+connect registered consumer and provider tokens, obtain generated typed handles with
+`CompositionBuilder::handle`, and expose whole registered boxes with `expose_all`. Do not repeat
+box IDs, walk implementation descriptors, or create application-owned erased/local dispatch
+adapters for ordinary in-process calls.
+
 ## Contracts and compatible evolution
 
 The authored controlled contract source is the source of truth for the public surface. Generated output is deterministic and checked in for review, but it is never hand-edited: change the authored source and regenerate it. The generated schema is the compatibility authority.

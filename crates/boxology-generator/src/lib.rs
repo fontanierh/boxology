@@ -891,6 +891,37 @@ fn adapter_source(
     // Purely additive: emitted only when the box has >=1 import, so zero-import boxes stay
     // byte-identical. `factory` and `{prefix}Adapter` are unchanged.
     let typed_imports = typed_imports_source(box_id, imports);
+    let register = if imports.is_empty() {
+        format!(
+            r#"pub fn register<T>(
+            composition: &mut ::boxology_runtime::CompositionBuilder,
+            service: T,
+        ) -> ::boxology_runtime::RegisteredBox
+        where
+            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+        {{
+            composition.register(implementation_descriptor(), move |imports| {{
+                factory(service, imports)
+            }})
+        }}"#,
+        )
+    } else {
+        format!(
+            r#"pub fn register<T, F>(
+            composition: &mut ::boxology_runtime::CompositionBuilder,
+            build: F,
+        ) -> ::boxology_runtime::RegisteredBox
+        where
+            T: ::boxology_generated_contract::{prefix}Dispatch + Send + Sync + 'static,
+            F: FnOnce({prefix}Imports) -> T,
+        {{
+            composition.register(implementation_descriptor(), move |imports| {{
+                let typed = typed_imports(&imports);
+                factory(build(typed), imports)
+            }})
+        }}"#,
+        )
+    };
     format!(
         r#"
         use ::boxology_contract::ContractType;
@@ -923,6 +954,8 @@ fn adapter_source(
                 _imports: imports,
             }}
         }}
+
+        {register}
 
         {typed_imports}
 
@@ -1367,6 +1400,12 @@ fn dispatch_source(box_id: &str, contract: &Contract) -> String {
             }}
 
 {handle_methods}        }}
+
+        impl ::boxology_contract::BoxHandle for {prefix}Handle {{
+            fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {{
+                Self::from_erased(target)
+            }}
+        }}
 
 {capability_statics}
         static {error_static}: LazyLock<TypeDescriptor> = LazyLock::new(|| {{
@@ -2186,6 +2225,7 @@ macro_rules! __boxology_check_implementation {
         let model = contract.model();
         let dispatch = dispatch_source("store", model);
         syn::parse_file(&dispatch).expect("multi-capability dispatch source must parse");
+        assert!(dispatch.contains("impl ::boxology_contract::BoxHandle for StoreHandle"));
         let get_trait = dispatch.find("fn get").expect("trait names get");
         let put_trait = dispatch.find("fn put").expect("trait names put");
         assert!(get_trait < put_trait, "trait methods out of source order");
@@ -2297,6 +2337,8 @@ macro_rules! __boxology_check_implementation {
             "boxology::contract! { #[error] pub enum GreetError { EmptyName } #[capability(exposure=external)] pub async fn greet(count:u32)->Result<bool,GreetError>; }",
         );
         let adapter = adapter_source("hello", contract.model(), &[]);
+        assert!(adapter.contains("pub fn register<T>"));
+        assert!(adapter.contains("composition.register(implementation_descriptor()"));
         assert!(adapter.contains("::boxology_contract::TypeDescriptor::u32()"));
         assert!(adapter.contains("u32::decode(&input)"));
         assert!(!adapter.contains("::std::string::String::decode"));
@@ -2406,6 +2448,9 @@ macro_rules! __boxology_check_implementation {
         assert!(adapter.contains("pub hello: HelloImport"));
         assert!(adapter.contains("pub world: WorldImport"));
         assert!(adapter.contains("pub fn typed_imports("));
+        assert!(adapter.contains("pub fn register<T, F>"));
+        assert!(adapter.contains("F: FnOnce(GreeterImports) -> T"));
+        assert!(adapter.contains("factory(build(typed), imports)"));
 
         // Capability order within a wrapper: greet before count (schema order).
         let greet = adapter.find("pub async fn greet(").unwrap();

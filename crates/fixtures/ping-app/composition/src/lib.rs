@@ -6,73 +6,68 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use boxology_contract::{BoxId, ExposureLevel};
+use boxology_contract::ExposureLevel;
 use boxology_http::{HttpServerBinding, HttpServerConfig};
 use boxology_runtime::{AssemblyErrors, Composition, CompositionBuilder};
 use ping_implementation::{PingService, generated};
 
+/// A running `ping` composition with its ordinary typed box handle.
+pub struct PingApp {
+    composition: Composition,
+    address: SocketAddr,
+    ping: ping_contract::PingHandle,
+}
+
+impl PingApp {
+    /// Returns the generated handle for the composed `ping` box.
+    pub fn ping(&self) -> &ping_contract::PingHandle {
+        &self.ping
+    }
+
+    /// Returns the bound HTTP address.
+    pub fn http_address(&self) -> SocketAddr {
+        self.address
+    }
+
+    /// Gracefully shuts down the composition.
+    pub async fn shutdown(
+        self,
+        timeout: std::time::Duration,
+    ) -> Result<(), boxology_contract::ErasedCallError> {
+        self.composition.shutdown(timeout).await
+    }
+}
+
 /// Starts the live `ping-app` composition.
-///
-/// The returned stub allocation is the assembled in-process binding. Keeping it alongside the
-/// composition lets fixture tests dispatch through the same generated adapter that the HTTP
-/// listener uses.
-pub fn start() -> Result<
-    (
-        Composition,
-        SocketAddr,
-        Arc<boxology_runtime::test_support::StubTransport>,
-    ),
-    AssemblyErrors,
-> {
-    let descriptor = generated::implementation_descriptor();
-    let capabilities = descriptor
-        .contract()
-        .capabilities()
-        .iter()
-        .map(|capability| capability.id().clone())
-        .collect::<Vec<_>>();
-    let in_process = Arc::new(boxology_runtime::test_support::StubTransport::new());
+pub fn start() -> Result<PingApp, AssemblyErrors> {
     let http = Arc::new(HttpServerBinding::new(HttpServerConfig::new(
         "127.0.0.1:0".parse().expect("loopback address is valid"),
     )));
 
     let mut builder = CompositionBuilder::new();
-    builder.add_box(descriptor, |imports| {
-        generated::factory(PingService, imports)
-    });
-    let box_id = BoxId::new("ping").expect("fixture box id is valid");
-    for capability in capabilities {
-        builder.expose(
-            box_id.clone(),
-            capability.clone(),
-            in_process.clone(),
-            ExposureLevel::CodeOnly,
-        );
-        builder.expose(
-            box_id.clone(),
-            capability,
-            http.clone(),
-            ExposureLevel::External,
-        );
-    }
+    let ping_box = generated::register(&mut builder, PingService);
+    let ping = builder.handle::<ping_contract::PingHandle>(&ping_box);
+    builder.expose_all(&ping_box, http.clone(), ExposureLevel::External);
 
     let composition = builder.start()?;
     let address = http.local_addr().expect("HTTP binding bound during start");
-    Ok((composition, address, in_process))
+    Ok(PingApp {
+        composition,
+        address,
+        ping,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use boxology_contract::{
-        CallContext, Caller, CancelToken, ContractType, ErasedCallError, TraceContext,
-    };
+    use boxology_contract::{CallContext, Caller, CancelToken, TraceContext};
     use boxology_manifest::{CrateRole, Exposure, Kind, Manifest, RelativePath, Transport};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    use super::{generated, start};
+    use super::start;
 
     const MANIFEST: &str = include_str!("../../boxology.toml");
 
@@ -138,50 +133,20 @@ mod tests {
 
     #[tokio::test]
     async fn assembled_ping_answers_in_process_and_over_real_http() {
-        let (composition, address, in_process) = start().expect("ping composition starts");
-        let runtime = in_process.runtime().expect("in-process binding is live");
-        assert_eq!(
-            runtime
-                .exposures()
-                .iter()
-                .map(|exposure| exposure.descriptor().id().to_string())
-                .collect::<Vec<_>>(),
-            generated::implementation_descriptor()
-                .contract()
-                .capabilities()
-                .iter()
-                .map(|capability| capability.id().to_string())
-                .collect::<Vec<_>>()
-        );
-        let exposure = runtime
-            .exposures()
-            .iter()
-            .find(|exposure| exposure.descriptor().id().name().as_str() == "ping")
-            .expect("ping is exposed in-process");
-
-        let first = exposure
-            .dispatch(context(), 17_u64.encode().expect("u64 encodes"))
+        let app = start().expect("ping composition starts");
+        let address = app.http_address();
+        let first = app
+            .ping()
+            .ping(context(), 17)
             .await
             .expect("first in-process call succeeds");
-        let second = exposure
-            .dispatch(context(), 9_001_u64.encode().expect("u64 encodes"))
+        let second = app
+            .ping()
+            .ping(context(), 9_001)
             .await
             .expect("second in-process call succeeds");
-        let first = u64::decode(&first).expect("first in-process response decodes");
-        let second = u64::decode(&second).expect("second in-process response decodes");
         assert_ne!(first, second);
         assert_eq!((first, second), (17, 9_001));
-
-        let malformed = exposure
-            .dispatch(
-                context(),
-                "not-a-u64".to_owned().encode().expect("string encodes"),
-            )
-            .await;
-        let Err(ErasedCallError::ContractViolation(detail)) = malformed else {
-            panic!("malformed non-u64 input was accepted")
-        };
-        assert_eq!(detail.code(), "input_decode");
 
         for nonce in [31_u64, 7_777_u64] {
             let request = format!("\"{nonce}\"");
@@ -198,25 +163,7 @@ mod tests {
             br#"{"error":{"kind":"call","code":"invalid_request","message":"invalid request"}}"#,
         );
 
-        let greet = runtime
-            .exposures()
-            .iter()
-            .find(|exposure| exposure.descriptor().id().name().as_str() == "greet");
         if std::env::var_os("BOXOLOGY_REQUIRE_GREET").is_some() {
-            assert!(greet.is_some(), "evolved greet is exposed in-process");
-        }
-        if let Some(greet) = greet {
-            let greeting = greet
-                .dispatch(
-                    context(),
-                    "Ada".to_owned().encode().expect("string encodes"),
-                )
-                .await
-                .expect("greet in-process call succeeds");
-            assert_eq!(
-                String::decode(&greeting).expect("greet in-process response decodes"),
-                "Hello, Ada!"
-            );
             let response = post(address, "greet", br#""Grace""#).await;
             assert_canonical_response(
                 &response,
@@ -225,8 +172,7 @@ mod tests {
             );
         }
 
-        composition
-            .shutdown(Duration::from_secs(1))
+        app.shutdown(Duration::from_secs(1))
             .await
             .expect("composition shutdown succeeds");
         assert!(TcpStream::connect(address).await.is_err());

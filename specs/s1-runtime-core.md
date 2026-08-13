@@ -84,13 +84,19 @@ pub trait ErasedTarget: Send + Sync {
 
 Resolving the injection and lifecycle gaps:
 
-```text
-CompositionBuilder
-  .add_box(ImplementationDescriptor, factory)      // factory: FnOnce(Imports) -> Receiver-adapter
-  .resolve_import(consumer_box, import_slot, ImportTarget)
-  .expose(provider_box, capability, transport_binding, exposure_level)
-  .start() -> Result<Composition, AssemblyErrors>  // consumes builder; THE validation boundary
+```rust
+let provider = app.register(implementation_descriptor(), factory);
+let consumer = app.register(consumer_descriptor(), consumer_factory);
+app.connect(&consumer, &provider);
+let handle: ProviderHandle = app.handle(&provider);
+app.expose_all(&provider, http, ExposureLevel::External);
+let running = app.start()?; // consumes the builder; THE validation boundary
 ```
+
+Normal composition code uses registered box tokens and generated typed handles. The lower-level
+`add_box`, `resolve_import`, and per-capability `expose` operations remain available for framework
+and unusual topology work, but applications do not repeat box IDs, enumerate descriptor
+capabilities, or author erased in-process dispatch adapters.
 
 - **Import injection:** typed import handles are composition-bound lazy references (internally `Arc<OnceLock<…>>`) sealed at `start()`. The builder constructs each box's generated `Imports` bundle immediately and passes it to that box's generated factory, which returns the receiver adapter — so construction order is independent of import topology and approved live-invocation cycles remain constructible. Invoking a handle before `start()` completes returns `Unavailable`.
 - **`start()` is authoritative and fallible.** It consumes the builder, runs all validation (missing/duplicate import resolution, unknown capability, exposure over maximum, transport conformance), then drives transport lifecycle: each `TransportBinding` gets `prepare(descriptors) -> Result`, then `start(TransportRuntime) -> Result<TransportHandle>` where `TransportRuntime` supplies the **composition-owned task tracker** and the transport's config (defaults such as request deadline and size limits live in the transport's config object, held by the composition). Any prepare/bind/start failure fails `start()` with a structured error; a separately inspectable `validate()` report exists but cannot authorize traffic.

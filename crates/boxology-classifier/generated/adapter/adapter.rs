@@ -26,6 +26,19 @@ where
         _imports: imports,
     }
 }
+pub fn register<T>(
+    composition: &mut ::boxology_runtime::CompositionBuilder,
+    service: T,
+) -> ::boxology_runtime::RegisteredBox
+where
+    T: ::boxology_generated_contract::ClassifierDispatch + Send + Sync + 'static,
+{
+    composition
+        .register(
+            implementation_descriptor(),
+            move |imports| { factory(service, imports) },
+        )
+}
 impl<T> ::boxology_contract::ErasedTarget for ClassifierAdapter<T>
 where
     T: ::boxology_generated_contract::ClassifierDispatch + Send + Sync + 'static,

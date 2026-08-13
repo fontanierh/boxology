@@ -87,6 +87,11 @@ impl HelloHandle {
             .map_err(CallError::InvalidResponse)
     }
 }
+impl ::boxology_contract::BoxHandle for HelloHandle {
+    fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {
+        Self::from_erased(target)
+    }
+}
 static HELLO_GREET: LazyLock<CapabilityId> = LazyLock::new(|| {
     CapabilityId::new(
         BoxId::new("hello").expect("generated box identity is valid"),

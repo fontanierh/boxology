@@ -349,6 +349,7 @@ dependencies = [
  "boxology-http",
  "boxology-manifest",
  "boxology-runtime",
+ "ping-contract",
  "ping-implementation",
  "tokio",
 ]

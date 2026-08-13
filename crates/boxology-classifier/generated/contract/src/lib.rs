@@ -460,6 +460,11 @@ impl ClassifierHandle {
             .map_err(CallError::InvalidResponse)
     }
 }
+impl ::boxology_contract::BoxHandle for ClassifierHandle {
+    fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {
+        Self::from_erased(target)
+    }
+}
 static CLASSIFIER_CLASSIFY: LazyLock<CapabilityId> = LazyLock::new(|| {
     CapabilityId::new(
         BoxId::new("classifier").expect("generated box identity is valid"),

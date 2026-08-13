@@ -87,6 +87,11 @@ impl PingHandle {
             .map_err(CallError::InvalidResponse)
     }
 }
+impl ::boxology_contract::BoxHandle for PingHandle {
+    fn from_erased(target: Arc<dyn ErasedCallTarget>) -> Self {
+        Self::from_erased(target)
+    }
+}
 static PING_PING: LazyLock<CapabilityId> = LazyLock::new(|| {
     CapabilityId::new(
         BoxId::new("ping").expect("generated box identity is valid"),
