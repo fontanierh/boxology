@@ -857,6 +857,12 @@ fn generated_contract_survives_workspace_fmt_and_check_byte_for_byte() {
     let unprotected = String::from_utf8(before.clone())
         .unwrap()
         .replace("#[rustfmt::skip]\n", "");
+    const FORMATTED_ITEM: &str =
+        "pub fn contract_descriptor() -> &'static ::boxology_contract::ContractDescriptor {";
+    const UNFORMATTED_ITEM: &str =
+        "pub fn contract_descriptor( )->&'static ::boxology_contract::ContractDescriptor{";
+    assert_eq!(unprotected.matches(FORMATTED_ITEM).count(), 1);
+    let unprotected = unprotected.replacen(FORMATTED_ITEM, UNFORMATTED_ITEM, 1);
     fs::write(&generated, &unprotected).unwrap();
     let mutant_format = fixture.cargo_fmt_all();
     assert!(
