@@ -699,7 +699,7 @@ fn generate_updates_provenance_digest_and_revision() {
         provenance
             .get("generator_version")
             .and_then(|value| value.as_str()),
-        Some("0.0.0")
+        Some(env!("CARGO_PKG_VERSION"))
     );
     assert_eq!(
         provenance
