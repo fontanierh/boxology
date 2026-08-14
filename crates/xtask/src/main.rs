@@ -81,8 +81,8 @@ const GENERATOR_SOURCE_INVENTORY_LOCK_SPEC: external_test::ExternalTestSpec =
         default_source: "tests/purity_lock.rs",
         tests: GENERATOR_SOURCE_INVENTORY_TESTS,
         manifest_digest: None,
-        source_digest: "34f6b95d28f1dc218058a54c4b0222a684fd8c8ab94568be6f2980f0c2865deb",
-        body_digest: "843e60c73414aa3788b94ea586ca2ec6d2901581bb1a3ba763e5571747e07cca",
+        source_digest: "41e50f8c71cfc21fc6606b103d2c03456bb45ed04b68c691b0c79dfbdd21c67a",
+        body_digest: "8174ff08ce26605f3374defba1ca78b512d2c608845d1d315b47c42f65204e6c",
     };
 const BORN_VALID_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-init",
@@ -168,8 +168,8 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("c141a001dbea023ebfd1f74e0a278ea889332b0a8d5790d3fbe4ddc00d65f786"),
-    source_digest: "e96636827dcb1a00d1d6c55e3c9bbd9712e66e9ff17f4d891e06c9643efe42ad",
-    body_digest: "9694bd19b5775466abcf9af355e6ba834ac01e79c9ac50edbe0e6a250547e8ef",
+    source_digest: "35efa3e42b8351c66c8dfb95b45f0fb56cda446f34e7abbd932667e8342d0e5f",
+    body_digest: "fabaa7fa9088ce101a7040824bca4f520290423f9198fdb7d5ceeb28671711b0",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-cli",
