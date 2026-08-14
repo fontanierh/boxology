@@ -36,7 +36,9 @@ impl SemanticErrorKind {
             Self::IntegerRange => "integer outside descriptor range",
             Self::NonFiniteFloat => "non-finite float",
             Self::DuplicateObjectKey => "duplicate object key",
-            Self::NullConformance => "null violates descriptor",
+            Self::NullConformance => {
+                "null violates descriptor; omit an absent optional object field instead of encoding null"
+            }
             Self::UnsupportedDescriptor => "unsupported descriptor",
         }
     }

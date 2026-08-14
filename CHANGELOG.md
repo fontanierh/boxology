@@ -4,6 +4,13 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
+### Fixed
+
+- Documented the canonical field-presence wire convention, made explicit `null` on an optional
+  object field a dedicated typed decoding error, and added actionable canonical JSON guidance.
+- Added `ContractDescriptor::capability` for generic dispatchers and clarified that generated
+  factories and runtime import bundles are composition-owned hooks rather than standalone APIs.
+
 ## [0.1.1] - 2026-08-13
 
 ### Added
