@@ -171,6 +171,13 @@ impl ContractDescriptor {
         &self.capabilities
     }
 
+    /// Looks up one capability by its box-qualified identity.
+    pub fn capability(&self, id: &CapabilityId) -> Option<&CapabilityDescriptor> {
+        self.capabilities
+            .iter()
+            .find(|capability| capability.id() == id)
+    }
+
     /// Returns the opaque contract revision.
     pub fn revision(&self) -> &ContractRevision {
         &self.revision
@@ -267,6 +274,8 @@ mod tests {
 
         assert_eq!(contract.box_id(), &box_id);
         assert_eq!(contract.revision(), &revision);
+        assert_eq!(contract.capability(&id("billing", "quote")), Some(&first));
+        assert_eq!(contract.capability(&id("billing", "missing")), None);
         assert_eq!(contract.capabilities(), &[first, second]);
         let viewed = &contract.capabilities()[0];
         assert_eq!(viewed.name().as_str(), "quote");

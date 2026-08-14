@@ -37,6 +37,8 @@ pub enum EncodeErrorKind {
 pub enum DecodeErrorKind {
     MissingRequired,
     UnexpectedNull,
+    /// An optional object field used `null`; absence must be represented by omission.
+    OptionalFieldNull,
     UnexpectedMissing,
     KindMismatch,
     OutOfRange,
@@ -44,6 +46,25 @@ pub enum DecodeErrorKind {
     UnknownField(String),
     UnknownVariant(String),
     UnsupportedPosition,
+}
+
+trait DiagnosticKind {
+    fn guidance(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+impl DiagnosticKind for EncodeErrorKind {}
+
+impl DiagnosticKind for DecodeErrorKind {
+    fn guidance(&self) -> Option<&'static str> {
+        match self {
+            Self::OptionalFieldNull => {
+                Some("omit an absent optional field instead of encoding null")
+            }
+            _ => None,
+        }
+    }
 }
 
 macro_rules! error_type {
@@ -79,7 +100,11 @@ macro_rules! error_type {
 
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(formatter, "{:?} at {:?}", self.kind, self.path)
+                if let Some(guidance) = self.kind.guidance() {
+                    write!(formatter, "{:?}: {guidance} at {:?}", self.kind, self.path)
+                } else {
+                    write!(formatter, "{:?} at {:?}", self.kind, self.path)
+                }
             }
         }
 
@@ -240,6 +265,9 @@ impl<T: ContractType> ContractType for Option<T> {
     fn decode_field(field: Option<&ContractValue>) -> Result<Self, DecodeError> {
         match field {
             None => Ok(None),
+            Some(value) if matches!(value.view(), ValueRef::Null) => {
+                Err(DecodeError::new(DecodeErrorKind::OptionalFieldNull))
+            }
             Some(value) => T::decode_value(value).map(Some),
         }
     }
@@ -639,9 +667,13 @@ mod tests {
         let some_field = some.encode_field().unwrap();
         assert_eq!(some_field, Some(ContractValue::u64(7)));
         assert_eq!(Option::<u8>::decode_field(some_field.as_ref()), Ok(some));
-        decode_error(
-            Option::<u8>::decode_field(Some(&ContractValue::null())),
-            DecodeErrorKind::KindMismatch,
+        let optional_null = Option::<u8>::decode_field(Some(&ContractValue::null()))
+            .unwrap_err()
+            .under(PathSegment::Field("base".into()));
+        assert_eq!(optional_null.kind(), &DecodeErrorKind::OptionalFieldNull);
+        assert_eq!(
+            optional_null.to_string(),
+            "OptionalFieldNull: omit an absent optional field instead of encoding null at [Field(\"base\")]"
         );
 
         for (field, slot) in [

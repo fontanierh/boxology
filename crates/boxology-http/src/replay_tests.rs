@@ -62,7 +62,9 @@ fn error_role(
             C::IntegerRange => "integer outside descriptor range",
             C::NonFiniteFloat => "non-finite float",
             C::DuplicateObjectKey => "duplicate object key",
-            C::NullConformance => "null violates descriptor",
+            C::NullConformance => {
+                "null violates descriptor; omit an absent optional object field instead of encoding null"
+            }
             C::UnsupportedDescriptor => "unsupported descriptor",
         }
     );

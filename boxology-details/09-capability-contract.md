@@ -103,8 +103,26 @@ field value   -> replace the value
 The contract therefore records presence and nullability separately:
 
 - `T` is required and non-null.
-- `Option<T>` represents an ordinary optional value: absence maps to `None`, while an explicit `null` is not silently collapsed into absence.
+- `Option<T>` represents an ordinary optional value. In an object, absence maps to `None` by omitting the field; an explicit `null` is rejected rather than silently collapsed into absence. At the top level or inside a list or map, where omission is impossible, `None` is represented by `null`.
 - A runtime contract type such as `Field<T>` represents `Missing`, `Null`, or `Value(T)` when all three states matter.
+
+### Binding-author wire checklist
+
+Bindings use `boxology_contract::json` instead of inventing a second projection. The canonical
+object-field presence table is:
+
+| Contract shape | Omitted field | `null` field | Value field |
+| --- | --- | --- | --- |
+| `T` | error | error | `T` |
+| `Option<T>` | `None` | error | `Some(T)` |
+| `Field<T>` | `Missing` | `Null` | `Value(T)` |
+
+At the top level and inside list/map elements, `Option<T>::None` uses `null` because there is no
+field to omit; `Field<T>` is not legal in list or map elements. Unit enum variants use the exact
+envelope `{"tag":"Variant","payload":null}`. Bounded bytes use
+`{"base64":"<standard padded Base64>"}`. Generic dispatchers resolve a capability with
+`ContractDescriptor::capability`; ordinary implementations enter composition through their
+generated `register`, not the doc-hidden generated `factory` or a manually constructed `Imports`.
 
 Defaults and declarative validation are contract metadata. For example, a field can declare a default plus minimum and maximum values. Every binding applies the same declared rules before invoking the implementation. The provider remains authoritative; generated clients may validate earlier only as a convenience. A client-side validation failure reflects that consumer's schema revision and remains distinguishable from a provider-returned contract or domain error. It is not proof that a differently versioned provider would reject the input.
 

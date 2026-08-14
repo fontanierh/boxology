@@ -43,6 +43,9 @@ pub trait RemoteImportTarget: ErasedCallTarget {
 ///
 /// Lookup is deterministic by import-slot identity. A missing slot returns
 /// `None`; handles cannot be added or replaced through this public surface.
+/// Applications receive this bundle only through [`CompositionBuilder`]; a
+/// generated, doc-hidden `factory` is a composition hook, not a standalone
+/// construction API. Ordinary composition code calls the generated `register`.
 pub struct Imports {
     handles: BTreeMap<BoxId, ImportHandle>,
 }
