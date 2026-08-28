@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "boxology"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "boxology-contract",
  "boxology-macros",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-contract"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "ryu",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-contract-syntax"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "boxology-contract",
  "proc-macro2",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-macros"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "boxology-contract-syntax",
  "proc-macro2",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-runtime"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "boxology-contract",
  "tokio",

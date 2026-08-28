@@ -897,7 +897,7 @@ mod tests {
         let tree = initialize(&request()).unwrap();
         assert_eq!(
             generated(&tree, "boxology-generator.toml"),
-            b"boxology-version = \"0.2.0\"\ndependency-source = \"https://github.com/fontanierh/boxology\"\n"
+            b"boxology-version = \"0.2.1\"\ndependency-source = \"https://github.com/fontanierh/boxology\"\n"
         );
         let cargo = std::str::from_utf8(generated(&tree, "Cargo.toml")).unwrap();
         assert_eq!(cargo.matches("path =").count(), 1);

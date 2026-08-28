@@ -4,10 +4,36 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
+## [0.2.1] - 2026-08-28
+
 ### Fixed
 
 - Allowed a root platform generator-version upgrade to carry exact, byte-verified regeneration
   across existing packages without accepting unrelated or tampered foreign derived outputs.
+
+### Distribution
+
+- Published the ordered `0.2.1` crate closure on crates.io with exact dependency versions and the
+  existing resumable, one-crate-at-a-time release safeguards.
+
+### Upgrading an existing setup
+
+Upgrade both installed tools from `0.2.0` to the patch release:
+
+```sh
+cargo install --force --locked --version 0.2.1 boxology-init
+cargo install --force --locked --version 0.2.1 boxology-cli
+```
+
+Most handwritten boxes only need the authoring facade:
+
+```toml
+[dependencies]
+boxology = "=0.2.1"
+```
+
+No contract change is required. Projects upgrading their generator version can regenerate all
+exact derived outputs in one coordinated change and then rerun `boxology check`.
 
 ## [0.2.0] - 2026-08-28
 
