@@ -47,8 +47,8 @@ owned = [
     "specs/**",
 ]
 fixtures = [
-    # Gitignored, but the walk prunes only .git and target: a contributor's
-    # agent worktree here would otherwise discover as a real package.
+    # Keep fixture opacity explicit for supplied/base listings as well as the effectful walk;
+    # Git-ignored untracked agent worktrees are already excluded at the CLI boundary.
     ".agents/worktrees/**",
     "crates/fixtures/generated-style-fmt/**",
     "crates/fixtures/greeter/**",

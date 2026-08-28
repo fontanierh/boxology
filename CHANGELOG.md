@@ -6,6 +6,8 @@ This file records notable user-facing changes to Boxology.
 
 ### Fixed
 
+- Made workspace discovery honor standard Git ignores without hiding tracked files, including when
+  the managed workspace is nested below the repository root.
 - Removed ignored semver build metadata from exact `toml_edit` dependency requirements so ordinary
   Cargo commands start without dependency-spec warnings.
 - Made release preflight inspect package archives in Cargo's effective target directory.
