@@ -80,6 +80,7 @@ dependencies = [
  "boxology-schema",
  "boxology-workspace",
  "serde_json",
+ "toml_edit",
 ]
 
 [[package]]

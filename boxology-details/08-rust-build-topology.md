@@ -132,6 +132,14 @@ Every generated artifact records machine-readable generator provenance; generate
 
 Updating the workspace generator does not mass-regenerate every box. Existing generated crates remain valid and continue to compile. When a box's declared contract-generation inputs next change, or its owner explicitly requests regeneration, CI uses the current workspace generator and requires the checked-in output to match it. That lazy regeneration replaces the box's derived output and updates the provenance. A workspace can therefore contain artifacts produced by several historical generator releases while installing and running only the current generator.
 
+A validated root `boxology-generator.toml` upgrade to the running checker version may deliberately
+regenerate several existing packages in one transaction. The checker accepts those cross-package
+derived changes only for package/output pairs whose complete submitted trees are byte-identical to
+current regeneration; the configuration change does not authorize stale, tampered, or unrelated
+derived bytes.
+
+![Generator-upgrade ownership authority](generator-upgrade-authority.svg)
+
 Generator releases must be backward-compatible:
 
 - Previously valid contract blocks remain accepted.
