@@ -89,7 +89,7 @@ const FOREIGN_TEXT: &str = "a box implementation must depend on no foreign box i
 const FOREIGN: EdgeRule = (("BXW0056", FOREIGN_TEXT), EDGE_SOURCE);
 const DECLARED_TEXT: &str = "a box crate's edge to a foreign contract must be a declared import";
 const DECLARED: EdgeRule = (("BXW0057", DECLARED_TEXT), EDGE_SOURCE);
-const SELECTED_TEXT: &str = "a composition edge must target a selected box";
+const SELECTED_TEXT: &str = "a composition edge must target a selected box or provider";
 const SELECTED: EdgeRule = (("BXW0058", SELECTED_TEXT), D4_SOURCE);
 // Scope is load-bearing: inferred same-package C→C is BXW0059, while declared foreign C→C is legal.
 const IMPOSSIBLE_TEXT: &str =
@@ -109,6 +109,9 @@ const SELECTED_BOX: Rule = ("BXW0087", SELECTED_BOX_TEXT);
 const SELECTED_SCHEMA: Rule = ("BXW0088", SELECTED_SCHEMA_TEXT);
 const SELECTOR_MATCH: Rule = ("BXW0089", SELECTOR_MATCH_TEXT);
 const BINDING_EXPOSURE: Rule = ("BXW0090", BINDING_EXPOSURE_TEXT);
+const SELECTED_PROVIDER_TEXT: &str =
+    "every composition-selected provider must be a discovered provider package";
+const SELECTED_PROVIDER: Rule = ("BXW0108", SELECTED_PROVIDER_TEXT);
 /// The normative source of base-relative diff ownership reporting (02-packages merger steps 1–4 at
 /// S5 D6 reporting strength).
 const OWNERSHIP_SOURCE: &str = "boxology-details/02-packages.md ownership and derived-artifact enforcement; specs/s5-manifest-and-validation.md D6";
@@ -1026,22 +1029,21 @@ struct Mapped<'a> {
 }
 /// Reports whether a package of `kind` can host a crate of `role`.
 ///
-/// **Ten** of the twelve cells are textually determined. "A native box owns a handwritten
+/// The role-to-kind cells are textually determined. "A native box owns a handwritten
 /// implementation crate and a mechanically generated contract crate. Both compilation units belong
 /// to the same logical box" gives `box-implementation` and `box-contract` to a box package and to no
-/// other kind; "Conversely, an application composition is a separate logical owner even when it
-/// compiles both box implementations into one binary" gives `composition` to a composition package
-/// and denies a box or a platform package one. The remaining two — `box`/`platform` and
-/// `composition`/`platform` — are **inferred**, from "Repository-wide ownership policy, CI, build
-/// tooling ... belong to platform packages", a sentence about material rather than about crate
-/// roles. S5 D4 licenses the whole table generically, so the relation is the identity between a
-/// role's owning kind and the declaring kind, with `box` the one kind hosting two. The match is over
+/// other kind; composition and provider roles belong to their matching package kinds. Platform is
+/// inferred from "Repository-wide ownership policy, CI, build tooling ... belong to platform
+/// packages", a sentence about material rather than crate roles. S5 D4 licenses the table
+/// generically, so the relation is the identity between a role's owning kind and the declaring
+/// kind, with `box` the one kind hosting two roles. The match is over
 /// the closed vocabulary, so a role added later fails to compile here rather than defaulting to
 /// possible; **how many** crates of a role a package hosts is a different sentence.
 fn hosts(kind: Kind, role: CrateRole) -> bool {
     match role {
         CrateRole::BoxImplementation | CrateRole::BoxContract => kind == Kind::Box,
         CrateRole::Composition => kind == Kind::Composition,
+        CrateRole::Provider => kind == Kind::Provider,
         CrateRole::Platform => kind == Kind::Platform,
     }
 }
@@ -1088,11 +1090,12 @@ fn edges(roled: &[Mapped], members: &[CargoMember]) -> Vec<Entry> {
                             .imports()
                             .iter()
                             .any(|import| import.package() == target.package.id());
-                        let selected = source
-                            .package
-                            .manifest()
-                            .composition()
-                            .is_some_and(|c| c.boxes().contains(target.package.id()));
+                        let selected = source.package.manifest().composition().is_some_and(|c| {
+                            match target.entry.role() {
+                                CrateRole::Provider => c.providers().contains(target.package.id()),
+                                _ => c.boxes().contains(target.package.id()),
+                            }
+                        });
                         judged(
                             source.entry.role(),
                             target.entry.role(),
@@ -1144,7 +1147,9 @@ fn judged(
     declared: bool,
     selected: bool,
 ) -> Option<EdgeRule> {
-    use CrateRole::{BoxContract as C, BoxImplementation as I, Composition as X, Platform as P};
+    use CrateRole::{
+        BoxContract as C, BoxImplementation as I, Composition as X, Platform as P, Provider as R,
+    };
     match (source, target) {
         // Allowed on the `#325` silence-1 resolution alone — 08 spells no such row.
         (_, P) => None,
@@ -1152,12 +1157,14 @@ fn judged(
         (C, C) if !same && declared => None,
         (I, C) => Some(DECLARED),
         (C, C) if !same => Some(DECLARED),
-        (X, I) | (X, C) if selected => None,
-        (X, I) | (X, C) => Some(SELECTED),
+        (X, I) | (X, C) | (X, R) if selected => None,
+        (X, I) | (X, C) | (X, R) => Some(SELECTED),
         (C, I) => Some(CONTRACT),
         (I, I) if !same => Some(FOREIGN),
         (I, I) | (C, C) | (C, X) | (I, X) => Some(IMPOSSIBLE),
         (X, X) | (P, I) | (P, C) | (P, X) => Some(IMPOSSIBLE),
+        (R, R) if same => None,
+        (I, R) | (C, R) | (P, R) | (R, I) | (R, C) | (R, X) | (R, R) => Some(IMPOSSIBLE),
     }
 }
 /// Reads the workspace members of a `cargo metadata` document. `None` is BXW0050: the whole
@@ -1476,9 +1483,10 @@ impl Workspace {
 
     /// Validates every composition against supplied checked-in schemas without performing I/O.
     ///
-    /// A failed prerequisite suppresses its dependants: a missing/non-box selection produces only
-    /// BXW0087; a missing, unreadable, or mismatched schema produces only BXW0088 for that box; and
-    /// an empty selector expansion produces BXW0089 without an exposure verdict.
+    /// A failed prerequisite suppresses its dependants: a missing/non-provider selection produces
+    /// BXW0108, a missing/non-box selection produces BXW0087, a missing, unreadable, or mismatched
+    /// schema produces BXW0088 for that box, and an empty selector expansion produces BXW0089
+    /// without an exposure verdict. Provider selection does not imply a capability binding.
     pub fn check_compositions(&self, schemas: &[SelectedSchema]) -> Result<(), Findings> {
         let mut defects = Vec::new();
         for composition in self
@@ -1489,6 +1497,19 @@ impl Workspace {
             let Some(declared) = composition.manifest.composition() else {
                 continue;
             };
+            for selected in declared.providers() {
+                let target = self
+                    .packages
+                    .iter()
+                    .find(|package| package.id() == selected);
+                if !target.is_some_and(|package| package.manifest.kind() == Kind::Provider) {
+                    defects.push(composition_finding(
+                        composition,
+                        SELECTED_PROVIDER,
+                        format!("provider={selected}"),
+                    ));
+                }
+            }
             for selected in declared.boxes() {
                 let target = self
                     .packages
@@ -3332,6 +3353,22 @@ jobs:
         }
         crates(base, entries)
     }
+    fn selecting_providers(
+        id: &str,
+        entries: &[(&str, &str, &str)],
+        providers: &[&str],
+    ) -> Vec<u8> {
+        let named = providers
+            .iter()
+            .map(|provider| format!("{provider:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut base = owning(id, "composition", &[MANIFEST], &[]);
+        base.extend_from_slice(
+            format!("[composition]\nboxes = [\"hello\"]\nproviders = [{named}]\n").as_bytes(),
+        );
+        crates(base, entries)
+    }
     fn successful_edge(
         checked: &Workspace,
         packages: &[&str],
@@ -3463,7 +3500,7 @@ jobs:
         "BXW0042", "BXW0043", "BXW0044", "BXW0045", "BXW0046", "BXW0047", "BXW0048", "BXW0049",
         "BXW0050", "BXW0051", "BXW0052", "BXW0053", "BXW0054", "BXW0055", "BXW0056", "BXW0057",
         "BXW0058", "BXW0059", "BXW0060", "BXW0087", "BXW0088", "BXW0089", "BXW0090", "BXW0098",
-        "BXW0099", "BXW0100", "BXW0101", "BXW0102",
+        "BXW0099", "BXW0100", "BXW0101", "BXW0102", "BXW0108",
     ];
     /// One minimal workspace for each discovery and edge code through BXW0060, in code order.
     /// Composition codes have their own cross-document corpus below.
@@ -3616,7 +3653,7 @@ BXW0056 a box implementation must depend on no foreign box implementation boxolo
 BXW0057 a/s/Cargo.toml package=a candidates=[b b/t dev]
 BXW0057 a box crate's edge to a foreign contract must be a declared import boxology-details/08-rust-build-topology.md edge table
 BXW0058 a/s/Cargo.toml package=a candidates=[b b/t dev]
-BXW0058 a composition edge must target a selected box specs/s5-manifest-and-validation.md D4
+BXW0058 a composition edge must target a selected box or provider specs/s5-manifest-and-validation.md D4
 BXW0059 s/Cargo.toml package=solo candidates=[solo t normal]
 BXW0059 no rule permits an edge between these crate roles at this package scope specs/s5-manifest-and-validation.md D4
 BXW0060 a/s/Cargo.toml package=a candidates=[missing normal]
@@ -3694,11 +3731,38 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             assert_eq!(finding.rule_source(), source);
             covered.push(expected);
         }
+        let provider = workspace(vec![
+            (
+                "app/boxology.toml",
+                composition_manifest_with_providers(&["ping"], &["absent"], &[]),
+            ),
+            (
+                "ping/boxology.toml",
+                owning("ping", "box", &[MANIFEST], &[]),
+            ),
+        ])
+        .check()
+        .unwrap()
+        .check_compositions(&[selected("ping", Some(schema("ping", &[])))])
+        .unwrap_err();
+        let finding = workspace_finding(&provider.as_slice()[0]);
+        assert_eq!(
+            (finding.code(), finding.rule(), finding.rule_source(),),
+            ("BXW0108", SELECTED_PROVIDER_TEXT, COMPOSITION_SOURCE)
+        );
+        covered.push("BXW0108");
         assert_eq!(covered, ALL_CODES);
         assert!(ALL_CODES.windows(2).all(|pair| pair[0] < pair[1]));
     }
     fn composition_manifest(
         boxes: &[&str],
+        bindings: &[(&str, &str, &str, Option<&str>)],
+    ) -> Vec<u8> {
+        composition_manifest_with_providers(boxes, &[], bindings)
+    }
+    fn composition_manifest_with_providers(
+        boxes: &[&str],
+        providers: &[&str],
         bindings: &[(&str, &str, &str, Option<&str>)],
     ) -> Vec<u8> {
         let mut text = String::from_utf8(owning("app", "composition", &[MANIFEST], &[])).unwrap();
@@ -3708,6 +3772,14 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             .collect::<Vec<_>>()
             .join(", ");
         text.push_str(&format!("[composition]\nboxes = [{boxes}]\n"));
+        if !providers.is_empty() {
+            let providers = providers
+                .iter()
+                .map(|id| format!("{id:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            text.push_str(&format!("providers = [{providers}]\n"));
+        }
         for (box_id, selector, transport, exposure) in bindings {
             text.push_str(&format!("[[composition.bindings]]\nbox = {box_id:?}\ncapability = {selector:?}\ntransport = {transport:?}\n"));
             if let Some(exposure) = exposure {
@@ -4423,6 +4495,103 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 )),
             )])
             .expect("both capabilities match and code_only is permitted");
+    }
+    #[test]
+    fn provider_packages_are_first_class_with_or_without_a_crate() {
+        let whatsapp = br#"schema = 1
+id = "whatsapp-bridge-provider"
+kind = "provider"
+owned = [
+  "boxology.toml",
+  "package.json",
+  "package-lock.json",
+  "README.md",
+  "architecture.mmd",
+  "architecture.png",
+  "credential-persistence-flow.mmd",
+  "credential-persistence-flow.png",
+  "inbound-persistence-flow.mmd",
+  "inbound-persistence-flow.png",
+  "src/**",
+  "test/**",
+]
+[quality]
+commands = ["npm test --prefix bridges/whatsapp"]
+"#
+        .to_vec();
+        let no_crate = listing(
+            vec![("bridges/whatsapp/boxology.toml", whatsapp.clone())],
+            &[
+                "bridges/whatsapp/package.json",
+                "bridges/whatsapp/src/index.js",
+                "bridges/whatsapp/test/index.test.js",
+            ],
+        )
+        .check()
+        .expect("a non-Cargo provider is a complete owner");
+        assert_eq!(no_crate.packages()[0].manifest().kind(), Kind::Provider);
+        assert_eq!(
+            no_crate.packages()[0].manifest().quality_commands(),
+            ["npm test --prefix bridges/whatsapp"]
+        );
+        assert!(no_crate.cargo_members().is_empty());
+
+        let with_crate = crates(whatsapp, &[("wa-runtime", "runtime", "provider")]);
+        mapped(
+            vec![("bridges/whatsapp/boxology.toml", with_crate)],
+            &[],
+            &metadata(&[("bridges/whatsapp/runtime", "wa-runtime")], &[]),
+        )
+        .check()
+        .expect("an optional provider crate maps to its provider owner");
+    }
+    #[test]
+    fn compositions_validate_selected_provider_identities_without_binding_them() {
+        let composition =
+            composition_manifest_with_providers(&["ping"], &["whatsapp-bridge-provider"], &[]);
+        let valid = workspace(vec![
+            ("app/boxology.toml", composition.clone()),
+            (
+                "bridges/whatsapp/boxology.toml",
+                owning("whatsapp-bridge-provider", "provider", &[MANIFEST], &[]),
+            ),
+            (
+                "ping/boxology.toml",
+                owning("ping", "box", &[MANIFEST], &[]),
+            ),
+        ])
+        .check()
+        .expect("structural workspace");
+        valid
+            .check_compositions(&[selected("ping", Some(schema("ping", &[])))])
+            .expect("a discovered provider selection needs no capability binding");
+
+        for (kind, expected) in [
+            (None, "provider=whatsapp-bridge-provider"),
+            (Some("platform"), "provider=whatsapp-bridge-provider"),
+        ] {
+            let mut manifests = vec![
+                ("app/boxology.toml", composition.clone()),
+                (
+                    "ping/boxology.toml",
+                    owning("ping", "box", &[MANIFEST], &[]),
+                ),
+            ];
+            if let Some(kind) = kind {
+                manifests.push((
+                    "bridges/whatsapp/boxology.toml",
+                    owning("whatsapp-bridge-provider", kind, &[MANIFEST], &[]),
+                ));
+            }
+            let checked = workspace(manifests).check().expect("structural workspace");
+            assert_eq!(
+                checked
+                    .check_compositions(&[selected("ping", Some(schema("ping", &[])))])
+                    .unwrap_err()
+                    .to_string(),
+                format!("BXW0108 app/boxology.toml package=app candidates=[{expected}]")
+            );
+        }
     }
     #[test]
     fn composition_validation_reports_bytewise_exposure_and_empty_selectors() {
@@ -5633,17 +5802,16 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         let source = "boxology-details/02-packages.md crate roles";
         assert_eq!(found.rule_source(), source);
     }
-    /// BXW0054's whole table, all twelve cells: the four a package kind can host as well as the
-    /// eight it cannot. Every case declares one entry that *does* match the one Cargo member, so
+    /// BXW0054's whole table: every package-kind/role cell, hostable and impossible. Every case
+    /// declares one entry that *does* match the one Cargo member, so
     /// nothing but the role decides it, and an accepted cell is a workspace with no finding at all.
     #[test]
     fn impossible_crate_roles_are_coded() {
         // "<kind> <role>", `!`-prefixed when that kind cannot host that role.
-        let cases = "box box-implementation,box box-contract,!box composition,!box platform,\
-                     !composition box-implementation,!composition box-contract,\
-                     composition composition,!composition platform,\
-                     !platform box-implementation,!platform box-contract,!platform composition,\
-                     platform platform";
+        let cases = "box box-implementation,box box-contract,!box composition,!box provider,!box platform,\
+                     !composition box-implementation,!composition box-contract,composition composition,!composition provider,!composition platform,\
+                     !provider box-implementation,!provider box-contract,!provider composition,provider provider,!provider platform,\
+                     !platform box-implementation,!platform box-contract,!platform composition,!platform provider,platform platform";
         for case in cases.split(',') {
             let impossible = case.strip_prefix('!');
             let Some((kind, role)) = impossible.unwrap_or(case).split_once(' ') else {
@@ -5795,6 +5963,7 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             "i" => ("box", "box-implementation"),
             "c" => ("box", "box-contract"),
             "x" => ("composition", "composition"),
+            "r" => ("provider", "provider"),
             "p" => ("platform", "platform"),
             other => panic!("unknown role {other:?}"),
         }
@@ -5811,8 +5980,12 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         let (target_kind, target_role) = plays(target);
         let source_entry = [("s", "s", source_role)];
         let source_manifest = if source == "x" {
-            let boxes = if selected { ["b"] } else { ["other"] };
-            selecting("a", &source_entry, &boxes, false)
+            let selected_ids = if selected { ["b"] } else { ["other"] };
+            if target == "r" {
+                selecting_providers("a", &source_entry, &selected_ids)
+            } else {
+                selecting("a", &source_entry, &selected_ids, false)
+            }
         } else if declared {
             importing("a", &source_entry, &["b"])
         } else {
@@ -5844,8 +6017,10 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                      i x foreign BXW0059,i p foreign,c i same BXW0055,c i foreign BXW0055,\
                      c c same BXW0059,c c foreign BXW0057,c x foreign BXW0059,c p foreign,\
                      x i foreign BXW0058,x c foreign BXW0058,\
-                     x x same BXW0059,x x foreign BXW0059,x p foreign,\
-                     p i foreign BXW0059,p c foreign BXW0059,p x foreign BXW0059,\
+                     x x same BXW0059,x x foreign BXW0059,x r foreign BXW0058,x p foreign,\
+                     r i foreign BXW0059,r c foreign BXW0059,r x foreign BXW0059,\
+                     r r same,r r foreign BXW0059,r p foreign,\
+                     p i foreign BXW0059,p c foreign BXW0059,p x foreign BXW0059,p r foreign BXW0059,\
                      p p same,p p foreign";
         for case in cases.split(',') {
             let field: Vec<&str> = case.split(' ').collect();
@@ -5903,7 +6078,8 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
     fn declaration_policy_matrix_crosses_edge_forms() {
         let cases = "i c undeclared BXW0057,i c declared -,c c undeclared BXW0057,\
                      c c declared -,x i unselected BXW0058,x i selected -,\
-                     x c unselected BXW0058,x c selected -";
+                     x c unselected BXW0058,x c selected -,\
+                     x r unselected BXW0058,x r selected -";
         for case in cases.split(',') {
             let [source, target, condition, expected] = case.split(' ').collect::<Vec<_>>()[..]
             else {

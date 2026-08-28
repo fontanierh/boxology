@@ -4,9 +4,10 @@
 
 This document expands the package kinds and infrastructure model discussed during the design interview.
 
-Status: this is target architecture. The shipped manifest schema currently recognizes `box`,
-`composition`, and `platform`; it deliberately rejects `provider` until a real use case forces
-that package kind. Provider and package-binding sections below do not claim current support.
+Status: the shipped manifest schema recognizes all four package kinds. Provider ownership,
+quality commands, an optional Cargo role, and composition selection are implemented. Requirement
+declarations, configured provider instances, and requirement-to-provider bindings remain target
+architecture tracked in [issue #7](https://github.com/fontanierh/boxology/issues/7).
 
 ## Package kinds
 
@@ -117,13 +118,18 @@ V1 imports the package's canonical contract and has no parallel-surface selector
 
 `[quality].commands` supplies package-specific entry points to `boxology check`, including generated-project conformance tests. These are trusted repository commands and execute with the lead sandbox's full ambient filesystem, environment, credential, process, and network access under the [foundation threat boundary](06-quality-and-authority.md#foundation-lead-sandbox-threat-boundary).
 
-The foundation crate-role vocabulary is `box-implementation`, `box-contract`, `composition`, and `platform`. The checker reads Cargo metadata and requires every Cargo package to match exactly one manifest `[[crates]]` entry by normalized manifest path and Cargo package name. A role cannot be inferred from a directory or crate-name suffix. Provider crate roles are added when the first provider enters the foundation rather than being guessed now.
+The foundation crate-role vocabulary is `box-implementation`, `box-contract`, `composition`,
+`provider`, and `platform`. A provider is a valid owner without a Cargo crate; when it has one, the
+crate declares `role = "provider"`. The checker reads Cargo metadata and requires every Cargo
+package to match exactly one manifest `[[crates]]` entry by normalized manifest path and Cargo
+package name. A role cannot be inferred from a directory or crate-name suffix.
 
 A composition adds its selected boxes and bindings:
 
 ```toml
 [composition]
 boxes = ["hello"]
+providers = ["whatsapp-bridge-provider"]
 
 [[composition.bindings]]
 box = "hello"
@@ -143,6 +149,14 @@ capabilities added to its contract later. Composition validation checks that eve
 identity exists and expands every selector against the generated contract. An expansion must be
 nonempty, is ordered bytewise by qualified capability id for deterministic output, and checks the
 binding's exposure against every expanded capability's declared maximum.
+
+`providers` is an optional, nonempty-when-present list of unique provider package identities.
+Validation requires each identity to resolve to a discovered `provider` package. It selects owned
+provider code for the composition and may authorize a Cargo edge from a composition crate to that
+provider's optional crate. It does not configure an instance or bind a box requirement;
+`[[composition.bindings]]` remains exclusively a box capability/transport declaration.
+
+![Provider ownership and composition selection](provider-selection.svg)
 
 The initializer creates a logical `platform` package at the workspace root. Its manifest owns root `Cargo.toml`, repository CI, generator configuration, ownership rules, and other non-derived root machinery, and declares `Cargo.lock` as the workspace's global derived artifact. The generated `ping` box and `ping-app` composition live under their own package roots with their own manifests. The platform package contains no Rust crate.
 
@@ -195,6 +209,11 @@ Deliberate repository-wide dependency maintenance, including security updates an
 Independent Cargo build roots remain deferred. The factory should measure lockfile-triggered reassessments, rework, and queue delay so separate roots can be introduced if shared resolution repeatedly serializes integration in practice.
 
 ## Requirements, providers, and bindings
+
+The shipped foundation stops at provider package ownership and composition selection. The
+requirement, instance configuration, lifecycle, and requirement-to-provider binding model below
+is intentionally deferred to [issue #7](https://github.com/fontanierh/boxology/issues/7); selection
+alone must not be interpreted as a runtime binding.
 
 The initial word "adapter" was carrying too many meanings. The infrastructure discussion was clarified into three concepts:
 

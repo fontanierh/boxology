@@ -46,8 +46,8 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
     manifest_digest: None,
-    source_digest: "851bc809ce185a49fb0ef6b6b5758269c2ae559bd7f363ed1288c86883780eea",
-    body_digest: "3daaf29c01df87b82990aaeeaa74b8856f85e1ff8a984992910393b3528b60d9",
+    source_digest: "0f957c89a4cdb204507f5613d88d624f782ef6db038786b6e6b9eb80b4a4e45e",
+    body_digest: "da9cb12f007f7160f1952536e6a7a15917f1769d17698214d240874a16b5d09a",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {

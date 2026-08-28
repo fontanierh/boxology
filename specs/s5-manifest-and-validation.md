@@ -13,8 +13,9 @@ format and validation baseline; this file records the implemented subset and liv
 
 V0 `check` reports policy facts; it is not a merger and does not replay a base package plus an
 accountable diff, resolve minimal lockfile closure, or authorize an incompatible contract change.
-Provider roles, isolation-profile enforcement, package-scoped validation, publication, and branch
-protection are not delivered. The CLI surface is `boxology generate [--package <id>]` and
+Provider-instance bindings and lifecycle, isolation-profile enforcement, package-scoped
+validation, publication, and branch protection are not delivered. The CLI surface is
+`boxology generate [--package <id>]` and
 `boxology check [--base <revision>] [--format human|json]`.
 
 ## Delivered decisions
@@ -35,10 +36,12 @@ Library diagnostics use stable `BXW####` codes and deterministic ordering.
 
 ### D2 — Manifest and classification
 
-Schema 1 accepts `box`, `composition`, and `platform`; unknown keys, newer schemas, provider kind,
-invalid workspace-relative globs, and impossible role combinations fail closed. Composition
-bindings select an exact capability or a nonempty `<box>.*` expansion and use `in-process` or
-`http` transport without exceeding declared exposure.
+Schema 1 accepts `box`, `composition`, `provider`, and `platform`; unknown keys, newer schemas,
+invalid workspace-relative globs, and impossible role combinations fail closed. A provider owns
+source and quality policy with no required contract or crate; its optional Cargo crate uses the
+`provider` role. Composition `providers` select unique discovered provider packages. Composition
+bindings remain box-only: they select an exact capability or a nonempty `<box>.*` expansion and
+use `in-process` or `http` transport without exceeding declared exposure.
 
 Each `[[crates]].path` is package-relative. Exact `.` names a Cargo crate at the declaring package
 root; every other accepted value is one literal relative directory. Wildcards, absolute paths,
@@ -146,7 +149,7 @@ is tracked by [#328](https://github.com/fontanierh/boxology/issues/328) and
 
 - The factory merger's base replay, minimal lock closure, and foreign-impact reassessment.
 - The first-release provenance-compatible generator boundary and Linux/cross-platform proof (#525).
-- Provider roles, isolation validation, package-scoped checks, identity lifecycle (#3), and
+- Provider-instance binding/lifecycle (#7), isolation validation, package-scoped checks, identity lifecycle (#3), and
   new-package creation policy (#47).
 - [#477](https://github.com/fontanierh/boxology/issues/477) items 2–6: cycle diagnostic locality,
   self-cycle/transitive-chain coverage, imported-path diagnostic invariants, the BXW0068 retirement

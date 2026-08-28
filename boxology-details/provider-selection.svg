@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="330" viewBox="0 0 900 330" role="img" aria-labelledby="title desc">
+  <title id="title">Provider ownership and composition selection</title>
+  <desc id="desc">A composition selects a provider package identity. The package owns source, quality commands, and an optional Cargo crate. Requirement-to-instance binding and lifecycle are deferred.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#57606a"/></marker>
+    <style>
+      .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 2; rx: 12; }
+      .deferred { fill: #fff8c5; stroke: #9a6700; stroke-width: 2; stroke-dasharray: 8 6; rx: 12; }
+      .title { font: 600 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2328; }
+      .body { font: 15px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #1f2328; }
+      .note { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #57606a; }
+      .line { stroke: #57606a; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #9a6700; stroke-width: 2; stroke-dasharray: 8 6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="box" x="35" y="45" width="255" height="135"/>
+  <text class="title" x="60" y="78">Composition</text>
+  <text class="body" x="60" y="112">[composition]</text>
+  <text class="body" x="60" y="140">providers = ["whatsapp"]</text>
+  <text class="note" x="60" y="165">identity selection only</text>
+  <path class="line" d="M290 112 H390"/>
+  <text class="note" x="312" y="98">validate</text>
+  <rect class="box" x="390" y="30" width="475" height="180"/>
+  <text class="title" x="420" y="66">Provider package: whatsapp</text>
+  <text class="body" x="420" y="103">kind = "provider"</text>
+  <text class="body" x="420" y="132">owns source + tests + quality</text>
+  <text class="body" x="420" y="161">optional role = "provider" crate</text>
+  <text class="note" x="420" y="190">no box contract required</text>
+  <path class="dash" d="M162 180 V260 H390"/>
+  <rect class="deferred" x="390" y="235" width="475" height="70"/>
+  <text class="title" x="420" y="267">Deferred to #7</text>
+  <text class="note" x="420" y="291">requirement → configured instance; lifecycle and secrets</text>
+</svg>

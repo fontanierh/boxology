@@ -200,13 +200,17 @@ The minimum edge policy is:
 | Box implementation | Declared foreign contract | Allowed |
 | Box implementation | Foreign implementation | Forbidden |
 | Application composition | Selected box implementations | Allowed |
+| Application composition | Selected provider crates | Allowed |
 | Any box crate | Undeclared foreign contract | Forbidden |
 
 The check covers normal, build, development, renamed, optional, feature-activated, and target-specific edges. A build script or generated source cannot be used to conceal a forbidden dependency.
 
 Box-owned tests follow the same boundary and use the generator's programmable contract-level test bindings for foreign capabilities. Tests that deliberately link several real implementations belong to an application composition and its integration-quality contract.
 
-Providers and platform crates have their own declared roles, but they cannot be used as passthroughs that expose a foreign box implementation to ordinary box code.
+Provider and platform crates have their own declared roles. A composition may depend on an
+explicitly selected provider crate; unselected provider edges and other cross-kind provider edges
+fail closed. Provider and platform crates cannot be used as passthroughs that expose a foreign box
+implementation to ordinary box code.
 
 ## Build cycles and invocation cycles
 
