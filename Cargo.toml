@@ -34,7 +34,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.97.1"
 license = "MIT OR Apache-2.0"
@@ -43,6 +43,6 @@ homepage = "https://github.com/fontanierh/boxology"
 readme = "README.md"
 
 [workspace.dependencies]
-boxology = { version = "=0.2.0", path = "crates/boxology" }
-boxology-contract = { version = "=0.2.0", path = "crates/boxology-contract" }
-boxology-runtime = { version = "=0.2.0", path = "crates/boxology-runtime" }
+boxology = { version = "=0.2.1", path = "crates/boxology" }
+boxology-contract = { version = "=0.2.1", path = "crates/boxology-contract" }
+boxology-runtime = { version = "=0.2.1", path = "crates/boxology-runtime" }
