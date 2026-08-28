@@ -5,11 +5,12 @@ use boxology_cli::{
     execute_plans, plan, project_check, walk,
 };
 use boxology_contract::BoxId;
+use boxology_manifest::CrateRole;
 use boxology_workspace::{Workspace, WorkspaceInputs};
 use std::{
     env,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::ExitCode,
 };
 
@@ -102,16 +103,11 @@ fn run_generate_setup(
             return 1;
         }
     };
-    let plans = match plan(&bootstrap, package.as_ref()) {
-        Ok(plans) => plans,
-        Err(error) => return report_plan_failure(error, CheckFormat::Human, stderr),
-    };
-    if !plans.iter().any(|plan| {
-        let package_root = plan
-            .package_root()
-            .map_or_else(|| root.to_owned(), |path| root.join(path.as_str()));
-        !package_root.join("generated/contract/Cargo.toml").is_file()
-    }) {
+    if let Err(error) = plan(&bootstrap, package.as_ref()) {
+        return report_plan_failure(error, CheckFormat::Human, stderr);
+    }
+    let missing_contract_members = missing_contract_members(root, &bootstrap);
+    if missing_contract_members.is_empty() {
         return match metadata {
             Ok(metadata) => report_workspace_failure(workspace_inputs(&walked, &metadata), stderr),
             Err(error) => report_metadata_failure(error, stderr),
@@ -122,7 +118,35 @@ fn run_generate_setup(
     if code != 0 {
         return code;
     }
-    validate_generated_workspace(root, stderr)
+    if missing_contract_members.iter().any(|path| !path.is_file()) {
+        0
+    } else {
+        validate_generated_workspace(root, stderr)
+    }
+}
+
+fn missing_contract_members(root: &Path, workspace: &Workspace) -> Vec<PathBuf> {
+    workspace
+        .packages()
+        .iter()
+        .flat_map(|package| {
+            package
+                .manifest()
+                .crates()
+                .iter()
+                .filter(|entry| entry.role() == CrateRole::BoxContract)
+                .filter_map(|entry| {
+                    let package_root = package
+                        .root()
+                        .map_or_else(|| root.to_owned(), |path| root.join(path.as_str()));
+                    let crate_root = entry.path().nested().map_or(package_root.clone(), |path| {
+                        package_root.join(path.as_str())
+                    });
+                    let manifest = crate_root.join("Cargo.toml");
+                    (!manifest.is_file()).then_some(manifest)
+                })
+        })
+        .collect()
 }
 
 fn workspace_inputs(walked: &boxology_cli::WalkedWorkspace, metadata: &str) -> WorkspaceInputs {

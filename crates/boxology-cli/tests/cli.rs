@@ -100,6 +100,7 @@ const ROOT_MANIFEST: &str = "schema = 1\nid = \"platform\"\nkind = \"platform\"\
 const PACKAGE_MANIFEST: &str = "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n";
 const METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
 const IMPLEMENTATION_ONLY_METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]}] }"#;
+const TWO_PACKAGE_METADATA: &str = r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0","path+file:///w/pong/generated/contract#0.0.0","path+file:///w/pong/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]},{"id":"path+file:///w/pong/generated/contract#0.0.0","name":"pong-contract","manifest_path":"/w/pong/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/pong/implementation#0.0.0","name":"pong-implementation","manifest_path":"/w/pong/implementation/Cargo.toml","dependencies":[]}] }"#;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
@@ -330,6 +331,10 @@ impl Fixture {
     }
 
     fn install_bootstrap_cargo(&self, initial_metadata: Option<&str>) {
+        self.install_bootstrap_cargo_for("ping/generated/contract/Cargo.toml", initial_metadata);
+    }
+
+    fn install_bootstrap_cargo_for(&self, manifest: &str, initial_metadata: Option<&str>) {
         let initial = initial_metadata.map_or_else(
             || "printf '%s\\n' 'missing generated contract manifest' >&2; exit 17".to_owned(),
             |metadata| format!("printf '%s\\n' '{metadata}'; exit 0"),
@@ -337,7 +342,7 @@ impl Fixture {
         fs::write(
             &self.cargo,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_ARG_LOG\"\nif [ ! -f ping/generated/contract/Cargo.toml ]; then {initial}; fi\n/bin/cat \"$BOXOLOGY_METADATA\"\n"
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_ARG_LOG\"\nif [ ! -f {manifest} ]; then {initial}; fi\n/bin/cat \"$BOXOLOGY_METADATA\"\n"
             ),
         )
         .unwrap();
@@ -557,6 +562,56 @@ fn generate_bootstraps_when_metadata_has_only_the_existing_implementation() {
     assert!(text(&output.stderr).is_empty());
     assert!(text(&output.stdout).contains("generate result changed\n"));
     assert!(fixture.root.join("ping/generated/schema.json").is_file());
+    assert_eq!(
+        fixture.argv_log(),
+        format!("{METADATA_ARGV}{METADATA_ARGV}")
+    );
+}
+
+#[test]
+fn selected_generation_tolerates_an_unrelated_missing_derived_member() {
+    let fixture = Fixture::new(false);
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"*/implementation\", \"*/generated/contract\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(fixture.root.join("pong/implementation/src")).unwrap();
+    fs::write(
+        fixture.root.join("pong/boxology.toml"),
+        PACKAGE_MANIFEST.replace("ping", "pong"),
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("pong/implementation/Cargo.toml"),
+        "[package]\nname = \"pong-implementation\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("pong/implementation/src/lib.rs"),
+        CONTRACT,
+    )
+    .unwrap();
+    fs::write(&fixture.metadata, TWO_PACKAGE_METADATA).unwrap();
+    fixture.install_bootstrap_cargo_for("pong/generated/contract/Cargo.toml", None);
+
+    let ping = fixture.run(&["generate", "--package", "ping"]);
+    assert_eq!(ping.status.code(), Some(0), "{}", text(&ping.stderr));
+    assert!(text(&ping.stderr).is_empty());
+    assert!(text(&ping.stdout).contains("generate ping"));
+    assert!(!fixture.root.join("pong/generated").exists());
+    assert_eq!(fixture.argv_log(), METADATA_ARGV);
+
+    let pong = fixture.run(&["generate", "--package", "pong"]);
+    assert_eq!(pong.status.code(), Some(0), "{}", text(&pong.stderr));
+    assert!(text(&pong.stderr).is_empty());
+    assert!(text(&pong.stdout).contains("generate pong written\n"));
+    assert!(
+        fixture
+            .root
+            .join("pong/generated/contract/Cargo.toml")
+            .is_file()
+    );
     assert_eq!(
         fixture.argv_log(),
         format!("{METADATA_ARGV}{METADATA_ARGV}")

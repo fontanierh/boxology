@@ -37,6 +37,8 @@ This file records notable user-facing changes to Boxology.
   written to stdout with exit status 0.
 - Allowed generation to bootstrap a missing generated contract crate, while retaining strict
   Cargo-backed validation after the write.
+- Kept selected generation available while an unrelated declared contract member is still being
+  bootstrapped, with strict Cargo validation restored once the derived workspace is complete.
 - Corrected ownership and compatibility classification for wholly new nested managed workspaces.
 - Made generated contract sources byte-stable across `cargo fmt --all` and serialized the
   regression test's process-wide Cargo environment.

@@ -235,6 +235,11 @@ boxology check [--base <git-revision>] [--format human|json]
 
 `boxology generate` is the explicit mutating operation. Without selection it regenerates only packages whose declared generation inputs changed; `--package` also permits an owner to request regeneration of one package with the current workspace generator. It rewrites declared derived outputs, updates generator provenance, and reports the semantic contract classification. It never edits handwritten source.
 
+Generation treats an absent declared box-contract crate as an incomplete derived workspace, not
+as a reason to make every other package unmaintainable. A selected package may regenerate from the
+validated manifest-owned source model while another declared contract member is still absent;
+Cargo-backed validation becomes mandatory again once all declared contract manifests exist.
+
 `boxology check` is the canonical non-mutating validation command used by developers, the lead, and generated CI. V1 always validates the complete workspace; package-scoped and impact-selected validation are later optimizations. It regenerates into temporary output and compares byte-for-byte rather than modifying the checkout. If `--base` is supplied, contract and ownership changes are classified against that revision. Local use defaults to the merge base with the configured main branch; CI passes the pull request's base revision explicitly.
 
 The command exits `0` when every check passes, `1` when repository validation fails, and `2` when invocation or configuration prevents validation from running. Human output is the default. `--format json` emits one JSON document whose top-level `schema` field identifies the diagnostic format version, followed by check identifiers, package identities, paths, diagnostics, contract classifications, and the final status.
