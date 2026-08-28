@@ -778,7 +778,7 @@ fn project_value(value: &TomlValue) -> Result<Canonical, ()> {
 /// BXW0101, except `Cargo.lock`, which
 /// [`DiffOwnership::lockfile_scope`] judges across all accountable packages.
 pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwnership {
-    diff_ownership_select(changed, |_| packages, &[], false)
+    diff_ownership_select(changed, |_| packages, &[], false, &[])
 }
 
 /// Classifies existing paths under base declarations and introduced paths under submitted
@@ -789,7 +789,7 @@ pub fn submitted_diff_ownership(
     base_paths: &[RelativePath],
     changed: &[RelativePath],
 ) -> DiffOwnership {
-    submitted_diff_ownership_inner(base, submitted, base_paths, changed, &[], false)
+    submitted_diff_ownership_inner(base, submitted, base_paths, changed, &[], false, &[])
 }
 
 /// Applies submitted-manifest ownership while accepting exact regeneration evidence for a
@@ -807,6 +807,34 @@ pub fn submitted_diff_ownership_with_verified_regeneration(
     verified: &[(BoxId, BoxId)],
     generator_configuration_upgraded: bool,
 ) -> DiffOwnership {
+    submitted_diff_ownership_with_verified_regeneration_and_imports(
+        base,
+        submitted,
+        base_paths,
+        changed,
+        verified,
+        generator_configuration_upgraded,
+        &[],
+    )
+}
+
+/// Applies submitted-manifest ownership with effectful evidence for both a generator upgrade and
+/// exact downstream regeneration caused by changed imported contracts.
+///
+/// Each import triple is `(importer package, importer derived output, imported package)`. The
+/// checker supplies one only after both generation plans recreated their submitted trees exactly
+/// and the imported schema path changed. BXW0101 is waived only when the imported package is also
+/// a non-derived owner in this diff. Existing ownership entry points remain strict without this
+/// explicit evidence.
+pub fn submitted_diff_ownership_with_verified_regeneration_and_imports(
+    base: &[Package],
+    submitted: &[Package],
+    base_paths: &[RelativePath],
+    changed: &[RelativePath],
+    verified: &[(BoxId, BoxId)],
+    generator_configuration_upgraded: bool,
+    verified_imports: &[(BoxId, BoxId, BoxId)],
+) -> DiffOwnership {
     submitted_diff_ownership_inner(
         base,
         submitted,
@@ -814,6 +842,7 @@ pub fn submitted_diff_ownership_with_verified_regeneration(
         changed,
         verified,
         generator_configuration_upgraded,
+        verified_imports,
     )
 }
 
@@ -824,6 +853,7 @@ fn submitted_diff_ownership_inner(
     changed: &[RelativePath],
     verified: &[(BoxId, BoxId)],
     generator_configuration_upgraded: bool,
+    verified_imports: &[(BoxId, BoxId, BoxId)],
 ) -> DiffOwnership {
     let mut base_paths = base_paths.to_vec();
     base_paths.sort();
@@ -839,6 +869,7 @@ fn submitted_diff_ownership_inner(
         },
         verified,
         generator_configuration_upgraded,
+        verified_imports,
     )
 }
 
@@ -847,6 +878,7 @@ fn diff_ownership_select<'a>(
     packages: impl Fn(&RelativePath) -> &'a [Package],
     verified: &[(BoxId, BoxId)],
     generator_configuration_upgraded: bool,
+    verified_imports: &[(BoxId, BoxId, BoxId)],
 ) -> DiffOwnership {
     let mut changed: Vec<RelativePath> = changed.to_vec();
     changed.sort();
@@ -911,6 +943,9 @@ fn diff_ownership_select<'a>(
     let mut verified = verified.to_vec();
     verified.sort();
     verified.dedup();
+    let mut verified_imports = verified_imports.to_vec();
+    verified_imports.sort();
+    verified_imports.dedup();
     if !owners.is_empty() {
         for held in &classifications {
             if held.path().as_str() == LOCKFILE {
@@ -927,6 +962,14 @@ fn diff_ownership_select<'a>(
                     .binary_search(&(held.package().clone(), output.clone()))
                     .is_ok()
             {
+                continue;
+            }
+            let imported_owner = verified_imports.iter().any(|(package, derived, imported)| {
+                package == held.package()
+                    && derived == output
+                    && owners.binary_search(imported).is_ok()
+            });
+            if imported_owner {
                 continue;
             }
             findings.push(Entry::Workspace(Finding::about(
@@ -4396,6 +4439,97 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
             finding_lines(rejected.findings()),
             ["BXW0101 ping/generated.rs package=ping candidates=[contract]".to_owned()]
         );
+    }
+    #[test]
+    fn verified_import_regeneration_requires_the_imported_package_owner() {
+        let manifests = vec![
+            (
+                path(MANIFEST),
+                owning("platform", "platform", &[MANIFEST, "notes.txt"], &[]),
+            ),
+            (
+                path("ping/boxology.toml"),
+                deriving(
+                    owning("ping", "box", &[MANIFEST, "implementation/**"], &[]),
+                    &[("contract", &["generated.rs"])],
+                ),
+            ),
+            (
+                path("pong/boxology.toml"),
+                deriving(
+                    owning("pong", "box", &[MANIFEST, "implementation/**"], &[]),
+                    &[("contract", &["generated.rs"])],
+                ),
+            ),
+        ];
+        let base = ownership_packages_from(manifests.clone()).expect("base discovers");
+        let submitted = ownership_packages_from(manifests).expect("submitted discovers");
+        let base_paths = changed(&[
+            MANIFEST,
+            "notes.txt",
+            "ping/boxology.toml",
+            "ping/implementation/src/lib.rs",
+            "ping/generated.rs",
+            "pong/boxology.toml",
+            "pong/generated.rs",
+        ]);
+        let imported_change = changed(&[
+            "ping/implementation/src/lib.rs",
+            "ping/generated.rs",
+            "pong/generated.rs",
+        ]);
+        let verified = vec![(id("ping"), id("contract")), (id("pong"), id("contract"))];
+
+        let existing = submitted_diff_ownership_with_verified_regeneration(
+            &base,
+            &submitted,
+            &base_paths,
+            &imported_change,
+            &verified,
+            false,
+        );
+        assert_eq!(
+            finding_lines(existing.findings()),
+            ["BXW0101 pong/generated.rs package=pong candidates=[contract]".to_owned()]
+        );
+
+        let accepted = submitted_diff_ownership_with_verified_regeneration_and_imports(
+            &base,
+            &submitted,
+            &base_paths,
+            &imported_change,
+            &verified,
+            false,
+            &[(id("pong"), id("contract"), id("ping"))],
+        );
+        assert!(accepted.findings().is_none());
+        assert_eq!(accepted.accountable().map(BoxId::as_str), Some("ping"));
+
+        let wrong_import = submitted_diff_ownership_with_verified_regeneration_and_imports(
+            &base,
+            &submitted,
+            &base_paths,
+            &imported_change,
+            &verified,
+            false,
+            &[(id("pong"), id("contract"), id("platform"))],
+        );
+        assert_eq!(
+            finding_lines(wrong_import.findings()),
+            ["BXW0101 pong/generated.rs package=pong candidates=[contract]".to_owned()]
+        );
+
+        let unrelated_owner = changed(&["notes.txt", "ping/generated.rs", "pong/generated.rs"]);
+        let rejected = submitted_diff_ownership_with_verified_regeneration_and_imports(
+            &base,
+            &submitted,
+            &base_paths,
+            &unrelated_owner,
+            &verified,
+            false,
+            &[(id("pong"), id("contract"), id("ping"))],
+        );
+        assert_eq!(finding_lines(rejected.findings()).len(), 2);
     }
     #[test]
     fn diff_ownership_canonicalizes_unsorted_and_duplicate_changed_paths() {

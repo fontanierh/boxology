@@ -18,10 +18,11 @@ use boxology_workspace::{
     CheckReport as WorkspaceReport, CheckStatus as WorkspaceStatus, ClassificationFinding,
     ClassificationFindings, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
     DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, Workspace,
-    WorkspaceInputs, bootstrap_diff_ownership, submitted_diff_ownership_with_verified_regeneration,
+    WorkspaceInputs, bootstrap_diff_ownership,
+    submitted_diff_ownership_with_verified_regeneration_and_imports,
 };
 use serde_json::Value;
-use std::{path::Path, process::Output};
+use std::{collections::BTreeSet, path::Path, process::Output};
 
 macro_rules! check_tool {
     ($result:expr) => {
@@ -143,7 +144,8 @@ impl CheckService {
                     Err(outcome) => return Ok(outcome),
                 };
                 let ownership =
-                    match diff_ownership_step(root, &base, &walked, &verified_regeneration) {
+                    match diff_ownership_step(root, &base, &walked, &plans, &verified_regeneration)
+                    {
                         Ok(value) => value,
                         Err(outcome) => return Ok(*outcome),
                     };
@@ -269,6 +271,7 @@ fn diff_ownership_step(
     root: &Path,
     base: &ResolvedBase,
     candidate: &boxology_cli_core::WalkedWorkspace,
+    plans: &[GenerationPlan],
     verified_regeneration: &[(BoxId, BoxId)],
 ) -> Result<DiffOwnershipCompletion, Box<CheckOutcome>> {
     let inputs =
@@ -291,13 +294,16 @@ fn diff_ownership_step(
         bootstrap_diff_ownership(inputs.packages(), inputs.changed())
     } else {
         let base_paths = inputs.base_paths().cloned().collect::<Vec<_>>();
-        submitted_diff_ownership_with_verified_regeneration(
+        let verified_imports =
+            verified_import_regeneration(plans, verified_regeneration, inputs.changed());
+        submitted_diff_ownership_with_verified_regeneration_and_imports(
             inputs.packages(),
             inputs.submitted_packages(),
             &base_paths,
             inputs.changed(),
             verified_regeneration,
             inputs.generator_configuration_upgraded(root, env!("CARGO_PKG_VERSION")),
+            &verified_imports,
         )
     };
     let pairs = inputs
@@ -313,6 +319,42 @@ fn diff_ownership_step(
         Some(value) => DiffOwnershipCompletion::Failed(value),
         None => DiffOwnershipCompletion::Passed,
     })
+}
+
+fn verified_import_regeneration(
+    plans: &[GenerationPlan],
+    verified: &[(BoxId, BoxId)],
+    changed: &[RelativePath],
+) -> Vec<(BoxId, BoxId, BoxId)> {
+    let verified = verified.iter().cloned().collect::<BTreeSet<_>>();
+    let changed = changed.iter().collect::<BTreeSet<_>>();
+    let mut evidence = BTreeSet::new();
+    for plan in plans {
+        let importer = (plan.package_id().clone(), plan.derived_output_id().clone());
+        if !verified.contains(&importer) {
+            continue;
+        }
+        for imported in plan.imports() {
+            let Some(imported_plan) = plans
+                .iter()
+                .find(|candidate| candidate.package_id() == imported.package())
+            else {
+                continue;
+            };
+            let imported_pair = (
+                imported_plan.package_id().clone(),
+                imported_plan.derived_output_id().clone(),
+            );
+            if changed.contains(imported.schema()) && verified.contains(&imported_pair) {
+                evidence.insert((
+                    importer.0.clone(),
+                    importer.1.clone(),
+                    imported.package().clone(),
+                ));
+            }
+        }
+    }
+    evidence.into_iter().collect()
 }
 
 #[rustfmt::skip]

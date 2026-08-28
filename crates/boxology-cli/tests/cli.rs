@@ -2349,6 +2349,163 @@ mod ownership {
         fixture
     }
 
+    fn imported_contract_fixture() -> Fixture {
+        let fixture = Fixture::new(false);
+        fs::write(
+            fixture.root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"*/implementation\", \"*/generated/contract\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("boxology.toml"),
+            ROOT_MANIFEST.replace(
+                "[\"Cargo.toml\", \"boxology.toml\"]",
+                "[\"Cargo.toml\", \"boxology.toml\", \"notes.txt\"]",
+            ),
+        )
+        .unwrap();
+        fs::write(fixture.root.join("notes.txt"), "base\n").unwrap();
+        for name in ["pong", "pang"] {
+            let root = fixture.root.join(name);
+            fs::create_dir_all(root.join("implementation/src")).unwrap();
+            fs::create_dir_all(root.join("generated/contract")).unwrap();
+            fs::write(
+                root.join("boxology.toml"),
+                format!(
+                    "{}\n[[imports]]\npackage = \"ping\"\ncontract = \"ping\"\n",
+                    PACKAGE_MANIFEST.replace("ping", name)
+                ),
+            )
+            .unwrap();
+            fs::write(
+                root.join("implementation/Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}-implementation\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"
+                ),
+            )
+            .unwrap();
+            fs::write(root.join("implementation/src/lib.rs"), CONTRACT).unwrap();
+            fs::write(
+                root.join("generated/contract/Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"
+                ),
+            )
+            .unwrap();
+        }
+        let mut members = Vec::new();
+        let mut packages = Vec::new();
+        for name in ["ping", "pong", "pang"] {
+            for role in ["implementation", "generated/contract"] {
+                let package = if role == "implementation" {
+                    format!("{name}-implementation")
+                } else {
+                    format!("{name}-contract")
+                };
+                let id = format!("path+file:///w/{name}/{role}#0.0.0");
+                members.push(id.clone());
+                packages.push(serde_json::json!({
+                    "id": id,
+                    "name": package,
+                    "manifest_path": format!("/w/{name}/{role}/Cargo.toml"),
+                    "dependencies": [],
+                }));
+            }
+        }
+        fs::write(
+            &fixture.metadata,
+            serde_json::to_vec(&serde_json::json!({
+                "workspace_root": "/w",
+                "workspace_members": members,
+                "packages": packages,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        fixture
+    }
+
+    #[test]
+    fn downstream_import_regeneration_is_owned_only_by_changed_exact_import() {
+        let fixture = imported_contract_fixture();
+        fixture.commit("base");
+        fs::write(
+            fixture.root.join("ping/implementation/src/lib.rs"),
+            CONTRACT_WITH_GREET,
+        )
+        .unwrap();
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        let changed = text(&fixture.git(&["diff", "--name-only", "HEAD", "--"]).stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert!(
+            changed
+                .iter()
+                .any(|path| path == "ping/generated/schema.json")
+        );
+        for importer in ["pang", "pong"] {
+            assert!(
+                changed
+                    .iter()
+                    .any(|path| { path == &format!("{importer}/generated/adapter/adapter.rs") })
+            );
+        }
+        let accepted = fixture.run(&["check", "--base", "HEAD"]);
+        assert_eq!(
+            accepted.status.code(),
+            Some(0),
+            "{}",
+            text(&accepted.stdout)
+        );
+        assert!(text(&accepted.stdout).contains("check regeneration passed\n"));
+        assert!(text(&accepted.stdout).contains("check diff-ownership passed\n"));
+
+        let tampered = fixture.root.join("pong/generated/adapter/adapter.rs");
+        let mut bytes = fs::read(&tampered).unwrap();
+        bytes.push(b'\n');
+        fs::write(&tampered, bytes).unwrap();
+        let rejected = fixture.run(&["check", "--base", "HEAD"]);
+        assert_eq!(rejected.status.code(), Some(1));
+        assert!(
+            text(&rejected.stdout)
+                .contains("BXW0083 pong/generated/adapter/adapter.rs package=pong")
+        );
+        assert!(ownership_failed(text(&rejected.stdout)).contains(
+            "BXW0101 pong/generated/adapter/adapter.rs package=pong candidates=[contract]"
+        ));
+
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        let upstream = fixture.root.join("ping/generated/schema.json");
+        let mut bytes = fs::read(&upstream).unwrap();
+        bytes.push(b'\n');
+        fs::write(&upstream, bytes).unwrap();
+        let rejected = fixture.run(&["check", "--base", "HEAD"]);
+        assert_eq!(rejected.status.code(), Some(1));
+        assert!(text(&rejected.stdout).contains("BXW0083 ping/generated/schema.json package=ping"));
+        let ownership = ownership_failed(text(&rejected.stdout));
+        assert!(ownership.contains(
+            "BXW0101 pang/generated/adapter/adapter.rs package=pang candidates=[contract]"
+        ));
+        assert!(ownership.contains(
+            "BXW0101 pong/generated/adapter/adapter.rs package=pong candidates=[contract]"
+        ));
+
+        let unrelated = imported_contract_fixture();
+        let stale = unrelated.root.join("pong/generated/adapter/adapter.rs");
+        fs::write(&stale, "stale\n").unwrap();
+        unrelated.commit("stale importer base");
+        assert_eq!(unrelated.run(&["generate"]).status.code(), Some(0));
+        fs::write(unrelated.root.join("notes.txt"), "unrelated\n").unwrap();
+        let rejected = unrelated.run(&["check", "--base", "HEAD"]);
+        assert_eq!(rejected.status.code(), Some(1));
+        assert!(text(&rejected.stdout).contains("check regeneration passed\n"));
+        assert!(ownership_failed(text(&rejected.stdout)).contains(
+            "BXW0101 pong/generated/adapter/adapter.rs package=pong candidates=[contract]"
+        ));
+    }
+
     #[test]
     fn generator_upgrade_accepts_only_verified_cross_package_regeneration() {
         let fixture = crab_upgrade_fixture();
