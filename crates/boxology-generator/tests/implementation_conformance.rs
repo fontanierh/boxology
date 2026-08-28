@@ -480,7 +480,7 @@ fn check_mutated(
     fs::write(
         case.join("Cargo.toml"),
         format!(
-            "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.1.1\",path={:?}}}\n",
+            "[workspace]\nmembers=[\"generated/contract\",\"consumer\"]\nresolver=\"3\"\n[workspace.dependencies]\nboxology-contract={{version=\"=0.2.0\",path={:?}}}\n",
             workspace.join("boxology-contract")
         ),
     ).unwrap();

@@ -27,8 +27,8 @@ server = [
 client = ["dep:boxology-runtime", "dep:http", "dep:reqwest", "dep:tokio"]
 
 [dependencies]
-boxology-contract = { version = "=0.1.1", path = "../boxology-contract" }
-boxology-runtime = { version = "=0.1.1", path = "../boxology-runtime", optional = true }
+boxology-contract = { version = "=0.2.0", path = "../boxology-contract" }
+boxology-runtime = { version = "=0.2.0", path = "../boxology-runtime", optional = true }
 bytes = { version = "=1.12.1", optional = true }
 http = { version = "=1.4.2", optional = true }
 http-body = { version = "=1.1.0", optional = true }
@@ -42,5 +42,5 @@ tokio = { version = "=1.53.0", default-features = false, features = ["macros", "
 tokio-util = { version = "=0.7.18", default-features = false, optional = true }
 
 [dev-dependencies]
-boxology-runtime = { version = "=0.1.1", path = "../boxology-runtime", features = ["test-support"] }
+boxology-runtime = { version = "=0.2.0", path = "../boxology-runtime", features = ["test-support"] }
 tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "test-util", "time"] }

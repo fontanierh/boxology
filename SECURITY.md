@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Boxology is currently an early-stage framework at version `0.0.0`. Security fixes are
+Boxology is currently an early-stage framework at version `0.2.0`. Security fixes are
 made on the latest `main` branch; there are no supported release branches yet.
 
 ## Reporting a vulnerability

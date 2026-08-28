@@ -11,9 +11,9 @@ description = "Compatibility classifier contract implementation"
 publish = true
 
 [dependencies]
-boxology = { version = "=0.1.1", path = "../../boxology" }
-boxology-classifier = { version = "=0.1.1", path = ".." }
-boxology-contract = { version = "=0.1.1", path = "../../boxology-contract" }
-boxology-runtime = { version = "=0.1.1", path = "../../boxology-runtime" }
-boxology-schema = { version = "=0.1.1", path = "../../boxology-schema" }
-boxology_generated_contract = { package = "classifier-contract", version = "=0.1.1", path = "../generated/contract" }
+boxology = { version = "=0.2.0", path = "../../boxology" }
+boxology-classifier = { version = "=0.2.0", path = ".." }
+boxology-contract = { version = "=0.2.0", path = "../../boxology-contract" }
+boxology-runtime = { version = "=0.2.0", path = "../../boxology-runtime" }
+boxology-schema = { version = "=0.2.0", path = "../../boxology-schema" }
+boxology_generated_contract = { package = "classifier-contract", version = "=0.2.0", path = "../generated/contract" }

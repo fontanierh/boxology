@@ -11,9 +11,9 @@ description = "Pure generation planning"
 publish = true
 
 [dependencies]
-boxology-contract = { version = "=0.1.1", path = "../boxology-contract" }
-boxology-contract-syntax = { version = "=0.1.1", path = "../boxology-contract-syntax" }
-boxology-schema = { version = "=0.1.1", path = "../boxology-schema" }
+boxology-contract = { version = "=0.2.0", path = "../boxology-contract" }
+boxology-contract-syntax = { version = "=0.2.0", path = "../boxology-contract-syntax" }
+boxology-schema = { version = "=0.2.0", path = "../boxology-schema" }
 proc-macro2 = { version = "=1.0.107", default-features = false, features = ["span-locations"] }
 serde_json = "=1.0.150"
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }
