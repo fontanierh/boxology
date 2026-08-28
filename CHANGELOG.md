@@ -39,6 +39,8 @@ This file records notable user-facing changes to Boxology.
   Cargo-backed validation after the write.
 - Kept selected generation available while an unrelated declared contract member is still being
   bootstrapped, with strict Cargo validation restored once the derived workspace is complete.
+- Resolved explicit package generation into its unique nested managed workspace, leaving legacy
+  monorepo siblings outside Boxology validation.
 - Corrected ownership and compatibility classification for wholly new nested managed workspaces.
 - Made generated contract sources byte-stable across `cargo fmt --all` and serialized the
   regression test's process-wide Cargo environment.

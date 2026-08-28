@@ -213,10 +213,21 @@ impl Fixture {
     }
 
     fn run_tools(&self, args: &[&str], mode: &str, fake_cargo: bool, fail: Option<&str>) -> Output {
+        self.run_tools_from(&self.root, args, mode, fake_cargo, fail)
+    }
+
+    fn run_tools_from(
+        &self,
+        directory: &std::path::Path,
+        args: &[&str],
+        mode: &str,
+        fake_cargo: bool,
+        fail: Option<&str>,
+    ) -> Output {
         let _lock = env_lock();
         let _ = fs::remove_file(&self.log);
         let mut command = Command::new(env!("CARGO_BIN_EXE_boxology"));
-        command.args(args).current_dir(&self.root);
+        command.args(args).current_dir(directory);
         command.env("BOXOLOGY_ARG_LOG", &self.log);
         command.env("BOXOLOGY_METADATA", &self.metadata);
         command.env("BOXOLOGY_MODE", mode);
@@ -616,6 +627,91 @@ fn selected_generation_tolerates_an_unrelated_missing_derived_member() {
         fixture.argv_log(),
         format!("{METADATA_ARGV}{METADATA_ARGV}")
     );
+}
+
+#[test]
+fn explicit_package_selection_enters_its_nested_managed_workspace() {
+    let isolated = Fixture::new(false);
+    assert_eq!(isolated.run(&["generate"]).status.code(), Some(0));
+    let expected = generated_snapshot(&isolated);
+
+    let nested = Fixture::new(false);
+    fs::write(
+        nested.cleanup.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"legacy\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    fs::create_dir(nested.cleanup.join("legacy")).unwrap();
+    fs::write(
+        nested.cleanup.join("legacy/Cargo.toml"),
+        "[package]\nname = \"legacy\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir(nested.cleanup.join("legacy/src")).unwrap();
+    fs::write(
+        nested.cleanup.join("legacy/src/lib.rs"),
+        "pub fn legacy() {}\n",
+    )
+    .unwrap();
+
+    let output = nested.run_tools_from(
+        &nested.cleanup,
+        &["generate", "--package", "ping"],
+        "ok",
+        true,
+        None,
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(text(&output.stderr).is_empty());
+    assert!(text(&output.stdout).contains("generate ping written\n"));
+    assert_eq!(generated_snapshot(&nested), expected);
+}
+
+#[test]
+fn explicit_package_selection_does_not_choose_between_managed_workspaces() {
+    let fixture = Fixture::new(false);
+    fs::write(
+        fixture.cleanup.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    let other = fixture.cleanup.join("other");
+    fs::create_dir_all(other.join("ping/implementation/src")).unwrap();
+    fs::create_dir_all(other.join("ping/generated/contract")).unwrap();
+    fs::write(
+        other.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"ping/implementation\", \"ping/generated/contract\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    fs::write(other.join("Cargo.lock"), b"").unwrap();
+    fs::write(other.join("boxology.toml"), ROOT_MANIFEST).unwrap();
+    fs::write(other.join("ping/boxology.toml"), PACKAGE_MANIFEST).unwrap();
+    fs::write(
+        other.join("ping/implementation/Cargo.toml"),
+        "[package]\nname = \"ping-implementation\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(other.join("ping/implementation/src/lib.rs"), CONTRACT).unwrap();
+    fs::write(
+        other.join("ping/generated/contract/Cargo.toml"),
+        "[package]\nname = \"ping-contract\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+
+    let output = fixture.run_tools_from(
+        &fixture.cleanup,
+        &["generate", "--package", "ping"],
+        "ok",
+        true,
+        None,
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stdout).is_empty());
+    assert!(text(&output.stderr).contains("BXW0042"));
+    assert!(!fixture.root.join("ping/generated/schema.json").exists());
+    assert!(!other.join("ping/generated/schema.json").exists());
 }
 
 #[test]
@@ -1396,11 +1492,35 @@ fn check_base_resolves_git_objects_from_a_nested_managed_workspace() {
             .unwrap();
         assert!(output.status.success(), "{}", text(&output.stderr));
     }
+    fs::write(
+        fixture.cleanup.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"legacy\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(fixture.cleanup.join("legacy/src")).unwrap();
+    fs::write(
+        fixture.cleanup.join("legacy/Cargo.toml"),
+        "[package]\nname = \"legacy\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.cleanup.join("legacy/src/lib.rs"),
+        "pub fn legacy() {}\n",
+    )
+    .unwrap();
+    assert!(fixture.git(&["add", ".."]).status.success());
+    assert!(
+        fixture
+            .git(&["commit", "-q", "-m", "outer legacy workspace"])
+            .status
+            .success()
+    );
 
     let output = fixture.run_in_parent_repository(&["check", "--base", "HEAD"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert!(text(&output.stderr).is_empty());
     assert!(text(&output.stdout).contains("check contract-classification passed\n"));
+    assert!(!text(&output.stdout).contains("legacy"));
     assert!(text(&output.stdout).ends_with("check result passed\n"));
 }
 

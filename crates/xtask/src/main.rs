@@ -137,6 +137,8 @@ const CLI_END_TO_END_TESTS: &[&str] = &[
     "check_validates_exact_and_wildcard_composition_with_the_planned_schema",
     "check_workspace_findings_fail_before_composition",
     "corrupted_cargo_toml_is_reported_with_captured_cargo_output",
+    "explicit_package_selection_does_not_choose_between_managed_workspaces",
+    "explicit_package_selection_enters_its_nested_managed_workspace",
     "first_write_then_byte_identical_unchanged_run_uses_exact_argv",
     "generate_incompatible_classification_still_exits_zero",
     "generate_bootstraps_when_metadata_has_only_the_existing_implementation",
@@ -169,8 +171,8 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("c141a001dbea023ebfd1f74e0a278ea889332b0a8d5790d3fbe4ddc00d65f786"),
-    source_digest: "25e9d8e4384810b5793a5db62db5f5c74bea24ca829d1a77175977e2fdcfe5b5",
-    body_digest: "9791ac671f3bc38264de5810ed53693542976313e9bbace67caf0c2c9fc3bc90",
+    source_digest: "9535f4e7337a147c4f32d294a059a9db650a0a06bb6c21c831f1b41ac7b092ff",
+    body_digest: "b790daee39707d65be0e6bd27f450414878952007103c23effc426dd32dab397",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-cli",
@@ -180,8 +182,8 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
     manifest_digest: Some("c141a001dbea023ebfd1f74e0a278ea889332b0a8d5790d3fbe4ddc00d65f786"),
-    source_digest: "786797dc72679a6b19169adee44234efeeed99c394d5781892e82111d8da2caa",
-    body_digest: "beebddbb6f7b9decf07cc839fd51919a6a6a124be85e25ea9acee8913d554de0",
+    source_digest: "6660eb71495ffef51281ca3242f912c7b89864d25b90765e85a197cb6bd20f1d",
+    body_digest: "af593c3334b27b60d608c070af5f2b75d671a1bb1c68ef42de03d1e6b33b456a",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),

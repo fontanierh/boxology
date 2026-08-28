@@ -235,6 +235,10 @@ boxology check [--base <git-revision>] [--format human|json]
 
 `boxology generate` is the explicit mutating operation. Without selection it regenerates only packages whose declared generation inputs changed; `--package` also permits an owner to request regeneration of one package with the current workspace generator. It rewrites declared derived outputs, updates generator provenance, and reports the semantic contract classification. It never edits handwritten source.
 
+When invoked from a partially managed monorepo, an explicit package selection resolves one unique
+descendant managed Cargo workspace and performs discovery, generation, and validation at that
+boundary. Unmanaged siblings are not adopted implicitly; ambiguous matches fail closed.
+
 Generation treats an absent declared box-contract crate as an incomplete derived workspace, not
 as a reason to make every other package unmaintainable. A selected package may regenerate from the
 validated manifest-owned source model while another declared contract member is still absent;
