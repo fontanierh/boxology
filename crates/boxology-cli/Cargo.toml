@@ -15,17 +15,17 @@ name = "boxology"
 path = "src/main.rs"
 
 [dependencies]
-boxology-classifier = { version = "=0.2.1", path = "../boxology-classifier" }
-boxology-cli-core = { version = "=0.2.1", path = "../boxology-cli-core" }
-boxology-contract = { version = "=0.2.1", path = "../boxology-contract" }
-boxology-manifest = { version = "=0.2.1", path = "../boxology-manifest" }
-boxology-runtime = { version = "=0.2.1", path = "../boxology-runtime" }
-boxology-schema = { version = "=0.2.1", path = "../boxology-schema" }
-boxology-workspace = { version = "=0.2.1", path = "../boxology-workspace" }
-check-implementation = { version = "=0.2.1", path = "../boxology-check/implementation" }
-check_contract = { package = "check-contract", version = "=0.2.1", path = "../boxology-check/generated/contract" }
-classifier-implementation = { version = "=0.2.1", path = "../boxology-classifier/implementation" }
-classifier_contract = { package = "classifier-contract", version = "=0.2.1", path = "../boxology-classifier/generated/contract" }
+boxology-classifier = { version = "=0.2.2", path = "../boxology-classifier" }
+boxology-cli-core = { version = "=0.2.2", path = "../boxology-cli-core" }
+boxology-contract = { version = "=0.2.2", path = "../boxology-contract" }
+boxology-manifest = { version = "=0.2.2", path = "../boxology-manifest" }
+boxology-runtime = { version = "=0.2.2", path = "../boxology-runtime" }
+boxology-schema = { version = "=0.2.2", path = "../boxology-schema" }
+boxology-workspace = { version = "=0.2.2", path = "../boxology-workspace" }
+check-implementation = { version = "=0.2.2", path = "../boxology-check/implementation" }
+check_contract = { package = "check-contract", version = "=0.2.2", path = "../boxology-check/generated/contract" }
+classifier-implementation = { version = "=0.2.2", path = "../boxology-classifier/implementation" }
+classifier_contract = { package = "classifier-contract", version = "=0.2.2", path = "../boxology-classifier/generated/contract" }
 serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 
@@ -34,6 +34,6 @@ name = "surface_lock"
 path = "tests/surface_lock.rs"
 
 [dev-dependencies]
-check_contract = { package = "check-contract", version = "=0.2.1", path = "../boxology-check/generated/contract", features = ["test-support"] }
-classifier_contract = { package = "classifier-contract", version = "=0.2.1", path = "../boxology-classifier/generated/contract", features = ["test-support"] }
+check_contract = { package = "check-contract", version = "=0.2.2", path = "../boxology-check/generated/contract", features = ["test-support"] }
+classifier_contract = { package = "classifier-contract", version = "=0.2.2", path = "../boxology-classifier/generated/contract", features = ["test-support"] }
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }

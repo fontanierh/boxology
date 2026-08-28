@@ -4,11 +4,37 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
+## [0.2.2] - 2026-08-28
+
 ### Fixed
 
 - Allowed an owned contract change to carry exact downstream adapter regeneration when both the
   imported and importing generation plans are byte-verified, without accepting stale, tampered,
   or unrelated foreign derived outputs.
+
+### Distribution
+
+- Published the ordered `0.2.2` crate closure on crates.io with exact dependency versions and the
+  existing resumable, one-crate-at-a-time release safeguards.
+
+### Upgrading an existing setup
+
+Upgrade both installed tools from `0.2.1` to the patch release:
+
+```sh
+cargo install --force --locked --version 0.2.2 boxology-init
+cargo install --force --locked --version 0.2.2 boxology-cli
+```
+
+Most handwritten boxes only need the authoring facade:
+
+```toml
+[dependencies]
+boxology = "=0.2.2"
+```
+
+No contract API change is required. A contract change may now carry exact regenerated adapters in
+packages that import it; stale, tampered, and unrelated foreign outputs remain rejected.
 
 ## [0.2.1] - 2026-08-28
 

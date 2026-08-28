@@ -6,9 +6,9 @@ members = ["composition"]
 edition = "2024"
 
 [workspace.dependencies]
-boxology-contract = { version = "=0.2.1", path = "../../boxology-contract" }
-boxology-http = { version = "=0.2.1", path = "../../boxology-http" }
-boxology-manifest = { version = "=0.2.1", path = "../../boxology-manifest" }
-boxology-runtime = { version = "=0.2.1", path = "../../boxology-runtime" }
+boxology-contract = { version = "=0.2.2", path = "../../boxology-contract" }
+boxology-http = { version = "=0.2.2", path = "../../boxology-http" }
+boxology-manifest = { version = "=0.2.2", path = "../../boxology-manifest" }
+boxology-runtime = { version = "=0.2.2", path = "../../boxology-runtime" }
 ping-contract = { version = "=0.0.0", path = "../ping/generated/contract" }
 tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }

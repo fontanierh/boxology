@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "boxology"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "boxology-contract",
  "boxology-macros",
@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-contract"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "ryu",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-contract-syntax"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "boxology-contract",
  "proc-macro2",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-http"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "boxology-contract",
  "boxology-runtime",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-macros"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "boxology-contract-syntax",
  "proc-macro2",
@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-manifest"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "boxology-contract",
  "toml_edit",
@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "boxology-runtime"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "boxology-contract",
  "tokio",
