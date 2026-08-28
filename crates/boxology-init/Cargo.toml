@@ -15,10 +15,10 @@ name = "boxology-init"
 path = "src/main.rs"
 
 [dependencies]
-boxology-contract = { version = "=0.2.1", path = "../boxology-contract" }
-boxology-generator = { version = "=0.2.1", path = "../boxology-generator" }
-boxology-generator-model = { version = "=0.2.1", path = "../boxology-generator-model" }
-boxology-workspace = { version = "=0.2.1", path = "../boxology-workspace" }
+boxology-contract = { version = "=0.2.2", path = "../boxology-contract" }
+boxology-generator = { version = "=0.2.2", path = "../boxology-generator" }
+boxology-generator-model = { version = "=0.2.2", path = "../boxology-generator-model" }
+boxology-workspace = { version = "=0.2.2", path = "../boxology-workspace" }
 
 [dev-dependencies]
-boxology-manifest = { version = "=0.2.1", path = "../boxology-manifest" }
+boxology-manifest = { version = "=0.2.2", path = "../boxology-manifest" }

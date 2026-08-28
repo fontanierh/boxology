@@ -84,7 +84,7 @@ fn inherited(table: &dyn TableLike, key: &str) -> bool {
 fn check_readme(readme: &str, errors: &mut Vec<String>) {
     for truth in ["early-stage framework", "V0 was completed on 2026-08-09",
         "Applications built with Boxology are separate products and are not included in this repository.",
-        "Boxology `0.2.1` tools are published on crates.io",
+        "Boxology `0.2.2` tools are published on crates.io",
         "cargo install boxology-init --locked",
         "cargo install boxology-cli --locked", "cargo install --git https://github.com/fontanierh/boxology",
         "requires Rust 1.97.1", "dual-licensed under [MIT](LICENSE-MIT) or [Apache License 2.0](LICENSE-APACHE)"] {
@@ -276,7 +276,7 @@ fn check_community(root: &Path, errors: &mut Vec<String>) {
                 relative,
                 &text,
                 &[
-                    "version `0.2.1`",
+                    "version `0.2.2`",
                     "latest `main` branch",
                     "Do not disclose",
                     CONTACT,
@@ -330,7 +330,7 @@ fn check(root: &Path) -> Result<(), Vec<String>> {
         else { return Err(vec!["Cargo.toml: missing [workspace]".into()]); };
     let Some(package) = workspace.get("package").and_then(Item::as_table_like)
         else { return Err(vec!["Cargo.toml: missing [workspace.package]".into()]); };
-    let expected = [("version", "0.2.1"), ("edition", "2024"), ("rust-version", "1.97.1"),
+    let expected = [("version", "0.2.2"), ("edition", "2024"), ("rust-version", "1.97.1"),
         ("license", "MIT OR Apache-2.0"), ("repository", REPOSITORY),
         ("homepage", REPOSITORY), ("readme", "README.md")];
     let keys: BTreeSet<_> = package.iter().map(|(key, _)| key).collect();
@@ -391,7 +391,7 @@ fn check(root: &Path) -> Result<(), Vec<String>> {
     }
     match fs::read_to_string(root.join("CHANGELOG.md")) {
         Err(error) => errors.push(format!("read CHANGELOG.md: {error}")),
-        Ok(text) if text.contains("## [0.2.1] - 2026-08-28") && text.contains("Published the ordered `0.2.1` crate closure")
+        Ok(text) if text.contains("## [0.2.2] - 2026-08-28") && text.contains("Published the ordered `0.2.2` crate closure")
             && text.contains("### Upgrading an existing setup")
             && text.contains("Consumers do not add all 19 published crates")
             && text.contains("Do not mechanically replace those\ngenerated entries with crates.io versions")
@@ -445,9 +445,9 @@ mod tests {
             ("crates/xtask/Cargo.toml", "version = \"0.0.0\"", "version = \"1.2.3\""),
             ("LICENSE-MIT", "Henry Fontanier", "H. Fontanier"),
             ("README.md", "crates.io", "registry.invalid"),
-            ("CHANGELOG.md", "Published the ordered `0.2.1` crate closure", "Prepared the ordered `0.2.1` crate closure"),
+            ("CHANGELOG.md", "Published the ordered `0.2.2` crate closure", "Prepared the ordered `0.2.2` crate closure"),
             ("CHANGELOG.md", "Consumers do not add all 19 published crates", "Consumers add all 19 published crates"),
-            ("SECURITY.md", "version `0.2.1`", "version `0.1.1`"),
+            ("SECURITY.md", "version `0.2.2`", "version `0.1.1`"),
         ] {
             let fixture = Fixture::new(); fixture.mutate(file, from, to);
             assert_eq!(run(&fixture.0), 1, "mutation survived: {file} {from}");

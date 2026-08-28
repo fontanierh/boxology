@@ -4,7 +4,7 @@ const PACKAGE: &str = include_str!("../Cargo.toml");
 const LIB: &str = include_str!("../src/lib.rs");
 const CONTRACT: &str = include_str!("../src/contract.rs");
 const ADAPTER: &str = include_str!("../src/generated_adapter.rs");
-const PACKAGE_HASH: u64 = 1_770_309_523_318_470_777;
+const PACKAGE_HASH: u64 = 3_006_759_770_784_564_077;
 const LIB_HASH: u64 = 10_757_569_697_766_627_072;
 const CONTRACT_HASH: u64 = 4_186_782_839_223_558_405;
 
