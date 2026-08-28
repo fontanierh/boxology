@@ -52,6 +52,10 @@ fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
         let _ = writeln!(stdout, "{USAGE}");
         return 0;
     }
+    if args == ["--version"] {
+        let _ = writeln!(stdout, "boxology-init {}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
     let args = match parse(args) {
         Ok(args) => args,
         Err(()) => return usage_failure(stderr),

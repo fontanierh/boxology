@@ -62,6 +62,10 @@ fn run(args: &[String], root: &Path, stdout: &mut dyn Write, stderr: &mut dyn Wr
         let _ = writeln!(stdout, "{USAGE}");
         return 0;
     }
+    if args == ["--version"] {
+        let _ = writeln!(stdout, "boxology {}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
     let selection = match parse(args) {
         Ok(selection) => selection,
         Err(()) => {

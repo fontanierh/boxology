@@ -71,6 +71,21 @@ fn help_is_a_stable_successful_installed_binary_path() {
     assert!(output.stderr.is_empty());
 }
 
+#[test]
+fn version_is_a_stable_successful_installed_binary_path() {
+    let output = Command::new(env!("CARGO_BIN_EXE_boxology-init"))
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        text(&output.stdout),
+        concat!("boxology-init ", env!("CARGO_PKG_VERSION"), "\n")
+    );
+    assert!(output.stderr.is_empty());
+}
+
 fn regular_files(root: &Path) -> Vec<String> {
     fn visit(root: &Path, directory: &Path, found: &mut Vec<String>) {
         for entry in fs::read_dir(directory).unwrap() {
@@ -156,6 +171,7 @@ fn assert_usage(args: &[&str]) {
 fn malformed_invocations_are_usage_failures() {
     for args in [
         &[][..], &["--name"][..], &["--name", "demo"][..],
+        &["--version", "extra"][..],
         &["--name", "demo", "--target", "t", "extra"][..],
         &["--unknown", "x"][..], &["demo"][..],
         &["--name=demo", "--target", "t"][..],
