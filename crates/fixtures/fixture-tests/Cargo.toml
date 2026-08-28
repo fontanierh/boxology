@@ -15,4 +15,4 @@ greeter-implementation = { version = "=0.0.0", path = "../greeter/implementation
 hello-contract = { version = "=0.0.0", path = "../hello/generated/contract", features = ["test-support"] }
 hello-implementation = { version = "=0.0.0", path = "../hello/implementation" }
 serde_json = "=1.0.150"
-tokio = { version = "=1.53.0", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }
