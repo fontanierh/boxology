@@ -1,5 +1,5 @@
 #[rustfmt::skip]
-use std::{collections::{BTreeMap, BTreeSet}, env, fs, path::Path, process::{Command, Output}};
+use std::{collections::{BTreeMap, BTreeSet}, env, fs, path::{Path, PathBuf}, process::{Command, Output}};
 use toml_edit::{DocumentMut, Item, TableLike};
 
 const VERSION: &str = "0.1.1";
@@ -53,6 +53,27 @@ fn inventory(output: &Output, name: &str) -> Result<(), String> {
     }
     Ok(())
 }
+fn parse_target_directory(bytes: &[u8]) -> Result<PathBuf, String> {
+    let metadata: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|error| format!("parse cargo metadata: {error}"))?;
+    let path = metadata
+        .get("target_directory")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| "cargo metadata target_directory must be an absolute path".to_owned())?;
+    Ok(path)
+}
+fn target_directory(root: &Path) -> Result<PathBuf, String> {
+    let output = cargo(
+        root,
+        &["metadata", "--locked", "--format-version", "1", "--no-deps"],
+    )?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+    }
+    parse_target_directory(&output.stdout)
+}
 fn preflight(root: &Path) -> u8 {
     for (name, _) in RELEASE {
         let output = match cargo(
@@ -82,7 +103,14 @@ fn preflight(root: &Path) -> u8 {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
         return 1;
     }
-    let archive = root.join(format!("target/package/{root_name}-{VERSION}.crate"));
+    let target = match target_directory(root) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("release: {error}");
+            return 1;
+        }
+    };
+    let archive = target.join(format!("package/{root_name}-{VERSION}.crate"));
     let tar = Command::new("tar")
         .args(["-tzf"])
         .arg(&archive)
@@ -247,5 +275,36 @@ mod tests {
                 .iter()
                 .any(|e| e.contains("order places"))
         );
+    }
+    #[test]
+    fn cargo_metadata_resolves_absolute_and_relative_target_directories() {
+        let root = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .expect("workspace root is canonical");
+        let read = |target: &Path| {
+            let output = Command::new("cargo")
+                .current_dir(&root)
+                .env("CARGO_TARGET_DIR", target)
+                .args(["metadata", "--locked", "--format-version", "1", "--no-deps"])
+                .output()
+                .expect("cargo metadata starts");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            parse_target_directory(&output.stdout).expect("metadata carries an absolute target")
+        };
+        let relative = Path::new(".boxology-release-relative-target");
+        assert_eq!(read(relative), root.join(relative));
+        let absolute = env::temp_dir().join("boxology-release-absolute-target");
+        assert_eq!(read(&absolute), absolute);
+
+        for mutant in [
+            br#"{}"#.as_slice(),
+            br#"{"target_directory":null}"#.as_slice(),
+            br#"{"target_directory":"relative"}"#.as_slice(),
+        ] {
+            assert!(parse_target_directory(mutant).is_err());
+        }
     }
 }

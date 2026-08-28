@@ -6,6 +6,7 @@ This file records notable user-facing changes to Boxology.
 
 ### Fixed
 
+- Made release preflight inspect package archives in Cargo's effective target directory.
 - Generated Rust headers and schema provenance now report the actual `boxology-generator` package
   version instead of the stale `0.0.0` placeholder.
 - Documented the canonical field-presence wire convention, made explicit `null` on an optional

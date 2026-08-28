@@ -59,7 +59,8 @@ impl ReviewService {
 Run `cargo xtask ci --base origin/main`, then `cargo xtask release preflight`. Preflight checks the
 exact `0.1.1` closure and order, inspects every crate's planned file inventory (including README and
 both licenses), and creates, verifies, and inspects the real dependency-free root `.crate`. It does
-not claim to package dependent crates: Cargo requires their predecessors to be visible on crates.io.
+so in Cargo's effective target directory, including an absolute or relative `CARGO_TARGET_DIR`. It
+does not claim to package dependent crates: Cargo requires their predecessors to be visible on crates.io.
 
 Configure Cargo's crates.io credentials securely, then publish exactly the next crate shown by the
 order using `BOXOLOGY_RELEASE_PUBLISH=1 cargo xtask release publish <crate-name>`. Each invocation
