@@ -1699,7 +1699,10 @@ const GIT_SH: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$BOXOLOGY_GIT_ARG_LO
 
 mod ingest {
     use super::*;
-    use boxology_cli::{BaseError, BaseInputsError, ResolvedBase, base_diff_inputs};
+    use boxology_cli::{
+        BaseError, BaseInputsError, ResolvedBase, base_diff_inputs,
+        base_diff_inputs_with_candidate, walk,
+    };
     use boxology_manifest::RelativePath;
     use boxology_workspace::diff_ownership;
     use std::os::unix::fs::symlink;
@@ -1846,6 +1849,26 @@ mod ingest {
                 "ls-tree\n-r\n-z\n{OID40}\n--\n.\n--\ncat-file\nblob\n{m}\n--\ncat-file\nblob\n{l}\n--\ndiff\n--name-only\n--relative\n-z\n--no-renames\n--no-ext-diff\n{OID40}\n--\n.\n--\n"
             )
         );
+
+        seed(&f, b"", b"", &[], [0, 0, 0]);
+        let candidate = walk(&f.root).unwrap();
+        let bootstrap = with_git(&f, || {
+            base_diff_inputs_with_candidate(
+                &f.root,
+                &base(),
+                candidate.files(),
+                candidate.manifests(),
+            )
+        })
+        .unwrap();
+        assert!(bootstrap.is_bootstrapping());
+        let mut package_ids = bootstrap
+            .packages()
+            .iter()
+            .map(|package| package.id().as_str())
+            .collect::<Vec<_>>();
+        package_ids.sort_unstable();
+        assert_eq!(package_ids, ["ping", "platform"]);
 
         let good = tre("100644", "blob", &m, "boxology.toml");
         let mut no_tab = format!("100644 blob {m} path").into_bytes();
@@ -2042,6 +2065,52 @@ mod ownership {
     }
 
     #[test]
+    fn established_workspace_accepts_an_additive_package() {
+        let fixture = ready();
+        fs::write(
+            fixture.root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"*/implementation\", \"*/generated/contract\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        fixture.commit("base");
+
+        fs::create_dir_all(fixture.root.join("pong/implementation/src")).unwrap();
+        fs::write(
+            fixture.root.join("pong/boxology.toml"),
+            PACKAGE_MANIFEST.replace("ping", "pong"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("pong/implementation/Cargo.toml"),
+            "[package]\nname = \"pong-implementation\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("pong/implementation/src/lib.rs"),
+            CONTRACT,
+        )
+        .unwrap();
+        fs::write(
+            &fixture.metadata,
+            r#"{"workspace_root":"/w","workspace_members":["path+file:///w/ping/generated/contract#0.0.0","path+file:///w/ping/implementation#0.0.0","path+file:///w/pong/generated/contract#0.0.0","path+file:///w/pong/implementation#0.0.0"],"packages":[{"id":"path+file:///w/ping/generated/contract#0.0.0","name":"ping-contract","manifest_path":"/w/ping/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/ping/implementation#0.0.0","name":"ping-implementation","manifest_path":"/w/ping/implementation/Cargo.toml","dependencies":[]},{"id":"path+file:///w/pong/generated/contract#0.0.0","name":"pong-contract","manifest_path":"/w/pong/generated/contract/Cargo.toml","dependencies":[]},{"id":"path+file:///w/pong/implementation#0.0.0","name":"pong-implementation","manifest_path":"/w/pong/implementation/Cargo.toml","dependencies":[]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            fixture
+                .run(&["generate", "--package", "pong"])
+                .status
+                .code(),
+            Some(0)
+        );
+        stage(&fixture);
+        let output = fixture.run(&["check", "--base", "HEAD"]);
+        let stdout = text(&output.stdout);
+        assert_eq!(output.status.code(), Some(0), "{stdout}");
+        assert!(stdout.contains("BXC0026 pong pong additive"));
+        assert!(stdout.contains("check diff-ownership passed\n"));
+    }
+
+    #[test]
     fn report_wiring_real_git_cases() {
         // Accountable source edit passes after regeneration.
         let pass = ready();
@@ -2059,53 +2128,33 @@ mod ownership {
         assert!(text(&output.stdout).contains(QUALITY));
         assert!(!text(&output.stdout).contains("{\""));
 
-        // Unowned under base declarations even when candidate authorizes the path.
-        let unowned = ready();
-        unowned.commit("base");
-        fs::write(
-            unowned.root.join("boxology.toml"),
-            "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\", \"orphan.rs\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
-        )
-        .unwrap();
-        fs::write(unowned.root.join("orphan.rs"), b"x").unwrap();
-        stage(&unowned);
-        let output = unowned.run(&["check", "--base", "HEAD"]);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(text(&output.stderr).is_empty());
-        assert_eq!(
-            ownership_failed(text(&output.stdout)),
-            "check diff-ownership failed\n  BXW0098 orphan.rs package= candidates=[]\n"
+        let clean = ready();
+        clean.commit("base");
+        let output = clean.run(&["check", "--base", "HEAD"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+        assert!(text(&output.stdout).contains("check diff-ownership skipped\n"));
+        assert!(
+            text(&output.stdout)
+                .contains("  not run: 0 changed paths compared with the selected base\n")
         );
 
-        // Ambiguous base claims on a path the candidate uniquely owns.
-        let ambiguous = ready();
+        // Introduced paths use validated submitted declarations.
+        let additive = ready();
+        additive.commit("base");
         fs::write(
-            ambiguous.root.join("boxology.toml"),
-            "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\", \"ping/shared/**\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
+            additive.root.join("boxology.toml"),
+            "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\", \"one.rs\", \"two.rs\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
         )
         .unwrap();
-        fs::write(
-            ambiguous.root.join("ping/boxology.toml"),
-            "schema = 1\nid = \"ping\"\nkind = \"box\"\nowned = [\"boxology.toml\", \"implementation/**\", \"shared/**\"]\n\n[[crates]]\ncargo_package = \"ping-implementation\"\npath = \"implementation\"\nrole = \"box-implementation\"\n\n[[crates]]\ncargo_package = \"ping-contract\"\npath = \"generated/contract\"\nrole = \"box-contract\"\n\n[[derived]]\nid = \"contract\"\ngenerator = \"boxology-contract\"\ninputs = [\"boxology.toml\", \"implementation/src/**\"]\noutputs = [\"generated/**\"]\n",
-        )
-        .unwrap();
-        ambiguous.commit("overlap patterns");
-        fs::write(ambiguous.root.join("ping/boxology.toml"), PACKAGE_MANIFEST).unwrap();
-        fs::write(
-            ambiguous.root.join("boxology.toml"),
-            "schema = 1\nid = \"platform\"\nkind = \"platform\"\nowned = [\"Cargo.toml\", \"boxology.toml\", \"ping/shared/**\"]\n\n[[derived]]\nid = \"lockfile\"\ngenerator = \"cargo\"\ninputs = [\"Cargo.toml\"]\noutputs = [\"Cargo.lock\"]\n",
-        )
-        .unwrap();
-        fs::create_dir_all(ambiguous.root.join("ping/shared")).unwrap();
-        fs::write(ambiguous.root.join("ping/shared/x.rs"), b"x").unwrap();
-        stage(&ambiguous);
-        let output = ambiguous.run(&["check", "--base", "HEAD"]);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(ownership_failed(text(&output.stdout)).contains(
-            "BXW0099 ping/shared/x.rs package= candidates=[platform boxology.toml ping/shared/**,ping ping/boxology.toml shared/**]"
-        ));
+        fs::write(additive.root.join("one.rs"), b"one").unwrap();
+        fs::write(additive.root.join("two.rs"), b"two").unwrap();
+        stage(&additive);
+        let output = additive.run(&["check", "--base", "HEAD"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+        assert!(text(&output.stderr).is_empty());
+        assert!(text(&output.stdout).contains("check diff-ownership passed\n"));
 
-        // Zero non-derived owners (lock-only) and two non-derived owners.
+        // A derived-only diff still fails; a coordinated two-owner diff passes.
         let zero = ready();
         zero.commit("base");
         fs::write(zero.root.join("Cargo.lock"), b"# changed\n").unwrap();
@@ -2126,11 +2175,8 @@ mod ownership {
         .unwrap();
         assert_eq!(two.run(&["generate"]).status.code(), Some(0));
         let output = two.run(&["check", "--base", "HEAD"]);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(
-            ownership_failed(text(&output.stdout))
-                .contains("BXW0100 Cargo.toml package= candidates=[ping,platform]")
-        );
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+        assert!(text(&output.stdout).contains("check diff-ownership passed\n"));
 
         // Foreign-derived output under another package.
         let foreign = ready();
@@ -2376,7 +2422,7 @@ mod ownership {
                 .contains("contract classification skipped: no merge base with main is available")
         );
 
-        // Ownership failure continues into later tools; final exit 1.
+        // Submitted ownership passes and a later tool failure still determines the final exit.
         let cont = ready();
         cont.commit("base");
         fs::write(cont.root.join("orphan-not"), b"x").unwrap();
@@ -2389,8 +2435,7 @@ mod ownership {
         let output = cont.run_tools(&["check", "--base", "HEAD"], "ok", true, Some("clippy"));
         let stdout = text(&output.stdout);
         assert_eq!(output.status.code(), Some(1));
-        assert!(stdout.contains("check diff-ownership failed\n"));
-        assert!(stdout.contains("BXW0098 orphan-not package= candidates=[]"));
+        assert!(stdout.contains("check diff-ownership passed\n"));
         assert!(stdout.contains("check clippy failed\n"));
         assert!(stdout.contains(QUALITY));
         assert!(stdout.ends_with("check result failed\n"));

@@ -31,6 +31,8 @@ The contract can include:
 - Any specialized validation defined by the package owners.
 
 The harness can add mandatory system-level checks beyond what an individual package declares.
+The shipped whole-workspace checker executes every declared package quality command, including for
+coordinated diffs with several exact owners; package selection remains future harness policy.
 
 Package kinds add different baselines. Boxes require contract compatibility and behavioral validation. Providers require conformance and isolation evidence. Compositions require assembly and integration validation. Platform packages require whole-workspace validation and stricter approval by default, subject to configured harness policy, because runtime, CI, build, generator, and enforcement changes can affect every package.
 
@@ -112,8 +114,10 @@ The agreed default guidance was:
 
 In the foundation, "protected" means that Boxology identifies these artifacts and the shipped
 skill tells the lead to flag their changes for human review. With `--base`, `boxology check` reads
-base manifests and schemas to attribute changed paths and classify contract differences; that is
-reporting under base declarations, not execution of immutable base policy. The candidate owns the
+base and validated submitted manifests plus base schemas. Existing exact paths retain base
+ownership authority; introduced paths use submitted ownership authority, and contract differences
+remain classified against the base schema. This is reporting, not execution of immutable base
+policy. The candidate owns the
 checker and workflow, and Boxology ships no merger replay, branch protection, enforced approval,
 or separation of duties. Operators can add required checks, branch protection, review ownership,
 or harness policy when they want a stronger boundary. Semantic self-protection remains
