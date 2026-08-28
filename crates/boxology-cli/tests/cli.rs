@@ -48,6 +48,21 @@ fn help_is_a_stable_successful_installed_binary_path() {
     assert_eq!(text(&output.stdout), USAGE);
     assert!(output.stderr.is_empty());
 }
+
+#[test]
+fn version_is_a_stable_successful_installed_binary_path() {
+    let output = Command::new(env!("CARGO_BIN_EXE_boxology"))
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        text(&output.stdout),
+        concat!("boxology ", env!("CARGO_PKG_VERSION"), "\n")
+    );
+    assert!(output.stderr.is_empty());
+}
 const METADATA_ARGV: &str = "metadata\n--format-version\n1\n--locked\n--no-deps\n";
 const REQUEST_DIAGNOSTICS_JSON: &str = r#"{
   "schema": "boxology.generator-diagnostics@1",
@@ -423,6 +438,7 @@ fn schema(box_id: &str, capabilities: &[(&str, &str)]) -> Vec<u8> {
 fn parsing_accepts_only_the_two_generate_forms() {
     for args in [
         vec![],
+        vec!["--version", "extra"],
         vec!["generate", "--package"],
         vec!["generate", "--package", "ping", "extra"],
         vec!["generate", "--package=ping"],

@@ -6,6 +6,7 @@ This file records notable user-facing changes to Boxology.
 
 ### Fixed
 
+- Made `boxology --version` and `boxology-init --version` report the installed package version.
 - Made workspace discovery honor standard Git ignores without hiding tracked files, including when
   the managed workspace is nested below the repository root.
 - Removed ignored semver build metadata from exact `toml_edit` dependency requirements so ordinary
