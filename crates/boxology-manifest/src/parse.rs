@@ -11,7 +11,7 @@ type Fields<'t> = &'t dyn TableLike;
 type Element<'i> = (Span, Fields<'i>);
 const PACKAGES: Code = "boxology-details/02-packages.md";
 const ROLES: Code =
-    "a crate role must be box-implementation, box-contract, composition, or platform";
+    "a crate role must be box-implementation, box-contract, composition, provider, or platform";
 const ORIGIN: LineColumn = LineColumn { line: 1, column: 1 };
 const POINT: Span = Span {
     start: ORIGIN,
@@ -22,21 +22,22 @@ const TOP_KEYS: &str = "schema id kind owned display_name fixtures protected qua
 /// The only key `[quality]` models; nesting inherits the same fail-closed inventory rule.
 const QUALITY_KEYS: &str = "commands";
 /// `[composition]`'s own keys: an array of tables nested in a table is still that table's key.
-const COMPOSITION_KEYS: &str = "boxes bindings";
+const COMPOSITION_KEYS: &str = "boxes providers bindings";
 /// The key inventory of one element of each array-of-tables section, applied per element.
 const CRATE_KEYS: &str = "cargo_package path role";
 const DERIVED_KEYS: &str = "id generator inputs outputs";
 const IMPORT_KEYS: &str = "package contract";
 const BINDING_KEYS: &str = "box capability transport exposure";
 
-/// The declared package kind. `provider` parses as TOML and is rejected by rule (BXW0008), so it
-/// is deliberately absent here: the model can only hold a kind v0 supports.
+/// The declared package kind.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Kind {
     /// A box package: one implementation and its generated contract.
     Box,
     /// A composition package: a wiring of boxes.
     Composition,
+    /// A provider package: an external protocol or technical strategy owned as one unit.
+    Provider,
     /// A platform package: repository-wide infrastructure.
     Platform,
 }
@@ -50,6 +51,8 @@ pub enum CrateRole {
     BoxContract,
     /// A crate wiring selected boxes into a composition.
     Composition,
+    /// An optional crate implementing a provider package.
+    Provider,
     /// Repository-wide platform infrastructure.
     Platform,
 }
@@ -60,6 +63,7 @@ impl CrateRole {
             "box-implementation" => Some(Self::BoxImplementation),
             "box-contract" => Some(Self::BoxContract),
             "composition" => Some(Self::Composition),
+            "provider" => Some(Self::Provider),
             "platform" => Some(Self::Platform),
             _ => None,
         }
@@ -209,11 +213,13 @@ impl Binding {
 #[derive(Debug, Eq, PartialEq)]
 pub struct Composition {
     boxes: Vec<BoxId>,
+    providers: Vec<BoxId>,
     bindings: Vec<Binding>,
 }
 impl Composition {
     ref_getters! {
         #[doc = "Returns the selected boxes, in declaration order."] boxes: &[BoxId] = boxes;
+        #[doc = "Returns the selected providers, in declaration order."] providers: &[BoxId] = providers;
         #[doc = "Returns the declared bindings, in declaration order."] bindings: &[Binding] = bindings;
     }
 }
@@ -279,11 +285,8 @@ impl Manifest {
         let kind = match parser.text(root, "kind", "BXW0007") {
             Some("box") => Some(Kind::Box),
             Some("composition") => Some(Kind::Composition),
+            Some("provider") => Some(Kind::Provider),
             Some("platform") => Some(Kind::Platform),
-            Some("provider") => {
-                parser.key("BXW0008", kind_span, "kind");
-                None
-            }
             Some(_) => {
                 parser.key("BXW0009", kind_span, "kind");
                 None
@@ -305,7 +308,7 @@ impl Manifest {
             Some(item) => {
                 // Both rules below reject the key's presence, not the value, so both span the key.
                 let span = key_span(source, root, "fixtures");
-                if matches!(kind, Some(Kind::Box | Kind::Composition)) {
+                if matches!(kind, Some(Kind::Box | Kind::Composition | Kind::Provider)) {
                     parser.key("BXW0021", span, "fixtures");
                 }
                 if item.as_array().is_some_and(|array| array.is_empty()) {
@@ -320,7 +323,7 @@ impl Manifest {
             None => Vec::new(),
             Some(item) => {
                 let span = key_span(source, root, "protected");
-                if matches!(kind, Some(Kind::Box | Kind::Composition)) {
+                if matches!(kind, Some(Kind::Box | Kind::Composition | Kind::Provider)) {
                     parser.key("BXW0074", span, "protected");
                 }
                 if item.as_array().is_some_and(|array| array.is_empty()) {
@@ -658,7 +661,7 @@ impl Parser<'_> {
             }
             return None;
         };
-        if matches!(kind, Some(Kind::Box | Kind::Platform)) {
+        if matches!(kind, Some(Kind::Box | Kind::Provider | Kind::Platform)) {
             let span = key_span(self.source, root, "composition");
             self.key("BXW0022", span, "composition");
         }
@@ -669,10 +672,17 @@ impl Parser<'_> {
         };
         self.unknown(table, COMPOSITION_KEYS);
         let boxes = self.boxes(table, whole);
+        let providers = table
+            .get("providers")
+            .map_or(Vec::new(), |item| self.selections(table, "providers", item));
         let bindings = table
             .get("bindings")
             .map_or(Vec::new(), |i| self.bindings(i, &boxes));
-        Some(Composition { boxes, bindings })
+        Some(Composition {
+            boxes,
+            providers,
+            bindings,
+        })
     }
     /// Reads `boxes`: required, unique, box-id grammar, and non-empty. Emptiness is BXW0034 because
     /// this list's presence is itself a claim, unlike a container section's.
@@ -681,24 +691,29 @@ impl Parser<'_> {
             self.key("BXW0012", whole, "boxes");
             return Vec::new();
         };
+        self.selections(at, "boxes", item)
+    }
+    /// Reads one nonempty, unique list of package identities. The key-specific wrapper decides
+    /// whether the list itself is required; providers are optional while boxes remain required.
+    fn selections(&mut self, at: Fields<'_>, key: Code, item: &Item) -> Vec<BoxId> {
         let Some(array) = item.as_array() else {
-            self.key("BXW0011", item_span(self.source, Some(item)), "boxes");
+            self.key("BXW0011", item_span(self.source, Some(item)), key);
             return Vec::new();
         };
         if array.is_empty() {
-            self.key("BXW0034", key_span(self.source, at, "boxes"), "boxes");
+            self.key("BXW0034", key_span(self.source, at, key), key);
         }
-        let mut boxes: Vec<BoxId> = Vec::new();
+        let mut selected: Vec<BoxId> = Vec::new();
         for value in array.iter() {
             let span = locate(self.source, value.span());
             match value.as_str().map(BoxId::new) {
-                None => self.key("BXW0011", span, "boxes"),
-                Some(Err(_)) => self.key("BXW0035", span, "boxes"),
-                Some(Ok(id)) if boxes.contains(&id) => self.key("BXW0036", span, "boxes"),
-                Some(Ok(id)) => boxes.push(id),
+                None => self.key("BXW0011", span, key),
+                Some(Err(_)) => self.key("BXW0035", span, key),
+                Some(Ok(id)) if selected.contains(&id) => self.key("BXW0036", span, key),
+                Some(Ok(id)) => selected.push(id),
             }
         }
-        boxes
+        selected
     }
     /// Reads `[[composition.bindings]]` through the one section funnel, so each element's key
     /// inventory is applied. Both cross-checks are in-document: a binding names a box this document
@@ -784,8 +799,7 @@ fn rule_of(code: Code) -> Code {
         "BXW0005" => "the manifest must declare a string package id",
         "BXW0006" => "the package id must match [a-z][a-z0-9-]*",
         "BXW0007" => "the manifest must declare a string package kind",
-        "BXW0008" => "provider packages are not supported in v0",
-        "BXW0009" => "the package kind must be box, composition, or platform",
+        "BXW0009" => "the package kind must be box, composition, provider, or platform",
         "BXW0010" => "schema 1 rejects unknown manifest keys",
         "BXW0011" => "a known manifest key must hold its declared TOML type",
         "BXW0012" => "a required manifest key must be present",
@@ -804,8 +818,8 @@ fn rule_of(code: Code) -> Code {
         "BXW0032" => "derived output ids must be unique",
         "BXW0033" => "generator identities must match [a-z][a-z0-9-]*",
         "BXW0034" => "this list must contain at least one entry",
-        "BXW0035" => "box references must match [a-z][a-z0-9-]*",
-        "BXW0036" => "selected boxes must be unique",
+        "BXW0035" => "selected package references must match [a-z][a-z0-9-]*",
+        "BXW0036" => "selected package identities must be unique within their list",
         "BXW0037" => {
             "binding capabilities must be exact box-qualified names or box-qualified * selectors"
         }
@@ -911,12 +925,12 @@ mod tests {
     /// Every code this crate emits, ascending. The corpus and the golden below are both driven
     /// from it, so a code that registers nowhere fails loudly instead of going unproven.
     const ALL_CODES: &[Code] = &[
-        "BXW0001", "BXW0002", "BXW0003", "BXW0004", "BXW0005", "BXW0006", "BXW0007", "BXW0008",
-        "BXW0009", "BXW0010", "BXW0011", "BXW0012", "BXW0013", "BXW0014", "BXW0015", "BXW0016",
-        "BXW0017", "BXW0018", "BXW0019", "BXW0020", "BXW0021", "BXW0022", "BXW0023", "BXW0024",
-        "BXW0025", "BXW0026", "BXW0027", "BXW0028", "BXW0029", "BXW0030", "BXW0031", "BXW0032",
-        "BXW0033", "BXW0034", "BXW0035", "BXW0036", "BXW0037", "BXW0038", "BXW0039", "BXW0040",
-        "BXW0041", "BXW0074",
+        "BXW0001", "BXW0002", "BXW0003", "BXW0004", "BXW0005", "BXW0006", "BXW0007", "BXW0009",
+        "BXW0010", "BXW0011", "BXW0012", "BXW0013", "BXW0014", "BXW0015", "BXW0016", "BXW0017",
+        "BXW0018", "BXW0019", "BXW0020", "BXW0021", "BXW0022", "BXW0023", "BXW0024", "BXW0025",
+        "BXW0026", "BXW0027", "BXW0028", "BXW0029", "BXW0030", "BXW0031", "BXW0032", "BXW0033",
+        "BXW0034", "BXW0035", "BXW0036", "BXW0037", "BXW0038", "BXW0039", "BXW0040", "BXW0041",
+        "BXW0074",
     ];
     const TOP_KEY_NAMES: &[&str] = &[
         "schema",
@@ -944,7 +958,6 @@ mod tests {
         r#"BXW0005 raw schema = 1|kind = "box"|owned = []"#,
         r#"BXW0006 raw schema = 1|id = "Bad"|kind = "box"|owned = []"#,
         "BXW0007 kind 7",
-        r#"BXW0008 kind "provider""#,
         r#"BXW0009 kind "nope""#,
         "BXW0010 head nope = 1",
         "BXW0011 head display_name = 7",
@@ -1008,8 +1021,7 @@ BXW0004 boxology.toml:1:10-1:11 offending="manifest key schema" rule="this reade
 BXW0005 boxology.toml:1:1-1:1 offending="manifest key id" rule="the manifest must declare a string package id" source="boxology-details/02-packages.md"
 BXW0006 boxology.toml:2:6-2:11 offending="manifest key id" rule="the package id must match [a-z][a-z0-9-]*" source="boxology-details/02-packages.md"
 BXW0007 boxology.toml:3:8-3:9 offending="manifest key kind" rule="the manifest must declare a string package kind" source="boxology-details/02-packages.md"
-BXW0008 boxology.toml:3:8-3:18 offending="manifest key kind" rule="provider packages are not supported in v0" source="boxology-details/02-packages.md"
-BXW0009 boxology.toml:3:8-3:14 offending="manifest key kind" rule="the package kind must be box, composition, or platform" source="boxology-details/02-packages.md"
+BXW0009 boxology.toml:3:8-3:14 offending="manifest key kind" rule="the package kind must be box, composition, provider, or platform" source="boxology-details/02-packages.md"
 BXW0010 boxology.toml:5:1-5:5 offending="manifest key nope" rule="schema 1 rejects unknown manifest keys" source="specs/s5-manifest-and-validation.md D2"
 BXW0011 boxology.toml:5:16-5:17 offending="manifest key display_name" rule="a known manifest key must hold its declared TOML type" source="specs/s5-manifest-and-validation.md D2"
 BXW0012 boxology.toml:5:1-5:10 offending="manifest key commands" rule="a required manifest key must be present" source="specs/s5-manifest-and-validation.md D2"
@@ -1027,7 +1039,7 @@ BXW0023 boxology.toml:1:1-1:1 offending="manifest key composition" rule="a compo
 BXW0024 boxology.toml:7:1-7:9 offending="manifest key contract" rule="v1 imports the package's canonical contract, so contract must equal package" source="boxology-details/02-packages.md"
 BXW0025 boxology.toml:9:1-9:8 offending="manifest key package" rule="declared import packages must be unique" source="specs/s5-manifest-and-validation.md D2"
 BXW0026 boxology.toml:6:12-6:14 offending="manifest key commands" rule="a quality command must be non-blank text" source="specs/s5-manifest-and-validation.md D2"
-BXW0027 boxology.toml:8:1-8:5 offending="manifest key role" rule="a crate role must be box-implementation, box-contract, composition, or platform" source="boxology-details/02-packages.md"
+BXW0027 boxology.toml:8:1-8:5 offending="manifest key role" rule="a crate role must be box-implementation, box-contract, composition, provider, or platform" source="boxology-details/02-packages.md"
 BXW0028 boxology.toml:7:1-7:5 offending="manifest key path" rule="crate paths must be `.` or literal relative paths" source="specs/s5-manifest-and-validation.md D2"
 BXW0029 boxology.toml:10:1-10:14 offending="manifest key cargo_package" rule="crate paths and cargo package names must be unique" source="specs/s5-manifest-and-validation.md D2"
 BXW0030 boxology.toml:6:1-6:14 offending="manifest key cargo_package" rule="cargo package names must be non-empty identifiers" source="specs/s5-manifest-and-validation.md D2"
@@ -1035,8 +1047,8 @@ BXW0031 boxology.toml:6:1-6:3 offending="manifest key id" rule="derived output i
 BXW0032 boxology.toml:11:1-11:3 offending="manifest key id" rule="derived output ids must be unique" source="specs/s5-manifest-and-validation.md D2"
 BXW0033 boxology.toml:7:1-7:10 offending="manifest key generator" rule="generator identities must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
 BXW0034 boxology.toml:6:1-6:6 offending="manifest key boxes" rule="this list must contain at least one entry" source="specs/s5-manifest-and-validation.md D2"
-BXW0035 boxology.toml:6:10-6:13 offending="manifest key boxes" rule="box references must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
-BXW0036 boxology.toml:6:15-6:18 offending="manifest key boxes" rule="selected boxes must be unique" source="specs/s5-manifest-and-validation.md D2"
+BXW0035 boxology.toml:6:10-6:13 offending="manifest key boxes" rule="selected package references must match [a-z][a-z0-9-]*" source="specs/s5-manifest-and-validation.md D2"
+BXW0036 boxology.toml:6:15-6:18 offending="manifest key boxes" rule="selected package identities must be unique within their list" source="specs/s5-manifest-and-validation.md D2"
 BXW0037 boxology.toml:9:1-9:11 offending="manifest key capability" rule="binding capabilities must be exact box-qualified names or box-qualified * selectors" source="specs/s5-manifest-and-validation.md D2"
 BXW0038 boxology.toml:10:1-10:10 offending="manifest key transport" rule="binding transport must be in-process or http" source="specs/s5-manifest-and-validation.md D2"
 BXW0039 boxology.toml:11:1-11:9 offending="manifest key exposure" rule="binding exposure must be code_only, internal, or external" source="specs/s5-manifest-and-validation.md D2"
@@ -1348,7 +1360,11 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         let inventories: &[(&str, &str, &[&str])] = &[
             ("TOP_KEYS", TOP_KEYS, TOP_KEY_NAMES),
             ("QUALITY_KEYS", QUALITY_KEYS, &["commands"]),
-            ("COMPOSITION_KEYS", COMPOSITION_KEYS, &["boxes", "bindings"]),
+            (
+                "COMPOSITION_KEYS",
+                COMPOSITION_KEYS,
+                &["boxes", "providers", "bindings"],
+            ),
             ("CRATE_KEYS", CRATE_KEYS, &["cargo_package", "path", "role"]),
             (
                 "DERIVED_KEYS",
@@ -1439,14 +1455,17 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         assert_eq!(rendered.lines().count(), hostile.as_slice().len());
     }
     #[test]
-    fn kind_vocabulary_and_provider_rejection() {
-        assert_eq!(codes(&kinded("\"provider\"")), ["BXW0008"]);
+    fn kind_vocabulary_includes_provider() {
         assert_eq!(codes(&kinded("\"Box\"")), ["BXW0009"]);
         assert_eq!(codes(&kinded("\"\"")), ["BXW0009"]);
         assert_eq!(codes(&kinded("7")), ["BXW0007"]);
         assert_eq!(codes("schema = 1\nid = \"d\"\nowned = []\n"), ["BXW0007"]);
         // `owned = []` parses: the unowned-package check is T2 classification, not parsing.
-        for (kind, expected) in [("box", Kind::Box), ("platform", Kind::Platform)] {
+        for (kind, expected) in [
+            ("box", Kind::Box),
+            ("provider", Kind::Provider),
+            ("platform", Kind::Platform),
+        ] {
             let text = kinded(&format!("\"{kind}\""));
             assert_eq!(parse(&text).expect("valid manifest").kind(), expected);
         }
@@ -1655,7 +1674,7 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         for role in ["Box-Implementation", "implementation", "box_contract", ""] {
             assert_eq!(codes(&one("a", "x", role)), ["BXW0027"], "{role}");
         }
-        for role in ["box-implementation", "composition", "platform"] {
+        for role in ["box-implementation", "composition", "provider", "platform"] {
             assert!(parse(&one("a", "a", role)).is_ok(), "{role}");
         }
         let root = parse(&one("root", ".", "platform")).expect("package-root crate");
@@ -1873,6 +1892,7 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         assert_eq!(valid.kind(), Kind::Composition);
         let composition = valid.composition().expect("declared");
         assert_eq!(composition.boxes()[0].as_str(), "hello");
+        assert!(composition.providers().is_empty());
         assert!(composition.bindings().is_empty());
         // The section is a kind claim in both directions. An absent one has no span of its own,
         // so it reports at the document origin, exactly as an absent `owned` does.
@@ -1882,7 +1902,7 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
         assert!(absent.starts_with(at), "{absent}");
         let source = format!("source={D2_SOURCE:?}");
         assert!(absent.ends_with(&source), "{absent}");
-        for kind in ["box", "platform"] {
+        for kind in ["box", "provider", "platform"] {
             let head = format!("schema = 1\nid = \"d\"\nkind = \"{kind}\"\nowned = [\"a\"]\n");
             let text = format!("{head}[composition]\nboxes = [\"hello\"]\n");
             assert_eq!(codes(&text), ["BXW0022"], "{kind}");
@@ -1935,6 +1955,28 @@ BXW0074 boxology.toml:5:1-5:10 offending="manifest key protected" rule="only a p
             .to_string();
         let at = r#"BXW0036 boxology.toml:6:15-6:18 offending="manifest key boxes""#;
         assert!(twice.starts_with(at), "{twice}");
+    }
+    #[test]
+    fn selected_providers_are_optional_named_and_unique() {
+        let text = format!(
+            "{}providers = [\"whatsapp-bridge-provider\", \"email-provider\"]\n",
+            composed("[\"hello\"]")
+        );
+        let valid = parse(&text).expect("selected providers");
+        let providers = valid.composition().expect("composition").providers();
+        assert_eq!(
+            providers.iter().map(BoxId::as_str).collect::<Vec<_>>(),
+            ["whatsapp-bridge-provider", "email-provider"]
+        );
+        for (value, code) in [
+            ("[]", "BXW0034"),
+            ("[\"Bad\"]", "BXW0035"),
+            ("[\"mail\", \"mail\"]", "BXW0036"),
+            ("7", "BXW0011"),
+        ] {
+            let text = format!("{}providers = {value}\n", composed("[\"hello\"]"));
+            assert_eq!(codes(&text), [code], "{value}");
+        }
     }
     #[test]
     fn bindings_reference_selected_boxes() {

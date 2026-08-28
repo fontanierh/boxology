@@ -4,6 +4,15 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
+### Added
+
+- Added first-class provider packages, optional provider Cargo crates, and deterministic
+  composition provider selection without conflating providers with capability bindings.
+
+  This extends the public `Kind` and `CrateRole` enums, so exhaustive downstream matches need a
+  `Provider` arm. The former provider-rejection diagnostic `BXW0008` is retired. For the current
+  `0.x` API, adoption therefore requires a `0.2.0` release rather than `0.1.2`.
+
 ### Fixed
 
 - Made `boxology --version` and `boxology-init --version` report the installed package version.
