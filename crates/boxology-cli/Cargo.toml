@@ -36,4 +36,4 @@ path = "tests/surface_lock.rs"
 [dev-dependencies]
 check_contract = { package = "check-contract", version = "=0.2.2", path = "../boxology-check/generated/contract", features = ["test-support"] }
 classifier_contract = { package = "classifier-contract", version = "=0.2.2", path = "../boxology-classifier/generated/contract", features = ["test-support"] }
-syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }
+syn = { version = "=3.0.4", default-features = false, features = ["full", "parsing", "visit"] }

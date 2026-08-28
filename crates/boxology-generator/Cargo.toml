@@ -18,7 +18,7 @@ boxology-schema = { version = "=0.2.2", path = "../boxology-schema" }
 prettyplease = "=0.3.0"
 serde_json = "=1.0.150"
 sha2 = "=0.10.9"
-syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing"] }
+syn = { version = "=3.0.4", default-features = false, features = ["full", "parsing"] }
 
 [dev-dependencies]
 boxology-classifier = { version = "=0.2.2", path = "../boxology-classifier" }
