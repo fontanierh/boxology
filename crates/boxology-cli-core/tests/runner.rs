@@ -19,6 +19,19 @@ fn rel(path: &str) -> RelativePath {
     RelativePath::new(path).unwrap()
 }
 
+fn git_at(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn fixture_workspace() -> Workspace {
     fixture_workspace_with_quality("", "")
 }
@@ -130,6 +143,116 @@ fn real_root_lock_spec_passes_through_run_command() {
         "{}",
         String::from_utf8_lossy(&out.combined())
     );
+}
+
+#[test]
+fn walk_respects_containing_git_ignores_without_hiding_tracked_files() {
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("boxology-cli-walk-{}-{id}", std::process::id())),
+    );
+    let root = scratch.0.join("nested/workspace");
+    for directory in [
+        root.join("node_modules/pkg"),
+        root.join("dist/release"),
+        root.join("tracked-cache"),
+    ] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    for (path, bytes) in [
+        ("Cargo.toml", b"[workspace]\n".as_slice()),
+        ("boxology.toml", b"schema = 1\n".as_slice()),
+        (
+            ".gitignore",
+            b"node_modules/\ndist/\ntracked-cache/\n".as_slice(),
+        ),
+        (
+            "node_modules/pkg/index.js",
+            b"ignored dependency".as_slice(),
+        ),
+        ("dist/release/boxology.toml", b"ignored bundle".as_slice()),
+        (
+            "tracked-cache/keep.txt",
+            b"tracked despite ignore".as_slice(),
+        ),
+        ("stray.txt", b"visible untracked mutation".as_slice()),
+    ] {
+        fs::write(root.join(path), bytes).unwrap();
+    }
+    git_at(&scratch.0, &["init", "-q"]);
+    git_at(
+        &scratch.0,
+        &[
+            "add",
+            "nested/workspace/Cargo.toml",
+            "nested/workspace/boxology.toml",
+            "nested/workspace/.gitignore",
+        ],
+    );
+    git_at(
+        &scratch.0,
+        &["add", "-f", "nested/workspace/tracked-cache/keep.txt"],
+    );
+
+    let walked = walk(&root).unwrap();
+    assert_eq!(
+        walked
+            .files()
+            .iter()
+            .map(|entry| entry.path().as_str())
+            .collect::<Vec<_>>(),
+        [
+            ".gitignore",
+            "Cargo.toml",
+            "boxology.toml",
+            "stray.txt",
+            "tracked-cache/keep.txt",
+        ]
+    );
+    assert_eq!(
+        walked
+            .manifests()
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        ["boxology.toml"]
+    );
+}
+
+#[test]
+fn walk_uses_the_nearest_nested_repository() {
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("boxology-cli-nested-{}-{id}", std::process::id())),
+    );
+    let root = scratch.0.join("nested/workspace");
+    fs::create_dir_all(root.join("dist/release")).unwrap();
+    git_at(&scratch.0, &["init", "-q"]);
+    fs::write(scratch.0.join(".gitignore"), b"nested/\n").unwrap();
+
+    git_at(&root, &["init", "-q"]);
+    for (path, bytes) in [
+        ("Cargo.toml", b"[workspace]\n".as_slice()),
+        ("boxology.toml", b"schema = 1\n".as_slice()),
+        (".gitignore", b"dist/\n".as_slice()),
+        ("dist/release/boxology.toml", b"ignored bundle".as_slice()),
+        ("visible.txt", b"inner untracked file".as_slice()),
+    ] {
+        fs::write(root.join(path), bytes).unwrap();
+    }
+    git_at(&root, &["add", "Cargo.toml", "boxology.toml", ".gitignore"]);
+
+    let walked = walk(&root).unwrap();
+    assert_eq!(
+        walked
+            .files()
+            .iter()
+            .map(|entry| entry.path().as_str())
+            .collect::<Vec<_>>(),
+        [".gitignore", "Cargo.toml", "boxology.toml", "visible.txt"]
+    );
+    assert_eq!(walked.manifests().len(), 1);
+    assert_eq!(walked.manifests()[0].0.as_str(), "boxology.toml");
 }
 
 #[test]

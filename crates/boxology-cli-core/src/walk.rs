@@ -3,6 +3,7 @@ use boxology_workspace::FileEntry;
 use std::{
     fmt, fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 // Current dense block begins at BXW0061; 02-packages discovery and S5-T4 #326 PR1 allocate it.
 type Rule = (&'static str, &'static str, &'static str);
@@ -52,8 +53,10 @@ impl WalkedWorkspace {
         &self.1
     }
 }
-/// Walks `root` without following symlink entries. Real `.git` and `target` directories are
-/// pruned at every depth; every other entry must have a valid [`RelativePath`].
+/// Walks `root` without following symlink entries. In a Git worktree the walk includes cached
+/// paths and non-ignored untracked paths, so ignored dependency/build trees stay outside discovery
+/// while tracked files remain visible. Without a containing Git worktree it falls back to the full
+/// filesystem walk. Real `.git` and `target` directories are always pruned at every depth.
 ///
 /// # Errors
 ///
@@ -69,10 +72,82 @@ pub fn walk(root: &Path) -> Result<WalkedWorkspace, WalkError> {
     }
     let mut files = Vec::new();
     let mut manifests = Vec::new();
-    visit(root, root, &mut files, &mut manifests)?;
+    if !git_marker(root) || !visit_git(root, &mut files, &mut manifests)? {
+        visit(root, root, &mut files, &mut manifests)?;
+    }
     files.sort_unstable_by(|left, right| left.path().cmp(right.path()));
     manifests.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Ok(WalkedWorkspace(files, manifests))
+}
+fn git_marker(root: &Path) -> bool {
+    root.ancestors()
+        .map(|directory| directory.join(".git"))
+        .any(|candidate| {
+            fs::symlink_metadata(candidate)
+                .is_ok_and(|metadata| metadata.is_dir() || metadata.is_file())
+        })
+}
+fn visit_git(
+    root: &Path,
+    files: &mut Vec<FileEntry>,
+    manifests: &mut Vec<(RelativePath, Vec<u8>)>,
+) -> Result<bool, WalkError> {
+    let output = match Command::new("git")
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--deduplicate",
+            "--exclude-standard",
+            "--",
+            ".",
+        ])
+        .current_dir(root)
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return Ok(false),
+    };
+    if !output.status.success() {
+        return Ok(false);
+    }
+    if !output.stdout.is_empty() && output.stdout.last() != Some(&0) {
+        return Err(failure(PATH, root.to_owned()));
+    }
+    for raw in output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|raw| !raw.is_empty())
+    {
+        let spelling = std::str::from_utf8(raw).map_err(|_| failure(PATH, root.to_owned()))?;
+        let logical = RelativePath::new(spelling).map_err(|_| failure(PATH, root.to_owned()))?;
+        if pruned_git_path(root, &logical) {
+            continue;
+        }
+        let physical = root.join(logical.as_str());
+        let metadata = match fs::symlink_metadata(&physical) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.kind() == std::io::ErrorKind::NotADirectory =>
+            {
+                continue;
+            }
+            Err(_) => return Err(failure(IO, physical)),
+        };
+        materialize(&physical, logical, metadata.file_type(), files, manifests)?;
+        // A listed directory is a nested repository/gitlink boundary, not a workspace file.
+    }
+    Ok(true)
+}
+fn pruned_git_path(root: &Path, logical: &RelativePath) -> bool {
+    let mut physical = root.to_owned();
+    logical.as_str().split('/').any(|component| {
+        physical.push(component);
+        (component == ".git" || component == "target")
+            && fs::symlink_metadata(&physical).is_ok_and(|metadata| metadata.is_dir())
+    })
 }
 fn visit(
     root: &Path,
@@ -96,19 +171,31 @@ fn visit(
                 continue;
             }
             visit(root, &physical, files, manifests)?;
-        } else if kind.is_symlink() {
-            let target = fs::read_link(&physical).map_err(|_| failure(IO, physical.clone()))?;
-            let target = target
-                .to_str()
-                .ok_or_else(|| failure(PATH, physical.clone()))?;
-            files.push(FileEntry::symlink(logical, target.to_owned()));
-        } else if kind.is_file() {
-            if entry.file_name() == MANIFEST {
-                let bytes = read_manifest(&physical, |path| fs::read(path))?;
-                manifests.push((logical.clone(), bytes));
-            }
-            files.push(FileEntry::file(logical));
+        } else {
+            materialize(&physical, logical, kind, files, manifests)?;
         }
+    }
+    Ok(())
+}
+fn materialize(
+    physical: &Path,
+    logical: RelativePath,
+    kind: fs::FileType,
+    files: &mut Vec<FileEntry>,
+    manifests: &mut Vec<(RelativePath, Vec<u8>)>,
+) -> Result<(), WalkError> {
+    if kind.is_symlink() {
+        let target = fs::read_link(physical).map_err(|_| failure(IO, physical.to_owned()))?;
+        let target = target
+            .to_str()
+            .ok_or_else(|| failure(PATH, physical.to_owned()))?;
+        files.push(FileEntry::symlink(logical, target.to_owned()));
+    } else if kind.is_file() {
+        if physical.file_name().is_some_and(|name| name == MANIFEST) {
+            let bytes = read_manifest(physical, |path| fs::read(path))?;
+            manifests.push((logical.clone(), bytes));
+        }
+        files.push(FileEntry::file(logical));
     }
     Ok(())
 }

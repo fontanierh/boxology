@@ -49,8 +49,10 @@ A platform package may declare fixture-opaque owned subtrees. Nested manifests i
 data, not discovered packages. Platform-only `protected` declarations identify control-plane
 paths, but their V0 strength is reporting only.
 
-Every tracked file classifies exactly once as one package's owned source or one declared derived
-output. Ambiguous, overlapping, and unowned paths fail with sorted diagnostics. Cargo packages
+Every tracked file and every non-ignored untracked file classifies exactly once as one package's
+owned source or one declared derived output. Git-ignored untracked paths stay outside discovery;
+tracked paths remain visible even when an ignore rule matches them. Ambiguous, overlapping, and
+unowned paths fail with sorted diagnostics. Cargo packages
 match exactly one declared crate role. Edge policy reads declared normal, build, dev, renamed,
 optional, feature, and target-specific dependencies from `cargo metadata`; source inclusion that
 bypasses a Cargo edge remains outside that model.
