@@ -263,6 +263,11 @@ fn diff_ownership_step(
     let inputs =
         base_diff_inputs_with_candidate(root, base, candidate.files(), candidate.manifests())
             .map_err(|error| Box::new(base_inputs_failure(error)))?;
+    if inputs.changed().is_empty() {
+        return Ok(DiffOwnershipCompletion::Skipped(
+            DiffOwnershipSkip::NoChanges,
+        ));
+    }
     // Release transactions intentionally span the exact closure guarded by `xtask release`.
     if inputs
         .changed()

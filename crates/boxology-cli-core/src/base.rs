@@ -357,9 +357,6 @@ impl BaseDiffInputs {
         root: &Path,
         ownership: &DiffOwnership,
     ) -> Result<Vec<CargoManifestChange>, BaseInputsError> {
-        let Some(accountable) = ownership.accountable() else {
-            return Ok(Vec::new());
-        };
         if ownership
             .classifications()
             .iter()
@@ -371,8 +368,9 @@ impl BaseDiffInputs {
             .classifications()
             .iter()
             .filter(|held| {
-                held.package() == accountable
-                    && held.path().as_str().rsplit('/').next() == Some("Cargo.toml")
+                ownership.classifications().iter().any(|source| {
+                    source.derived_output().is_none() && source.package() == held.package()
+                }) && held.path().as_str().rsplit('/').next() == Some("Cargo.toml")
             })
             .map(|held| {
                 let path = held.path();

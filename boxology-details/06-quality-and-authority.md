@@ -31,6 +31,8 @@ The contract can include:
 - Any specialized validation defined by the package owners.
 
 The harness can add mandatory system-level checks beyond what an individual package declares.
+The shipped whole-workspace checker executes every declared package quality command, including for
+coordinated diffs with several exact owners; package selection remains future harness policy.
 
 Package kinds add different baselines. Boxes require contract compatibility and behavioral validation. Providers require conformance and isolation evidence. Compositions require assembly and integration validation. Platform packages require whole-workspace validation and stricter approval by default, subject to configured harness policy, because runtime, CI, build, generator, and enforcement changes can affect every package.
 

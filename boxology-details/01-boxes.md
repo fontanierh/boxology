@@ -42,6 +42,10 @@ The ownership model discussed was:
 
 In V0, generated artifacts are regenerated from the candidate's permitted source inputs and checked byte-for-byte, while ownership findings are reported relative to base-revision manifests and schemas. Reconstructing a candidate from immutable base policy and tooling is the future factory-merger protocol, not a shipped V0 guarantee. Derived artifacts cannot hide hand-written semantic changes or weaken protected ownership and quality policy. The common manifest, ownership algorithm, and lockfile rules are defined in [Packages, Providers, and Compositions](02-packages.md#common-ownership-manifest).
 
+The shipped checker accepts coordinated changes with one or more exact non-derived package owners
+and runs the whole workspace plus every declared package quality command. That pragmatic checker
+behavior does not weaken the single-owner policy of a future reconstructing merger.
+
 ## Why accept more pull requests
 
 An ordinary codebase may change several areas in one pull request because doing so minimizes coordination and overhead for human developers. This system deliberately makes the opposite trade.

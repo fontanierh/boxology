@@ -87,16 +87,18 @@ classified findings retain a `passed` step status because they are facts for the
 checker-policy failures. Each changed path uses the base revision's declarations when that exact
 path exists in the base tree and the validated submitted declarations otherwise. Modified and
 deleted paths therefore retain base authority, while introduced manifests and files may establish
-submitted ownership. Accountable-package, foreign-source, and derived-output findings are applied
-after those per-path classifications are combined. The sole bootstrap
+submitted ownership. After those per-path classifications are combined, a nonempty diff needs at
+least one non-derived owner; several owners are a valid coordinated change and every declared
+package quality command still runs. Declared derived outputs remain byte-checked by regeneration;
+every non-lock derived output must belong to one of those non-derived owners. The sole bootstrap
 exception is a managed workspace root with no Git object at all in the base: its wholly introduced
-tree is attributed exactly once under the submitted manifests without imposing the ordinary
-single-accountable-package rule on the initial package set. Once any base object exists below that
-root, ordinary single-accountable-package checking resumes. A lockfile diff without an accountable
-package's manifest dependency-declaration change emits a coded scope finding; minimal-closure
+tree is attributed exactly once under the submitted manifests. A lockfile diff without any
+accountable package's manifest dependency-declaration change emits a coded scope finding; minimal-closure
 replay remains deferred. This is reporting strength, not the
 factory merger's replay/enforcement protocol. Without `--base`, local check uses the merge base
 with `main`; where no usable revision exists, base-relative steps are explicitly reported skipped.
+An explicit base comparison with zero changed paths is likewise reported skipped with a `0 changed
+paths` reason rather than displayed as a vacuous ownership pass.
 
 The baseline includes discovery/ownership, regeneration comparison, classification, lockfile
 freshness, manifest-derived formatting, workspace Clippy/tests, and manifest quality commands.

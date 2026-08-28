@@ -2128,6 +2128,16 @@ mod ownership {
         assert!(text(&output.stdout).contains(QUALITY));
         assert!(!text(&output.stdout).contains("{\""));
 
+        let clean = ready();
+        clean.commit("base");
+        let output = clean.run(&["check", "--base", "HEAD"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+        assert!(text(&output.stdout).contains("check diff-ownership skipped\n"));
+        assert!(
+            text(&output.stdout)
+                .contains("  not run: 0 changed paths compared with the selected base\n")
+        );
+
         // Introduced paths use validated submitted declarations.
         let additive = ready();
         additive.commit("base");
@@ -2144,7 +2154,7 @@ mod ownership {
         assert!(text(&output.stderr).is_empty());
         assert!(text(&output.stdout).contains("check diff-ownership passed\n"));
 
-        // Zero non-derived owners (lock-only) and two non-derived owners.
+        // A derived-only diff still fails; a coordinated two-owner diff passes.
         let zero = ready();
         zero.commit("base");
         fs::write(zero.root.join("Cargo.lock"), b"# changed\n").unwrap();
@@ -2165,11 +2175,8 @@ mod ownership {
         .unwrap();
         assert_eq!(two.run(&["generate"]).status.code(), Some(0));
         let output = two.run(&["check", "--base", "HEAD"]);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(
-            ownership_failed(text(&output.stdout))
-                .contains("BXW0100 Cargo.toml package= candidates=[ping,platform]")
-        );
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+        assert!(text(&output.stdout).contains("check diff-ownership passed\n"));
 
         // Foreign-derived output under another package.
         let foreign = ready();

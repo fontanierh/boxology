@@ -7,8 +7,8 @@ This file records notable user-facing changes to Boxology.
 ### Fixed
 
 - Made release preflight inspect package archives in Cargo's effective target directory.
-- Made base-relative ownership checks accept newly introduced packages and newly declared files,
-  while retaining base authority for modified and deleted paths.
+- Made base-relative ownership checks accept newly introduced packages, newly declared files, and
+  coordinated multi-package changes while retaining base authority for modified and deleted paths.
 - Generated Rust headers and schema provenance now report the actual `boxology-generator` package
   version instead of the stale `0.0.0` placeholder.
 - Documented the canonical field-presence wire convention, made explicit `null` on an optional

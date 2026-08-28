@@ -48,7 +48,7 @@ const EXECUTE_HASH: u64 = 15_138_597_921_723_061_807;
 const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 16_295_088_236_220_879_986;
-const BASE_HASH: u64 = 7_744_282_387_389_615_881;
+const BASE_HASH: u64 = 4_344_763_148_694_917_719;
 const RUNNER_HASH: u64 = 14_976_080_536_641_793_496;
 const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\nargs == [\"--help\"]\nwriteln!(stdout, \"{USAGE}\")\nSelection::Generate(package) => run_generate_setup(root, &package, stdout, stderr)\nSelection::Check { base, format } => run_check(base, format, stdout, stderr)\nfn run_generate_setup(\nfn validate_generated_workspace(\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ncheck_for_generation()\nvalidate_generated_workspace(root, stderr)\nplan(&workspace, package.as_ref())\nexecute_plans(root, &plans)\nClassifierComposition::start()\n.classify(outcome.base_schema(), outcome.submitted_schema())\nreport.rendered_text\nCheckComposition::start()\nCheckFormat::Human => false\nCheckFormat::Json => true\nproject_check(check.check(base), json)\nstdout.write_all(&projected.stdout)\nstderr.write_all(&projected.stderr)\nprojected.code\nerror.render_json()\ndiagnostics.render_json()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
@@ -76,7 +76,7 @@ const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classi
 const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED,\n            \"submitted\",\nCHECK_PAIRING,\n                \"pairing\",\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
 const CHECK_PUBLIC: &str = "DuplicatePackages PackageSchemas new package base submitted CheckClassificationError package code side detail diagnostics ClassifyStepError classify_step";
 const BASE_PUBLIC: &str = "GitToolError BaseError code location detail BaseSchemasError BaseInputsError DefaultBase ResolvedBase as_str from_oid resolve_default_base resolve_base base_package_schemas BaseDiffInputs packages submitted_packages changed is_bootstrapping base_paths manifest_changes base_diff_inputs base_diff_inputs_with_candidate";
-const BASE_ANCHORS: &str = "[\"rev-parse\", \"--git-dir\"]\n[\"merge-base\", \"HEAD\", \"main\"]\n[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n[\"ls-tree\", \"-r\", \"-z\", base.as_str(), \"--\", \".\"]\nformat!(\"{oid}:./{}\", plan.schema_path().as_str())\n\"--relative\",\n\"--no-ext-diff\",\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\n[\"cat-file\", \"blob\", oid]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(\nbase_diff_inputs_inner(root, base, None)\nSome(CandidateDeclarations {\ncandidate.is_some() && objects.is_empty()\nif self.bootstrapping {\nlet (base_packages, findings) = inputs.discover();\nlet submitted_packages = match candidate {\ncandidate.files.to_vec(), candidate.manifests.to_vec()";
+const BASE_ANCHORS: &str = "[\"rev-parse\", \"--git-dir\"]\n[\"merge-base\", \"HEAD\", \"main\"]\n[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n[\"ls-tree\", \"-r\", \"-z\", base.as_str(), \"--\", \".\"]\nformat!(\"{oid}:./{}\", plan.schema_path().as_str())\n\"--relative\",\n\"--no-ext-diff\",\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\n[\"cat-file\", \"blob\", oid]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(\nbase_diff_inputs_inner(root, base, None)\nSome(CandidateDeclarations {\ncandidate.is_some() && objects.is_empty()\nif self.bootstrapping {\nlet (base_packages, findings) = inputs.discover();\nlet submitted_packages = match candidate {\ncandidate.files.to_vec(), candidate.manifests.to_vec()\nsource.derived_output().is_none() && source.package() == held.package()";
 const RUNNER_PUBLIC: &str = "CommandSpec new args render CapturedOutput new success combined SpawnError ToolStep into_parts run_command CommandRunner fmt_packages fmt_spec clippy_spec test_spec lock_spec run_fmt_step run_clippy_step run_test_step run_lock_step QualityCommand package manifest_path spec quality_specs run_quality_step";
 const RUNNER_ANCHORS: &str = "classified.derived_output().is_none()\n\"fmt\".to_owned()\n\"-D\"\nBXW0093\nBXW0095\nBXW0096\nBXW0097\nBXW0107\n[\"metadata\", \"--format-version\", \"1\", \"--locked\"]\nformat!(\"command=\\\"{}\\\"\", spec.render())\nsplit_ascii_whitespace()\nquality_specs(workspace)\nCommand::new(&spec.program)";
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -456,6 +456,10 @@ fn source_surface_is_exact_and_mutation_resistant() {
         (
             "candidate.files.to_vec(), candidate.manifests.to_vec()",
             "Vec::new(), Vec::new()",
+        ),
+        (
+            "source.derived_output().is_none() && source.package() == held.package()",
+            "source.derived_output().is_some() && source.package() == held.package()",
         ),
     ] {
         let changed = BASE.replace(anchor, replacement);

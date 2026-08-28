@@ -117,12 +117,12 @@ const DIFF_UNOWNED: Rule = ("BXW0098", DIFF_UNOWNED_TEXT);
 const DIFF_AMBIGUOUS_TEXT: &str = "every changed path must classify as one non-derived package path or one declared derived output";
 const DIFF_AMBIGUOUS: Rule = ("BXW0099", DIFF_AMBIGUOUS_TEXT);
 const DIFF_ACCOUNTABLE_TEXT: &str =
-    "the set of non-derived owners must contain exactly one accountable package";
+    "a nonempty changed set must contain at least one non-derived owner";
 const DIFF_ACCOUNTABLE: Rule = ("BXW0100", DIFF_ACCOUNTABLE_TEXT);
 const DIFF_FOREIGN_TEXT: &str =
-    "a derived output not attributable to the accountable package is foreign source";
+    "a non-lock derived output must belong to one of the changed set's non-derived owners";
 const DIFF_FOREIGN: Rule = ("BXW0101", DIFF_FOREIGN_TEXT);
-const DIFF_LOCK_SCOPE_TEXT: &str = "a lockfile diff requires a dependency-declaration change in the accountable package's Cargo manifests";
+const DIFF_LOCK_SCOPE_TEXT: &str = "a lockfile diff requires a dependency-declaration change in an accountable package's Cargo manifests";
 const DIFF_LOCK_SCOPE: Rule = ("BXW0102", DIFF_LOCK_SCOPE_TEXT);
 const LOCK_SCOPE_SOURCE: &str =
     "specs/s0-repo-bootstrap.md D6; specs/s5-manifest-and-validation.md D6";
@@ -468,7 +468,7 @@ impl DiffOwnership {
         #[doc = "Returns every successfully attributed changed path, in frozen report order."]
         classifications: &[FileClassification] = classifications;
     }
-    /// Returns the sole non-derived owner when the changed set has exactly one.
+    /// Returns the sole non-derived owner, or `None` for zero or multiple owners.
     pub fn accountable(&self) -> Option<&BoxId> {
         self.accountable.as_ref()
     }
@@ -480,10 +480,10 @@ impl DiffOwnership {
     pub fn into_parts(self) -> (Vec<FileClassification>, Option<BoxId>, Option<Findings>) {
         (self.classifications, self.accountable, self.findings)
     }
-    /// Reports BXW0102 when `Cargo.lock` changed under a sole accountable package and no selected
-    /// accountable `Cargo.toml` proves a semantic dependency-declaration change.
+    /// Reports BXW0102 when `Cargo.lock` changed and no accountable package's selected
+    /// `Cargo.toml` proves a semantic dependency-declaration change.
     ///
-    /// `Ok(None)` without whole-path `Cargo.lock` or an accountable package. `Err` only for duplicate
+    /// `Ok(None)` without whole-path `Cargo.lock` or any accountable package. `Err` only for duplicate
     /// `manifests` paths or a missing pair for a selected accountable `Cargo.toml`. Extra pairs for
     /// unselected paths are ignored.
     pub fn lockfile_scope(
@@ -503,11 +503,20 @@ impl DiffOwnership {
         else {
             return Ok(None);
         };
-        let Some(accountable) = &self.accountable else {
-            return Ok(None);
+        let owns_source = |package: &BoxId| {
+            self.classifications
+                .iter()
+                .any(|held| held.derived_output().is_none() && held.package() == package)
         };
+        if !self
+            .classifications
+            .iter()
+            .any(|held| owns_source(held.package()))
+        {
+            return Ok(None);
+        }
         let selected = self.classifications.iter().filter(|held| {
-            held.package() == accountable
+            owns_source(held.package())
                 && held.path().as_str().rsplit('/').next() == Some(CARGO_MANIFEST)
         });
         let mut payload = Vec::new();
@@ -539,7 +548,7 @@ impl DiffOwnership {
             DIFF_LOCK_SCOPE,
             LOCK_SCOPE_SOURCE,
             lock.path().clone(),
-            Some(accountable.clone()),
+            self.accountable.clone(),
             payload.join(","),
         ))]))
     }
@@ -759,9 +768,10 @@ fn project_value(value: &TomlValue) -> Result<Canonical, ()> {
 /// by sorting and deduplicating paths so unsorted or duplicate callers observe exactly the same
 /// classifications, accountable owner, and findings. Successful attributions reuse
 /// `attribute_path`; unowned paths are BXW0098 and rival claims BXW0099. The non-derived owner
-/// set must be exactly one package (BXW0100 otherwise). Under a sole accountable package, a derived
-/// output of any other package is BXW0101, except the workspace `Cargo.lock` path which
-/// [`DiffOwnership::lockfile_scope`] judges alone.
+/// set must be nonempty (BXW0100 otherwise). Multiple owners form a coordinated change; the
+/// checker still applies every package quality gate. A derived output outside that owner set is
+/// BXW0101, except `Cargo.lock`, which
+/// [`DiffOwnership::lockfile_scope`] judges across all accountable packages.
 pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwnership {
     diff_ownership_select(changed, |_| packages)
 }
@@ -831,23 +841,18 @@ fn diff_ownership_select<'a>(
         [only] => Some(only.clone()),
         _ => None,
     };
-    if owners.len() != 1 {
-        let payload = owners
-            .iter()
-            .map(BoxId::as_str)
-            .collect::<Vec<_>>()
-            .join(",");
-        if let Some(at) = changed.first() {
-            findings.push(Entry::Workspace(Finding::about(
-                DIFF_ACCOUNTABLE,
-                OWNERSHIP_SOURCE,
-                at.clone(),
-                None,
-                payload,
-            )));
-        }
+    if owners.is_empty()
+        && let Some(at) = changed.first()
+    {
+        findings.push(Entry::Workspace(Finding::about(
+            DIFF_ACCOUNTABLE,
+            OWNERSHIP_SOURCE,
+            at.clone(),
+            None,
+            String::new(),
+        )));
     }
-    if let Some(accountable) = &accountable {
+    if !owners.is_empty() {
         for held in &classifications {
             if held.path().as_str() == LOCKFILE {
                 continue;
@@ -855,7 +860,7 @@ fn diff_ownership_select<'a>(
             let Some(output) = held.derived_output() else {
                 continue;
             };
-            if held.package() == accountable {
+            if owners.binary_search(held.package()).is_ok() {
                 continue;
             }
             findings.push(Entry::Workspace(Finding::about(
@@ -2171,6 +2176,8 @@ pub enum DiffOwnershipSkip {
     NoRepository,
     /// The repository has no merge base with the configured `main` branch.
     NoMergeBase,
+    /// The selected base and working tree have no changed paths to compare.
+    NoChanges,
 }
 impl DiffOwnershipSkip {
     /// Returns the frozen, deterministic human sentence for this skip reason.
@@ -2179,6 +2186,7 @@ impl DiffOwnershipSkip {
             Self::NotImplemented => "not run: the step is not implemented in this boxology version",
             Self::NoRepository => "not run: no repository is available",
             Self::NoMergeBase => "not run: no merge base with main is available",
+            Self::NoChanges => "not run: 0 changed paths compared with the selected base",
         }
     }
 }
@@ -3034,6 +3042,7 @@ jobs:
             DiffOwnershipSkip::NotImplemented,
             DiffOwnershipSkip::NoRepository,
             DiffOwnershipSkip::NoMergeBase,
+            DiffOwnershipSkip::NoChanges,
         ];
         for reason in ownership_skips {
             let sentence = reason.sentence();
@@ -4117,9 +4126,24 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
 
         let two_owners = diff_ownership(&packages, &changed(&["src/a.rs", "ping/src/b.rs"]));
         assert_eq!(two_owners.accountable(), None);
+        assert!(two_owners.findings().is_none());
+
+        let mut manifests = ownership_manifests();
+        manifests.push((
+            path("pong/boxology.toml"),
+            deriving(
+                owning("pong", "box", &["boxology.toml"], &[]),
+                &[("out", &["generated.rs"])],
+            ),
+        ));
+        let packages = ownership_packages_from(manifests).expect("discovers");
+        let coordinated_foreign = diff_ownership(
+            &packages,
+            &changed(&["src/a.rs", "ping/src/b.rs", "pong/generated.rs"]),
+        );
         assert_eq!(
-            finding_lines(two_owners.findings()),
-            ["BXW0100 ping/src/b.rs package= candidates=[ping,root]".to_owned()]
+            finding_lines(coordinated_foreign.findings()),
+            ["BXW0101 pong/generated.rs package=pong candidates=[out]".to_owned()]
         );
 
         let foreign = diff_ownership(&packages, &changed(&["src/lib.rs", "ping/generated.rs"]));
@@ -4175,10 +4199,7 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         assert_eq!(observed.accountable(), None);
         assert_eq!(
             finding_lines(observed.findings()),
-            [
-                "BXW0098 orphan.rs package= candidates=[]".to_owned(),
-                "BXW0100 orphan.rs package= candidates=[ping,root]".to_owned(),
-            ]
+            ["BXW0098 orphan.rs package= candidates=[]".to_owned()]
         );
     }
     #[test]
@@ -4325,6 +4346,14 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         );
         none(None, Some("[dependencies]\nfoo = \"1.0\"\n"));
         none(Some("[dependencies]\nfoo = \"1.0\"\n"), None);
+
+        let packages = ownership_packages_from(vec![
+            (path(MANIFEST), deriving(owning("root", "platform", &["boxology.toml", "src/**", "Cargo.toml"], &[]), &[("lockfile", &[LOCKFILE])])),
+            (path("ping/boxology.toml"), owning("ping", "box", &["boxology.toml", "src/**", "Cargo.toml"], &[])),
+        ]).expect("discovers");
+        let ownership = diff_ownership(&packages, &changed(&["src/lib.rs", "ping/src/lib.rs", "ping/Cargo.toml", LOCKFILE]));
+        assert!(ownership.findings().is_none());
+        assert!(ownership.lockfile_scope(&[manifest_change("ping/Cargo.toml", Some("[dependencies]\n"), Some("[dependencies]\nfoo = \"1\"\n"))]).expect("ok").is_none());
         assert!(diff_ownership(
             &sole_root(&["boxology.toml", "src/**"], &[("manifest", &["generated/Cargo.toml"])]),
             &changed(&["src/lib.rs", LOCKFILE, "generated/Cargo.toml"]),
@@ -4335,7 +4364,14 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         assert!(ownership.lockfile_scope(&[]).expect("ok").is_none());
         let ownership = lock_ownership(&["src/a.rs", "ping/src/b.rs", LOCKFILE]);
         assert_eq!(ownership.accountable(), None);
-        assert!(ownership.lockfile_scope(&[]).expect("ok").is_none());
+        assert_eq!(
+            ownership
+                .lockfile_scope(&[])
+                .expect("ok")
+                .expect("BXW0102")
+                .to_string(),
+            "BXW0102 Cargo.lock package= candidates=[]"
+        );
     }
     #[rustfmt::skip]
     #[test]
