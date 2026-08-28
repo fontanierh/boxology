@@ -2233,6 +2233,16 @@ mod ownership {
     const SKIP_MERGE: &str =
         "check diff-ownership skipped\n  not run: no merge base with main is available\n";
     const QUALITY: &str = "check quality passed\n";
+    const CRAB_BOXES: [&str; 8] = [
+        "agent-host",
+        "bridge-host",
+        "channel-gateway",
+        "native-channel",
+        "runtime-control",
+        "sub-agent-host",
+        "trigger-inbox",
+        "turn-router",
+    ];
 
     fn ready() -> Fixture {
         let fixture = Fixture::new(false);
@@ -2253,6 +2263,169 @@ mod ownership {
 
     fn stage(fixture: &Fixture) {
         assert!(fixture.git(&["add", "-A"]).status.success());
+    }
+
+    fn crab_upgrade_fixture() -> Fixture {
+        let fixture = Fixture::new(false);
+        fs::remove_dir_all(fixture.root.join("ping")).unwrap();
+        fs::write(
+            fixture.root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"*/implementation\", \"*/generated/contract\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("boxology.toml"),
+            ROOT_MANIFEST.replace(
+                "[\"Cargo.toml\", \"boxology.toml\"]",
+                "[\"Cargo.toml\", \"boxology.toml\", \"boxology-generator.toml\"]",
+            ),
+        )
+        .unwrap();
+        let mut members = Vec::new();
+        let mut packages = Vec::new();
+        for name in CRAB_BOXES {
+            let root = fixture.root.join(name);
+            fs::create_dir_all(root.join("implementation/src")).unwrap();
+            fs::create_dir_all(root.join("generated/contract")).unwrap();
+            fs::write(
+                root.join("boxology.toml"),
+                PACKAGE_MANIFEST.replace("ping", name),
+            )
+            .unwrap();
+            for role in ["implementation", "generated/contract"] {
+                let package = match role {
+                    "implementation" => format!("{name}-implementation"),
+                    "generated/contract" => format!("{name}-contract"),
+                    _ => unreachable!(),
+                };
+                let id = format!("path+file:///w/{name}/{role}#0.0.0");
+                members.push(id.clone());
+                packages.push(serde_json::json!({
+                    "id": id,
+                    "name": package,
+                    "manifest_path": format!("/w/{name}/{role}/Cargo.toml"),
+                    "dependencies": [],
+                }));
+                fs::write(
+                    root.join(role).join("Cargo.toml"),
+                    format!(
+                        "[package]\nname = {package:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n"
+                    ),
+                )
+                .unwrap();
+            }
+            fs::write(root.join("implementation/src/lib.rs"), CONTRACT).unwrap();
+        }
+        fs::write(
+            &fixture.metadata,
+            serde_json::to_vec(&serde_json::json!({
+                "workspace_root": "/w",
+                "workspace_members": members,
+                "packages": packages,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        for name in CRAB_BOXES {
+            for relative in [
+                "generated/adapter/adapter.rs",
+                "generated/contract/src/lib.rs",
+                "generated/schema.json",
+            ] {
+                let path = fixture.root.join(name).join(relative);
+                let current = fs::read_to_string(&path).unwrap();
+                let version = env!("CARGO_PKG_VERSION");
+                assert_eq!(current.matches(version).count(), 1, "{}", path.display());
+                fs::write(path, current.replace(version, "0.1.1")).unwrap();
+            }
+        }
+        fs::write(
+            fixture.root.join("boxology-generator.toml"),
+            "boxology-version = \"0.1.1\"\ndependency-source = \"https://github.com/fontanierh/boxology\"\n",
+        )
+        .unwrap();
+        fixture.commit("0.1.1 generated topology");
+        fixture
+    }
+
+    #[test]
+    fn generator_upgrade_accepts_only_verified_cross_package_regeneration() {
+        let fixture = crab_upgrade_fixture();
+        fs::write(
+            fixture.root.join("boxology-generator.toml"),
+            format!(
+                "boxology-version = {:?}\ndependency-source = \"https://github.com/fontanierh/boxology\"\n",
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+        .unwrap();
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        let changed = text(&fixture.git(&["diff", "--name-only", "HEAD", "--"]).stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(changed.len(), 1 + 3 * CRAB_BOXES.len());
+        assert!(changed.iter().any(|path| path == "boxology-generator.toml"));
+        for name in CRAB_BOXES {
+            assert!(
+                changed
+                    .iter()
+                    .any(|path| { path == &format!("{name}/generated/adapter/adapter.rs") })
+            );
+            assert!(
+                changed
+                    .iter()
+                    .any(|path| { path == &format!("{name}/generated/contract/src/lib.rs") })
+            );
+            assert!(
+                changed
+                    .iter()
+                    .any(|path| path == &format!("{name}/generated/schema.json"))
+            );
+        }
+        assert!(
+            changed
+                .iter()
+                .all(|path| !path.ends_with("generated/contract/Cargo.toml"))
+        );
+
+        let output = fixture.run(&["check", "--base", "HEAD"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+        assert!(text(&output.stdout).contains("check regeneration passed\n"));
+        assert!(text(&output.stdout).contains("check diff-ownership passed\n"));
+
+        let tampered = fixture.root.join("agent-host/generated/adapter/adapter.rs");
+        let mut bytes = fs::read(&tampered).unwrap();
+        bytes.push(b'\n');
+        fs::write(&tampered, bytes).unwrap();
+        let output = fixture.run(&["check", "--base", "HEAD"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            text(&output.stdout)
+                .contains("BXW0083 agent-host/generated/adapter/adapter.rs package=agent-host")
+        );
+        assert!(ownership_failed(text(&output.stdout)).contains(
+            "BXW0101 agent-host/generated/adapter/adapter.rs package=agent-host candidates=[contract]"
+        ));
+
+        assert_eq!(fixture.run(&["generate"]).status.code(), Some(0));
+        fs::write(
+            fixture.root.join("boxology-generator.toml"),
+            "boxology-version = \"0.1.1\"\ndependency-source = \"https://github.com/fontanierh/boxology\"\n",
+        )
+        .unwrap();
+        let cargo = fs::read_to_string(fixture.root.join("Cargo.toml")).unwrap();
+        fs::write(
+            fixture.root.join("Cargo.toml"),
+            format!("{cargo}# unrelated\n"),
+        )
+        .unwrap();
+        let output = fixture.run(&["check", "--base", "HEAD"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(text(&output.stdout).contains("check regeneration passed\n"));
+        let ownership = ownership_failed(text(&output.stdout));
+        assert_eq!(ownership.matches("BXW0101 ").count(), 3 * CRAB_BOXES.len());
     }
 
     #[test]

@@ -46,8 +46,8 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
     manifest_digest: None,
-    source_digest: "0f957c89a4cdb204507f5613d88d624f782ef6db038786b6e6b9eb80b4a4e45e",
-    body_digest: "da9cb12f007f7160f1952536e6a7a15917f1769d17698214d240874a16b5d09a",
+    source_digest: "e895e68e1cd43251616c785fd40d124693567e3f4b368da9cd1084f03d57321c",
+    body_digest: "1361bd704a2d2111e9d6445be3293acbafa70d41cd82de274a47e1eb8a7d17c8",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
@@ -172,7 +172,7 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("842efdf59e8a2cf550f9065f05ae614a80449d3b1043f7c09914fff01105a640"),
-    source_digest: "c594bb2a50d6b6da2a1b91a154f587d95df5a57ccb8f3e958d33aee65ff22781",
+    source_digest: "551feb8f8f9d5ee95b555ef3d0ca10bd127af97a3e5c09333d9a4dad396203eb",
     body_digest: "3f6ba759a6969da2c096e0810db6229c024c8c053dce06f2975619721c3f07b1",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
@@ -183,8 +183,8 @@ const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Ex
     default_source: "tests/surface_lock.rs",
     tests: CLI_SURFACE_LOCK_TESTS,
     manifest_digest: Some("842efdf59e8a2cf550f9065f05ae614a80449d3b1043f7c09914fff01105a640"),
-    source_digest: "20a125ed37421dee804bf143ded601ddee6cc477311acaeb5169bca6f3ba1a6a",
-    body_digest: "6fd914a87f407da59aa0d34873afff4c6ecc3b405ac78572b6269942a7480e28",
+    source_digest: "de672f40bf06118f42830af2558c52041b884393d4a28d8bdd4ffae0f2f6b08c",
+    body_digest: "a476cdcbf62099082818d22a28a6d59a0596a7f761b8a1d132490b403e9118bb",
 };
 const EXTERNAL_TEST_SPECS: &[(&str, &external_test::ExternalTestSpec)] = &[
     ("cli-end-to-end-integrity", &CLI_END_TO_END_SPEC),

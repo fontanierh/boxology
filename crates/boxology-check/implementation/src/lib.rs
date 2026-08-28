@@ -18,7 +18,7 @@ use boxology_workspace::{
     CheckReport as WorkspaceReport, CheckStatus as WorkspaceStatus, ClassificationFinding,
     ClassificationFindings, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
     DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, Workspace,
-    WorkspaceInputs, bootstrap_diff_ownership, submitted_diff_ownership,
+    WorkspaceInputs, bootstrap_diff_ownership, submitted_diff_ownership_with_verified_regeneration,
 };
 use serde_json::Value;
 use std::{path::Path, process::Output};
@@ -102,6 +102,15 @@ impl CheckService {
             Err(CompareStepError::Plan(error)) => return Ok(plan_failure(error)),
             Err(CompareStepError::Execute(error)) => return Ok(execute_failure(error)),
         };
+        let verified_regeneration = plans
+            .iter()
+            .filter(|plan| {
+                differences
+                    .iter()
+                    .all(|difference| difference.package() != plan.package_id())
+            })
+            .map(|plan| (plan.package_id().clone(), plan.derived_output_id().clone()))
+            .collect::<Vec<_>>();
         let regeneration = if differences.is_empty() {
             Completion::Passed
         } else {
@@ -133,10 +142,11 @@ impl CheckService {
                     Ok(value) => value,
                     Err(outcome) => return Ok(outcome),
                 };
-                let ownership = match diff_ownership_step(root, &base, &walked) {
-                    Ok(value) => value,
-                    Err(outcome) => return Ok(*outcome),
-                };
+                let ownership =
+                    match diff_ownership_step(root, &base, &walked, &verified_regeneration) {
+                        Ok(value) => value,
+                        Err(outcome) => return Ok(*outcome),
+                    };
                 (classification, ownership)
             }
         };
@@ -259,6 +269,7 @@ fn diff_ownership_step(
     root: &Path,
     base: &ResolvedBase,
     candidate: &boxology_cli_core::WalkedWorkspace,
+    verified_regeneration: &[(BoxId, BoxId)],
 ) -> Result<DiffOwnershipCompletion, Box<CheckOutcome>> {
     let inputs =
         base_diff_inputs_with_candidate(root, base, candidate.files(), candidate.manifests())
@@ -280,11 +291,13 @@ fn diff_ownership_step(
         bootstrap_diff_ownership(inputs.packages(), inputs.changed())
     } else {
         let base_paths = inputs.base_paths().cloned().collect::<Vec<_>>();
-        submitted_diff_ownership(
+        submitted_diff_ownership_with_verified_regeneration(
             inputs.packages(),
             inputs.submitted_packages(),
             &base_paths,
             inputs.changed(),
+            verified_regeneration,
+            inputs.generator_configuration_upgraded(root, env!("CARGO_PKG_VERSION")),
         )
     };
     let pairs = inputs

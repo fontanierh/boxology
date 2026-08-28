@@ -4,6 +4,11 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
+### Fixed
+
+- Allowed a root platform generator-version upgrade to carry exact, byte-verified regeneration
+  across existing packages without accepting unrelated or tampered foreign derived outputs.
+
 ## [0.2.0] - 2026-08-28
 
 ### Added

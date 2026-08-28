@@ -131,6 +131,8 @@ const LOCK_SCOPE_SOURCE: &str =
     "specs/s0-repo-bootstrap.md D6; specs/s5-manifest-and-validation.md D6";
 /// The one file name a package manifest may carry.
 const MANIFEST: &str = "boxology.toml";
+/// The workspace generator selection owned by the root platform package.
+const GENERATOR_CONFIG: &str = "boxology-generator.toml";
 /// The workspace's own lockfile, spelled as the whole path it is: never one inside a subtree.
 const LOCKFILE: &str = "Cargo.lock";
 /// The Cargo manifest name: the final segment of every member's `manifest_path`, and — at the
@@ -776,7 +778,7 @@ fn project_value(value: &TomlValue) -> Result<Canonical, ()> {
 /// BXW0101, except `Cargo.lock`, which
 /// [`DiffOwnership::lockfile_scope`] judges across all accountable packages.
 pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwnership {
-    diff_ownership_select(changed, |_| packages)
+    diff_ownership_select(changed, |_| packages, &[], false)
 }
 
 /// Classifies existing paths under base declarations and introduced paths under submitted
@@ -787,21 +789,64 @@ pub fn submitted_diff_ownership(
     base_paths: &[RelativePath],
     changed: &[RelativePath],
 ) -> DiffOwnership {
+    submitted_diff_ownership_inner(base, submitted, base_paths, changed, &[], false)
+}
+
+/// Applies submitted-manifest ownership while accepting exact regeneration evidence for a
+/// workspace generator upgrade.
+///
+/// Each `(package, derived output)` pair is evidence supplied by the effectful checker only after
+/// byte-for-byte regeneration. It waives BXW0101 only when the changed set also contains the exact
+/// root `boxology-generator.toml`, attributed as non-derived source to a platform package. The
+/// ordinary [`submitted_diff_ownership`] entry point remains strict without that evidence.
+pub fn submitted_diff_ownership_with_verified_regeneration(
+    base: &[Package],
+    submitted: &[Package],
+    base_paths: &[RelativePath],
+    changed: &[RelativePath],
+    verified: &[(BoxId, BoxId)],
+    generator_configuration_upgraded: bool,
+) -> DiffOwnership {
+    submitted_diff_ownership_inner(
+        base,
+        submitted,
+        base_paths,
+        changed,
+        verified,
+        generator_configuration_upgraded,
+    )
+}
+
+fn submitted_diff_ownership_inner(
+    base: &[Package],
+    submitted: &[Package],
+    base_paths: &[RelativePath],
+    changed: &[RelativePath],
+    verified: &[(BoxId, BoxId)],
+    generator_configuration_upgraded: bool,
+) -> DiffOwnership {
     let mut base_paths = base_paths.to_vec();
     base_paths.sort();
     base_paths.dedup();
-    diff_ownership_select(changed, |path| {
-        if base_paths.binary_search(path).is_ok() {
-            base
-        } else {
-            submitted
-        }
-    })
+    diff_ownership_select(
+        changed,
+        |path| {
+            if base_paths.binary_search(path).is_ok() {
+                base
+            } else {
+                submitted
+            }
+        },
+        verified,
+        generator_configuration_upgraded,
+    )
 }
 
 fn diff_ownership_select<'a>(
     changed: &[RelativePath],
     packages: impl Fn(&RelativePath) -> &'a [Package],
+    verified: &[(BoxId, BoxId)],
+    generator_configuration_upgraded: bool,
 ) -> DiffOwnership {
     let mut changed: Vec<RelativePath> = changed.to_vec();
     changed.sort();
@@ -855,6 +900,17 @@ fn diff_ownership_select<'a>(
             String::new(),
         )));
     }
+    let generator_upgrade = generator_configuration_upgraded
+        && classifications.iter().any(|held| {
+            held.path().as_str() == GENERATOR_CONFIG
+                && held.derived_output().is_none()
+                && packages(held.path()).iter().any(|package| {
+                    package.id() == held.package() && package.manifest().kind() == Kind::Platform
+                })
+        });
+    let mut verified = verified.to_vec();
+    verified.sort();
+    verified.dedup();
     if !owners.is_empty() {
         for held in &classifications {
             if held.path().as_str() == LOCKFILE {
@@ -864,6 +920,13 @@ fn diff_ownership_select<'a>(
                 continue;
             };
             if owners.binary_search(held.package()).is_ok() {
+                continue;
+            }
+            if generator_upgrade
+                && verified
+                    .binary_search(&(held.package().clone(), output.clone()))
+                    .is_ok()
+            {
                 continue;
             }
             findings.push(Entry::Workspace(Finding::about(
@@ -4236,6 +4299,102 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
                 .classifications()
                 .iter()
                 .any(|held| held.path().as_str() == LOCKFILE && held.derived_output().is_some())
+        );
+    }
+    #[test]
+    fn verified_regeneration_requires_the_root_platform_generator_change() {
+        let manifests = vec![
+            (
+                path(MANIFEST),
+                owning(
+                    "platform",
+                    "platform",
+                    &[MANIFEST, GENERATOR_CONFIG, "notes.txt"],
+                    &[],
+                ),
+            ),
+            (
+                path("ping/boxology.toml"),
+                deriving(
+                    owning("ping", "box", &[MANIFEST], &[]),
+                    &[("contract", &["generated.rs"])],
+                ),
+            ),
+            (
+                path("pong/boxology.toml"),
+                deriving(
+                    owning("pong", "box", &[MANIFEST], &[]),
+                    &[("contract", &["generated.rs"])],
+                ),
+            ),
+        ];
+        let base = ownership_packages_from(manifests.clone()).expect("base discovers");
+        let submitted = ownership_packages_from(manifests).expect("submitted discovers");
+        let base_paths = changed(&[
+            MANIFEST,
+            GENERATOR_CONFIG,
+            "notes.txt",
+            "ping/boxology.toml",
+            "ping/generated.rs",
+            "pong/boxology.toml",
+            "pong/generated.rs",
+        ]);
+        let upgrade = changed(&[GENERATOR_CONFIG, "ping/generated.rs", "pong/generated.rs"]);
+
+        let strict = submitted_diff_ownership(&base, &submitted, &base_paths, &upgrade);
+        assert_eq!(finding_lines(strict.findings()).len(), 2);
+
+        let verified = vec![
+            (id("pong"), id("contract")),
+            (id("ping"), id("contract")),
+            (id("ping"), id("contract")),
+        ];
+        let accepted = submitted_diff_ownership_with_verified_regeneration(
+            &base,
+            &submitted,
+            &base_paths,
+            &upgrade,
+            &verified,
+            true,
+        );
+        assert!(accepted.findings().is_none());
+        assert_eq!(accepted.accountable().map(BoxId::as_str), Some("platform"));
+
+        let unproven = submitted_diff_ownership_with_verified_regeneration(
+            &base,
+            &submitted,
+            &base_paths,
+            &upgrade,
+            &verified,
+            false,
+        );
+        assert_eq!(finding_lines(unproven.findings()).len(), 2);
+
+        let partial = submitted_diff_ownership_with_verified_regeneration(
+            &base,
+            &submitted,
+            &base_paths,
+            &upgrade,
+            &[(id("ping"), id("contract"))],
+            true,
+        );
+        assert_eq!(
+            finding_lines(partial.findings()),
+            ["BXW0101 pong/generated.rs package=pong candidates=[contract]".to_owned()]
+        );
+
+        let unrelated = changed(&["notes.txt", "ping/generated.rs"]);
+        let rejected = submitted_diff_ownership_with_verified_regeneration(
+            &base,
+            &submitted,
+            &base_paths,
+            &unrelated,
+            &[(id("ping"), id("contract"))],
+            true,
+        );
+        assert_eq!(
+            finding_lines(rejected.findings()),
+            ["BXW0101 ping/generated.rs package=ping candidates=[contract]".to_owned()]
         );
     }
     #[test]

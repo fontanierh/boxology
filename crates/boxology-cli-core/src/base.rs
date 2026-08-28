@@ -13,6 +13,7 @@ use std::{
     path::Path,
     process::{Command, Output},
 };
+use toml_edit::Document;
 
 type Rule = (&'static str, &'static str, &'static str);
 const BASE_GIT_SOURCE: &str = "specs/s5-manifest-and-validation.md D6";
@@ -348,6 +349,41 @@ impl BaseDiffInputs {
     pub fn base_paths(&self) -> impl Iterator<Item = &RelativePath> {
         self.objects.keys()
     }
+    /// Proves a semantic root generator-configuration upgrade to the running checker version.
+    ///
+    /// The base and candidate must both be regular files containing exactly `boxology-version`
+    /// and `dependency-source`; their validated field pairs must differ, and the candidate version
+    /// must equal `current_version`. Every absence, malformed document, symlink, or read failure
+    /// returns `false`, so callers can only withhold cross-package regeneration authority.
+    pub fn generator_configuration_upgraded(&self, root: &Path, current_version: &str) -> bool {
+        let path = RelativePath::new("boxology-generator.toml").expect("fixed path is valid");
+        if self.changed.binary_search(&path).is_err() {
+            return false;
+        }
+        let Some((TreeKind::File, oid)) = self.objects.get(&path) else {
+            return false;
+        };
+        let Ok(base) = read_blob(root, oid, &path) else {
+            return false;
+        };
+        let candidate_path = root.join(path.as_str());
+        let Ok(metadata) = fs::symlink_metadata(&candidate_path) else {
+            return false;
+        };
+        if !metadata.file_type().is_file() {
+            return false;
+        }
+        let Ok(candidate) = fs::read(candidate_path) else {
+            return false;
+        };
+        let (Some(base), Some(candidate)) = (
+            generator_configuration(&base),
+            generator_configuration(&candidate),
+        ) else {
+            return false;
+        };
+        candidate.0 == current_version && candidate != base
+    }
     /// Loads base/candidate bytes for accountable changed `Cargo.toml` paths under `ownership`.
     ///
     /// # Errors
@@ -386,6 +422,18 @@ impl BaseDiffInputs {
             })
             .collect()
     }
+}
+
+fn generator_configuration(bytes: &[u8]) -> Option<(String, String)> {
+    let source = std::str::from_utf8(bytes).ok()?;
+    let document = Document::parse(source).ok()?;
+    if document.iter().count() != 2 {
+        return None;
+    }
+    Some((
+        document.get("boxology-version")?.as_str()?.to_owned(),
+        document.get("dependency-source")?.as_str()?.to_owned(),
+    ))
 }
 
 /// Loads base packages, the working-tree changed set, and the full tree object index.

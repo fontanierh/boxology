@@ -15,7 +15,7 @@ const PACKAGE: &str = include_str!("../Cargo.toml");
 const CORE_PACKAGE: &str = include_str!("../../boxology-cli-core/Cargo.toml");
 const FACADE: &str = include_str!("../src/lib.rs");
 const PACKAGE_HASH: u64 = 13_422_311_558_868_746_279;
-const CORE_PACKAGE_HASH: u64 = 2_461_327_188_924_948_234;
+const CORE_PACKAGE_HASH: u64 = 11_346_167_260_144_291_204;
 const FACADE_HASH: u64 = 17_028_389_826_028_418_546;
 const LIB: &str = include_str!("../../boxology-cli-core/src/lib.rs");
 const WALK: &str = include_str!("../../boxology-cli-core/src/walk.rs");
@@ -48,7 +48,7 @@ const EXECUTE_HASH: u64 = 15_138_597_921_723_061_807;
 const COMPARE_HASH: u64 = 202_095_199_502_936_122;
 const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 16_295_088_236_220_879_986;
-const BASE_HASH: u64 = 4_344_763_148_694_917_719;
+const BASE_HASH: u64 = 11_156_365_889_519_790_867;
 const RUNNER_HASH: u64 = 14_976_080_536_641_793_496;
 const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\nargs == [\"--help\"]\nwriteln!(stdout, \"{USAGE}\")\nargs == [\"--version\"]\nwriteln!(stdout, \"boxology {}\", env!(\"CARGO_PKG_VERSION\"))\nSelection::Generate(package) => run_generate_setup(root, &package, stdout, stderr)\nSelection::Check { base, format } => run_check(base, format, stdout, stderr)\nSelection::Generate(Some(package)) => selected_workspace_root(root, package)\nfn selected_workspace_root(\nManifest::parse(manifest_path.clone(), bytes)\nroots.len() == 1\nfn owning_managed_root(\nfs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())\nManifest::parse(logical_manifest, &bytes)\nmanifest.kind() == Kind::Platform\nfn run_generate_setup(\nplan(&bootstrap, package.as_ref())\nfn missing_contract_members(\nentry.role() == CrateRole::BoxContract\nmissing_contract_members.iter().any(|path| !path.is_file())\nfn validate_generated_workspace(\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ncheck_for_generation()\nvalidate_generated_workspace(root, stderr)\nplan(&workspace, package.as_ref())\nexecute_plans(root, &plans)\nClassifierComposition::start()\n.classify(outcome.base_schema(), outcome.submitted_schema())\nreport.rendered_text\nCheckComposition::start()\nCheckFormat::Human => false\nCheckFormat::Json => true\nproject_check(check.check(base), json)\nstdout.write_all(&projected.stdout)\nstderr.write_all(&projected.stderr)\nprojected.code\nerror.render_json()\ndiagnostics.render_json()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
@@ -75,8 +75,8 @@ const CLASSIFY_ANCHORS: &str = "map_err(ClassifyError::base)\nmap_err(ClassifyEr
 const CLASSIFY_PUBLIC: &str = "ClassifyError code side detail diagnostics classify";
 const CHECK_ANCHORS: &str = "CHECK_BASE, \"base\", diagnostics)\nCHECK_SUBMITTED,\n            \"submitted\",\nCHECK_PAIRING,\n                \"pairing\",\nboxology_classifier::classify(base.as_ref(), Some(&submitted))";
 const CHECK_PUBLIC: &str = "DuplicatePackages PackageSchemas new package base submitted CheckClassificationError package code side detail diagnostics ClassifyStepError classify_step";
-const BASE_PUBLIC: &str = "GitToolError BaseError code location detail BaseSchemasError BaseInputsError DefaultBase ResolvedBase as_str from_oid resolve_default_base resolve_base base_package_schemas BaseDiffInputs packages submitted_packages changed is_bootstrapping base_paths manifest_changes base_diff_inputs base_diff_inputs_with_candidate";
-const BASE_ANCHORS: &str = "[\"rev-parse\", \"--git-dir\"]\n[\"merge-base\", \"HEAD\", \"main\"]\n[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n[\"ls-tree\", \"-r\", \"-z\", base.as_str(), \"--\", \".\"]\nformat!(\"{oid}:./{}\", plan.schema_path().as_str())\n\"--relative\",\n\"--no-ext-diff\",\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\n[\"cat-file\", \"blob\", oid]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(\nbase_diff_inputs_inner(root, base, None)\nSome(CandidateDeclarations {\ncandidate.is_some() && objects.is_empty()\nif self.bootstrapping {\nlet (base_packages, findings) = inputs.discover();\nlet submitted_packages = match candidate {\ncandidate.files.to_vec(), candidate.manifests.to_vec()\nsource.derived_output().is_none() && source.package() == held.package()";
+const BASE_PUBLIC: &str = "GitToolError BaseError code location detail BaseSchemasError BaseInputsError DefaultBase ResolvedBase as_str from_oid resolve_default_base resolve_base base_package_schemas BaseDiffInputs packages submitted_packages changed is_bootstrapping base_paths generator_configuration_upgraded manifest_changes base_diff_inputs base_diff_inputs_with_candidate";
+const BASE_ANCHORS: &str = "[\"rev-parse\", \"--git-dir\"]\n[\"merge-base\", \"HEAD\", \"main\"]\n[\"rev-parse\", \"--verify\", \"--end-of-options\", &requested]\n[\"ls-tree\", \"-r\", \"-z\", base.as_str(), \"--\", \".\"]\nformat!(\"{oid}:./{}\", plan.schema_path().as_str())\n\"--relative\",\n\"--no-ext-diff\",\n[\"cat-file\", \"-e\", &object]\n[\"cat-file\", \"blob\", &object]\n[\"cat-file\", \"blob\", oid]\nread_optional_file(root, plan.schema_path())\nPackageSchemas::new(\nbase_diff_inputs_inner(root, base, None)\nSome(CandidateDeclarations {\ncandidate.is_some() && objects.is_empty()\nif self.bootstrapping {\nlet (base_packages, findings) = inputs.discover();\nlet submitted_packages = match candidate {\ncandidate.files.to_vec(), candidate.manifests.to_vec()\nsource.derived_output().is_none() && source.package() == held.package()\nself.changed.binary_search(&path).is_err()\nlet Some((TreeKind::File, oid)) = self.objects.get(&path) else\nfs::symlink_metadata(&candidate_path)\ndocument.iter().count() != 2\ndocument.get(\"boxology-version\")?.as_str()?.to_owned()\ndocument.get(\"dependency-source\")?.as_str()?.to_owned()\ncandidate.0 == current_version && candidate != base";
 const RUNNER_PUBLIC: &str = "CommandSpec new args render CapturedOutput new success combined SpawnError ToolStep into_parts run_command CommandRunner fmt_packages fmt_spec clippy_spec test_spec lock_spec run_fmt_step run_clippy_step run_test_step run_lock_step QualityCommand package manifest_path spec quality_specs run_quality_step";
 const RUNNER_ANCHORS: &str = "classified.derived_output().is_none()\n\"fmt\".to_owned()\n\"-D\"\nBXW0093\nBXW0095\nBXW0096\nBXW0097\nBXW0107\n[\"metadata\", \"--format-version\", \"1\", \"--locked\"]\nformat!(\"command=\\\"{}\\\"\", spec.render())\nsplit_ascii_whitespace()\nquality_specs(workspace)\nCommand::new(&spec.program)";
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -522,6 +522,23 @@ fn source_surface_is_exact_and_mutation_resistant() {
         (
             "source.derived_output().is_none() && source.package() == held.package()",
             "source.derived_output().is_some() && source.package() == held.package()",
+        ),
+        (
+            "self.changed.binary_search(&path).is_err()",
+            "self.changed.binary_search(&path).is_ok()",
+        ),
+        (
+            "let Some((TreeKind::File, oid)) = self.objects.get(&path) else",
+            "let Some((_, oid)) = self.objects.get(&path) else",
+        ),
+        (
+            "fs::symlink_metadata(&candidate_path)",
+            "fs::metadata(&candidate_path)",
+        ),
+        ("document.iter().count() != 2", "false"),
+        (
+            "candidate.0 == current_version && candidate != base",
+            "candidate != base",
         ),
     ] {
         let changed = BASE.replace(anchor, replacement);
