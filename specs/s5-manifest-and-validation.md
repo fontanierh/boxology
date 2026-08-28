@@ -84,12 +84,15 @@ malformed invocations continue to print usage to stderr and exit `2`.
 With `--base`, the CLI obtains base manifests and schemas from git. Contract changes are classified
 against that revision and reported without suppression or policy authorization; successfully
 classified findings retain a `passed` step status because they are facts for the harness, not
-checker-policy failures. Changed paths are attributed under the **base revision's declarations**,
-including accountable-package, foreign-source, and derived-output findings. The sole bootstrap
+checker-policy failures. Each changed path uses the base revision's declarations when that exact
+path exists in the base tree and the validated submitted declarations otherwise. Modified and
+deleted paths therefore retain base authority, while introduced manifests and files may establish
+submitted ownership. Accountable-package, foreign-source, and derived-output findings are applied
+after those per-path classifications are combined. The sole bootstrap
 exception is a managed workspace root with no Git object at all in the base: its wholly introduced
 tree is attributed exactly once under the submitted manifests without imposing the ordinary
 single-accountable-package rule on the initial package set. Once any base object exists below that
-root, submitted ownership changes cannot authorize the same diff. A lockfile diff without an accountable
+root, ordinary single-accountable-package checking resumes. A lockfile diff without an accountable
 package's manifest dependency-declaration change emits a coded scope finding; minimal-closure
 replay remains deferred. This is reporting strength, not the
 factory merger's replay/enforcement protocol. Without `--base`, local check uses the merge base

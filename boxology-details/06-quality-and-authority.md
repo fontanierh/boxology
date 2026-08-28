@@ -112,8 +112,10 @@ The agreed default guidance was:
 
 In the foundation, "protected" means that Boxology identifies these artifacts and the shipped
 skill tells the lead to flag their changes for human review. With `--base`, `boxology check` reads
-base manifests and schemas to attribute changed paths and classify contract differences; that is
-reporting under base declarations, not execution of immutable base policy. The candidate owns the
+base and validated submitted manifests plus base schemas. Existing exact paths retain base
+ownership authority; introduced paths use submitted ownership authority, and contract differences
+remain classified against the base schema. This is reporting, not execution of immutable base
+policy. The candidate owns the
 checker and workflow, and Boxology ships no merger replay, branch protection, enforced approval,
 or separation of duties. Operators can add required checks, branch protection, review ownership,
 or harness policy when they want a stronger boundary. Semantic self-protection remains

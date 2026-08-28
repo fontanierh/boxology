@@ -313,19 +313,28 @@ fn read_schema(
     Ok(Some(output.stdout))
 }
 
-/// Base-revision packages, changed paths, and tree object index for diff ownership.
+/// Base and submitted packages, changed paths, and tree object index for diff ownership.
 #[derive(Debug)]
 pub struct BaseDiffInputs {
-    packages: Vec<Package>,
+    base_packages: Vec<Package>,
+    submitted_packages: Vec<Package>,
     changed: Vec<RelativePath>,
     bootstrapping: bool,
     /// Mode/type class and object id for every validated path, including gitlinks.
     objects: BTreeMap<RelativePath, (TreeKind, String)>,
 }
 impl BaseDiffInputs {
-    /// Returns packages discovered solely from base-revision declarations.
+    /// Returns submitted packages for a wholly absent-root bootstrap, and base packages otherwise.
     pub fn packages(&self) -> &[Package] {
-        &self.packages
+        if self.bootstrapping {
+            &self.submitted_packages
+        } else {
+            &self.base_packages
+        }
+    }
+    /// Returns packages discovered from validated submitted declarations.
+    pub fn submitted_packages(&self) -> &[Package] {
+        &self.submitted_packages
     }
     /// Returns the sorted, deduplicated changed-path set.
     pub fn changed(&self) -> &[RelativePath] {
@@ -334,6 +343,10 @@ impl BaseDiffInputs {
     /// Returns whether candidate declarations were selected for a wholly absent base root.
     pub fn is_bootstrapping(&self) -> bool {
         self.bootstrapping
+    }
+    /// Returns the sorted paths which exist as objects in the base tree.
+    pub fn base_paths(&self) -> impl Iterator<Item = &RelativePath> {
+        self.objects.keys()
     }
     /// Loads base/candidate bytes for accountable changed `Cargo.toml` paths under `ownership`.
     ///
@@ -390,11 +403,10 @@ pub fn base_diff_inputs(
     base_diff_inputs_inner(root, base, None)
 }
 
-/// Loads diff inputs, using candidate declarations only when the managed root has no base object.
+/// Loads base and validated submitted declarations for exact-path ownership classification.
 ///
-/// This narrow bootstrap path lets a complete managed workspace be introduced below an existing
-/// repository. Once the base contains any object below `root`, base declarations remain the sole
-/// ownership authority.
+/// A changed path which exists in the base tree uses base declarations; an introduced path uses
+/// submitted declarations. A wholly absent base root is additionally marked for bootstrap rules.
 ///
 /// # Errors
 /// Returns coded listing/blob/discovery failures or [`GitToolError`] when Git cannot start.
@@ -472,21 +484,34 @@ fn base_diff_inputs_inner(
     changed.sort();
     changed.dedup();
     let bootstrapping = candidate.is_some() && objects.is_empty();
-    let (files, manifests) = match candidate.filter(|_| bootstrapping) {
-        Some(candidate) => (candidate.files.to_vec(), candidate.manifests.to_vec()),
-        None => (files, manifests),
-    };
     let inputs =
         WorkspaceInputs::new(files, manifests, "").map_err(|_| data(BaseError::listing()))?;
-    let (packages, findings) = inputs.discover();
+    let (base_packages, findings) = inputs.discover();
     if let Some(findings) = findings {
         return Err(BaseInputsError::Declarations {
             header: BaseError::declarations(),
             findings,
         });
     }
+    let submitted_packages = match candidate {
+        Some(candidate) => {
+            let inputs =
+                WorkspaceInputs::new(candidate.files.to_vec(), candidate.manifests.to_vec(), "")
+                    .map_err(|_| data(BaseError::listing()))?;
+            let (packages, findings) = inputs.discover();
+            if let Some(findings) = findings {
+                return Err(BaseInputsError::Declarations {
+                    header: BaseError::declarations(),
+                    findings,
+                });
+            }
+            packages
+        }
+        None => Vec::new(),
+    };
     Ok(BaseDiffInputs {
-        packages,
+        base_packages,
+        submitted_packages,
         changed,
         bootstrapping,
         objects,

@@ -18,7 +18,7 @@ use boxology_workspace::{
     CheckReport as WorkspaceReport, CheckStatus as WorkspaceStatus, ClassificationFinding,
     ClassificationFindings, Completion, ContractClassificationCompletion, DiffOwnershipCompletion,
     DiffOwnershipSkip, Entry, ExternalOutput, Finding, Findings, SkipReason, Workspace,
-    WorkspaceInputs, bootstrap_diff_ownership, diff_ownership,
+    WorkspaceInputs, bootstrap_diff_ownership, submitted_diff_ownership,
 };
 use serde_json::Value;
 use std::{path::Path, process::Output};
@@ -274,7 +274,13 @@ fn diff_ownership_step(
     let ownership = if inputs.is_bootstrapping() {
         bootstrap_diff_ownership(inputs.packages(), inputs.changed())
     } else {
-        diff_ownership(inputs.packages(), inputs.changed())
+        let base_paths = inputs.base_paths().cloned().collect::<Vec<_>>();
+        submitted_diff_ownership(
+            inputs.packages(),
+            inputs.submitted_packages(),
+            &base_paths,
+            inputs.changed(),
+        )
     };
     let pairs = inputs
         .manifest_changes(root, &ownership)

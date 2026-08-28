@@ -763,6 +763,33 @@ fn project_value(value: &TomlValue) -> Result<Canonical, ()> {
 /// output of any other package is BXW0101, except the workspace `Cargo.lock` path which
 /// [`DiffOwnership::lockfile_scope`] judges alone.
 pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwnership {
+    diff_ownership_select(changed, |_| packages)
+}
+
+/// Classifies existing paths under base declarations and introduced paths under submitted
+/// declarations, then applies the ordinary whole-diff ownership checks to the combined result.
+pub fn submitted_diff_ownership(
+    base: &[Package],
+    submitted: &[Package],
+    base_paths: &[RelativePath],
+    changed: &[RelativePath],
+) -> DiffOwnership {
+    let mut base_paths = base_paths.to_vec();
+    base_paths.sort();
+    base_paths.dedup();
+    diff_ownership_select(changed, |path| {
+        if base_paths.binary_search(path).is_ok() {
+            base
+        } else {
+            submitted
+        }
+    })
+}
+
+fn diff_ownership_select<'a>(
+    changed: &[RelativePath],
+    packages: impl Fn(&RelativePath) -> &'a [Package],
+) -> DiffOwnership {
     let mut changed: Vec<RelativePath> = changed.to_vec();
     changed.sort();
     changed.dedup();
@@ -776,7 +803,7 @@ pub fn diff_ownership(packages: &[Package], changed: &[RelativePath]) -> DiffOwn
         };
     }
     for path in &changed {
-        match attribute_path(packages, path) {
+        match attribute_path(packages(path), path) {
             Attribution::Owned(package, output) => {
                 classifications.push(FileClassification::new(path, package, output));
             }
@@ -3903,6 +3930,86 @@ BXW0060 a path dependency onto a non-member is allowed only from a platform crat
         assert_eq!(
             finding_lines(mutated.findings()),
             ["BXW0098 orphan.rs package= candidates=[]".to_owned()]
+        );
+    }
+    #[test]
+    fn submitted_ownership_uses_base_only_for_preexisting_paths() {
+        let base = ownership_packages_from(vec![(
+            path(MANIFEST),
+            owning(
+                "root",
+                "platform",
+                &["boxology.toml", "kept.rs", "gone.rs"],
+                &[],
+            ),
+        )])
+        .expect("base discovers");
+        let submitted = ownership_packages_from(vec![(
+            path(MANIFEST),
+            deriving(
+                owning(
+                    "root",
+                    "platform",
+                    &["boxology.toml", "new-a.rs", "new-b.rs"],
+                    &[],
+                ),
+                &[("generated", &["kept.rs"])],
+            ),
+        )])
+        .expect("submitted discovers");
+        let base_paths = changed(&["kept.rs", "boxology.toml", "gone.rs", "kept.rs"]);
+        let result = submitted_diff_ownership(
+            &base,
+            &submitted,
+            &base_paths,
+            &changed(&["kept.rs", "gone.rs", "new-a.rs", "new-b.rs"]),
+        );
+        assert!(
+            result.findings().is_none(),
+            "{}",
+            result.findings().expect("present")
+        );
+        assert_eq!(result.accountable().map(BoxId::as_str), Some("root"));
+        assert!(
+            result
+                .classifications()
+                .iter()
+                .all(|held| held.derived_output().is_none())
+        );
+
+        let unowned =
+            submitted_diff_ownership(&base, &submitted, &base_paths, &changed(&["orphan.rs"]));
+        assert_eq!(
+            finding_lines(unowned.findings()),
+            [
+                "BXW0098 orphan.rs package= candidates=[]".to_owned(),
+                "BXW0100 orphan.rs package= candidates=[]".to_owned(),
+            ]
+        );
+
+        let rival_submitted = ownership_packages_from(vec![
+            (
+                path(MANIFEST),
+                owning("root", "platform", &["boxology.toml", "nested/**"], &[]),
+            ),
+            (
+                path("nested/boxology.toml"),
+                owning("nested", "box", &["boxology.toml", "x.rs"], &[]),
+            ),
+        ])
+        .expect("submitted rivalry discovers before the path is added");
+        let rivalry = submitted_diff_ownership(
+            &base,
+            &rival_submitted,
+            &base_paths,
+            &changed(&["nested/x.rs"]),
+        );
+        assert_eq!(
+            finding_lines(rivalry.findings()),
+            [
+                "BXW0099 nested/x.rs package= candidates=[root boxology.toml nested/**,nested nested/boxology.toml x.rs]".to_owned(),
+                "BXW0100 nested/x.rs package= candidates=[]".to_owned(),
+            ]
         );
     }
     #[test]
