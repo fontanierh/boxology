@@ -5,10 +5,11 @@ use boxology_cli::{
     execute_plans, plan, project_check, walk,
 };
 use boxology_contract::BoxId;
-use boxology_manifest::CrateRole;
+use boxology_manifest::{CrateRole, Kind, Manifest, RelativePath};
 use boxology_workspace::{Workspace, WorkspaceInputs};
 use std::{
-    env,
+    collections::BTreeSet,
+    env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
     process::ExitCode,
@@ -68,10 +69,63 @@ fn run(args: &[String], root: &Path, stdout: &mut dyn Write, stderr: &mut dyn Wr
             return 2;
         }
     };
+    let selected_root = match &selection {
+        Selection::Generate(Some(package)) => selected_workspace_root(root, package),
+        Selection::Generate(None) | Selection::Check { .. } => None,
+    };
+    let root = selected_root.as_deref().unwrap_or(root);
     match selection {
         Selection::Generate(package) => run_generate_setup(root, &package, stdout, stderr),
         Selection::Check { base, format } => run_check(base, format, stdout, stderr),
     }
+}
+
+fn selected_workspace_root(root: &Path, selected: &BoxId) -> Option<PathBuf> {
+    let walked = walk(root).ok()?;
+    let mut roots = BTreeSet::new();
+    for (manifest_path, bytes) in walked.manifests() {
+        let Ok(manifest) = Manifest::parse(manifest_path.clone(), bytes) else {
+            continue;
+        };
+        if manifest.id() == selected
+            && let Some(workspace_root) = owning_managed_root(root, manifest_path)
+        {
+            roots.insert(workspace_root);
+        }
+    }
+    (roots.len() == 1).then(|| roots.pop_first().expect("one root exists"))
+}
+
+fn owning_managed_root(root: &Path, manifest_path: &RelativePath) -> Option<PathBuf> {
+    let physical = root.join(manifest_path.as_str());
+    let mut directory = physical.parent()?;
+    loop {
+        if is_managed_root(directory) {
+            return Some(directory.to_owned());
+        }
+        if directory == root {
+            return None;
+        }
+        directory = directory.parent()?;
+    }
+}
+
+fn is_managed_root(candidate: &Path) -> bool {
+    let cargo = candidate.join("Cargo.toml");
+    let manifest = candidate.join("boxology.toml");
+    if ![&cargo, &manifest]
+        .iter()
+        .all(|path| fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()))
+    {
+        return false;
+    }
+    let Ok(bytes) = fs::read(manifest) else {
+        return false;
+    };
+    let logical_manifest =
+        RelativePath::new("boxology.toml").expect("the fixed manifest path is valid");
+    Manifest::parse(logical_manifest, &bytes)
+        .is_ok_and(|manifest| manifest.kind() == Kind::Platform)
 }
 
 fn run_generate_setup(

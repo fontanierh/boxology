@@ -63,6 +63,10 @@ generator's confined per-file atomic publication, refreshes provenance, and atta
 classification unmodified. Post-V0, that classification crosses the real generated classifier
 handle assembled by the CLI composition; generation and publication remain ordinary core code.
 `--package` selects one package; a byte-identical run writes nothing.
+From a partially managed monorepo root, an explicit package selection enters that package's unique
+descendant managed Cargo workspace. Unmanaged sibling trees remain outside generation and
+validation. Zero or multiple matching managed roots retain the invocation root and fail closed
+through ordinary discovery instead of selecting one arbitrarily.
 For a `box-implementation` crate, path `.` projects to package-root `src/lib.rs`; a nested crate path
 projects to `<path>/src/lib.rs`.
 While any declared generated contract crate is absent, `generate` plans from the otherwise
