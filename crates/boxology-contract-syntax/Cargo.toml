@@ -11,7 +11,7 @@ description = "Controlled contract parser and model"
 publish = true
 
 [dependencies]
-boxology-contract = { version = "=0.1.1", path = "../boxology-contract" }
+boxology-contract = { version = "=0.2.0", path = "../boxology-contract" }
 proc-macro2 = { version = "=1.0.107", default-features = false, features = ["span-locations"] }
 sha2 = "=0.10.9"
 syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "printing"] }

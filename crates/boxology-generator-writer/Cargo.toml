@@ -11,9 +11,9 @@ description = "Filesystem publication"
 publish = true
 
 [dependencies]
-boxology-generator = { version = "=0.1.1", path = "../boxology-generator" }
-boxology-manifest = { version = "=0.1.1", path = "../boxology-manifest" }
+boxology-generator = { version = "=0.2.0", path = "../boxology-generator" }
+boxology-manifest = { version = "=0.2.0", path = "../boxology-manifest" }
 
 [dev-dependencies]
-boxology-contract = { version = "=0.1.1", path = "../boxology-contract" }
-boxology-generator-model = { version = "=0.1.1", path = "../boxology-generator-model" }
+boxology-contract = { version = "=0.2.0", path = "../boxology-contract" }
+boxology-generator-model = { version = "=0.2.0", path = "../boxology-generator-model" }

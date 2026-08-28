@@ -4,6 +4,8 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
+## [0.2.0] - 2026-08-28
+
 ### Added
 
 - Added first-class provider packages, optional provider Cargo crates, and deterministic
@@ -29,6 +31,32 @@ This file records notable user-facing changes to Boxology.
   object field a dedicated typed decoding error, and added actionable canonical JSON guidance.
 - Added `ContractDescriptor::capability` for generic dispatchers and clarified that generated
   factories and runtime import bundles are composition-owned hooks rather than standalone APIs.
+
+### Distribution
+
+- Published the ordered `0.2.0` crate closure on crates.io with exact dependency versions and the
+  existing resumable, one-crate-at-a-time release safeguards.
+
+### Upgrading an existing setup
+
+Upgrade both installed tools from `0.1.1` to the new registry release:
+
+```sh
+cargo install --force --locked --version 0.2.0 boxology-init
+cargo install --force --locked --version 0.2.0 boxology-cli
+```
+
+Most handwritten boxes only need the authoring facade:
+
+```toml
+[dependencies]
+boxology = "=0.2.0"
+```
+
+Downstream exhaustive matches over `boxology_manifest::Kind` or `CrateRole` must add a `Provider`
+arm. Composition provider selection is ownership and dependency metadata; it does not configure a
+provider instance or bind a box requirement. Existing generated projects should retain their exact
+Git revision pins because `boxology-http` remains outside the registry release closure.
 
 ## [0.1.1] - 2026-08-13
 

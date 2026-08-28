@@ -5,11 +5,11 @@ edition.workspace = true
 publish = false
 
 [dev-dependencies]
-boxology-contract = { version = "=0.1.1", path = "../../boxology-contract" }
-boxology-http = { version = "=0.1.1", path = "../../boxology-http", features = ["client"] }
-boxology-generator = { version = "=0.1.1", path = "../../boxology-generator" }
-boxology-generator-model = { version = "=0.1.1", path = "../../boxology-generator-model" }
-boxology-runtime = { version = "=0.1.1", path = "../../boxology-runtime", features = ["test-support"] }
+boxology-contract = { version = "=0.2.0", path = "../../boxology-contract" }
+boxology-http = { version = "=0.2.0", path = "../../boxology-http", features = ["client"] }
+boxology-generator = { version = "=0.2.0", path = "../../boxology-generator" }
+boxology-generator-model = { version = "=0.2.0", path = "../../boxology-generator-model" }
+boxology-runtime = { version = "=0.2.0", path = "../../boxology-runtime", features = ["test-support"] }
 greeter-contract = { version = "=0.0.0", path = "../greeter/generated/contract" }
 greeter-implementation = { version = "=0.0.0", path = "../greeter/implementation" }
 hello-contract = { version = "=0.0.0", path = "../hello/generated/contract", features = ["test-support"] }
