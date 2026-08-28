@@ -46,8 +46,8 @@ const SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::Extern
     default_source: "tests/surface_lock.rs",
     tests: &["surface_and_live_evasions_are_locked"],
     manifest_digest: None,
-    source_digest: "e895e68e1cd43251616c785fd40d124693567e3f4b368da9cd1084f03d57321c",
-    body_digest: "1361bd704a2d2111e9d6445be3293acbafa70d41cd82de274a47e1eb8a7d17c8",
+    source_digest: "cbae3f14832e0e1ebcf1d3f1b74ba19eb4f46f1a44a865393db34df605177361",
+    body_digest: "09cdb0584e253cc431030aae85df5f988abb30bad92b508e2598cef5590a8551",
 };
 const CLASSIFIER_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec =
     external_test::ExternalTestSpec {
@@ -150,6 +150,7 @@ const CLI_END_TO_END_TESTS: &[&str] = &[
     "metadata_failure_reports_code_and_captured_stderr",
     "non_unicode_argument_is_usage_failure_without_panic",
     "non_utf8_metadata_is_a_coded_failure",
+    "ownership::downstream_import_regeneration_is_owned_only_by_changed_exact_import",
     "ownership::report_wiring_real_git_cases",
     "parsing_accepts_only_the_two_generate_forms",
     "selected_generation_tolerates_an_unrelated_missing_derived_member",
@@ -172,8 +173,8 @@ const CLI_END_TO_END_SPEC: external_test::ExternalTestSpec = external_test::Exte
     default_source: "tests/cli.rs",
     tests: CLI_END_TO_END_TESTS,
     manifest_digest: Some("361cffcfddcdc8d2ec05f3c4f26a0322ed5d00b9f137afbdf7472f30505736eb"),
-    source_digest: "551feb8f8f9d5ee95b555ef3d0ca10bd127af97a3e5c09333d9a4dad396203eb",
-    body_digest: "3f6ba759a6969da2c096e0810db6229c024c8c053dce06f2975619721c3f07b1",
+    source_digest: "4cf7c5e7eec40986efd27e9fbf84b6e1a7937c5d295785b404542a11b4d9ad2e",
+    body_digest: "d44b96b587ec67ad655dae6536194833dd9ae8b0dc9d09c1d2245d61a86c1772",
 };
 const CLI_SURFACE_LOCK_SPEC: external_test::ExternalTestSpec = external_test::ExternalTestSpec {
     package: "boxology-cli",

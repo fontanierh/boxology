@@ -4,6 +4,12 @@ This file records notable user-facing changes to Boxology.
 
 ## Unreleased
 
+### Fixed
+
+- Allowed an owned contract change to carry exact downstream adapter regeneration when both the
+  imported and importing generation plans are byte-verified, without accepting stale, tampered,
+  or unrelated foreign derived outputs.
+
 ## [0.2.1] - 2026-08-28
 
 ### Fixed

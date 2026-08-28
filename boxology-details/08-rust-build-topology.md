@@ -138,7 +138,14 @@ derived changes only for package/output pairs whose complete submitted trees are
 current regeneration; the configuration change does not authorize stale, tampered, or unrelated
 derived bytes.
 
+An ordinary contract change can likewise regenerate adapters in packages that import that
+contract. The checker accepts only exact importer outputs when the imported schema appears in the
+Git diff, both generation plans reproduce their submitted trees, and the imported package owns a
+non-derived change. Tampering with either tree removes that downstream authority.
+
 ![Generator-upgrade ownership authority](generator-upgrade-authority.svg)
+
+![Imported-contract regeneration authority](import-regeneration-authority.svg)
 
 Generator releases must be backward-compatible:
 

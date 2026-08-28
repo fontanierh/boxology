@@ -25,11 +25,13 @@ const CARGO_MANIFEST_CHANGE_NEW: &str =
     "pub fn new(path: RelativePath, base: Option<Vec<u8>>, candidate: Option<Vec<u8>>) -> Self";
 const CARGO_MANIFEST_CHANGE_PATH: &str = "#[doc = \"Returns the changed manifest's workspace-relative path.\"] path: &RelativePath = path;";
 const VERIFIED_REGENERATION: &str = "pub fn submitted_diff_ownership_with_verified_regeneration(\n    base: &[Package],\n    submitted: &[Package],\n    base_paths: &[RelativePath],\n    changed: &[RelativePath],\n    verified: &[(BoxId, BoxId)],\n    generator_configuration_upgraded: bool,\n) -> DiffOwnership";
+const VERIFIED_IMPORT_REGENERATION: &str = "pub fn submitted_diff_ownership_with_verified_regeneration_and_imports(\n    base: &[Package],\n    submitted: &[Package],\n    base_paths: &[RelativePath],\n    changed: &[RelativePath],\n    verified: &[(BoxId, BoxId)],\n    generator_configuration_upgraded: bool,\n    verified_imports: &[(BoxId, BoxId, BoxId)],\n) -> DiffOwnership";
 const GENERATOR_UPGRADE_GUARD: &str = "held.path().as_str() == GENERATOR_CONFIG";
 const CONFIGURATION_EVIDENCE_GUARD: &str = "generator_configuration_upgraded\n        &&";
 const PLATFORM_OWNER_GUARD: &str =
     "package.id() == held.package() && package.manifest().kind() == Kind::Platform";
 const VERIFIED_PAIR_GUARD: &str = ".binary_search(&(held.package().clone(), output.clone()))";
+const IMPORTED_OWNER_GUARD: &str = "owners.binary_search(imported).is_ok()";
 const PROTECTED: &str =
     "Rule EdgeRule derive ref_getters assert assert_eq assert_ne format matches panic vec write";
 const RETAINED_EDGE_ASSERTION: &str = "assert_eq!(\n            source.edges(),\n            &[DeclaredEdge {\n                kind: EdgeKind::Normal,\n                target: EdgeTarget::InRoot(path(target_at)),\n            }]\n        )";
@@ -519,10 +521,12 @@ fn locked_sources<'a>(sources: impl IntoIterator<Item = &'a Source>) -> bool {
         && lib.text.match_indices(CARGO_MANIFEST_CHANGE_NEW).count() == 1
         && lib.text.match_indices(CARGO_MANIFEST_CHANGE_PATH).count() == 1
         && lib.text.match_indices(VERIFIED_REGENERATION).count() == 1
+        && lib.text.match_indices(VERIFIED_IMPORT_REGENERATION).count() == 1
         && lib.text.match_indices(GENERATOR_UPGRADE_GUARD).count() == 1
         && lib.text.match_indices(CONFIGURATION_EVIDENCE_GUARD).count() == 1
         && lib.text.match_indices(PLATFORM_OWNER_GUARD).count() == 1
         && lib.text.match_indices(VERIFIED_PAIR_GUARD).count() == 1
+        && lib.text.match_indices(IMPORTED_OWNER_GUARD).count() == 1
         && lib.text.match_indices(RETAINED_EDGE_ASSERTION).count() == 1
 }
 fn locked_document(document: &Value, files: &BTreeMap<PathBuf, String>) -> bool {
@@ -621,6 +625,12 @@ fn surface_and_live_evasions_are_locked() {
         &VERIFIED_REGENERATION.replacen("pub ", "", 1),
     );
     rejects(
+        "verified import regeneration seam",
+        source,
+        VERIFIED_IMPORT_REGENERATION,
+        &VERIFIED_IMPORT_REGENERATION.replacen("pub ", "", 1),
+    );
+    rejects(
         "generator config authority",
         source,
         GENERATOR_UPGRADE_GUARD,
@@ -643,6 +653,12 @@ fn surface_and_live_evasions_are_locked() {
         source,
         VERIFIED_PAIR_GUARD,
         ".binary_search(&(held.package().clone(), held.package().clone()))",
+    );
+    rejects(
+        "imported package ownership",
+        source,
+        IMPORTED_OWNER_GUARD,
+        "true",
     );
     rejects("post-test registration", source, source, &format!("{source}\nconst HIDDEN: Rule = (\"BXW9999\", \"hidden\");\n"));
     for (name, anchor, replacement) in [
