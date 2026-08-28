@@ -120,7 +120,7 @@ const MODEL_DEPS: &[Dep] = &[
     feat("proc-macro2", "=1.0.107", false, &["span-locations"]),
     ver("serde_json", "=1.0.150"),
     feat("syn", "=3.0.0", false, &["full", "parsing", "visit"]),
-    ver("toml_edit", "=0.25.13+spec-1.1.0"),
+    ver("toml_edit", "=0.25.13"),
 ];
 const MODEL_DEV: &[Dep] = &[];
 

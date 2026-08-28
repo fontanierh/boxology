@@ -6,6 +6,8 @@ This file records notable user-facing changes to Boxology.
 
 ### Fixed
 
+- Removed ignored semver build metadata from exact `toml_edit` dependency requirements so ordinary
+  Cargo commands start without dependency-spec warnings.
 - Made release preflight inspect package archives in Cargo's effective target directory.
 - Made base-relative ownership checks accept newly introduced packages, newly declared files, and
   coordinated multi-package changes while retaining base authority for modified and deleted paths.
