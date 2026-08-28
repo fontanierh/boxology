@@ -50,9 +50,9 @@ const CLASSIFY_HASH: u64 = 17_939_391_275_069_315_174;
 const CHECK_HASH: u64 = 16_295_088_236_220_879_986;
 const BASE_HASH: u64 = 4_344_763_148_694_917_719;
 const RUNNER_HASH: u64 = 14_976_080_536_641_793_496;
-const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\nargs == [\"--help\"]\nwriteln!(stdout, \"{USAGE}\")\nSelection::Generate(package) => run_generate_setup(root, &package, stdout, stderr)\nSelection::Check { base, format } => run_check(base, format, stdout, stderr)\nfn run_generate_setup(\nfn validate_generated_workspace(\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ncheck_for_generation()\nvalidate_generated_workspace(root, stderr)\nplan(&workspace, package.as_ref())\nexecute_plans(root, &plans)\nClassifierComposition::start()\n.classify(outcome.base_schema(), outcome.submitted_schema())\nreport.rendered_text\nCheckComposition::start()\nCheckFormat::Human => false\nCheckFormat::Json => true\nproject_check(check.check(base), json)\nstdout.write_all(&projected.stdout)\nstderr.write_all(&projected.stderr)\nprojected.code\nerror.render_json()\ndiagnostics.render_json()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
+const MAIN_ANCHORS: &str = "env::args_os()\ncollect::<Result<Vec<_>, _>>()\nargs == [\"--help\"]\nwriteln!(stdout, \"{USAGE}\")\nSelection::Generate(package) => run_generate_setup(root, &package, stdout, stderr)\nSelection::Check { base, format } => run_check(base, format, stdout, stderr)\nfn run_generate_setup(\nplan(&bootstrap, package.as_ref())\nfn missing_contract_members(\nentry.role() == CrateRole::BoxContract\nmissing_contract_members.iter().any(|path| !path.is_file())\nfn validate_generated_workspace(\ncargo_metadata_command(root)\nstatus.success()\nString::from_utf8(stdout)\nWorkspaceInputs::new\ncheck_for_generation()\nvalidate_generated_workspace(root, stderr)\nplan(&workspace, package.as_ref())\nexecute_plans(root, &plans)\nClassifierComposition::start()\n.classify(outcome.base_schema(), outcome.submitted_schema())\nreport.rendered_text\nCheckComposition::start()\nCheckFormat::Human => false\nCheckFormat::Json => true\nproject_check(check.check(base), json)\nstdout.write_all(&projected.stdout)\nstderr.write_all(&projected.stderr)\nprojected.code\nerror.render_json()\ndiagnostics.render_json()\nBXW0075\nif error.is_unknown_package() { 2 } else { 1 }\nfn parse_check(args: &[String]) -> Result<Selection, ()>\n\"human\" => CheckFormat::Human\n\"json\" => CheckFormat::Json\n_ => Err(())";
 const ARGV_SHAPE: &str = "pub const CARGO_METADATA_ARGS: [&str; 5] =\n    [\"metadata\", \"--format-version\", \"1\", \"--locked\", \"--no-deps\"];";
-const MAIN_HASH: u64 = 4_557_351_110_657_509_342;
+const MAIN_HASH: u64 = 11_601_466_459_558_289_107;
 const HASHES: [u64; 10] = [
     LIB_HASH,
     WALK_HASH,
@@ -443,6 +443,34 @@ fn source_surface_is_exact_and_mutation_resistant() {
             hash(&fallthrough),
         ],
     );
+    for (anchor, replacement) in [
+        (
+            "plan(&bootstrap, package.as_ref())",
+            "plan(&bootstrap, None)",
+        ),
+        (
+            "entry.role() == CrateRole::BoxContract",
+            "entry.role() != CrateRole::BoxContract",
+        ),
+        (
+            "missing_contract_members.iter().any(|path| !path.is_file())",
+            "missing_contract_members.is_empty()",
+        ),
+    ] {
+        let changed = MAIN.replace(anchor, replacement);
+        rejects(
+            [LIB, WALK, GENERATE, EXECUTE, CLASSIFY, CHECK, &changed],
+            [
+                LIB_HASH,
+                WALK_HASH,
+                GENERATE_HASH,
+                EXECUTE_HASH,
+                CLASSIFY_HASH,
+                CHECK_HASH,
+                hash(&changed),
+            ],
+        );
+    }
     for (anchor, replacement) in [
         ("if self.bootstrapping {", "if !self.bootstrapping {"),
         (
