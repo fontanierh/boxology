@@ -16,4 +16,4 @@ boxology-schema = { version = "=0.2.2", path = "../boxology-schema" }
 [dev-dependencies]
 boxology-contract = { version = "=0.2.2", path = "../boxology-contract" }
 serde_json = "=1.0.150"
-syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }
+syn = { version = "=3.0.4", default-features = false, features = ["full", "parsing", "visit"] }

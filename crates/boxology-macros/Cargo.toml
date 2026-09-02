@@ -17,4 +17,4 @@ proc-macro = true
 boxology-contract-syntax = { version = "=0.2.2", path = "../boxology-contract-syntax" }
 proc-macro2 = { version = "=1.0.107", default-features = false }
 quote = "=1.0.47"
-syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "printing", "visit"] }
+syn = { version = "=3.0.4", default-features = false, features = ["full", "parsing", "printing", "visit"] }

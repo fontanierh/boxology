@@ -21,4 +21,4 @@ toml_edit = "=0.25.13"
 name = "surface_lock"
 path = "tests/surface_lock.rs"
 [dev-dependencies]
-syn = { version = "=3.0.0", default-features = false, features = ["full", "parsing", "visit"] }
+syn = { version = "=3.0.4", default-features = false, features = ["full", "parsing", "visit"] }
